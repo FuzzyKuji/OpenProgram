@@ -1,0 +1,1250 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Write Strategy Comparison</title>
+<style>
+  :root{
+    --bg:#16150f; --pan:#1d1c14; --bd:#2e2c20; --tx:#bdb9a6; --acc:#d4843a;
+    --cb:#12110b; --dim:#8a8675;
+    --c0:#4f8ef7; --c1:#5aad4e; --c2:#d4843a; --c3:#9d6fe0; --c4:#2db3d5;
+    --no:#e0445a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:40px 24px 96px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:23px;color:#f0eee6;margin:0 0 6px}
+  .sub{color:var(--tx);margin:0 0 18px;max-width:78ch}
+  .sub a{color:var(--acc)}
+  h2{font-size:16px;color:var(--acc);margin:34px 0 8px;scroll-margin-top:20px}
+  h2 .num{color:var(--dim);font-size:12px;margin-right:8px;letter-spacing:.16em}
+  h2 .tier{font-size:10px;letter-spacing:.18em;border:1px solid;border-radius:99px;
+    padding:2px 8px;margin-left:9px;vertical-align:2px;font-weight:400}
+  .t2{color:var(--c0);border-color:var(--c0)}
+  .t3{color:var(--c3);border-color:var(--c3)}
+  .lead{color:var(--dim);font-size:13px;margin:0 0 12px;max-width:82ch}
+  .card{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:8px;margin-bottom:16px}
+  svg{display:block;width:100%;height:auto;background:var(--cb);border-radius:8px}
+  .legend{font-size:12.5px;color:var(--dim);padding:8px 10px;line-height:1.8}
+  .legend b{color:#f0eee6}
+  code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
+  text{font-family:-apple-system,"Segoe UI",sans-serif}
+
+  .toc{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px}
+  .toc a{font-size:12px;color:var(--tx);text-decoration:none;border:1px solid var(--bd);
+    background:var(--pan);border-radius:99px;padding:4px 12px}
+  .toc a:hover{border-color:var(--acc);color:#f0eee6}
+
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+  .st{background:var(--pan);border:1px solid var(--bd);border-top-width:3px;border-radius:12px;padding:13px 15px}
+  .st .k{font-size:10.5px;letter-spacing:.2em;color:var(--dim);margin-bottom:5px}
+  .st h3{margin:0 0 5px;font-size:15px;font-weight:700;color:#f0eee6}
+  .st p{margin:0;font-size:12.5px;color:#a5a190;line-height:1.65}
+  .st a{color:var(--acc)}
+  @media(max-width:820px){.grid3{grid-template-columns:1fr}}
+
+  .tbl{overflow-x:auto;background:var(--pan);border:1px solid var(--bd);border-radius:12px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:820px}
+  th{text-align:left;padding:10px 14px;color:var(--dim);font-weight:600;font-size:11px;
+    letter-spacing:.14em;border-bottom:1px solid var(--bd);white-space:nowrap}
+  td{padding:9px 14px;border-bottom:1px solid #26241a;vertical-align:top;line-height:1.6}
+  tr:last-child td{border-bottom:none}
+  td.y{color:var(--c1)} td.n{color:var(--no)} td.q{color:var(--dim)} td.h{color:var(--c2)}
+  td b{color:#f0eee6;font-weight:600}
+  td .src{display:block;font:11px Menlo,monospace;color:#6b6a63;margin-top:3px;word-break:break-all}
+  tr.us td{background:#141a12}
+  tr.us td:first-child{box-shadow:inset 3px 0 0 var(--c1)}
+  tr.plan td{background:#1a1622}
+  tr.plan td:first-child{box-shadow:inset 3px 0 0 var(--c3)}
+  .fw{font:11.5px Menlo,monospace;color:var(--tx);white-space:nowrap}
+
+  .note{border-left:3px solid var(--bd);padding:2px 0 2px 13px;color:var(--dim);
+    font-size:12.5px;margin:0 0 16px;max-width:86ch;line-height:1.8}
+  .note b{color:#f0eee6}
+  .note a{color:var(--acc)}
+  .note.k{border-left-color:var(--acc)}
+  .note.p{border-left-color:var(--c3)}
+  .note code{font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Write Strategy Comparison</h1>
+  <p class="sub">How others turn conversations into long-term memory, where our choices fit, and where to go next.
+    Mechanisms are illustrated in <a href="architecture.html">Memory subsystem: mechanisms illustrated</a>, and the authoritative text is in
+    <code>docs/reference/design/memory/overview.md</code>. This page compares implementations only.</p>
+
+  <div class="grid3">
+    <div class="st" style="border-top-color:#5aad4e">
+      <div class="k">Layer 1 · our current implementation</div>
+      <h3>Green rows</h3>
+      <p>Behavior verified against running code in <code>openprogram/state/memory/</code>. Each table includes a green-background row.</p>
+    </div>
+    <div class="st" style="border-top-color:#4f8ef7">
+      <div class="k">Layer 2 · other implementations</div>
+      <h3>Eight frameworks</h3>
+      <p><code>references/</code> contains all eight. Missing features remain listed because not implementing a feature is itself a choice.</p>
+    </div>
+    <div class="st" style="border-top-color:#9d6fe0">
+      <div class="k">Layer 3 · our final design</div>
+      <h3>Purple rows</h3>
+      <p>Node markers (sections 04, 05, 09) and resident content generated from <code>topics/core.md</code> (section 07) are implemented.
+        Authoritative descriptions are in <a href="written-marker.html">written-marker.md</a> and <a href="overview.html">overview.md</a>, “Resident content.”</p>
+    </div>
+  </div>
+
+  <div class="note">
+    <b>Two notes before reading:</b>First, <code>references/claude-code-leaked</code> and
+    <code>references/codex-cli</code> are internal builds, much larger than their public counterparts; some capabilities below are absent from public versions.
+    Second, conclusions refer to actual code in these two snapshots, with recorded line numbers; missing implementations are labeled “call site only.”
+  </div>
+
+  <div class="toc">
+    <a href="#have">01 Is there long-term memory</a>
+    <a href="#when">02 When writes happen</a>
+    <a href="#what">03 What is written</a>
+    <a href="#cursor">04 What remains unwritten</a>
+    <a href="#branch">05 Branches and restarts</a>
+    <a href="#recall">06 Retrieval</a>
+    <a href="#core">07 Trimming full resident content</a>
+    <a href="#size">08 Implementation size</a>
+    <a href="#plan">09 Where our design fits</a>
+  </div>
+
+  <!-- ══════════ 01 ══════════ -->
+  <h2 id="have"><span class="num">01</span>Is there long-term memory<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">“After closing this conversation, will the next one remember?” Four of eight do, four do not. The latter delegate this responsibility
+    to user-written <code>AGENTS.md</code> or to another wrapped process.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Long-term memory across eight frameworks">
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Four store memory themselves; four delegate it</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">The left side writes, stores, and retrieves its own memory; the right stores none and relies on alternatives.</text>
+
+    <line x1="580" y1="72" x2="580" y2="536" stroke="#2e2c20" stroke-width="1.4" stroke-dasharray="5 5"/>
+    <text x="300" y="92" fill="#5aad4e" font-size="13" font-weight="700" text-anchor="middle">Has long-term memory</text>
+    <text x="870" y="92" fill="#e0445a" font-size="13" font-weight="700" text-anchor="middle">No; another mechanism substitutes</text>
+
+    <!-- 有：5 行 -->
+    <g>
+      <rect x="40" y="108" width="510" height="76" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="58" y="134" fill="#5aad4e" font-size="13.5" font-weight="700">claude-code</text>
+      <text x="58" y="156" fill="#bdb9a6" font-size="11.5">Files only: MEMORY.md indexes topic files containing details,</text>
+      <text x="58" y="173" fill="#bdb9a6" font-size="11.5">with optional synchronization to a team-shared copy</text>
+      <text x="530" y="134" fill="#5aad4e" font-size="11" text-anchor="end">Files only</text>
+    </g>
+    <g>
+      <rect x="40" y="192" width="510" height="76" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="58" y="218" fill="#5aad4e" font-size="13.5" font-weight="700">codex-cli</text>
+      <text x="58" y="240" fill="#bdb9a6" font-size="11.5">MEMORY.md, summary pages, and skill directories, plus a</text>
+      <text x="58" y="257" fill="#bdb9a6" font-size="11.5">SQLite database scheduling two-stage distillation</text>
+      <text x="530" y="218" fill="#d4843a" font-size="11" text-anchor="end">Disabled by default</text>
+    </g>
+    <g>
+      <rect x="40" y="276" width="510" height="76" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="58" y="302" fill="#5aad4e" font-size="13.5" font-weight="700">openclaw</text>
+      <text x="58" y="324" fill="#bdb9a6" font-size="11.5">MEMORY.md is canonical; SQLite is only a rebuildable index:</text>
+      <text x="58" y="341" fill="#bdb9a6" font-size="11.5">vector nearest neighbors combined with full-text ranking</text>
+      <text x="530" y="302" fill="#5aad4e" font-size="11" text-anchor="end">Files plus index</text>
+    </g>
+    <g>
+      <rect x="40" y="360" width="510" height="76" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="58" y="386" fill="#5aad4e" font-size="13.5" font-weight="700">hermes-agent</text>
+      <text x="58" y="408" fill="#bdb9a6" font-size="11.5">Built-in MEMORY.md and USER.md Markdown files,</text>
+      <text x="58" y="425" fill="#bdb9a6" font-size="11.5">plus eight optional hosted services, only one enabled at a time</text>
+      <text x="530" y="386" fill="#5aad4e" font-size="11" text-anchor="end">Files plus external service</text>
+    </g>
+    <g>
+      <rect x="40" y="444" width="510" height="76" rx="9" fill="#141a12" stroke="#5aad4e" stroke-width="2.4"/>
+      <text x="58" y="470" fill="#5aad4e" font-size="13.5" font-weight="700">OpenProgram</text>
+      <text x="58" y="492" fill="#bdb9a6" font-size="11.5">topics/ stores distilled facts whose footnotes link the chat;</text>
+      <text x="58" y="509" fill="#bdb9a6" font-size="11.5">core.md is the small block included in every context</text>
+      <text x="530" y="470" fill="#5aad4e" font-size="11" text-anchor="end">Files only</text>
+    </g>
+
+    <!-- 没有：4 行 -->
+    <g>
+      <rect x="610" y="108" width="510" height="76" rx="9" fill="#241014" stroke="#e0445a" stroke-width="1.4"/>
+      <text x="628" y="134" fill="#e0445a" font-size="13.5" font-weight="700">opencode</text>
+      <text x="628" y="156" fill="#bdb9a6" font-size="11.5">User-written AGENTS.md or CLAUDE.md substitutes.</text>
+      <text x="628" y="173" fill="#bdb9a6" font-size="11.5">The tool catalog contains no memory tool</text>
+    </g>
+    <g>
+      <rect x="610" y="192" width="510" height="76" rx="9" fill="#241014" stroke="#e0445a" stroke-width="1.4"/>
+      <text x="628" y="218" fill="#e0445a" font-size="13.5" font-weight="700">pi-mono</text>
+      <text x="628" y="240" fill="#bdb9a6" font-size="11.5">Sessions are JSONL trees serving only replay and branching.</text>
+      <text x="628" y="257" fill="#bdb9a6" font-size="11.5">Only AGENTS.md carries across sessions</text>
+    </g>
+    <g>
+      <rect x="610" y="276" width="510" height="76" rx="9" fill="#241014" stroke="#e0445a" stroke-width="1.4"/>
+      <text x="628" y="302" fill="#e0445a" font-size="13.5" font-weight="700">pi-ai</text>
+      <text x="628" y="324" fill="#bdb9a6" font-size="11.5">Only an SDK for model providers, without even a session concept.</text>
+      <text x="628" y="341" fill="#bdb9a6" font-size="11.5">The caller owns message arrays and supplies the full array each time</text>
+    </g>
+    <g>
+      <rect x="610" y="360" width="510" height="76" rx="9" fill="#241014" stroke="#e0445a" stroke-width="1.4"/>
+      <text x="628" y="386" fill="#e0445a" font-size="13.5" font-weight="700">weclaw</text>
+      <text x="628" y="408" fill="#bdb9a6" font-size="11.5">A WeChat-to-agent integration stores only an opaque session id;</text>
+      <text x="628" y="425" fill="#bdb9a6" font-size="11.5">the launched process owns all memory</text>
+    </g>
+    <g>
+      <rect x="610" y="444" width="510" height="76" rx="9" fill="#1d1c14" stroke="#3a382c" stroke-width="1.2" stroke-dasharray="4 4"/>
+      <text x="628" y="470" fill="#8a8675" font-size="12" font-weight="700">All four preserve complete originals</text>
+      <text x="628" y="492" fill="#8a8675" font-size="11.5">codex, opencode, and pi-mono have complete transcripts, but nobody distills</text>
+      <text x="628" y="509" fill="#8a8675" font-size="11.5">or reads them across sessions. Storing originals is not memory.</text>
+    </g>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Present</th><th>Form</th><th>Verified location</th></tr>
+    <tr><td><b>claude-code</b></td><td class="y">Yes</td><td>Files only: <code>MEMORY.md</code> index, topic files, and dated logs; team edition synchronizes another copy to an HTTP service</td><td class="q"><span class="src">src/memdir/paths.ts:223-235<br>src/memdir/memdir.ts:34,348<br>src/services/teamMemorySync/index.ts:1-80</span></td></tr>
+    <tr><td><b>codex-cli</b></td><td class="h">Yes, but disabled by default</td><td><code>~/.codex/memories/</code>: <code>MEMORY.md</code>, summary pages, skill directory, and session summaries; SQLite only schedules distillation</td><td class="q"><span class="src">memories/write/src/lib.rs:116-118<br>state/memory_migrations/0001_memories.sql:1-35<br>Default off: features/src/lib.rs:996-999</span></td></tr>
+    <tr><td><b>openclaw</b></td><td class="y">Yes</td><td><code>MEMORY.md</code> is canonical; SQLite is a rebuildable index combining vector nearest-neighbor and full-text ranking</td><td class="q"><span class="src">src/memory/root-memory-files.ts:4,8<br>extensions/memory-core/src/memory/manager-db.ts:10<br>.../manager-search.ts:148</span></td></tr>
+    <tr><td><b>opencode</b></td><td class="n">No</td><td>User-written <code>AGENTS.md</code> or <code>CLAUDE.md</code>; no memory tools in the catalog</td><td class="q"><span class="src">packages/opencode/src/session/instruction.ts:60-68<br>Entire tool/ directory listed</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td class="y">Yes</td><td><code>MEMORY.md</code> plus <code>USER.md</code>; eight optional hosted services, only one enabled at a time</td><td class="q"><span class="src">tools/memory_tool.py:56-60,138-173<br>agent/memory_manager.py:258-280</span></td></tr>
+    <tr><td><b>pi-ai</b></td><td class="n">No</td><td>Provider SDK, 12 files, no session concept</td><td class="q"><span class="src">No repository-wide grep matches; only OAuth credentials persist</span></td></tr>
+    <tr><td><b>pi-mono</b></td><td class="n">No</td><td>Session JSONL tree serves replay and branching; across sessions only <code>AGENTS.md</code></td><td class="q"><span class="src">packages/coding-agent/src/core/session-manager.ts:428-436</span></td></tr>
+    <tr><td><b>weclaw</b></td><td class="n">No</td><td>Stores only opaque session ids; the wrapped process owns memory</td><td class="q"><span class="src">agent/cli_agent.go:25,226-231</span></td></tr>
+    <tr class="us"><td><b>OpenProgram</b></td><td class="y">Yes</td><td>Markdown workspace: <code>topics/</code> plus <code>MEMORY.md</code>; footnotes link chat messages</td><td class="q"><span class="src">openprogram/state/memory/store.py:39</span></td></tr>
+  </table>
+  </div>
+
+  <div class="note k">
+    <b>Two easily misread points:</b>First, the internal codex build has <b>fully implemented but default-disabled long-term memory</b>.
+    Looking only at default behavior wrongly suggests codex has no memory. Second, weclaw’s only persisted knowledge files
+    (URLs pasted and saved as Markdown) <b>deliberately bypass the agent</b> and are never read back by a prompt.
+    Classify by whether content returns to context, not whether it is Markdown.
+  </div>
+
+  <!-- ══════════ 02 ══════════ -->
+  <h2 id="when"><span class="num">02</span>When writes happen<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">The four writing frameworks trigger differently: one dispatches a background agent each turn; one starts a fire-and-forget task at turn start;
+    one uses cron; one lets the model decide. We wait until enough content accumulates.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Five write triggers">
+    <defs>
+      <marker id="w-bl" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#4f8ef7"/></marker>
+      <marker id="w-cy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2db3d5"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Same sequence of turns, five writing schedules</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">The horizontal axis shows consecutive session turns. Bright outlines mark turns that trigger writes.</text>
+
+    <!-- claude-code -->
+    <text x="150" y="102" fill="#4f8ef7" font-size="12.5" font-weight="700" text-anchor="end">claude-code</text>
+    <text x="150" y="118" fill="#8a8675" font-size="10.5" text-anchor="end">Dispatch a background agent each turn</text>
+    <g>
+      <line x1="170" y1="98" x2="1010" y2="98" stroke="#2e2c20" stroke-width="1.2"/>
+      <g>
+        <rect x="170" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="266" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="362" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="458" y="86" width="24" height="24" rx="5" fill="#12110b" stroke="#3a382c" stroke-width="1.2"/>
+        <rect x="554" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="650" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="746" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="842" y="86" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+      </g>
+      <text x="470" y="130" fill="#8a8675" font-size="10.5" text-anchor="middle">The main agent already wrote</text>
+      <text x="470" y="144" fill="#8a8675" font-size="10.5" text-anchor="middle">memory this turn; skip</text>
+      <text x="890" y="103" fill="#4f8ef7" font-size="11">Inherits main system + message prefix</text>
+    </g>
+
+    <!-- codex -->
+    <text x="150" y="186" fill="#4f8ef7" font-size="12.5" font-weight="700" text-anchor="end">codex-cli</text>
+    <text x="150" y="202" fill="#8a8675" font-size="10.5" text-anchor="end">Dispatch at each turn start</text>
+    <g>
+      <line x1="170" y1="182" x2="1010" y2="182" stroke="#2e2c20" stroke-width="1.2"/>
+      <g>
+        <rect x="170" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="266" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="362" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="458" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="554" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="650" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="746" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+        <rect x="842" y="170" width="24" height="24" rx="5" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+      </g>
+      <text x="180" y="216" fill="#8a8675" font-size="10.5">Every turn dispatches, but work has strict conditions: insufficient quota exits; sessions idle under six hours are untouched.</text>
+      <text x="180" y="232" fill="#8a8675" font-size="10.5">Tasks acquire a database lease; the winner works and records the watermark on completion.</text>
+    </g>
+
+    <!-- openclaw -->
+    <text x="150" y="278" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">openclaw</text>
+    <text x="150" y="294" fill="#8a8675" font-size="10.5" text-anchor="end">Scheduled by cron</text>
+    <g>
+      <line x1="170" y1="274" x2="1010" y2="274" stroke="#2e2c20" stroke-width="1.2"/>
+      <g fill="#12110b" stroke="#3a382c" stroke-width="1.2">
+        <rect x="170" y="262" width="24" height="24" rx="5"/><rect x="266" y="262" width="24" height="24" rx="5"/>
+        <rect x="362" y="262" width="24" height="24" rx="5"/><rect x="458" y="262" width="24" height="24" rx="5"/>
+        <rect x="554" y="262" width="24" height="24" rx="5"/><rect x="650" y="262" width="24" height="24" rx="5"/>
+        <rect x="746" y="262" width="24" height="24" rx="5"/><rect x="842" y="262" width="24" height="24" rx="5"/>
+      </g>
+      <path d="M930 244 L930 274" stroke="#2db3d5" stroke-width="1.6" marker-end="url(#w-cy)"/>
+      <rect x="860" y="220" width="200" height="24" rx="6" fill="#1e2630" stroke="#2db3d5" stroke-width="1.4"/>
+      <text x="960" y="237" fill="#2db3d5" font-size="11.5" text-anchor="middle">Daily at 03:00</text>
+      <text x="180" y="308" fill="#8a8675" font-size="10.5">No in-session writes. Short-term entries accumulate; the scheduled task ranks six weighted criteria and promotes qualifying entries.</text>
+    </g>
+
+    <!-- hermes -->
+    <text x="150" y="360" fill="#d4843a" font-size="12.5" font-weight="700" text-anchor="end">hermes-agent</text>
+    <text x="150" y="376" fill="#8a8675" font-size="10.5" text-anchor="end">Model decides</text>
+    <g>
+      <line x1="170" y1="356" x2="1010" y2="356" stroke="#2e2c20" stroke-width="1.2"/>
+      <g fill="#12110b" stroke="#3a382c" stroke-width="1.2">
+        <rect x="170" y="344" width="24" height="24" rx="5"/><rect x="266" y="344" width="24" height="24" rx="5"/>
+        <rect x="458" y="344" width="24" height="24" rx="5"/><rect x="554" y="344" width="24" height="24" rx="5"/>
+        <rect x="650" y="344" width="24" height="24" rx="5"/><rect x="746" y="344" width="24" height="24" rx="5"/>
+      </g>
+      <rect x="362" y="344" width="24" height="24" rx="5" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+      <rect x="842" y="344" width="24" height="24" rx="5" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+      <text x="374" y="390" fill="#d4843a" font-size="10.5" text-anchor="middle">The model calls a memory tool itself</text>
+      <text x="854" y="390" fill="#d4843a" font-size="10.5" text-anchor="middle">Every ten turns, a background agent asks whether to save</text>
+      <text x="180" y="406" fill="#8a8675" font-size="10.5">The background agent only reminds; the model decides whether and what to store.</text>
+    </g>
+
+    <!-- 我们 -->
+    <text x="150" y="452" fill="#5aad4e" font-size="12.5" font-weight="700" text-anchor="end">OpenProgram</text>
+    <text x="150" y="468" fill="#8a8675" font-size="10.5" text-anchor="end">Write after enough accumulation</text>
+    <g>
+      <line x1="170" y1="448" x2="1010" y2="448" stroke="#2e2c20" stroke-width="1.2"/>
+      <g fill="#12110b" stroke="#3a382c" stroke-width="1.2">
+        <rect x="170" y="436" width="24" height="24" rx="5"/><rect x="266" y="436" width="24" height="24" rx="5"/>
+        <rect x="362" y="436" width="24" height="24" rx="5"/><rect x="458" y="436" width="24" height="24" rx="5"/>
+        <rect x="650" y="436" width="24" height="24" rx="5"/><rect x="746" y="436" width="24" height="24" rx="5"/>
+      </g>
+      <rect x="554" y="436" width="24" height="24" rx="5" fill="#101a10" stroke="#5aad4e" stroke-width="1.8"/>
+      <rect x="842" y="436" width="24" height="24" rx="5" fill="#101a10" stroke="#5aad4e" stroke-width="1.8"/>
+      <path d="M182 430 L566 430" stroke="#5aad4e" stroke-width="1.2" stroke-dasharray="3 3"/>
+      <text x="576" y="434" fill="#5aad4e" font-size="10.5">This segment totals 16k tokens</text>
+      <text x="854" y="484" fill="#5aad4e" font-size="10.5" text-anchor="middle">Session idle: write all remaining content</text>
+      <text x="890" y="454" fill="#8a8675" font-size="11">Check per turn; write above threshold</text>
+    </g>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Timing</th><th>Trigger</th></tr>
+    <tr><td><b>claude-code</b></td><td>Background agent at turn end; skip if the main agent already wrote memory</td><td class="q"><span class="src">src/services/extractMemories/extractMemories.ts:348,598-603<br>Mutual-exclusion check: :121-148</span></td></tr>
+    <tr><td><b>codex-cli</b></td><td>Fire-and-forget task at turn start; handle only sessions idle over six hours, deduplicated by database lease</td><td class="q"><span class="src">app-server/src/request_processors/turn_processor.rs:578-591<br>memories/write/src/start.rs:23-81<br>memories/write/src/phase1.rs:149-187</span></td></tr>
+    <tr><td><b>openclaw</b></td><td>Cron, default daily 03:00, promotes using six weighted criteria</td><td class="q"><span class="src">src/memory-host-sdk/dreaming.ts:17,36-39<br>extensions/memory-core/src/dreaming.ts:163-187</span></td></tr>
+    <tr><td><b>opencode</b></td><td class="n">No writes</td><td class="q"><span class="src">No memory tools under tool/</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td>Model may call tools anytime; a background agent reminds every ten turns</td><td class="q"><span class="src">tools/memory_tool.py:619-686<br>agent/conversation_loop.py:429-439<br>agent/background_review.py:34-43</span></td></tr>
+    <tr><td><b>pi-ai</b></td><td class="n">No writes</td><td class="q">—</td></tr>
+    <tr><td><b>pi-mono</b></td><td class="n">No long-term-memory writes; original events persist synchronously</td><td class="q"><span class="src">packages/coding-agent/src/core/agent-session.ts:515</span></td></tr>
+    <tr><td><b>weclaw</b></td><td class="n">No writes</td><td class="q">—</td></tr>
+    <tr class="us"><td><b>OpenProgram</b></td><td>Check each turn; write at 16k tokens, force remaining writes on idle, reorganize at 03:00</td><td class="q"><span class="src">openprogram/state/memory/provider.py:30,117</span></td></tr>
+  </table>
+  </div>
+
+  <div class="note k">
+    <b>A shared conclusion:</b>Three of four writers—claude-code, codex, and openclaw—write <b>outside the conversation</b>,
+    for the same reason: the conversational model is working on the task, and memory-file edits add a call and distract from it.
+    hermes alone makes the main model write, depending on whether it remembers to do so and requiring reminders every ten turns.
+    We follow the other three.
+  </div>
+
+  <div class="note k">
+    <b>A useful codex practice:</b>Its writer task <b>acquires a lease</b> from a SQLite task table
+    carrying retry counts and the last successful watermark, and checks remaining quota before work.
+    We currently serialize using a cross-process write lock with a one-second timeout, achieving similar exclusion without retry counts;
+    after two consecutive batch failures, only an event-bus record remains.
+  </div>
+
+  <!-- ══════════ 03 ══════════ -->
+  <h2 id="what"><span class="num">03</span>What is written<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">Original statements or model-distilled facts. The four retaining both—claude-code, codex, pi-mono, and ours—share one approach:
+    originals are append-only, distilled content may be rewritten, and originals remain available for checking.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Originals or distilled facts">
+    <defs>
+      <marker id="s-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+      <marker id="s-gn" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Three storage approaches</text>
+
+    <rect x="40" y="56" width="330" height="240" rx="10" fill="#1d1c14" stroke="#2e2c20" stroke-width="1.3"/>
+    <text x="60" y="82" fill="#e0445a" font-size="13" font-weight="700">Originals only</text>
+    <text x="60" y="102" fill="#8a8675" font-size="11">opencode · weclaw</text>
+    <g>
+      <rect x="60" y="120" width="290" height="26" rx="5" fill="#12110b" stroke="#3a382c"/>
+      <text x="74" y="138" fill="#bdb9a6" font-size="11">user: The budget spreadsheet is due April 15</text>
+      <rect x="60" y="152" width="290" height="26" rx="5" fill="#12110b" stroke="#3a382c"/>
+      <text x="74" y="170" fill="#bdb9a6" font-size="11">assistant: OK, I will create a Flask project first</text>
+      <rect x="60" y="184" width="290" height="26" rx="5" fill="#12110b" stroke="#3a382c"/>
+      <text x="74" y="202" fill="#bdb9a6" font-size="11">tool_use: write_file(app.py)</text>
+    </g>
+    <text x="60" y="238" fill="#8a8675" font-size="11">Copy the conversation into storage only to resume it.</text>
+    <text x="60" y="256" fill="#8a8675" font-size="11">Nobody distills it or reads it across sessions.</text>
+    <text x="60" y="278" fill="#e0445a" font-size="11">In a new conversation, these words are effectively absent.</text>
+
+    <rect x="392" y="56" width="330" height="240" rx="10" fill="#1d1c14" stroke="#2e2c20" stroke-width="1.3"/>
+    <text x="412" y="82" fill="#2db3d5" font-size="13" font-weight="700">Distilled facts only</text>
+    <text x="412" y="102" fill="#8a8675" font-size="11">hermes-agent</text>
+    <g>
+      <rect x="412" y="120" width="290" height="46" rx="5" fill="#1e2630" stroke="#2db3d5" stroke-width="1.3"/>
+      <text x="426" y="140" fill="#bdb9a6" font-size="11">Craig is building a budget spreadsheet with Flask,</text>
+      <text x="426" y="157" fill="#bdb9a6" font-size="11">due 2024-04-15</text>
+    </g>
+    <text x="412" y="192" fill="#8a8675" font-size="11">Originals do not enter memory. Tool instructions explicitly say</text>
+    <text x="412" y="210" fill="#8a8675" font-size="11">“Do not store logs; search past sessions for those.”</text>
+    <text x="412" y="238" fill="#8a8675" font-size="11">Small storage and fast reads are the benefit.</text>
+    <text x="412" y="262" fill="#e0445a" font-size="11">If distillation is wrong, there is no source record to verify;</text>
+    <text x="412" y="280" fill="#e0445a" font-size="11">it must be discarded and rewritten.</text>
+
+    <rect x="744" y="56" width="376" height="240" rx="10" fill="#141a12" stroke="#5aad4e" stroke-width="1.6"/>
+    <text x="764" y="82" fill="#5aad4e" font-size="13" font-weight="700">Keep both</text>
+    <text x="764" y="102" fill="#8a8675" font-size="11">claude-code · codex-cli · pi-mono · OpenProgram</text>
+    <g>
+      <rect x="764" y="118" width="150" height="60" rx="6" fill="#12110b" stroke="#3a382c"/>
+      <text x="778" y="138" fill="#8a8675" font-size="11">Originals</text>
+      <text x="778" y="156" fill="#6b6a63" font-size="10.5">The chat history</text>
+      <text x="778" y="172" fill="#6b6a63" font-size="10.5">/s/&lt;session&gt;#&lt;msg&gt;</text>
+
+      <path d="M918 148 L968 148" stroke="#5aad4e" stroke-width="1.5" marker-end="url(#s-gn)"/>
+
+      <rect x="972" y="118" width="130" height="60" rx="6" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+      <text x="986" y="138" fill="#5aad4e" font-size="11">Distilled facts</text>
+      <text x="986" y="156" fill="#6b6a63" font-size="10.5">Freely rewritable</text>
+      <text x="986" y="172" fill="#6b6a63" font-size="10.5">topics/</text>
+
+      <path d="M1037 182 C 1037 216, 860 200, 845 182" fill="none" stroke="#d4843a" stroke-width="1.4" marker-end="url(#s-or)"/>
+      <text x="940" y="216" fill="#d4843a" font-size="11" text-anchor="middle">Each distilled statement has a footnote to its source</text>
+    </g>
+    <text x="764" y="248" fill="#8a8675" font-size="11">Distilled facts serve the model; originals support verification.</text>
+    <text x="764" y="268" fill="#8a8675" font-size="11">An implausible statement can be traced to what was actually said.</text>
+    <text x="764" y="288" fill="#d4843a" font-size="11">Only our implementation adds footnotes; the other three stop short of this.</text>
+  </svg>
+  </div>
+
+  <div class="note k">
+    <b>codex distills twice, not once.</b>First, per-session processing compresses a full conversation into structured raw memories and a session summary.
+    Second, another agent without network or approval prompts uses all first-stage artifacts and a workspace diff
+    to rewrite <code>MEMORY.md</code>, summary pages, and skill directories. Writing and organizing are separate roles,
+    like our writing and nightly reorganization, but separated by pipeline stage rather than time.
+  </div>
+
+  <!-- ══════════ 04 ══════════ -->
+  <h2 id="cursor"><span class="num">04</span>How unwritten content is identified<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">Eight implementations use five progress representations: none, scalar position, one message identity, in-data markers, and per-node identities.
+    OpenProgram currently uses the last; no reference here shares that implementation.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 630" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Five cursor forms">
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Five cursor forms</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">The same messages m1…m6: how each system records write progress. Orange indicates the cursor.</text>
+
+    <!-- A 不记 -->
+    <text x="152" y="98" fill="#e0445a" font-size="12.5" font-weight="700" text-anchor="end">A · no record</text>
+    <text x="152" y="114" fill="#8a8675" font-size="10.5" text-anchor="end">hermes · weclaw</text>
+    <g>
+      <g font-size="11" text-anchor="middle" fill="#8a8675">
+        <rect x="176" y="82" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="202" y="100">m1</text>
+        <rect x="244" y="82" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="270" y="100">m2</text>
+        <rect x="312" y="82" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="338" y="100">m3</text>
+        <rect x="380" y="82" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="406" y="100">m4</text>
+        <rect x="448" y="82" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="474" y="100">m5</text>
+        <rect x="516" y="82" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="542" y="100">m6</text>
+      </g>
+      <text x="596" y="93" fill="#8a8675" font-size="11.5">hermes writes when the model chooses; there is no concept of pending content.</text>
+      <text x="596" y="111" fill="#8a8675" font-size="11.5">weclaw directly hands off each completed turn and does not track afterward.</text>
+    </g>
+
+    <!-- B 记一个数 -->
+    <text x="152" y="182" fill="#e0445a" font-size="12.5" font-weight="700" text-anchor="end">B · one number</text>
+    <text x="152" y="198" fill="#8a8675" font-size="10.5" text-anchor="end">codex · OpenProgram before migration</text>
+    <g>
+      <g font-size="11" text-anchor="middle">
+        <rect x="176" y="166" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="202" y="184" fill="#5aad4e">m1</text>
+        <rect x="244" y="166" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="270" y="184" fill="#5aad4e">m2</text>
+        <rect x="312" y="166" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="338" y="184" fill="#5aad4e">m3</text>
+        <rect x="380" y="166" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="406" y="184" fill="#8a8675">m4</text>
+        <rect x="448" y="166" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="474" y="184" fill="#8a8675">m5</text>
+        <rect x="516" y="166" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="542" y="184" fill="#8a8675">m6</text>
+      </g>
+      <rect x="584" y="166" width="128" height="26" rx="6" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+      <text x="648" y="184" fill="#d4843a" font-size="11.5" text-anchor="middle" font-family="Menlo,monospace">Written through message 3</text>
+      <text x="728" y="177" fill="#8a8675" font-size="11.5">codex records timestamp watermarks; we recorded ordinal positions;</text>
+      <text x="728" y="195" fill="#8a8675" font-size="11.5">both are comparable scalars.</text>
+      <text x="176" y="216" fill="#e0445a" font-size="11">codex works at whole-session-file granularity and avoids forks; ours indexed positions within a branch and failed after branching, as below.</text>
+    </g>
+
+    <!-- C 单个身份 -->
+    <text x="152" y="270" fill="#d4843a" font-size="12.5" font-weight="700" text-anchor="end">C · one identity</text>
+    <text x="152" y="286" fill="#8a8675" font-size="10.5" text-anchor="end">claude-code · pi-mono</text>
+    <g>
+      <g font-size="11" text-anchor="middle">
+        <rect x="176" y="254" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="202" y="272" fill="#5aad4e">m1</text>
+        <rect x="244" y="254" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="270" y="272" fill="#5aad4e">m2</text>
+        <rect x="312" y="254" width="52" height="26" rx="6" fill="#241f10" stroke="#d4843a" stroke-width="2"/><text x="338" y="272" fill="#d4843a">m3</text>
+        <rect x="380" y="254" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="406" y="272" fill="#8a8675">m4</text>
+        <rect x="448" y="254" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="474" y="272" fill="#8a8675">m5</text>
+        <rect x="516" y="254" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="542" y="272" fill="#8a8675">m6</text>
+      </g>
+      <rect x="584" y="254" width="180" height="26" rx="6" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+      <text x="674" y="272" fill="#d4843a" font-size="11" text-anchor="middle" font-family="Menlo,monospace">lastUuid = "m3"</text>
+      <text x="780" y="265" fill="#8a8675" font-size="11.5">Scan from the array start; content after this id is new.</text>
+      <text x="780" y="283" fill="#8a8675" font-size="11.5">claude-code keeps it only in-process, losing it on restart.</text>
+      <text x="176" y="308" fill="#d4843a" font-size="11">If the id disappears, for example after compaction, treat everything as new, preferring repetition to permanently stopped extraction.</text>
+    </g>
+
+    <!-- D 标记进数据 -->
+    <text x="152" y="366" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">D · markers inside data</text>
+    <text x="152" y="382" fill="#8a8675" font-size="10.5" text-anchor="end">opencode · openclaw</text>
+    <g>
+      <g font-size="11" text-anchor="middle">
+        <rect x="176" y="350" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="202" y="368" fill="#5aad4e">m1</text>
+        <rect x="244" y="350" width="52" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="270" y="368" fill="#5aad4e">m2</text>
+        <rect x="312" y="350" width="52" height="26" rx="6" fill="#1e2630" stroke="#2db3d5" stroke-width="2"/><text x="338" y="368" fill="#2db3d5">m3</text>
+        <rect x="380" y="350" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="406" y="368" fill="#8a8675">m4</text>
+        <rect x="448" y="350" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="474" y="368" fill="#8a8675">m5</text>
+        <rect x="516" y="350" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="542" y="368" fill="#8a8675">m6</text>
+      </g>
+      <path d="M338 344 L338 330" stroke="#2db3d5" stroke-width="1.4"/>
+      <text x="338" y="324" fill="#2db3d5" font-size="10.5" text-anchor="middle" font-family="Menlo,monospace">summary: true</text>
+      <text x="596" y="357" fill="#8a8675" font-size="11.5">No separate cursor file; the boundary is stored within the data itself.</text>
+      <text x="596" y="375" fill="#8a8675" font-size="11.5">openclaw uses two variants: promotedAt timestamps on entries,</text>
+      <text x="596" y="393" fill="#8a8675" font-size="11.5">and HTML deduplication comments in the body, cross-checking one another.</text>
+      <text x="176" y="414" fill="#2db3d5" font-size="11">Cursor and data stay together, but changing the boundary requires changing the data.</text>
+    </g>
+
+    <!-- E 身份集合 -->
+    <text x="152" y="470" fill="#9d6fe0" font-size="12.5" font-weight="700" text-anchor="end">E · a complete identity set</text>
+    <text x="152" y="486" fill="#8a8675" font-size="10.5" text-anchor="end">Current OpenProgram</text>
+    <g>
+      <g font-size="11" text-anchor="middle">
+        <rect x="176" y="454" width="52" height="26" rx="6" fill="#221a30" stroke="#9d6fe0" stroke-width="1.6"/><text x="202" y="472" fill="#9d6fe0">m1</text>
+        <rect x="244" y="454" width="52" height="26" rx="6" fill="#221a30" stroke="#9d6fe0" stroke-width="1.6"/><text x="270" y="472" fill="#9d6fe0">m2</text>
+        <rect x="312" y="454" width="52" height="26" rx="6" fill="#221a30" stroke="#9d6fe0" stroke-width="1.6"/><text x="338" y="472" fill="#9d6fe0">m3</text>
+        <rect x="380" y="454" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="406" y="472" fill="#8a8675">m4</text>
+        <rect x="448" y="454" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="474" y="472" fill="#8a8675">m5</text>
+        <rect x="516" y="454" width="52" height="26" rx="6" fill="#12110b" stroke="#3a382c"/><text x="542" y="472" fill="#8a8675">m6</text>
+      </g>
+      <rect x="584" y="454" width="290" height="26" rx="6" fill="#221a30" stroke="#9d6fe0" stroke-width="1.5"/>
+      <text x="729" y="472" fill="#9d6fe0" font-size="10" text-anchor="middle" font-family="Menlo,monospace">metadata.memory_written_scriptorium</text>
+      <text x="890" y="472" fill="#8a8675" font-size="11.5">Markers reside on individual message nodes</text>
+      <text x="176" y="504" fill="#9d6fe0" font-size="11">Inspect backward from the current branch’s newest node until a workspace marker is found; intervening unmarked nodes form the pending suffix.</text>
+    </g>
+
+    <line x1="32" y1="530" x2="1128" y2="530" stroke="#2e2c20" stroke-width="1"/>
+    <text x="32" y="560" fill="#d4843a" font-size="12.5" font-weight="700">Why only we require a set</text>
+    <text x="32" y="584" fill="#bdb9a6" font-size="11.5">A–D assume messages form a line: whether numeric, one id, or an in-data marker, “everything after this point is new.”</text>
+    <text x="32" y="604" fill="#bdb9a6" font-size="11.5">With two branches in one session, “after this point” refers to two message sequences and becomes ambiguous. See section 05.</text>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Form</th><th>Storage</th><th>Verified location</th></tr>
+    <tr><td><b>claude-code</b></td><td>Single message UUID, scan backward</td><td class="n">In-process closure variable, not persisted, lost on restart</td><td class="q"><span class="src">src/services/extractMemories/extractMemories.ts:305-309,340,348<br>Missing means all new: :103-108</span></td></tr>
+    <tr><td><b>codex-cli</b></td><td>Integer timestamp watermark at session-file granularity</td><td>SQLite task table with lease and retry count</td><td class="q"><span class="src">state/memory_migrations/0001_memories.sql:3,7,17-31<br>memories/write/src/phase1.rs:149-187</span></td></tr>
+    <tr><td><b>openclaw</b></td><td>Entry-level <code>promotedAt</code> timestamp plus a body-embedded deduplication comment</td><td>On entries themselves plus <code>MEMORY.md</code> body</td><td class="q"><span class="src">extensions/memory-core/src/short-term-promotion.ts:84,1602-1612,1666-1669,1737</span></td></tr>
+    <tr><td><b>opencode</b></td><td>Message-level <code>summary: true</code> boolean plus a <code>tail_start_id</code></td><td>On messages themselves</td><td class="q"><span class="src">packages/opencode/src/session/message-v2.ts:535-586<br>.../compaction.ts:386,437-442</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td class="n">No memory cursor; persistence uses an integer index, compaction scans body markers</td><td>—</td><td class="q"><span class="src">agent/agent_init.py:1026<br>agent/context_compressor.py:37-51,1215-1226</span></td></tr>
+    <tr><td><b>pi-ai</b></td><td class="n">None</td><td>—</td><td class="q">—</td></tr>
+    <tr><td><b>pi-mono</b></td><td>Single entry id <code>firstKeptEntryId</code>, scan backward</td><td>In compaction records, in the transcript file</td><td class="q"><span class="src">packages/coding-agent/src/core/session-manager.ts:67-77,315-422</span></td></tr>
+    <tr><td><b>weclaw</b></td><td class="n">None; only a hard message-count cutoff</td><td>—</td><td class="q"><span class="src">agent/http_agent.go:151-154</span></td></tr>
+    <tr class="us"><td><b>OpenProgram before migration</b></td><td class="n">Integer ordinal position</td><td><code>runtime.json</code></td><td class="q"><span class="src">written-marker.md layer 1</span></td></tr>
+    <tr class="plan"><td><b>Current OpenProgram</b></td><td>Workspace marker on each node</td><td>Session node’s <code>metadata</code></td><td class="q"><span class="src">written-marker.md layer 3</span></td></tr>
+  </table>
+  </div>
+
+  <div class="note k">
+    <b>A practice to adopt:</b>If claude-code cannot find the cursor’s message, it <b>treats all messages as unwritten again</b>,
+    rather than returning zero. The comment states that zero would stop extraction for the rest of the session.
+    Rewriting has bounded cost; silent stoppage has unbounded cost. Our migration offers an old session whole once instead of trusting its old cursor, which makes the same tradeoff:
+    prefer a repeated batch to losing everything.
+  </div>
+
+  <div class="note k">
+    <b>Another practice:</b>openclaw deduplication <b>records two mutually checking copies</b>: promotion time on entries,
+    plus <code>MEMORY.md</code> body HTML comments with keys. If either copy disappears, the other still prevents duplicates.
+    Our record is the node marks alone; Topic footnotes also name the messages they rest on, but the two do not cross-check.
+  </div>
+
+  <!-- ══════════ 05 ══════════ -->
+  <h2 id="branch"><span class="num">05</span>Branches and restarts<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">This matters most for us. Of eight references, only pi-mono, like us, places branches <b>inside the same session</b>.
+    Others either never branch or create another session file linked to its parent.
+    Their cursors need not handle branches sharing a prefix inside one session because that structure does not exist.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three branching approaches">
+    <defs>
+      <marker id="b-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+      <marker id="b-gy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a8675"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">The user returns to message three and asks again: three approaches</text>
+
+    <rect x="32" y="52" width="352" height="180" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
+    <text x="52" y="78" fill="#e0445a" font-size="13" font-weight="700">No branching</text>
+    <text x="52" y="98" fill="#8a8675" font-size="11">weclaw · pi-ai</text>
+    <g font-size="10.5" text-anchor="middle">
+      <line x1="76" y1="140" x2="336" y2="140" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="76" cy="140" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="76" y="164" fill="#8a8675">m1</text>
+      <circle cx="141" cy="140" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="141" y="164" fill="#8a8675">m2</text>
+      <circle cx="206" cy="140" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="206" y="164" fill="#8a8675">m3</text>
+      <circle cx="271" cy="140" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="271" y="164" fill="#8a8675">m4</text>
+      <circle cx="336" cy="140" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="336" y="164" fill="#8a8675">m5</text>
+    </g>
+    <text x="52" y="196" fill="#8a8675" font-size="11">Restarting requires clearing the session and creating another. weclaw permits</text>
+    <text x="52" y="214" fill="#8a8675" font-size="11">one session per WeChat contact and discards the old one.</text>
+
+    <rect x="404" y="52" width="352" height="180" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
+    <text x="424" y="78" fill="#2db3d5" font-size="13" font-weight="700">New session with a parent pointer</text>
+    <text x="424" y="97" fill="#8a8675" font-size="11">claude-code · codex · hermes</text>
+    <text x="424" y="113" fill="#8a8675" font-size="11">opencode · openclaw</text>
+    <g font-size="10.5" text-anchor="middle">
+      <line x1="448" y1="146" x2="578" y2="146" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="448" cy="146" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="513" cy="146" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="578" cy="146" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+      <text x="640" y="150" fill="#8a8675" text-anchor="start">Session A remains unchanged</text>
+      <path d="M578 156 C 578 178, 610 182, 636 182" fill="none" stroke="#2db3d5" stroke-width="1.4" marker-end="url(#b-gy)"/>
+      <line x1="640" y1="182" x2="726" y2="182" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="640" cy="182" r="8" fill="#1e2630" stroke="#2db3d5" stroke-width="1.4"/>
+      <circle cx="705" cy="182" r="8" fill="#1e2630" stroke="#2db3d5" stroke-width="1.4"/>
+      <text x="672" y="206" fill="#2db3d5">Session B records A as its parent</text>
+    </g>
+    <text x="424" y="224" fill="#8a8675" font-size="11">Each session remains linear, so the cursor still works.</text>
+
+    <rect x="776" y="52" width="352" height="180" rx="10" fill="#141a12" stroke="#5aad4e" stroke-width="1.6"/>
+    <text x="796" y="78" fill="#5aad4e" font-size="13" font-weight="700">Branch within the same session</text>
+    <text x="796" y="98" fill="#8a8675" font-size="11">pi-mono · OpenProgram</text>
+    <g font-size="10.5" text-anchor="middle">
+      <line x1="820" y1="128" x2="950" y2="128" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="820" cy="128" r="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+      <circle cx="885" cy="128" r="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+      <circle cx="950" cy="128" r="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+      <line x1="950" y1="128" x2="1080" y2="128" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="1015" cy="128" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="1080" cy="128" r="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+      <path d="M950 138 C 950 158, 990 162, 1015 176" fill="none" stroke="#d4843a" stroke-width="1.5" marker-end="url(#b-or)"/>
+      <line x1="1015" y1="180" x2="1080" y2="180" stroke="#3a382c" stroke-width="1.3"/>
+      <circle cx="1015" cy="180" r="8" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+      <circle cx="1080" cy="180" r="8" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+      <text x="887" y="152" fill="#5aad4e">Shared prefix</text>
+      <text x="1046" y="206" fill="#d4843a">New branch</text>
+    </g>
+    <text x="796" y="222" fill="#8a8675" font-size="11">One session id; two sequences share three messages.</text>
+
+    <line x1="32" y1="256" x2="1128" y2="256" stroke="#2e2c20" stroke-width="1"/>
+    <text x="32" y="286" fill="#d4843a" font-size="13" font-weight="700">In an in-session DAG, “after this message” is ambiguous</text>
+
+    <g>
+      <text x="140" y="330" fill="#8a8675" font-size="11.5" text-anchor="end">Main branch (written)</text>
+      <g font-size="10.5" text-anchor="middle">
+        <line x1="176" y1="326" x2="566" y2="326" stroke="#3a382c" stroke-width="1.3"/>
+        <rect x="152" y="313" width="48" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="176" y="331" fill="#5aad4e">m1</text>
+        <rect x="230" y="313" width="48" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="254" y="331" fill="#5aad4e">m2</text>
+        <rect x="308" y="313" width="48" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="332" y="331" fill="#5aad4e">m3</text>
+        <rect x="386" y="313" width="48" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="410" y="331" fill="#5aad4e">m4</text>
+        <rect x="464" y="313" width="48" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="488" y="331" fill="#5aad4e">m5</text>
+        <rect x="542" y="313" width="48" height="26" rx="6" fill="#101a10" stroke="#5aad4e"/><text x="566" y="331" fill="#5aad4e">m6</text>
+      </g>
+      <path d="M332 341 C 332 366, 386 366, 410 388" fill="none" stroke="#d4843a" stroke-width="1.5" marker-end="url(#b-or)"/>
+      <text x="140" y="405" fill="#d4843a" font-size="11.5" text-anchor="end">New branch (pending)</text>
+      <g font-size="10.5" text-anchor="middle">
+        <line x1="410" y1="401" x2="566" y2="401" stroke="#3a382c" stroke-width="1.3"/>
+        <rect x="386" y="388" width="48" height="26" rx="6" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/><text x="410" y="406" fill="#d4843a">b4</text>
+        <rect x="464" y="388" width="48" height="26" rx="6" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/><text x="488" y="406" fill="#d4843a">b5</text>
+        <rect x="542" y="388" width="48" height="26" rx="6" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/><text x="566" y="406" fill="#d4843a">b6</text>
+      </g>
+
+      <rect x="620" y="300" width="248" height="52" rx="8" fill="#241014" stroke="#e0445a" stroke-width="1.3"/>
+      <text x="636" y="322" fill="#e0445a" font-size="11.5">Ordinal cursor: “written through 6”</text>
+      <text x="636" y="341" fill="#bdb9a6" font-size="11">→ b4 b5 b6 have indices 4 5 6 and are all skipped</text>
+
+      <rect x="620" y="362" width="248" height="52" rx="8" fill="#241014" stroke="#e0445a" stroke-width="1.3"/>
+      <text x="636" y="384" fill="#e0445a" font-size="11.5">Single-id cursor: “written through m6”</text>
+      <text x="636" y="403" fill="#bdb9a6" font-size="11">→ m6 never appears on this branch</text>
+
+      <rect x="888" y="330" width="240" height="56" rx="8" fill="#221a30" stroke="#9d6fe0" stroke-width="1.6"/>
+      <text x="904" y="353" fill="#9d6fe0" font-size="11.5">Set: “m1…m6 are written”</text>
+      <text x="904" y="372" fill="#bdb9a6" font-size="11">→ b4 b5 b6: missing, pending</text>
+    </g>
+    <text x="32" y="444" fill="#8a8675" font-size="11.5">pi-mono also uses an in-session tree but avoids this problem because its id marks compaction start, not eligibility for long-term-memory writing.</text>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Branching supported</th><th>Implementation</th><th>Verified location</th></tr>
+    <tr><td><b>claude-code</b></td><td>Yes, most complete</td><td><code>/branch</code> copies the whole session into a new one; <code>/rewind</code> can rewind conversation, files, or both; subagents write separate files</td><td class="q"><span class="src">src/commands/branch/branch.ts:61-173<br>src/components/MessageSelector.tsx:31<br>src/utils/sessionStorage.ts:247-258</span></td></tr>
+    <tr><td><b>codex-cli</b></td><td>Yes</td><td><code>codex fork</code> and TUI edits of earlier prompts create new threads, leaving the source unchanged</td><td class="q"><span class="src">thread-store/src/types.rs:183-190<br>tui/src/app_backtrack.rs:7-8<br>rollout/src/recorder.rs:97-98</span></td></tr>
+    <tr><td><b>openclaw</b></td><td>Yes, subagents only</td><td>Subagent dispatch can inherit the parent transcript or start clean; no old-message edit/rerun implementation found</td><td class="q"><span class="src">src/agents/tools/sessions-spawn-tool.ts:190,307,343-344<br>Message editing: no grep matches</span></td></tr>
+    <tr><td><b>opencode</b></td><td>Can copy; rewind deletes</td><td><code>fork</code> deep-copies an independent session; <code>revert</code> only sets a marker; at the next prompt, messages after it are <b>actually deleted</b></td><td class="q"><span class="src">packages/opencode/src/session/session.ts:733-774<br>.../revert.ts:100-134<br>.../prompt.ts:1155-1159</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td>Yes</td><td><code>/branch</code> copies all history into a new session linked by parent id; compaction also creates child sessions, and <code>/resume</code> automatically follows the chain to the latest one</td><td class="q"><span class="src">cli.py:6682-6809<br>agent/conversation_compression.py:381-397<br>hermes_state.py:1851-1869</span></td></tr>
+    <tr><td><b>pi-ai</b></td><td class="n">No sessions</td><td>—</td><td class="q">—</td></tr>
+    <tr><td><b>pi-mono</b></td><td>Yes, sessions are trees</td><td>Editing an old message creates a sibling branch; leaving a branch can preserve a generated summary</td><td class="q"><span class="src">packages/agent/src/harness/agent-harness.ts:788-812<br>.../branch-summarization.ts:200-262</span></td></tr>
+    <tr><td><b>weclaw</b></td><td class="n">No</td><td>One per WeChat contact; <code>/new</code> deletes the old session</td><td class="q"><span class="src">messaging/handler.go:340-345</span></td></tr>
+    <tr class="us"><td><b>OpenProgram</b></td><td>Yes, sessions are DAGs</td><td>Reasking, retrying, and spawning agents branch from intermediate points; multiple branches under one session id share prefixes</td><td class="q"><span class="src">openprogram/state/store/session/session_store.py:988</span></td></tr>
+  </table>
+  </div>
+
+  <p class="lead" style="margin-top:22px">The above explains session structure. What determines missing writes is the next question:
+    <b>what happens to the cursor after a fork</b>. Eight implementations use three approaches; none simply ignores the issue.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cursor handling after forks">
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">After a fork: three cursor approaches</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">An index cursor assumes one line within its scope. Forking threatens that assumption; each approach preserves it differently.</text>
+
+    <!-- 办法一 -->
+    <rect x="32" y="72" width="1096" height="118" rx="9" fill="#1d1c14" stroke="#2db3d5" stroke-width="1.4"/>
+    <text x="52" y="98" fill="#2db3d5" font-size="13" font-weight="700">Approach 1 · new cursor scope, re-extract shared prefix</text>
+    <text x="440" y="98" fill="#8a8675" font-size="11">codex · claude-code · openclaw</text>
+    <text x="52" y="122" fill="#bdb9a6" font-size="11.5">codex: forks create a new thread_id, which is the memory-cursor table primary key. The new thread has no row, so extraction restarts from the beginning.</text>
+    <text x="52" y="141" fill="#bdb9a6" font-size="11.5">openclaw: forks create a new session and flush markers are <tspan fill="#f0eee6" font-weight="700">deliberately cleared</tspan>; comments prefer re-extraction in the new session to omission from hash collisions.</text>
+    <text x="52" y="160" fill="#bdb9a6" font-size="11.5">claude-code: the cursor is an in-process closure variable, reused in the same process but empty in a new one; empty means everything is new.</text>
+    <text x="52" y="181" fill="#8a8675" font-size="11">Cost: the shared prefix is extracted again. codex’s Phase 2 consolidation agent merges semantically, without mechanical deduplication. These systems accept that cost.</text>
+
+    <!-- 办法二 -->
+    <rect x="32" y="202" width="1096" height="100" rx="9" fill="#1d1c14" stroke="#9d6fe0" stroke-width="1.4"/>
+    <text x="52" y="228" fill="#9d6fe0" font-size="13" font-weight="700">Approach 2 · carry the boundary and translate coordinates</text>
+    <text x="440" y="228" fill="#8a8675" font-size="11">opencode · hermes</text>
+    <text x="52" y="252" fill="#bdb9a6" font-size="11.5">opencode: a fork gives every message a new id; the compaction boundary <tspan font-family="Menlo,monospace">tail_start_id</tspan> follows a lookup table to the new id, avoiding prefix recompaction.</text>
+    <text x="52" y="271" fill="#bdb9a6" font-size="11.5">hermes: <tspan font-family="Menlo,monospace">/branch</tspan>Copy all history into a new session, then manually advance the index to the copied length at the fork.</text>
+    <text x="52" y="292" fill="#8a8675" font-size="11">This works because the fork <tspan fill="#f0eee6">copies content</tspan>, with a new coordinate system starting from the beginning, allowing translation or one-time advancement.</text>
+
+    <!-- 办法三 -->
+    <rect x="32" y="314" width="1096" height="82" rx="9" fill="#1d1c14" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="52" y="340" fill="#5aad4e" font-size="13" font-weight="700">Approach 3 · exclude the prefix from traversal</text>
+    <text x="440" y="340" fill="#8a8675" font-size="11">pi-mono</text>
+    <text x="52" y="364" fill="#bdb9a6" font-size="11.5">Like us, it has an in-session tree, but asks for branch changes relative to the nearest common ancestor: walk from leaf backward and stop at that ancestor.</text>
+    <text x="52" y="385" fill="#8a8675" font-size="11">Traversal excludes the shared prefix, not a cursor. Therefore the tree needs no cursor for this purpose.</text>
+
+    <!-- 我们 -->
+    <line x1="32" y1="412" x2="1128" y2="412" stroke="#2e2c20" stroke-width="1"/>
+    <rect x="32" y="424" width="1096" height="62" rx="9" fill="#241015" stroke="#e0445a" stroke-width="1.6"/>
+    <text x="52" y="450" fill="#e0445a" font-size="13" font-weight="700">Before migration · none of the three</text>
+    <text x="52" y="472" fill="#bdb9a6" font-size="11.5">Forks then neither changed session id nor copied nodes; <tspan font-family="Menlo,monospace">get_branch</tspan> walked from head to the beginning while progress remained a positional index. Node-marker migration replaced exactly this implementation.</text>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Cursor scope after a fork</th><th>Shared-prefix re-extraction</th><th>Verified location</th></tr>
+    <tr><td><b>codex-cli</b></td><td>New scope: fork produces a new <code>thread_id</code>, the cursor table’s primary key</td><td class="h">Yes, entire prefix. Only Phase 2 consolidation merges semantically</td><td class="q"><span class="src">thread-store/src/types.rs:78-79,97<br>state/memory_migrations/0001_memories.sql:1-12<br>state/src/runtime/memories.rs:104-108<br>memories/write/src/phase1.rs:290</span></td></tr>
+    <tr><td><b>claude-code</b></td><td>One per process: closure variable, not persisted</td><td class="h">No within the same process; yes deliberately in a new process</td><td class="q"><span class="src">src/services/extractMemories/extractMemories.ts:305-307,86-88<br>src/utils/backgroundHousekeeping.ts:34-36<br>src/commands/branch/branch.ts:68,117-146</span></td></tr>
+    <tr><td><b>openclaw</b></td><td>New scope: fork creates a session and intentionally clears flush markers</td><td class="h">Yes. Comments prefer repetition to omission from equal hashes</td><td class="q"><span class="src">src/auto-reply/reply/session.ts:756-767,793-799<br>src/config/sessions/types.ts:370-371<br>src/auto-reply/reply/memory-flush.ts:117-123</span></td></tr>
+    <tr><td><b>opencode</b></td><td>New scope with translated boundary: fork reissues every message id, and <code>tail_start_id</code> maps to the new id</td><td class="y">No</td><td class="q"><span class="src">packages/opencode/src/session/session.ts:748-758,767-769<br>.../compaction.ts:244-248</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td>New session; manually advance index to copied length</td><td class="y">No. Compaction-created sessions instead reset to 0 because they truly start empty</td><td class="q"><span class="src">cli.py:6701-6705,6744-6756,6776-6777<br>agent/agent_init.py:1026<br>agent/conversation_compression.py:379-380,407-408</span></td></tr>
+    <tr><td><b>pi-mono</b></td><td>Unnecessary: take only leaf-to-nearest-common-ancestor changes</td><td class="y">No; traversal excludes it</td><td class="q"><span class="src">packages/agent/src/harness/compaction/branch-summarization.ts:87-97<br>packages/agent/src/harness/agent-harness.ts:737-834</span></td></tr>
+    <tr><td><b>pi-ai</b> · <b>weclaw</b></td><td class="q">No session forks</td><td class="q">Not applicable</td><td class="q"><span class="src">weclaw agent/http_agent.go:76-78 (/new clears the session)</span></td></tr>
+    <tr class="us"><td><b>OpenProgram before migration</b></td><td class="n">Unchanged: same session id and positional cursor</td><td class="n">No repetition, but a fork can misclassify unwritten nodes as written</td><td class="q"><span class="src">written-marker.md layer 1</span></td></tr>
+    <tr class="plan"><td><b>Current OpenProgram</b></td><td>Unchanged scope; inspect workspace markers backward from current branch tip</td><td class="y">No; shared-prefix nodes already carry markers, and inspection stops there</td><td class="q"><span class="src">written-marker.md layer 3</span></td></tr>
+  </table>
+  </div>
+
+  <div class="note k">
+    <b>The conclusion for this comparison:</b>Index and timestamp cursors depend on one line per cursor scope.
+    They preserve that assumption by <b>changing scope on a fork</b>: codex changes thread_id, openclaw changes session,
+    claude-code changes process, and hermes manually advances the index at the fork.
+    Scope changes work because their forks all <b>copies content</b>, giving the new side fresh coordinates.
+    Our forks do not copy: both branches share a graph and session id, so neither scope switching nor coordinate translation applies.
+    We therefore record identities rather than ordinal positions.
+    pi-mono demonstrates another solution: its in-session tree excludes prefixes by stopping at the nearest common ancestor.
+    That requires a comparison branch for every traversal, whereas memory asks what remains unwritten in the session, with no second branch to compare.
+  </div>
+
+  <div class="note k">
+    <b>A useful pi-mono practice:</b>When leaving a branch, it can generate a summary and attach it to the tree,
+    preserving statements after abandonment. This addresses the gap acknowledged in our overview.md:
+    only the head branch is written, and nobody revisits branches abandoned midway.
+  </div>
+
+  <div class="note k">
+    <b>An unexpected opencode behavior:</b><code>revert</code> itself deletes nothing, but the next prompt starts by <b>permanently deleting</b> messages after the marker.
+    Editing an old message and rerunning is therefore irreversible unless the old branch is forked first.
+    Our DAG retains both, requiring a way to identify which content has been written.
+  </div>
+
+  <!-- ══════════ 06 ══════════ -->
+  <h2 id="recall"><span class="num">06</span>Retrieval<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">How stored content returns to context: inject everything, keyword search, vector search, or model selection.
+    The fourth is unique to claude-code and is the least expensive approach.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four retrieval methods">
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Four retrieval paths</text>
+
+    <rect x="32" y="52" width="264" height="216" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
+    <text x="52" y="78" fill="#8a8675" font-size="12.5" font-weight="700">Inject everything</text>
+    <text x="52" y="100" fill="#6b6a63" font-size="11">opencode · pi-mono</text>
+    <text x="52" y="128" fill="#bdb9a6" font-size="11.5">The entire AGENTS.md enters the system prompt,</text>
+    <text x="52" y="146" fill="#bdb9a6" font-size="11.5">without chunking or filtering.</text>
+    <text x="52" y="176" fill="#8a8675" font-size="11">For finer detail, the model uses</text>
+    <text x="52" y="194" fill="#8a8675" font-size="11">file-reading and grep tools itself.</text>
+    <text x="52" y="228" fill="#5aad4e" font-size="11">Zero infrastructure.</text>
+    <text x="52" y="246" fill="#e0445a" font-size="11">Large files exhaust the budget.</text>
+
+    <rect x="308" y="52" width="264" height="216" rx="10" fill="#141a12" stroke="#5aad4e" stroke-width="1.6"/>
+    <text x="328" y="78" fill="#5aad4e" font-size="12.5" font-weight="700">Keyword search</text>
+    <text x="328" y="100" fill="#6b6a63" font-size="11">hermes · codex · OpenProgram</text>
+    <text x="328" y="128" fill="#bdb9a6" font-size="11.5">We rank with BM25 and take five results</text>
+    <text x="328" y="146" fill="#bdb9a6" font-size="11.5">every turn, without a model call.</text>
+    <text x="328" y="176" fill="#8a8675" font-size="11">hermes: SQLite full-text session search.</text>
+    <text x="328" y="194" fill="#8a8675" font-size="11">codex uses simpler line-by-line substring matching.</text>
+    <text x="328" y="228" fill="#5aad4e" font-size="11">Fast, inexpensive, explainable results.</text>
+    <text x="328" y="246" fill="#e0445a" font-size="11">Paraphrases may not match.</text>
+
+    <rect x="584" y="52" width="264" height="216" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
+    <text x="604" y="78" fill="#2db3d5" font-size="12.5" font-weight="700">Vector search</text>
+    <text x="604" y="100" fill="#6b6a63" font-size="11">openclaw</text>
+    <text x="604" y="128" fill="#bdb9a6" font-size="11.5">Nearest-neighbor search in SQLite,</text>
+    <text x="604" y="146" fill="#bdb9a6" font-size="11.5">combined with full-text ranking.</text>
+    <text x="604" y="176" fill="#8a8675" font-size="11">Paraphrases can still match.</text>
+    <text x="604" y="200" fill="#8a8675" font-size="11">A dedicated subagent also searches before the user turn</text>
+    <text x="604" y="218" fill="#8a8675" font-size="11">and inserts conclusions into the main context.</text>
+    <text x="604" y="248" fill="#e0445a" font-size="11">Requires embeddings, indexes, and rebuilding—over half of more than twenty thousand lines.</text>
+
+    <rect x="860" y="52" width="268" height="216" rx="10" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+    <text x="880" y="78" fill="#4f8ef7" font-size="12.5" font-weight="700">Let the model select</text>
+    <text x="880" y="100" fill="#6b6a63" font-size="11">claude-code</text>
+    <text x="880" y="128" fill="#bdb9a6" font-size="11.5">Scan every memory file header,</text>
+    <text x="880" y="146" fill="#bdb9a6" font-size="11.5">list filenames plus one-line descriptions,</text>
+    <text x="880" y="164" fill="#bdb9a6" font-size="11.5">and ask a small model to choose at most five.</text>
+    <text x="880" y="194" fill="#8a8675" font-size="11">The prompt includes a counterintuitive rule:</text>
+    <text x="880" y="212" fill="#8a8675" font-size="11">omit usage docs for tools already being used,</text>
+    <text x="880" y="230" fill="#8a8675" font-size="11">but select their pitfalls and known issues.</text>
+    <text x="880" y="256" fill="#4f8ef7" font-size="11">No index; one inexpensive extra call.</text>
+  </svg>
+  </div>
+
+  <div class="note k">
+    <b>The most useful practice to adopt.</b>claude-code <b>builds no index</b>, instead requiring each memory file to start with a self-description.
+    Retrieval lists these descriptions and uses an inexpensive small-model call to select five filenames.
+    We currently lack this path, which naturally matches our <code>topics/</code> structure.
+    Selection is more precise than “choose if relevant”: omit uncertain matches and prefer empty results.
+  </div>
+
+  <div class="note k">
+    <b>A useful codex feedback loop:</b>The model embeds a hidden marker identifying memory used in its response.
+    The server parses it, increments usage counts, then <b>removes it</b> before showing the response.
+    Counts feed organization-stage ranking: frequently used content stays prominent while unused content is ranked lower,
+    without manual scoring. Our nightly reorganization currently merges by content only, without this feedback.
+  </div>
+
+  <!-- ══════════ 07 ══════════ -->
+  <h2 id="core"><span class="num">07</span>Resident content: trimming when full<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">Four of eight implementations limit the small memory block included every turn, with six gates in total. There are only two trimming approaches,
+    and <b>none delegates removal decisions entirely to an unconstrained model</b>: deterministic truncation, or deterministic rejection followed by model edits.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 640" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Trimming full resident content">
+    <defs>
+      <marker id="c-rd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a8675"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Six gates, seven approaches including ours</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">Left: limit size. Middle: what happens on overflow. Right: whether the action is disclosed.</text>
+
+    <text x="180" y="86" fill="#8a8675" font-size="11" letter-spacing="1.5">Limit</text>
+    <text x="420" y="86" fill="#8a8675" font-size="11" letter-spacing="1.5">Overflow behavior</text>
+    <text x="900" y="86" fill="#8a8675" font-size="11" letter-spacing="1.5">Disclosure</text>
+    <line x1="32" y1="96" x2="1128" y2="96" stroke="#2e2c20" stroke-width="1"/>
+
+    <!-- claude-code MEMORY.md -->
+    <text x="164" y="128" fill="#4f8ef7" font-size="12.5" font-weight="700" text-anchor="end">claude-code</text>
+    <text x="164" y="144" fill="#8a8675" font-size="10.5" text-anchor="end">MEMORY.md</text>
+    <text x="180" y="128" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">200 lines</text>
+    <text x="180" y="146" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">25000 bytes</text>
+    <g>
+      <rect x="300" y="110" width="560" height="44" rx="7" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+      <text x="316" y="130" fill="#bdb9a6" font-size="11.5">Two sequential gates: first 200 lines, then, if bytes still exceed the limit,<tspan fill="#f0eee6" font-weight="700">backtrack to the last newline</tspan>and cut there, never mid-line.</text>
+      <text x="316" y="147" fill="#8a8675" font-size="11">The byte gate was added after a production index stayed under 200 lines but reached 197KB.</text>
+    </g>
+    <text x="876" y="126" fill="#5aad4e" font-size="11.5">Yes. Append a warning</text>
+    <text x="876" y="143" fill="#5aad4e" font-size="11.5">naming the triggered gate</text>
+    <text x="876" y="160" fill="#5aad4e" font-size="11.5">and how to fix it</text>
+
+    <!-- claude-code SessionMemory -->
+    <text x="164" y="200" fill="#4f8ef7" font-size="12.5" font-weight="700" text-anchor="end">claude-code</text>
+    <text x="164" y="216" fill="#8a8675" font-size="10.5" text-anchor="end">SessionMemory</text>
+    <text x="180" y="200" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">2000 tokens per section</text>
+    <text x="180" y="218" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">12000 tokens total</text>
+    <g>
+      <rect x="300" y="182" width="272" height="44" rx="7" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+      <text x="316" y="202" fill="#d4843a" font-size="11.5" font-weight="700">First level: model compression</text>
+      <text x="316" y="219" fill="#8a8675" font-size="11">The prompt names two sections to preserve</text>
+      <path d="M576 204 L596 204" stroke="#8a8675" stroke-width="1.3" marker-end="url(#c-rd)"/>
+      <rect x="600" y="182" width="260" height="44" rx="7" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+      <text x="616" y="202" fill="#4f8ef7" font-size="11.5" font-weight="700">Second level: deterministic line truncation</text>
+      <text x="616" y="219" fill="#8a8675" font-size="11">Fallback when model compression is insufficient</text>
+    </g>
+    <text x="876" y="198" fill="#5aad4e" font-size="11.5">Yes. Truncated sections retain</text>
+    <text x="876" y="215" fill="#5aad4e" font-size="11.5">“This section was truncated due to length”</text>
+
+    <!-- codex AGENTS.md -->
+    <text x="164" y="272" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">codex-cli</text>
+    <text x="164" y="288" fill="#8a8675" font-size="10.5" text-anchor="end">AGENTS.md and summary pages</text>
+    <text x="180" y="272" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">32 KiB combined budget</text>
+    <text x="180" y="290" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">Summary pages: 2500 tokens</text>
+    <g>
+      <rect x="300" y="254" width="560" height="44" rx="7" fill="#1e2630" stroke="#2db3d5" stroke-width="1.3"/>
+      <text x="316" y="274" fill="#bdb9a6" font-size="11.5">Multiple project AGENTS.md files share one remaining-byte budget and are cut wherever it ends.</text>
+      <text x="316" y="291" fill="#e0445a" font-size="11">The global <tspan font-family="Menlo,monospace">~/.codex/AGENTS.md</tspan> has no gate and is injected in full regardless of size.</text>
+    </g>
+    <text x="876" y="270" fill="#e0445a" font-size="11.5">Mostly no. Only a log entry,</text>
+    <text x="876" y="287" fill="#e0445a" font-size="11.5">invisible to both user</text>
+    <text x="876" y="304" fill="#e0445a" font-size="11.5">and model</text>
+
+    <!-- openclaw -->
+    <text x="164" y="344" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">openclaw</text>
+    <text x="164" y="360" fill="#8a8675" font-size="10.5" text-anchor="end">MEMORY.md</text>
+    <text x="180" y="344" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">10000 characters</text>
+    <text x="180" y="362" fill="#8a8675" font-size="10.5">Below 12000-char gate</text>
+    <g>
+      <rect x="300" y="326" width="560" height="44" rx="7" fill="#1e2630" stroke="#2db3d5" stroke-width="1.3"/>
+      <text x="316" y="346" fill="#bdb9a6" font-size="11.5"><tspan fill="#f0eee6" font-weight="700">Trim by ownership</tspan>: remove only automatically promoted paragraphs, oldest dates first.</text>
+      <text x="316" y="363" fill="#5aad4e" font-size="11.5">Never alter handwritten content in the file.</text>
+    </g>
+    <text x="876" y="342" fill="#5aad4e" font-size="11.5">Yes. Return the dates</text>
+    <text x="876" y="359" fill="#5aad4e" font-size="11.5">removed by this operation</text>
+
+    <!-- openclaw bootstrap -->
+    <text x="164" y="416" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">openclaw</text>
+    <text x="164" y="432" fill="#8a8675" font-size="10.5" text-anchor="end">Startup injection layer</text>
+    <text x="180" y="416" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">12000 characters per file</text>
+    <text x="180" y="434" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">60000 chars total</text>
+    <g>
+      <rect x="300" y="398" width="560" height="44" rx="7" fill="#1e2630" stroke="#2db3d5" stroke-width="1.4"/>
+      <text x="316" y="418" fill="#bdb9a6" font-size="11.5">Ordinary files retain 75% head and 25% tail. AGENTS.md is special:<tspan fill="#f0eee6" font-weight="700">45% head, 35% regex-selected key lines, 15% tail</tspan>.</text>
+      <text x="316" y="435" fill="#8a8675" font-size="11">Regex recognizes headings, list lines, and words such as must, never, security, and commit; not model judgment.</text>
+    </g>
+    <text x="876" y="414" fill="#5aad4e" font-size="11.5">Yes. Add a separate</text>
+    <text x="876" y="431" fill="#5aad4e" font-size="11.5">truncation warning to the system prompt,</text>
+    <text x="876" y="448" fill="#5aad4e" font-size="11.5">by default every time</text>
+
+    <!-- hermes -->
+    <text x="164" y="488" fill="#d4843a" font-size="12.5" font-weight="700" text-anchor="end">hermes-agent</text>
+    <text x="164" y="504" fill="#8a8675" font-size="10.5" text-anchor="end">MEMORY.md / USER.md</text>
+    <text x="180" y="488" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">2200 / 1375 characters</text>
+    <text x="180" y="506" fill="#8a8675" font-size="10.5">Characters, not tokens</text>
+    <g>
+      <rect x="300" y="470" width="560" height="44" rx="7" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+      <text x="316" y="490" fill="#bdb9a6" font-size="11.5"><tspan fill="#f0eee6" font-weight="700">Reject rather than trim</tspan>. Return the write unchanged; persist nothing.</text>
+      <text x="316" y="507" fill="#8a8675" font-size="11">The model decides what to remove afterward but learns it is full only after rejection.</text>
+    </g>
+    <text x="876" y="486" fill="#5aad4e" font-size="11.5">Yes. Rejection returns</text>
+    <text x="876" y="503" fill="#5aad4e" font-size="11.5">current usage and the limit</text>
+    <text x="876" y="520" fill="#5aad4e" font-size="11.5">to the model</text>
+
+    <!-- 我们 -->
+    <text x="164" y="560" fill="#5aad4e" font-size="12.5" font-weight="700" text-anchor="end">OpenProgram</text>
+    <text x="164" y="576" fill="#8a8675" font-size="10.5" text-anchor="end">core.md</text>
+    <text x="180" y="560" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace">2000 token</text>
+    <text x="180" y="578" fill="#8a8675" font-size="10.5">Actual tiktoken count</text>
+    <g>
+      <rect x="300" y="542" width="560" height="44" rx="7" fill="#141a12" stroke="#5aad4e" stroke-width="1.8"/>
+      <text x="316" y="562" fill="#bdb9a6" font-size="11.5"><tspan fill="#f0eee6" font-weight="700">Reject the whole transaction</tspan>. Reject the entire batch, not just this entry; the workspace remains byte-for-byte unchanged.</text>
+      <text x="316" y="579" fill="#8a8675" font-size="11">Give the writer a repair instruction: core.md is full; leave it alone and put this in a topic file.</text>
+    </g>
+    <text x="876" y="558" fill="#5aad4e" font-size="11.5">Yes. Give repair guidance</text>
+    <text x="876" y="575" fill="#5aad4e" font-size="11.5">directly to the writer, with</text>
+    <text x="876" y="592" fill="#5aad4e" font-size="11.5">one retry opportunity</text>
+
+    <line x1="32" y1="612" x2="1128" y2="612" stroke="#2e2c20" stroke-width="1"/>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Resident block</th><th>Limit</th><th>When full</th><th>Decision maker</th><th>Disclosure</th><th>Verified location</th></tr>
+    <tr><td><b>claude-code</b> MEMORY.md</td><td class="y">Yes</td><td class="fw">200 lines + 25000 bytes</td><td>Truncate by lines, then by bytes at the last newline</td><td>Deterministic</td><td class="y">Append a warning naming the gate</td><td class="q"><span class="src">src/memdir/memdir.ts:35,38,57-103</span></td></tr>
+    <tr><td><b>claude-code</b> SessionMemory</td><td class="y">Yes</td><td class="fw">2000 tokens per section / 12000 total</td><td>Model compression first, deterministic line truncation if insufficient</td><td>Model, then deterministic</td><td class="y">Retain <code>[... section truncated for length ...]</code></td><td class="q"><span class="src">src/services/SessionMemory/prompts.ts:8-9,67,185,256-324</span></td></tr>
+    <tr><td><b>claude-code</b> CLAUDE.md</td><td class="y">Yes</td><td class="n">40000 characters warns only, without truncation</td><td class="n">Do nothing beyond “file too large” in the status panel</td><td class="q">—</td><td class="y">Status-panel notice</td><td class="q"><span class="src">src/utils/claudemd.ts:92,1132-1134</span></td></tr>
+    <tr><td><b>codex-cli</b></td><td class="y">Yes</td><td class="fw">Project 32 KiB; summary 2500 tokens; global unlimited</td><td>Cut at the remaining-byte boundary</td><td>Deterministic</td><td class="n">Log entry only</td><td class="q"><span class="src">core/src/config/mod.rs:211<br>core/src/agents_md.rs:94,116-124<br>ext/memories/src/lib.rs:16</span></td></tr>
+    <tr><td><b>openclaw</b> MEMORY.md</td><td class="y">Yes</td><td class="fw">10000 characters</td><td>Remove only automatically promoted paragraphs, oldest first; preserve handwritten content</td><td>Deterministic, ownership-based</td><td class="y">Return removed dates</td><td class="q"><span class="src">extensions/memory-core/src/memory-budget.ts:25,100-164<br>short-term-promotion.ts:1719,1762</span></td></tr>
+    <tr><td><b>openclaw</b> startup injection layer</td><td class="y">Yes</td><td class="fw">12000 per file / 60000 total characters</td><td>Ordinary files: 75% head, 25% tail; AGENTS.md: 45% head, 35% regex-selected key lines, 15% tail</td><td>Deterministic regex selection</td><td class="y">Add a system-prompt truncation warning, by default every time</td><td class="q"><span class="src">src/agents/pi-embedded-helpers/bootstrap.ts:88-89,96-102,158-165</span></td></tr>
+    <tr><td><b>opencode</b></td><td class="n">No memory block</td><td class="n">AGENTS.md has no limit; confirmed rather than not found</td><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q"><span class="src">packages/opencode/src/session/instruction.ts:91-93,155-169</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td class="y">Yes</td><td class="fw">2200 / 1375 characters</td><td>Hard-reject the write; let the model replace or remove content</td><td>Deterministic rejection + model removal selection</td><td class="y">Return usage and limit to the model</td><td class="q"><span class="src">tools/memory_tool.py:149,295-306,359-366</span></td></tr>
+    <tr><td><b>pi-ai</b></td><td class="n">No</td><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q">—</td></tr>
+    <tr><td><b>pi-mono</b></td><td class="y">Has AGENTS.md</td><td class="n">Unlimited, concatenate in full</td><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q"><span class="src">packages/coding-agent/src/core/system-prompt.ts:61-68</span></td></tr>
+    <tr><td><b>weclaw</b></td><td class="n">No</td><td class="q">Fixed configured system prompt, without learned content</td><td class="q">—</td><td class="q">—</td><td class="q">—</td><td class="q"><span class="src">config/config.go:28</span></td></tr>
+    <tr class="us"><td><b>OpenProgram</b> topics/core.md → core.md</td><td class="y">Yes</td><td class="fw">2000-token rendering budget</td><td>Runtime deterministically renders a budget-sized resident block; canonical Topic content is not deleted</td><td>Deterministic rendering</td><td class="y">Topics excluded from the resident block remain retrievable</td><td class="q"><span class="src">openprogram/state/memory/management/config.py<br>.../block_views.py</span></td></tr>
+  </table>
+  </div>
+
+  <p class="lead" style="margin-top:22px">The table explains immediate overflow but leaves another question, which is precisely our gap:
+    <b>can new stable facts enter after the block is full</b>? This depends on maintenance and whether the resident block is itself canonical.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Resident-content maintenance and new facts after saturation">
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Who maintains the resident block, and can new facts still enter</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">Canonical storage determines whether trimming means omitted from this view or deleted. A maintenance path determines whether new facts can enter after saturation.</text>
+
+    <text x="196" y="86" fill="#8a8675" font-size="11" letter-spacing="1.5">Canonical location</text>
+    <text x="520" y="86" fill="#8a8675" font-size="11" letter-spacing="1.5">Maintenance path</text>
+    <text x="912" y="86" fill="#8a8675" font-size="11" letter-spacing="1.5">New facts after saturation</text>
+    <line x1="32" y1="96" x2="1128" y2="96" stroke="#2e2c20" stroke-width="1"/>
+
+    <!-- claude-code -->
+    <text x="180" y="126" fill="#4f8ef7" font-size="12.5" font-weight="700" text-anchor="end">claude-code</text>
+    <text x="180" y="142" fill="#8a8675" font-size="10.5" text-anchor="end">MEMORY.md</text>
+    <rect x="196" y="108" width="300" height="42" rx="7" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+    <text x="210" y="127" fill="#bdb9a6" font-size="11.5">Topic files: <tspan fill="#f0eee6" font-weight="700">index, not memory</tspan></text>
+    <text x="210" y="144" fill="#8a8675" font-size="10.5">Prompt: no memory content in MEMORY.md</text>
+    <rect x="520" y="108" width="352" height="42" rx="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="534" y="127" fill="#5aad4e" font-size="11.5">Yes. Dream agent: after 24 hours and ≥5 sessions</text>
+    <text x="534" y="144" fill="#8a8675" font-size="10.5">Four parts; final pruning/indexing: below 200 lines</text>
+    <text x="912" y="132" fill="#5aad4e" font-size="12" font-weight="700">Yes. No gate exists on writes</text>
+
+    <!-- codex -->
+    <text x="180" y="184" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">codex-cli</text>
+    <text x="180" y="200" fill="#8a8675" font-size="10.5" text-anchor="end">memory_summary.md</text>
+    <rect x="196" y="166" width="300" height="42" rx="7" fill="#1e2630" stroke="#2db3d5" stroke-width="1.3"/>
+    <text x="210" y="185" fill="#bdb9a6" font-size="11.5">SQLite tables, then rendered into a raw-memory file</text>
+    <text x="210" y="202" fill="#8a8675" font-size="10.5">The resident block is the final derived step</text>
+    <rect x="520" y="166" width="352" height="42" rx="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="534" y="185" fill="#5aad4e" font-size="11.5">Yes. Session-start full rewrite; six-hour cooldown</text>
+    <text x="534" y="202" fill="#8a8675" font-size="10.5">Database pruning also deletes raw entries unused for 30 days</text>
+    <text x="912" y="190" fill="#5aad4e" font-size="12" font-weight="700">Yes. Rewritten each round</text>
+
+    <!-- openclaw -->
+    <text x="180" y="242" fill="#2db3d5" font-size="12.5" font-weight="700" text-anchor="end">openclaw</text>
+    <text x="180" y="258" fill="#8a8675" font-size="10.5" text-anchor="end">MEMORY.md</text>
+    <rect x="196" y="224" width="300" height="42" rx="7" fill="#1e2630" stroke="#2db3d5" stroke-width="1.3"/>
+    <text x="210" y="243" fill="#bdb9a6" font-size="11.5">Canonical file: manual + automatic content</text>
+    <text x="210" y="260" fill="#8a8675" font-size="10.5">Hence ownership-based trimming is required</text>
+    <rect x="520" y="224" width="352" height="42" rx="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="534" y="243" fill="#5aad4e" font-size="11.5">Yes. Daily 03:00 cron promotes after the dream pipeline</text>
+    <text x="534" y="260" fill="#8a8675" font-size="10.5">Before promotion: trim oldest automatic text to budget</text>
+    <text x="912" y="238" fill="#5aad4e" font-size="12" font-weight="700">Yes. <tspan fill="#f0eee6">All old content removable; writes continue</tspan></text>
+    <text x="912" y="256" fill="#8a8675" font-size="10.5">Comment: reject writes, lose latest material</text>
+
+    <!-- hermes -->
+    <text x="180" y="300" fill="#d4843a" font-size="12.5" font-weight="700" text-anchor="end">hermes-agent</text>
+    <text x="180" y="316" fill="#8a8675" font-size="10.5" text-anchor="end">MEMORY.md / USER.md</text>
+    <rect x="196" y="282" width="300" height="42" rx="7" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+    <text x="210" y="301" fill="#bdb9a6" font-size="11.5">The file itself is canonical, with no other copy</text>
+    <rect x="520" y="282" width="352" height="42" rx="7" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+    <text x="534" y="301" fill="#d4843a" font-size="11.5">No. The only one of eight without maintenance</text>
+    <text x="534" y="318" fill="#8a8675" font-size="10.5">No matches: consolidate / distill / prune / compact / dream</text>
+    <text x="912" y="296" fill="#d4843a" font-size="12" font-weight="700">Yes, but the model must first make room</text>
+    <text x="912" y="314" fill="#8a8675" font-size="10.5">Rejection returns to the <tspan fill="#f0eee6">main conversational model</tspan></text>
+
+    <!-- opencode / pi-mono -->
+    <text x="180" y="358" fill="#8a8675" font-size="12.5" font-weight="700" text-anchor="end">opencode · pi-mono</text>
+    <rect x="196" y="340" width="300" height="30" rx="7" fill="#1d1c14" stroke="#2e2c20" stroke-width="1.3"/>
+    <text x="210" y="359" fill="#8a8675" font-size="11.5">Handwritten AGENTS.md, injected in full</text>
+    <rect x="520" y="340" width="352" height="30" rx="7" fill="#1d1c14" stroke="#2e2c20" stroke-width="1.3"/>
+    <text x="534" y="359" fill="#8a8675" font-size="11.5">Not applicable: no automatic writes, hence no maintenance problem</text>
+    <text x="912" y="359" fill="#8a8675" font-size="12">Not applicable</text>
+
+    <!-- 我们 -->
+    <line x1="32" y1="386" x2="1128" y2="386" stroke="#2e2c20" stroke-width="1"/>
+    <text x="180" y="418" fill="#5aad4e" font-size="12.5" font-weight="700" text-anchor="end">Current OpenProgram</text>
+    <text x="180" y="434" fill="#8a8675" font-size="10.5" text-anchor="end">topics/core.md → core.md</text>
+    <rect x="196" y="400" width="300" height="42" rx="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="210" y="419" fill="#bdb9a6" font-size="11.5">Topic files are canonical</text>
+    <text x="210" y="436" fill="#8a8675" font-size="10.5">core.md is a Runtime-derived view rendered within budget</text>
+    <rect x="520" y="400" width="352" height="42" rx="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="534" y="419" fill="#5aad4e" font-size="11.5">Yes. Deterministic rebuild after every installed transaction</text>
+    <text x="534" y="436" fill="#8a8675" font-size="10.5">Nightly organization edits Topics only, then rebuilds derived views</text>
+    <text x="912" y="415" fill="#5aad4e" font-size="12" font-weight="700">Topics can still receive writes</text>
+    <text x="912" y="433" fill="#8a8675" font-size="10.5">Over-budget content stays retrievable</text>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Framework</th><th>Canonical source</th><th>Maintenance path and trigger</th><th>After saturation</th><th>Verified location</th></tr>
+    <tr><td><b>claude-code</b></td><td>Index of the topic-file directory</td><td class="y">Dream agent: 24 hours and at least 5 sessions</td><td class="y">No write-path gate; truncation happens only at injection, leaving disk originals unchanged</td><td class="q"><span class="src">src/memdir/memdir.ts:227,322-325,363<br>src/services/autoDream/autoDream.ts:63-66,140-141,166-171<br>src/services/autoDream/consolidationPrompt.ts:53-61</span></td></tr>
+    <tr><td><b>codex-cli</b></td><td>SQLite tables → raw-memory file → resident block</td><td class="y">Consolidation agent at session start with six-hour post-success cooldown; prune database entries unused for 30 days</td><td class="y">Rewrite in full; injection applies a 2500-token fallback cutoff</td><td class="q"><span class="src">state/src/runtime/memories.rs:21<br>memories/write/src/phase2.rs:139-166<br>memories/write/src/phase1.rs:110-133<br>ext/memories/src/lib.rs:16</span></td></tr>
+    <tr><td><b>openclaw</b></td><td>The file itself</td><td class="y">Daily 03:00 cron promotes after the dream pipeline</td><td class="y">Trim oldest automatic paragraphs before promotion; write new content even if all old paragraphs are removed</td><td class="q"><span class="src">src/memory-host-sdk/dreaming.ts:17<br>extensions/memory-core/src/memory-budget.ts:25,100-164<br>.../short-term-promotion.ts:1706-1727</span></td></tr>
+    <tr><td><b>hermes-agent</b></td><td>The file itself</td><td class="n">No</td><td class="h">Hard-reject this write and return usage/limit to the main conversational model, which frees space with replace or remove</td><td class="q"><span class="src">tools/memory_tool.py:149,295-306<br>No matches for consolidate / distill / prune / compact / dream</span></td></tr>
+    <tr><td><b>opencode</b> · <b>pi-mono</b></td><td>Handwritten file</td><td class="q">Not applicable</td><td class="q">No limit</td><td class="q"><span class="src">packages/opencode/src/session/instruction.ts:60-93<br>packages/coding-agent/src/core/resource-loader.ts:57-100</span></td></tr>
+    <tr class="us"><td><b>OpenProgram before migration</b></td><td>Root directory<code>core.md</code></td><td class="n">None; <code>organize_topics</code> handles only <code>topics/**.md</code></td><td class="n">Reject over-budget write transactions</td><td class="q"><span class="src">adoption.html section 02</span></td></tr>
+    <tr class="plan"><td><b>Current OpenProgram</b></td><td><code>topics/core.md</code></td><td>Deterministically rebuild alongside other derived views after every installed transaction</td><td>Render to budget; Topic content outside the resident block stays retrievable</td><td class="q"><span class="src">overview.md, “Resident content”</span></td></tr>
+  </table>
+  </div>
+
+  <div class="note k">
+    <b>Adoption record.</b>claude-code, codex, and openclaw separate editable canonical content from injection budgets. OpenProgram follows that principle, using
+    <code>topics/core.md</code> as canonical source and <code>core.md</code> as a deterministic derived view. Unlike them, OpenProgram does not delete
+    over-budget Topic content; retrieval can still return those blocks. Before migration, root <code>core.md</code> directly held canonical content and rejected over-budget transactions;
+    that implementation has been replaced.
+  </div>
+
+  <div class="note k">
+    <b>Conclusion on trimming full resident content:</b>None of seven gates leaves removals to unconstrained model judgment.
+    Five use deterministic truncation: claude-code MEMORY.md, codex, both openclaw layers, and claude-code SessionMemory’s fallback.
+    Two reject deterministically before returning choices to the model: hermes and ours.
+    Only claude-code SessionMemory involves model judgment, using <b>model compression followed by deterministic fallback</b>,
+    with a prompt explicitly naming the two sections to preserve rather than allowing unconstrained edits.
+    Four applicable lessons:<b>First, </b>Use two limits: line counts cannot constrain long lines; claude-code’s byte gate followed a 200-line, 197KB index.
+    <b>Second, </b>ownership matters more than time when trimming; openclaw removes only its own writes and preserves handwritten content.
+    <b>Third, </b>apply limits to all relevant content: codex limits project AGENTS.md but omits global AGENTS.md; claude-code hard-limits its own MEMORY.md but only warns for user-maintained CLAUDE.md.
+    <b>Fourth, </b>disclose truncation. codex only logs it, leaving users and models unaware of omitted content.
+    Our core.md currently falls under deterministic rejection with disclosure.
+    We will not copy the first two lessons directly: another gate on the write path still excludes stable facts;
+    ownership matters for openclaw because its resident file is the sole copy and deleting a line destroys it.
+    Once core.md is derived, omission is non-destructive and ownership need not be checked.
+    The decision and rationale are in <a href="adoption.html">What to adopt after comparison</a> section 02.
+  </div>
+
+  <!-- ══════════ 08 ══════════ -->
+  <h2 id="size"><span class="num">08</span>Implementation size<span class="tier t2">Layer 2</span></h2>
+  <p class="lead">Excludes tests. Colored bars represent long-term memory itself; gray bars represent compaction and transcript storage. Implementations range from 0 to 34,000 lines,
+    almost entirely depending on whether they maintain an index.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 400" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Memory implementation size">
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Lines of memory-related code</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">Bars use one scale. Gray bars are not long-term memory: transcript persistence and context compaction are needed regardless of remembering.</text>
+
+    <g font-size="11.5">
+      <text x="188" y="92" fill="#2db3d5" text-anchor="end" font-weight="700">openclaw</text>
+      <rect x="200" y="80" width="820" height="18" rx="4" fill="#1e2630" stroke="#2db3d5" stroke-width="1.3"/>
+      <text x="1030" y="94" fill="#bdb9a6">34000</text>
+      <text x="212" y="94" fill="#2db3d5" font-size="11">Vectors, full-text, dream pipeline, promotion ranking. Two alternative backends add 12000 lines, excluded</text>
+
+      <text x="188" y="128" fill="#4f8ef7" text-anchor="end" font-weight="700">codex-cli</text>
+      <rect x="200" y="116" width="215" height="18" rx="4" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+      <rect x="415" y="116" width="90" height="18" rx="4" fill="#1d1c14" stroke="#3a382c" stroke-width="1.3"/>
+      <text x="517" y="130" fill="#bdb9a6">8900 + 3700</text>
+      <text x="212" y="130" fill="#4f8ef7" font-size="11">Two-stage distillation and read path</text>
+      <text x="700" y="130" fill="#8a8675" font-size="11">About 60000 additional transcript-storage/forking lines are not memory</text>
+
+      <text x="188" y="164" fill="#5aad4e" text-anchor="end" font-weight="700">OpenProgram</text>
+      <rect x="200" y="152" width="154" height="18" rx="4" fill="#141a12" stroke="#5aad4e" stroke-width="1.8"/>
+      <text x="366" y="166" fill="#bdb9a6">6380</text>
+      <text x="412" y="166" fill="#5aad4e" font-size="11">Writing, transactions, BM25, topic format, nightly reorganization. All long-term memory; none is compaction</text>
+
+      <text x="188" y="200" fill="#4f8ef7" text-anchor="end" font-weight="700">claude-code</text>
+      <rect x="200" y="188" width="119" height="18" rx="4" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+      <rect x="319" y="188" width="103" height="18" rx="4" fill="#1d1c14" stroke="#3a382c" stroke-width="1.3"/>
+      <text x="434" y="202" fill="#bdb9a6">4900 + 4300</text>
+      <text x="212" y="202" fill="#4f8ef7" font-size="11">Memory directory and extraction agent</text>
+      <text x="700" y="202" fill="#8a8675" font-size="11">Another 1500 lines for the CLAUDE.md loader and 2200 for team synchronization</text>
+
+      <text x="188" y="236" fill="#d4843a" text-anchor="end" font-weight="700">hermes-agent</text>
+      <rect x="200" y="224" width="67" height="18" rx="4" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+      <rect x="267" y="224" width="57" height="18" rx="4" fill="#1d1c14" stroke="#3a382c" stroke-width="1.3"/>
+      <text x="336" y="238" fill="#bdb9a6">2800 + 2400</text>
+      <text x="700" y="238" fill="#8a8675" font-size="11">Eight optional service plugins total 11600 lines, all default off</text>
+
+      <text x="188" y="272" fill="#8a8675" text-anchor="end" font-weight="700">pi-mono</text>
+      <rect x="200" y="260" width="121" height="18" rx="4" fill="#1d1c14" stroke="#3a382c" stroke-width="1.3"/>
+      <text x="333" y="274" fill="#8a8675">5000</text>
+      <text x="380" y="274" fill="#8a8675" font-size="11">Entirely session tree and compaction; 0 long-term-memory lines; the same logic is implemented twice</text>
+
+      <text x="188" y="308" fill="#8a8675" text-anchor="end" font-weight="700">opencode</text>
+      <rect x="200" y="296" width="37" height="18" rx="4" fill="#1d1c14" stroke="#3a382c" stroke-width="1.3"/>
+      <text x="249" y="310" fill="#8a8675">1550</text>
+      <text x="286" y="310" fill="#8a8675" font-size="11">Compaction and storage; 0 long-term-memory lines</text>
+
+      <text x="188" y="344" fill="#8a8675" text-anchor="end" font-weight="700">weclaw</text>
+      <rect x="200" y="332" width="5" height="18" rx="2" fill="#1d1c14" stroke="#3a382c"/>
+      <text x="220" y="346" fill="#8a8675">200, all session-id bookkeeping</text>
+
+      <text x="188" y="380" fill="#8a8675" text-anchor="end" font-weight="700">pi-ai</text>
+      <rect x="200" y="368" width="3" height="18" rx="1" fill="#3a382c"/>
+      <text x="216" y="382" fill="#8a8675">0, not a single line</text>
+    </g>
+  </svg>
+  </div>
+
+  <div class="note">
+    <b>Retrieval accounts for the complexity.</b>Vectors, embedding caches, index rebuilding, and hybrid ranking dominate openclaw’s 34000 lines.
+    Removing that layer leaves roughly the same scale as claude-code’s 4900 lines.
+    Our 6300 lines do not require vectors—embeddings are optional—and additional code implements transactions and topic-format validation.
+    The dividing factor is maintaining an index, not merely having memory.
+  </div>
+
+  <!-- ══════════ 09 ══════════ -->
+  <h2 id="plan"><span class="num">09</span>Where our design fits<span class="tier t3">Layer 3</span></h2>
+  <p class="lead">The preceding eight sections position the current design across dimensions. Most reuse established practices;
+    node markers follow SessionDAG branch semantics, explained in section 05.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 500" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Position of our design across dimensions">
+    <defs>
+      <marker id="p-vi" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9d6fe0"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">Our peers across seven dimensions</text>
+
+    <g font-size="11.5">
+      <text x="200" y="76" fill="#8a8675" text-anchor="end">Storage form</text>
+      <rect x="216" y="60" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="78" fill="#5aad4e">Files only, like claude-code</text>
+      <text x="706" y="78" fill="#8a8675" font-size="11">openclaw: index; hermes: external services. Files: readable, Git-compatible</text>
+
+      <text x="200" y="116" fill="#8a8675" text-anchor="end">Who writes</text>
+      <rect x="216" y="100" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="118" fill="#5aad4e">An out-of-conversation agent, like claude-code, codex, and openclaw</text>
+      <text x="706" y="118" fill="#8a8675" font-size="11">Three of four do this. hermes relies on the main model remembering to write</text>
+
+      <text x="200" y="156" fill="#8a8675" text-anchor="end">What is written</text>
+      <rect x="216" y="140" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="158" fill="#5aad4e">Keep originals and distilled facts, like claude-code, codex, and pi-mono</text>
+      <text x="706" y="158" fill="#8a8675" font-size="11">Only we link every distilled statement back to originals with a footnote</text>
+
+      <text x="200" y="196" fill="#8a8675" text-anchor="end">Retrieval</text>
+      <rect x="216" y="180" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="198" fill="#5aad4e">Keyword BM25, the same category as hermes and codex</text>
+      <text x="706" y="198" fill="#d4843a" font-size="11">Missing claude-code’s small-model file-selection path; see section 06</text>
+
+      <text x="200" y="236" fill="#8a8675" text-anchor="end">Resident-block gate</text>
+      <rect x="216" y="220" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="238" fill="#5aad4e">Deterministic rejection with disclosure, like hermes</text>
+      <text x="706" y="238" fill="#8a8675" font-size="11">topics/core.md → derived core.md, 2000-token budget; section 07</text>
+
+      <text x="200" y="276" fill="#8a8675" text-anchor="end">Nightly organization</text>
+      <rect x="216" y="260" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="278" fill="#5aad4e">Present, like claude-code, codex, and openclaw</text>
+      <text x="706" y="278" fill="#8a8675" font-size="11">All four recognize that writing without organizing makes files grow indefinitely</text>
+
+      <text x="200" y="316" fill="#8a8675" text-anchor="end">Session structure</text>
+      <rect x="216" y="300" width="470" height="26" rx="6" fill="#141a12" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="232" y="318" fill="#5aad4e">In-session DAG, shared only with pi-mono</text>
+      <text x="706" y="318" fill="#8a8675" font-size="11">The other six are linear or represent forks as separate session files</text>
+    </g>
+
+    <line x1="32" y1="344" x2="1128" y2="344" stroke="#2e2c20" stroke-width="1"/>
+
+    <g>
+      <text x="200" y="386" fill="#9d6fe0" text-anchor="end" font-size="12" font-weight="700">Cursor</text>
+      <rect x="216" y="368" width="470" height="30" rx="6" fill="#221a30" stroke="#9d6fe0" stroke-width="1.8"/>
+      <text x="232" y="388" fill="#9d6fe0" font-size="12">Set of written message ids; no other implementation does this</text>
+      <path d="M690 383 L716 383" stroke="#9d6fe0" stroke-width="1.5" marker-end="url(#p-vi)"/>
+      <text x="726" y="380" fill="#bdb9a6" font-size="11.5">Because of the preceding dimension: different session structure makes</text>
+      <text x="726" y="398" fill="#bdb9a6" font-size="11.5">their cursor forms incorrect for ours.</text>
+    </g>
+
+    <text x="32" y="440" fill="#8a8675" font-size="11.5">This is not greater foresight: others have linear sessions where “everything after this point is new” is unambiguous,</text>
+    <text x="32" y="460" fill="#8a8675" font-size="11.5">while ours does not. Similarly, pi-mono has an in-session tree without needing a set because its id marks compaction start, not long-term-memory eligibility.</text>
+    <text x="32" y="484" fill="#d4843a" font-size="11.5">The form follows session structure rather than preference.</text>
+  </svg>
+  </div>
+
+  <div class="note p">
+    <b>The design itself is documented elsewhere.</b>Where markers live, when they are set, how forks traverse, how missing markers recover, and positional-cursor migration
+    are authoritatively documented in <a href="written-marker.html">written-marker.md</a>, with mechanism diagrams in
+    <a href="architecture.html">architecture.html</a> section 04. This page only explains
+    how that form relates to other implementations.
+   The background agent inherits the main session’s system prompt and message prefix. topics/core.md is canonical; core.md is generated deterministically within the 2000-token budget described in section 07. The session-start rewrite is performed by a consolidation agent. Its six-hour cooldown remains unchanged.</div>
+
+  <div class="note">
+    <b>Current comparison-decision status.</b>
+    Implemented: <code>topics/core.md</code> as resident canonical source, per-node workspace markers, live-branch enumeration at session boundaries, and Topic footnotes preserving Source references.
+    Not implemented: index-free retrieval using Topic self-descriptions and small-model file selection (claude-code, section 06); retrieval usage as nightly-organization input (codex, section 06); direct writer notification on head changes instead of post-turn thresholds or idle watcher.
+  </div>
+
+  <div class="legend">
+    <b>Implementation record (2026-08-11)</b>: Four of eight have long-term memory; message-branching session structures appear only in pi-mono, openclaw, and OpenProgram.
+    OpenProgram has replaced positional cursors with node workspace markers and uses <code>topics/core.md</code> as maintainable canonical resident content.
+    Pre-migration rows remain as problem evidence; purple rows now indicate current implementation, not future plans.
+  </div>
+
+</div>
+</body>
+</html>

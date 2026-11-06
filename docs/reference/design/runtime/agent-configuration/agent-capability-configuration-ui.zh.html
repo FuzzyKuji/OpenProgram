@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent 能力配置 — OpenProgram</title>
+<style>
+.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
+</style>
+</head>
+<body>
+<main class="ad">
+<header>
+<div class="eyebrow">OpenProgram · Agents</div>
+<h1>Agent 能力配置</h1>
+<p class="lead">可复用配置、可选长期记忆、统一执行语义。</p>
+<a href="agent-capability-configuration-ui.html">English</a>
+<div class="status">部分已实现 · Agents 页面、带 revision 的保存配置和记忆策略已经实现；仍属目标设计的部分见文末实现状态。链接的原型只用示例数据，不修改真实配置。</div>
+<nav aria-label="设计文档">
+<a href="agent-configuration-ui.zh.html">配置契约</a>
+<a href="agent-core-configuration-ui.zh.html">页面与基础配置</a>
+<a href="agent-capability-configuration-ui.zh.html">能力配置</a>
+<a href="agent-tool-configuration-ui.zh.html">Programs 选择器</a>
+<a href="agent-configuration-plan.zh.html">实施计划</a>
+</nav>
+<nav class="toc" aria-label="本页目录">
+<a href="#ownership">全局目录与 Agent 引用</a>
+<a href="#modes">策略语义与迁移</a>
+<a href="#flow">发现、调用与变化传播</a>
+<a href="#ui">编辑器职责</a>
+</nav>
+</header>
+<section id="ownership">
+<h2>全局目录与 Agent 引用</h2>
+<p>Agent 选择能力范围，不复制定义。Programs 管理可调用 Tools、Workflows、Applications；Skills 管理操作指令；MCP 管理连接与凭据。页面分别配置。继承和强制权限见配置总契约。</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>目录</th>
+<th>Agent 保存</th>
+<th>Agent 不保存</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Programs</td>
+<td>策略、预设引用、明确名称与排除项</td>
+<td>Python 源码、展开 schema、工作流仓库</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td>模式、名称/类别、排除项</td>
+<td>复制的 Skill 目录或永久注入的完整正文</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>允许和必需的服务引用</td>
+<td>凭据、登录 Cookie、服务实现</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="modes">
+<h2>策略语义与迁移</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>请求集合</th>
+<th>约束</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>inherit</td>
+<td>采用基础策略</td>
+<td>发现能力前解析</td>
+</tr>
+<tr>
+<td>all</td>
+<td>全局可用项目</td>
+<td>仍应用拒绝和强制上限</td>
+</tr>
+<tr>
+<td>selected</td>
+<td>明确名称与类别过滤取交集；Programs 也可选择一个预设</td>
+<td>显式 allowed=[] 表示空；Programs 不允许同时指定 preset 与明确名称</td>
+</tr>
+<tr>
+<td>none</td>
+<td>空集合</td>
+<td>不能通过延迟按名称加载绕过</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>生效集合 = 请求集合 ∩ 全局可用 ∩ 调用方授权 ∩ 父委派上限 ∩ 环境限制 − 显式拒绝。失效引用仍保存但不可调用。必需 MCP 必须属于生效服务，矛盾模式包括通配拒绝都需校验。Skill 描述某个工具不等于授予使用权限。</p>
+<p>目标格式为 Skills/MCP 同样加入明确 mode。旧 automatic 映射 all；disabled=["*"] 映射 none；allowed/categories 非空映射 selected；旧空 allowlist 仅迁移时映射 all。目标 selected=[] 绝不能进入旧空列表代表全部的处理。Skills 的 selected 模式中，allowed 省略且 categories 非空表示仅做类别过滤；两者非空时取交集。有类别项必须匹配，无类别项保留已有豁免，并在 UI 明示未分类。显式 allowed=[] 即使同时指定类别也表示无项目。名称和类别都缺少则不选择任何项目。旧 allowed 为空且类别生效时，迁移为省略 allowed，保留旧判断而非变成空显式白名单。规范化只在统一边界完成，不由 UI、搜索、执行器各自解释。</p>
+</section>
+<section id="flow">
+<h2>发现、调用与变化传播</h2>
+<ul>
+<li>保存配置只保存意图。执行解析带版本的范围和目录/预设引用，不把全部 schema 清单加入首轮提示。</li>
+<li>tool_search 只搜索生效范围，返回少量匹配 schema。按名称加载与嵌套 workflow/program 入口使用同一策略。</li>
+<li>真正调用时重查撤销、可用性和资源权限。即使排队或固定快照，已全局禁用能力也在下个边界禁止执行。</li>
+<li>可选 MCP 中断时禁用该服务并显示状态，必需服务中断阻止准入或启动。认证错误不自动换账户。</li>
+<li>失效名称在选择器内保持到明确移除，保存不抹除。预设更新影响新解析调用，运行中保留原意图，但仍受撤销限制。</li>
+<li>记忆读写工具还受执行记忆策略约束，能力 allowlist 无法覆盖记忆关闭或只读。</li>
+</ul>
+</section>
+<section id="ui">
+<h2>编辑器职责</h2>
+<p>Programs、Skills、MCP 分开。各自显示模式、继承来源、生效数量、失效数量和目录入口，只在打开时加载目录。类别/预设是选择方式，不是复制内容。MCP 增加必需标记与全局连接入口，凭据不进入草稿。列表、树与详情由 Programs 选择器文档定义，本页不重复目录。</p>
+<p>验收：selected 空集合在搜索和调用均为空；被拒绝明确名称不能调用；必需服务缺失在副作用前阻止执行；失效引用重新加载后保留；切换分区保留统一草稿；记忆关闭时相关工具不能执行。现有策略基础已存在，目标规范模式与跨入口强制行为依实施计划验收。</p>
+</section>
+</main>
+</body>
+</html>

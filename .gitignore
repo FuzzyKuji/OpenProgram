@@ -1,0 +1,120 @@
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+.venv*/
+.env
+*.egg-info/
+dist/
+build/
+# apps/desktop/build 是 electron-builder 的源资产目录（应用图标），不是构建产物
+!apps/desktop/build/
+.pytest_cache/
+.DS_Store
+
+# Local scratch / agent artifacts
+tmp/
+
+# Runtime/generated artifacts — generated functions live in third_party/
+# (the framework-provided buildin/meta functions are always tracked)
+openprogram/programs/tools/third_party/*.py
+!openprogram/programs/tools/third_party/__init__.py
+!openprogram/programs/tools/third_party/llm_call_example.py
+!openprogram/programs/tools/third_party/sentiment.py
+!openprogram/programs/tools/third_party/sentiment_v2.py
+!openprogram/programs/tools/third_party/word_count.py
+!openprogram/programs/tools/third_party/test.py
+!openprogram/programs/tools/third_party/test_framework.py
+!openprogram/programs/tools/third_party/test_resume.py
+
+# Scratch skill
+skills/init-research/
+
+# Runtime test logs (historical — current default is ~/.agentic/logs/,
+# outside the workspace; keep entries here in case someone sets
+# AGENTIC_LOGS_DIR back to these paths)
+openprogram/runtime/agent/logs/
+openprogram/logs/
+
+# Full upstream clones kept locally for reference while designing new
+# tools/providers. Not committed — too large and rot against upstream.
+references/openclaw/
+references/openclaw 3/
+references/hermes-agent/
+references/weclaw/
+references/claude-code-leaked/
+references/claude-code/
+references/pi-mono/
+references/opencode/
+
+# Local OpenProgram runtime state
+.openprogram/
+
+# Detached backend logs from local dev launches
+.backend.log
+.backend.log.err
+
+# Frontend dependency/build artifacts
+node_modules/
+apps/web/.next/
+apps/web/next-env.d.ts
+apps/web/tsconfig.tsbuildinfo
+# Generated Node fixture bundles and runners (not tracked source).
+apps/web/.resources-test-*/
+apps/web/.pip-dock-test-*/
+apps/web/.pip-open-test-*/
+apps/web/.control-bar-test-*/
+apps/web/.turn-files-test-*/
+apps/web/scripts/run-secret-replacement-*.mjs
+apps/cli/.auth_probe_*.mjs
+# Release staging copies web/out here before building the wheel.
+openprogram/interfaces/server/_frontend/
+# Keep ignoring staging produced by releases before the Server migration.
+openprogram/webui/_frontend/
+
+# macOS Finder duplicates ("foo 2.py", "foo 3.json") — never source
+* [0-9].*
+apps/cli/vendor/ink/package-lock.json
+
+# Per-user webui runtime state (favourites, folders, icons) — not code
+openprogram/webui/functions_meta.json
+openprogram/webui/programs_meta.json
+.agent_cron_test/
+.agent_tmp/
+.cron-test.log
+.cron-test/
+.claude/
+
+# fetched per-provider model lists (runtime, user-specific — not source)
+openprogram/models/providers/_catalog/fetched/
+
+# local agent working notes
+.codegraph/
+.superpowers/
+docs/_site/
+docs/_site.tmp/
+docs/_site.build.lock
+merge-x/
+
+# Generated reference pages (rebuilt by scripts/docs_site/generate_reference.py)
+docs/reference/cli/
+docs/reference/config-keys.md
+docs/reference/config-keys.zh.md
+docs/reference/provider-registry.md
+docs/reference/provider-registry.zh.md
+
+# Electron desktop shell
+apps/desktop/dist/
+apps/desktop/build/runtime/
+apps/desktop/build/office/
+apps/desktop/build/.runtime-prepare.lock
+apps/desktop/build/.runtime-stage-*/
+
+references/codex-cli/
+
+# Pinned document decoder assets generated from package-lock before Web builds.
+apps/web/public/document-assets/
+
+# Local verification evidence; authoritative design lives under docs/reference/design.
+/reports/durable-tool-results.md
+/reports/content-security/

@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenProgram · JSON Schema Structured Output design</title>
+<style>
+  :root {
+    --bg:#0e1117; --panel:#161b24; --panel2:#1b2230; --ink:#e7ebf2; --muted:#98a2b3;
+    --line:#2a3342; --accent:#79a8ff; --accent2:#b19cff; --ok:#4ad6a0; --warn:#f4c76b;
+    --bad:#ff7c82; --info:#73d2de; --code:#0a0d12;
+    --mono:'SFMono-Regular',Consolas,'Liberation Mono',Menlo,monospace;
+  }
+  * { box-sizing:border-box }
+  html { scroll-behavior:smooth }
+  body { margin:0; color:var(--ink); background:var(--bg); font:15px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif }
+  .wrap { max-width:1180px; margin:auto; padding:40px 28px 88px }
+  h1 { margin:2px 0 8px; font-size:32px; line-height:1.25 }
+  h2 { margin:46px 0 16px; padding-top:15px; border-top:1px solid var(--line); font-size:22px }
+  h3 { margin:27px 0 10px; font-size:17px; color:#d8e2f3 }
+  h4 { margin:0 0 7px; font-size:15px }
+  p { margin:9px 0 }
+  a { color:var(--accent) }
+  code,.mono { font-family:var(--mono); font-size:.9em }
+  code { color:#dce7fb; background:var(--code); border:1px solid var(--line); border-radius:5px; padding:1px 5px }
+  pre { margin:12px 0; padding:15px 17px; overflow:auto; background:var(--code); border:1px solid var(--line); border-radius:10px; color:#dce7fb; font:12.5px/1.55 var(--mono) }
+  table { width:100%; border-collapse:collapse; margin:12px 0; font-size:13.5px }
+  th,td { padding:9px 11px; border:1px solid var(--line); text-align:left; vertical-align:top }
+  th { color:#d8e2f3; background:var(--panel2) }
+  tr:nth-child(even) td { background:#121721 }
+  ul,ol { margin:8px 0; padding-left:23px }
+  li { margin:5px 0 }
+  .eyebrow,.small { color:var(--muted); font-size:12.5px }
+  .lead { margin:19px 0; padding:18px 20px; border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:12px; background:linear-gradient(180deg,#182131,#131924) }
+  .grid { display:grid; gap:14px }
+  .g2 { grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .g3 { grid-template-columns:repeat(3,minmax(0,1fr)) }
+  .card { padding:16px 18px; border:1px solid var(--line); border-radius:11px; background:var(--panel) }
+  .pill { display:inline-block; padding:4px 7px; border:1px solid; border-radius:999px; font:600 10.5px/1 var(--mono); white-space:nowrap }
+  .ok { color:var(--ok); border-color:#256449; background:#10251d }
+  .warn { color:var(--warn); border-color:#655128; background:#29220f }
+  .bad { color:var(--bad); border-color:#6c3136; background:#2b1518 }
+  .info { color:var(--info); border-color:#285f66; background:#102328 }
+  .callout { margin:13px 0; padding:12px 15px; border-radius:10px; border:1px solid var(--line); background:var(--panel) }
+  .callout.badline { border-color:#6c3136; background:#271518 }
+  .callout.warnline { border-color:#655128; background:#28210f }
+  .callout.okline { border-color:#256449; background:#10231c }
+  .flow { display:grid; grid-template-columns:repeat(7,minmax(105px,1fr)); gap:8px; align-items:stretch; margin:14px 0 }
+  .flow .node { padding:12px 9px; border:1px solid var(--line); border-radius:9px; background:var(--panel); text-align:center; font-size:12.5px }
+  .flow .node:not(:last-child)::after { content:"→"; float:right; transform:translate(18px,0); color:#5f6c80 }
+  .state { display:grid; grid-template-columns:42px 1fr; border:1px solid var(--line); border-bottom:0 }
+  .state:first-child { border-radius:10px 10px 0 0 }
+  .state:last-child { border-bottom:1px solid var(--line); border-radius:0 0 10px 10px }
+  .state .n { display:flex; align-items:center; justify-content:center; background:var(--panel2); color:var(--accent); font:600 13px var(--mono) }
+  .state .d { padding:10px 13px; background:var(--panel) }
+  .files td:first-child { white-space:nowrap; font-family:var(--mono); font-size:12px }
+  .foot { margin-top:52px; padding-top:18px; border-top:1px solid var(--line); color:var(--muted); font-size:12.5px }
+  @media(max-width:900px) { .flow { grid-template-columns:1fr 1fr } .flow .node::after { display:none } }
+  @media(max-width:720px) { .g2,.g3 { grid-template-columns:1fr } .wrap { padding:26px 17px 64px } }
+</style>
+</head>
+<body>
+<main class="wrap">
+  <p class="eyebrow">OpenProgram · Provider / Runtime design · implemented and reviewed · 2026-08-12</p>
+  <h1>JSON Schema Structured Output</h1>
+  <p class="small">Design baseline: <code>main@708bfbab</code>. Implementation evidence: Tasks 1–6; final review commit <code>2fb471b3</code>. Sections 2–15 retain the approved design and implementation checklist; §16 separates implemented contracts, verification evidence and unmet complete gates.</p>
+
+  <div class="lead">
+    <p><strong>Design conclusion:</strong> Continue the existing <code>Runtime.exec(..., response_format=...)</code> as the sole public entry. Add normalized schema configuration to public provider types. Capability negotiation selects native provider JSON Schema or a constrained hidden-tool fallback. Regardless of provider strict claims, final results require strict JSON parsing and local validation against the caller’s original schema. Failure permits at most one semantic repair request; return only validated Python JSON values.</p>
+    <p class="small">The existing Agent loop now implements schema normalization, negotiation, strict local validation, one optional repair, typed CLI/Web entries, record/replay v2 and the session-title consumer. Unverified provider combinations fail closed; ordinary text calls retain return semantics.</p>
+  </div>
+
+  <h2>1. Scope, goals and boundaries</h2>
+  <p>Function-tool arguments use the canonical tool schema for local validation. Strict provider export represents optional fields as required nullable fields; shared argument normalization restores those added nulls to omitted object properties before canonical validation. Required fields and originally nullable values retain their semantics. Only nulls accepted by the actual strict property schema are eligible, so enum, conditional and combinator constraints remain enforced. Normalization copies inputs, preserves array positions and applies the same optional-default semantics to non-strict callers. It does not modify function signatures or weaken canonical schemas.</p>
+  <div class="grid g3">
+    <section class="card"><h4>Unified semantics</h4><p>Python Runtime, Agent, CLI and WebSocket/API share one schema, negotiation result, validator and error classification.</p></section>
+    <section class="card"><h4>Streaming compatibility</h4><p>Preserve incremental provider text/tool events while explicitly representing candidate attempts, discard, retry and final structured results.</p></section>
+    <section class="card"><h4>Reproducibility</h4><p>Record/replay captures normalized requests and every provider call; offline replay reruns identical parsing, validation and bounded retries.</p></section>
+  </div>
+  <p>Excluded: lossy schema-to-provider-subset rewriting, automatic Pydantic types, cross-language code generation, tokenwise incremental JSON AST, Web schema editor, or changed ordinary-text returns/events.</p>
+
+  <h2>2. Baseline audit (main@708bfbab)</h2>
+  <p class="small">This section records project-start facts and gaps as the basis for design decisions; it does not describe the current state of <code>2fb471b3</code> .</p>
+  <table>
+    <thead><tr><th>Layer</th><th>Current facts</th><th>Gap</th></tr></thead>
+    <tbody>
+      <tr><td>Public Runtime</td><td><code>agent/runtime.py</code> Already exposes <code>response_format: dict</code> and forwards it on the callable-model path.</td><td><code>_call_via_providers()</code> does not use it; default provider calls silently fall back to ordinary text.</td></tr>
+      <tr><td>Provider types</td><td><code>StreamOptions</code> has sampling, tool, transport and header fields; <code>Model</code> has reasoning/thinking/compat; <code>AssistantMessage</code> stores only text/tools/errors.</td><td>No output schema, model capability or parsed JSON fields.</td></tr>
+      <tr><td>Model catalog</td><td><code>models_dev.py</code> Already normalizes and caches models.dev <code>structured_output</code> .</td><td><code>Model</code> has no corresponding field; Pydantic construction discards it and the model list does not show the capability.</td></tr>
+      <tr><td>Agent loop</td><td><code>AgentLoopConfig</code> Inherits shared stream options; each round may execute tools until an assistant message contains no tool call.</td><td>Reconstructing <code>SimpleStreamOptions</code> has no schema to forward, nor final-candidate validation/repair state.</td></tr>
+      <tr><td>Stream events</td><td>Provider events cover text/thinking/tool/done/error; dispatcher converts them to Web/CLI <code>stream_event</code>.</td><td>Cannot represent “candidate 1 invalid; clear and enter attempt 2” or “final structured value validated”.</td></tr>
+      <tr><td>CLI / Web / API</td><td><code>--print</code> Finally prints strings; WS <code>chat_response.result.content</code> is a string; <code>POST /api/function/{name}</code> returns asynchronous acknowledgements.</td><td>Requests cannot carry schemas; successful results lack typed JSON and errors lack stable machine-readable codes.</td></tr>
+      <tr><td>Session title</td><td>Design documentation specifies <code>{title:string}</code> schema.</td><td><code>conversation/turn_runtime/titles.py</code> Actually prompts “ONLY title text”, then cleans lines, quotes, prefixes and length.</td></tr>
+      <tr><td>Record/replay</td><td>Format v1 records model, context, options and raw provider events; replay compares fields strictly.</td><td>New default fields change shapes between old recordings and new requests; validation retries must preserve call-index order.</td></tr>
+    </tbody>
+  </table>
+
+  <h3>Call and return chain</h3>
+  <div class="flow">
+    <div class="node">Runtime.exec</div><div class="node">_call_via_providers</div><div class="node">AgentSession</div><div class="node">Agent loop</div><div class="node">API provider stream</div><div class="node">event parsing</div><div class="node">CLI / WS / API</div>
+  </div>
+  <p class="small">Schema must travel through this existing chain. Do not add a structured provider client bypassing the Agent loop, which would create separate tool-calling, deadline, record/replay, DAG and persistence semantics.</p>
+
+  <h2>3. Public API and normalized types</h2>
+  <p>Retain the parameter name <code>response_format</code> because it is already public and documented. Support bare JSON Schema and an envelope containing OpenProgram controls. Normalize exactly once.</p>
+  <pre>JsonValue = None | bool | int | float | str | list["JsonValue"] | dict[str, "JsonValue"]
+
+class JsonSchemaOutput(BaseModel):
+    type: Literal["json_schema"] = "json_schema"
+    schema: dict[str, Any]                  # Original caller schema; never mutate in place
+    name: str = "response"                 # ^[A-Za-z_][A-Za-z0-9_-]{0,63}$
+    description: str | None = None
+    strict: bool = True
+    fallback: Literal["auto", "none", "prompt"] = "auto"
+    max_validation_retries: Literal[0, 1] = 1
+
+# Existing-call compatibility: a bare dict is the schema, not a provider payload.
+Runtime.exec(content=..., response_format={"type":"object", ...}) -&gt; JsonValue
+Runtime.exec(content=..., response_format=JsonSchemaOutput(...)) -&gt; JsonValue
+Runtime.exec(content=..., response_format=None) -&gt; str</pre>
+  <ul>
+    <li>Use overloads for return types; ordinary text calls still return <code>str</code>. Successful structured calls do not return JSON strings.</li>
+    <li><code>async_exec</code>, <code>exec</code>, AgentSession and dispatcher use the same <code>JsonSchemaOutput</code>; provider-private <code>response_format</code> payload.</li>
+    <li>is not accepted. Before any network request, invoke <code>validator_for(schema).check_schema(schema)</code>. Unknown meta-schemas or invalid schemas raise <code>StructuredOutputSchemaError</code> without consuming a provider request.</li>
+    <li>Declare <code>pyproject.toml</code> directly in <code>jsonschema&gt;=4.23</code>. An existing transitive lockfile dependency is not a core-feature contract.</li>
+  </ul>
+
+  <h3>Public provider fields</h3>
+  <pre>class Model(BaseModel):
+    structured_output: bool | None = None   # models.dev: true / false / unknown
+
+class StreamOptions(BaseModel):
+    ...
+    response_format: JsonSchemaOutput | None = None
+
+class AssistantMessage(BaseModel):
+    ...
+    structured_output: JsonValue | None = None
+    structured_output_mode: Literal["native", "tool", "prompt"] | None = None
+    structured_output_attempt: int | None = None</pre>
+  <p><code>None</code> means unknown capability, not <code>False</code>. Raw JSON text remains in assistant text content for history, DAG, audit and replay; program calls return <code>structured_output</code>.</p>
+
+  <h2>4. Capability negotiation</h2>
+  <p>The model catalog says only whether the model claims structured-output support. API adapters must also specify payload dialect, streaming and tool-combination constraints; negotiation checks both.</p>
+  <pre>class StructuredOutputCapabilities(BaseModel):
+    native: Literal["supported", "unsupported", "unknown"]
+    dialect: Literal["openai_chat", "openai_responses", "anthropic",
+                     "google", "bedrock"] | None
+    streaming: bool
+    with_tools: bool
+    schema_profile: str                 # Provider-subset checker name
+
+negotiate(model, api_provider, options, tools) -&gt; StructuredOutputPlan
+# plan.mode: native | tool | prompt
+# plan.provider_schema: Semantically equivalent projected copy
+# plan.original_schema: Used for final local validation</pre>
+  <ol>
+    <li>Invalid schema: fail immediately.</li>
+    <li>If the adapter explicitly supports the API, the model field is not <code>False</code>, schema projects losslessly and current tools are supported, choose <code>native</code>.</li>
+    <li><code>fallback="auto"</code> and the provider supports strict tool schemas, schema projects losslessly, and <code>tool_choice</code> does not prohibit/force another tool: choose a hidden tool.</li>
+    <li><code>fallback="prompt"</code>: explicit prompt fallback guarantees only local validation, not provider-level strictness.</li>
+    <li>Otherwise raise <code>StructuredOutputUnsupportedError</code> before sending, reporting provider, model, conflicting capabilities and fallback reasons.</li>
+  </ol>
+  <div class="callout warnline"><strong>Do not optimistically interpret unknown capability.</strong> <code>openai-codex</code> and <code>gemini-subscription</code> may reuse official model entries but use different backends. Without API-adapter contract tests, <code>Model.structured_output=True</code> alone must not enable native fields.</div>
+
+  <h3>Provider mappings and initial boundaries</h3>
+  <table>
+    <thead><tr><th>API</th><th>Native payload</th><th>Initial strategy</th><th>Combination constraints</th></tr></thead>
+    <tbody>
+      <tr><td><code>openai-completions</code></td><td><code>response_format={type:"json_schema", json_schema:{name,description,strict,schema}}</code></td><td><span class="pill ok">native</span></td><td>Check tools/parallel against compatibility profiles; do not assume complete OpenAI support for community endpoints.</td></tr>
+      <tr><td><code>openai-responses</code></td><td><code>text.format={type:"json_schema", name,description,strict,schema}</code></td><td><span class="pill ok">native</span></td><td>Retain refusal/incomplete termination; fall back to hidden tools when capabilities are insufficient.</td></tr>
+      <tr><td><code>azure-openai-responses</code></td><td>Responses <code>text.format</code></td><td><span class="pill ok">native</span></td><td>Deployment model and API version must pass adapter probes/contracts, not model-name assumptions.</td></tr>
+      <tr><td><code>anthropic-messages</code></td><td><code>output_config.format={type:"json_schema", schema}</code></td><td><span class="pill ok">native</span></td><td>Merge with existing <code>output_config.effort</code> without overwriting; refusal/max_tokens still require local failure classification.</td></tr>
+      <tr><td><code>google-generative-ai</code></td><td><code>response_mime_type="application/json"</code> + <code>response_json_schema</code></td><td><span class="pill ok">native</span></td><td>Accept only the officially supported subset; mark tool combinations <code>with_tools=False</code>.</td></tr>
+      <tr><td><code>bedrock-converse-stream</code></td><td><code>outputConfig.textFormat.structure.jsonSchema</code> until contract tests pass; schema is a JSON string</td><td><span class="pill ok">native</span></td><td>The adapter decides supported models and citation conflicts; local validation still uses the original schema.</td></tr>
+      <tr><td><code>openai-codex</code></td><td>No verified ChatGPT-backend contract</td><td><span class="pill warn">tool fallback</span></td><td>Native capability unknown; do not send private OpenAI Responses fields.</td></tr>
+      <tr><td><code>gemini-subscription</code></td><td>Cloud Code Assist requests internally contain <code>generationConfig</code>, but compatibility is unverified</td><td><span class="pill warn">tool fallback</span></td><td>Enable native capability only after independent contract tests.</td></tr>
+    </tbody>
+  </table>
+  <p class="small">External contract references: <a href="https://openai.com/index/introducing-structured-outputs-in-the-api/">OpenAI Structured Outputs</a>, <a href="https://platform.claude.com/docs/en/build-with-claude/structured-outputs">Anthropic structured outputs</a>, <a href="https://ai.google.dev/api/generate-content">Google GenerateContent API</a>, <a href="https://docs.aws.amazon.com/bedrock/latest/userguide/structured-output.html">Amazon Bedrock structured outputs</a>, <a href="https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/structured-outputs">Azure OpenAI structured outputs</a>. These interfaces change; adapter contracts are required before enabling capabilities.</p>
+
+  <h2>5. Native mode and fallbacks</h2>
+  <h3>Native schema</h3>
+  <p>Adapters only map normalized configuration to provider payloads. Existing <code>providers/_schema</code> may supply traversal/dialect detection, but transformations must preserve semantics, such as key naming or JSON-string serialization. Dropping constraints, relaxing <code>additionalProperties</code>, rewriting unions or any other lossy transform reports the exact path and disables native mode. Final validation always uses the caller’s original schema.</p>
+
+  <h3>Hidden-tool fallback</h3>
+  <pre>{
+  "name": "__openprogram_submit_json",
+  "description": "Submit the final response matching the required schema.",
+  "parameters": &lt;provider_schema&gt;,
+  "strict": true
+}</pre>
+  <ul>
+    <li>Send the hidden tool alongside caller tools. Ordinary tool calls execute normally and continue to the next round.</li>
+    <li>The hidden tool must appear alone. Its arguments are the final candidate; do not execute it or generate <code>ToolResultMessage</code>.</li>
+    <li>The fallback round sets <code>parallel_tool_calls=False</code>. If the caller explicitly requests parallel execution, <code>tool_choice="none"</code> or forces another tool, negotiation fails rather than overriding settings.</li>
+    <li>Plain text without a hidden-tool call is classified as <code>missing_submission</code> and may enter one repair request.</li>
+  </ul>
+
+  <h3>Prompt fallback</h3>
+  <p>Enable only when the caller explicitly sets <code>fallback="prompt"</code> : add a compact schema and JSON-only requirement to the system layer, then parse/validate final text identically. This is not strict and is never silently used in <code>auto</code> . This distinguishes provider constraints from purely local detection.</p>
+
+  <h2>6. Streaming events and incremental text</h2>
+  <p>Structured output does not incrementally validate schemas. Forward raw text deltas per attempt so consumers may display generated JSON; parse only after final <code>text_end</code> . Add two framework events and optional attempt metadata on text events to prevent invalid attempts becoming final messages.</p>
+  <pre>EventTextStart/TextDelta/TextEnd.output_attempt: int | None = None
+
+EventStructuredOutputRetry {
+  type: "structured_output_retry",
+  attempt: 1,
+  next_attempt: 2,
+  issues: [{code, path, schema_path, message}],
+}
+
+EventStructuredOutputEnd {
+  type: "structured_output_end",
+  attempt: 1 | 2,
+  mode: "native" | "tool" | "prompt",
+  value: JsonValue,
+}</pre>
+  <div class="state"><div class="n">1</div><div class="d">Forward attempt=1 text/tool deltas into a client candidate buffer without committing persistent messages.</div></div>
+  <div class="state"><div class="n">2</div><div class="d">After provider raw <code>done</code> , strictly parse and validate. On success emit <code>structured_output_end</code>, followed by exactly one <code>done</code>; stream EOF without raw <code>done</code>/<code>error</code> fails as <code>incomplete</code> rather than synthesizing success from a partial message.</div></div>
+  <div class="state"><div class="n">3</div><div class="d">For repairable failure emit <code>structured_output_retry</code>. CLI/Web clear candidate buffers; the Agent loop starts another provider stream.</div></div>
+  <div class="state"><div class="n">4</div><div class="d">Commit if attempt 2 succeeds; otherwise emit <code>error</code> without <code>done</code> and do not persist an invalid final assistant message.</div></div>
+  <p>Provider raw <code>done</code> is consumed by the Agent loop; expose only the structured transaction’s final <code>done</code>. Ordinary text retains its event sequence. CLI/TUI/Web safely ignore unknown events for rolling upgrades.</p>
+
+  <h2>7. Strict parsing, validation and bounded retries</h2>
+  <h3>Parsing rules</h3>
+  <ul>
+    <li>Direct text uses <code>json.loads(raw, parse_constant=reject_nonfinite)</code>; reject Markdown fences, surrounding explanations, trailing content, <code>NaN</code>/<code>Infinity</code>.</li>
+    <li>Parse hidden-tool arguments as complete JSON text too; never use <code>utils/json_parse.py</code> partial/forgiving parsing.</li>
+    <li>Use <code>jsonschema.validators.validator_for(original_schema)</code> to create the validator, with a registry prohibiting external-resource access. Sort errors by instance path, schema path and message.</li>
+    <li>Schema preflight rejects all <code>$ref</code>/<code>$dynamicRef</code>/<code>$recursiveRef</code> that cannot resolve to embedded resources in the current schema. Fragment references and relative references defined by embedded <code>$id</code> remain valid, so Runtime, CLI, Web and replay never initiate DNS, HTTP or file reads for local validation.</li>
+    <li>Canonical schema JSON is limited to 1 MiB, 4096 container nodes, 8192 container edges and depth 100. Exceeding any limit returns stable <code>invalid_schema</code>.</li>
+    <li>before provider calls. Fragment-only references allow local JSON Pointers/anchors; direct reference self/mutual cycles fail preflight to prevent validator recursion overflow. Finite recursive schemas advancing through instance structure remain supported.</li>
+    <li>Transport at most 20 errors with messages of at most 500 characters each, avoiding copying complete sensitive output into logs or WS errors.</li>
+  </ul>
+
+  <h3>Retry states</h3>
+  <table>
+    <thead><tr><th>Failure</th><th>Consumes validation retry?</th><th>Handling</th></tr></thead>
+    <tbody>
+      <tr><td>Invalid schema definition</td><td>No</td><td>Before request <code>StructuredOutputSchemaError</code>.</td></tr>
+      <tr><td>Unsupported provider/model or conflicting configuration</td><td>No</td><td>Before request <code>StructuredOutputUnsupportedError</code>.</td></tr>
+      <tr><td>JSON syntax, schema violation, missing hidden submission</td><td>Yes, at most once</td><td>Append the invalid assistant candidate and deterministic issue list to temporary repair context; request once more.</td></tr>
+      <tr><td>Refusal, content filter or safety block</td><td>No</td><td><code>StructuredOutputGenerationError(code="refusal")</code>.</td></tr>
+      <tr><td><code>max_tokens</code>/incomplete, context length</td><td>No</td><td>Retain provider reason; the caller adjusts budgets. The framework does not enlarge token limits itself.</td></tr>
+      <tr><td>transport/rate limit/provider internal</td><td>No</td><td>Existing stream/exec retry still handles these; they do not consume validation retries, but every Runtime provider call consumes shared <code>max_retries</code> budget.</td></tr>
+      <tr><td>Cancellation or deadline</td><td>No</td><td>Propagate immediately without repair.</td></tr>
+    </tbody>
+  </table>
+  <h3>Shared call budget</h3>
+  <p><code>max_validation_retries</code> and <code>max_retries</code> are two limits, not multiplicative loops. The former caps semantic repairs after initial-candidate failure; the latter caps total provider calls initiated at the Runtime boundary by one synchronous/asynchronous <code>exec</code> , including the initial call, semantic repair and calls following transport failures. Repair requires both an available validation retry and remaining shared call budget.</p>
+  <p>Therefore Runtime-boundary provider calls never exceed <code>max_retries</code>. For example, <code>max_retries=1</code> causes an invalid first candidate to immediately return <code>StructuredOutputValidationError</code>; <code>max_retries=2</code> with one default validation retry permits only initial call plus one repair. A repair transport failure already consumes budget; the outer layer cannot regain a full budget. Adapter/SDK transport retries remain governed by existing deadlines/transport settings, not validation retry counts.</p>
+  <p><code>structured_output_retry.attempt</code> and <code>next_attempt</code> continues identifying structured candidate attempts, not transport attempts. Emit only after Runtime confirms remaining shared budget and is about to repair; never emit false retry events on exhaustion.</p>
+  <p>Repair prompts contain only failure type and bounded issues, without reinterpreting schemas or calling another LLM. Repair context lasts only for this exec; session history/final DAG keep only the valid final assistant, while model-call records retain both provider calls for audit.</p>
+
+  <h2>8. Coexistence with tool calling</h2>
+  <table>
+    <thead><tr><th>Case</th><th>Behavior</th></tr></thead>
+    <tbody>
+      <tr><td>Native schema without user tools</td><td>Apply native output format directly.</td></tr>
+      <tr><td>Native schema + user tools; adapter <code>with_tools=True</code></td><td>Each Agent round carries schema. User tools execute normally; validate terminal text from the round without tools.</td></tr>
+      <tr><td>Native schema + tools, combination unverified</td><td>Use hidden-tool fallback if auto permits it; otherwise fail preflight.</td></tr>
+      <tr><td>Tool fallback + user tools</td><td>Combine hidden submit and user tools. Ordinary tools may run multiple rounds; submit ends the transaction.</td></tr>
+      <tr><td>One response contains ordinary tools and submit</td><td>Reject the candidate and enter bounded repair; do not execute ordinary tools, avoiding side effects after finalization.</td></tr>
+      <tr><td>Caller forces a specific tool or disables tools</td><td>Do not override intent; use native if available, otherwise unsupported.</td></tr>
+    </tbody>
+  </table>
+  <p>Explicitly copy structured configuration during <code>agent_loop._stream_assistant_response()</code> Reconstructing <code>SimpleStreamOptions</code> . Final validation belongs at the Agent-loop no-tool terminal boundary, not duplicated inside provider parsers.</p>
+
+  <h2>9. CLI, WebSocket/API and error semantics</h2>
+  <h3>Python API</h3>
+  <pre>value = runtime.exec(content=..., response_format=schema)  # Python JsonValue
+
+except StructuredOutputError as e:
+    e.code       # invalid_schema | unsupported | invalid_json | validation_failed |
+                 # missing_submission | refusal | incomplete
+    e.provider
+    e.model
+    e.attempts
+    e.issues     # bounded machine-readable list</pre>
+  <p><code>StructuredOutputError</code> uses the existing LLM-error boundary without pretending to be a transport error.<code>retryable</code> means whether a new exec/budget could succeed; validation-retry exhaustion is indicated by <code>attempts</code> .</p>
+
+  <h3>CLI</h3>
+  <p>Add to existing one-shot <code>openprogram --print</code> the option <code>--json-schema PATH</code>; initially leave interactive REPL/TUI input unchanged. Success writes canonical UTF-8 compact JSON plus newline to stdout and exits 0. Errors go to stderr: usage/invalid schema exits 2, unsupported 3, generation/final-validation failure 4. Existing provider/auth/cancel semantics remain. Persist compact JSON in session assistant content with parsed value/mode in metadata.</p>
+
+  <h3>WebSocket and asynchronous HTTP API</h3>
+  <pre>// request: existing chat action and POST /api/function/{name} body
+response_format?: JsonSchemaOutput | JSONSchema
+
+// stream
+{type:"chat_response", data:{type:"stream_event", event:{
+  type:"structured_output_retry", attempt:1, next_attempt:2, issues:[...]}}}
+
+// success
+{type:"chat_response", data:{type:"result", content:"{...}",
+  structured_output:&lt;JsonValue&gt;, structured_output_mode:"native", attempt:1}}
+
+// terminal error
+{type:"chat_response", data:{type:"error", code:"validation_failed",
+  content:"Structured output failed validation", attempts:2, issues:[...]}}</pre>
+  <ul>
+    <li><code>POST /api/function/{name}</code> Continue returning <code>{session_id,msg_id}</code> acknowledgements immediately; deliver results through the same WS/event chain instead of synchronous HTTP.</li>
+    <li>Web chat sends no schema by default. Display schema results as canonical JSON text, retaining typed values for API consumers; retry clears candidate text.</li>
+    <li>Server <code>json.dumps(..., default=str)</code> must not serialize structured values; validated values already belong to the JSON data model, otherwise this is an internal error.</li>
+  </ul>
+
+  <h2>10. Record/replay and persistence</h2>
+  <ul>
+    <li><code>RECORDING_FORMAT_VERSION</code> moves from 1 to 2. v2 request options record complete normalized <code>response_format</code>; explicitly reject old v1 to avoid ambiguous mismatches from default <code>None</code> fields.</li>
+    <li>Record raw provider events, not locally derived validation events. Replay returns identical raw events and the Agent loop deterministically reconstructs retry/end/error.</li>
+    <li>Each validation repair creates a new provider call and <code>call_index</code>; recordings must contain two request/call_end pairs. Missing or extra replay calls are mismatches.</li>
+    <li>After normalization, recursively sort schema keys and compute SHA-256 for logs, DAG metadata and error correlation. Recordings retain the full schema for strict comparison; hashes do not replace it.</li>
+    <li>Session assistant content stores final canonical JSON; metadata stores mode, attempt and schema hash. Invalid candidates never enter the session message chain.</li>
+  </ul>
+
+  <h2>11. Session-title migration</h2>
+  <p>After core capabilities are ready, migrate <code>conversation/turn_runtime/titles.py</code> as the first internal consumer:</p>
+  <pre>TITLE_SCHEMA = {
+  "type": "object",
+  "properties": {"title": {"type": "string", "minLength": 1, "maxLength": 80}},
+  "required": ["title"],
+  "additionalProperties": false,
+}
+
+result = runtime.exec(content=prompt, toolset="none", max_iterations=2,
+  response_format=JsonSchemaOutput(
+    schema=TITLE_SCHEMA, name="session_title", max_validation_retries=1,
+))
+title = result["title"]</pre>
+  <p>Retain Unicode trimming and final database length protection; remove ONLY-title-text instructions and quote, <code>Title:</code> and first-line format cleanup. Title generation stays best-effort: structured errors retain the phase-1 placeholder without affecting the main turn. Update <code>session/name.md</code> and feature matrix to distinguish implemented from designed behavior.</p>
+
+  <h2>12. References: adopt, modify, reject</h2>
+  <p>Repository <code>references/pi-ai</code> already has shared stream options, provider-local payload builders, tool schemas and <code>supportsStrictMode</code>, but strict applies only to tool definitions. It lacks generic response schemas, final JSON validation and structured retries.</p>
+  <table>
+    <thead><tr><th>Decision</th><th>Source/current state</th><th>Treatment in this design</th></tr></thead>
+    <tbody>
+      <tr><td><span class="pill ok">Adopt</span></td><td>Forward shared options/types through every provider adapter.</td><td><code>JsonSchemaOutput</code> belongs in public types; payload mapping stays provider-local.</td></tr>
+      <tr><td><span class="pill ok">Adopt</span></td><td>Tool strictness is provider/model compatibility, not a unilateral caller promise.</td><td>Hidden-tool fallback is constrained by negotiation and schema profiles.</td></tr>
+      <tr><td><span class="pill warn">Modify</span></td><td>pi-ai keeps strict capability in compat; models.dev already supplies structured_output.</td><td>Use a tri-state model field plus independent API-adapter capability; decide jointly.</td></tr>
+      <tr><td><span class="pill warn">Modify</span></td><td>Existing <code>_schema</code> can downgrade tool schemas for providers.</td><td>Structured output permits only lossless projection; always validate locally against the original schema.</td></tr>
+      <tr><td><span class="pill bad">Reject</span></td><td>Rely only on provider strict and return raw text.</td><td>Rejected: refusal, truncation, compatible endpoints and provider bugs require local parse + validate.</td></tr>
+      <tr><td><span class="pill bad">Reject</span></td><td>Repair final output using forgiving/partial JSON parsers.</td><td>Rejected: accept only one complete JSON document; failures enter bounded semantic repair.</td></tr>
+      <tr><td><span class="pill bad">Reject</span></td><td>Parse every JSON delta into incremental objects and publish them.</td><td>Rejected: schema validation is defined only for complete candidates; streaming carries candidate text and attempt only.</td></tr>
+      <tr><td><span class="pill bad">Reject</span></td><td>Create an independent structured-output provider path.</td><td>Rejected: reuse Agent loop, tools, deadlines, DAG and record/replay.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>13. Exact files to change</h2>
+  <table class="files">
+    <thead><tr><th>File</th><th>Modify</th></tr></thead>
+    <tbody>
+      <tr><td>openprogram/models/providers/types.py</td><td>Add <code>JsonSchemaOutput</code>, JsonValue, model tri-state, StreamOptions fields, AssistantMessage parsed fields and structured retry/end events.</td></tr>
+      <tr><td>openprogram/models/providers/catalog/api_registry.py<br>openprogram/models/providers/catalog/register.py</td><td>Register adapter structured capabilities; provide unknown-safe lookup without guessing from model names.</td></tr>
+      <tr><td>openprogram/models/providers/structured_output.py <span class="pill info">new</span></td><td>Input normalization, preflight, negotiation, strict parsing, local validation, bounded issues, schema hash and error types.</td></tr>
+      <tr><td>openprogram/models/providers/schema/*</td><td>Add lossless/lossy reporting and provider schema profiles; retain original schemas.</td></tr>
+      <tr><td>openprogram/models/providers/catalog/sources/models_dev.py<br>openprogram/models/providers/catalog/enabled_models.py<br>openprogram/models/listing/listing.py</td><td>Retain, construct and expose <code>structured_output</code> tri-state.</td></tr>
+      <tr><td>openprogram/models/providers/adapters/openai_completions/openai_completions.py<br>openprogram/models/providers/adapters/openai_responses/openai_responses.py<br>openprogram/models/providers/adapters/azure_openai_responses/azure_openai_responses.py</td><td>Map Chat/Responses/Azure native payloads and handle refusal/incomplete.</td></tr>
+      <tr><td>openprogram/models/providers/adapters/anthropic/anthropic.py</td><td>Merge format into existing <code>output_config</code> while retaining adaptive-thinking effort.</td></tr>
+      <tr><td>openprogram/models/providers/adapters/google/google.py<br>openprogram/models/providers/adapters/google_gemini_cli/google_gemini_cli.py</td><td>Official Google adapter maps native fields; subscription adapter initially uses explicit unknown/tool fallback.</td></tr>
+      <tr><td>openprogram/models/providers/adapters/amazon_bedrock/amazon_bedrock.py<br>openprogram/models/providers/adapters/openai_codex/openai_codex.py</td><td>Bedrock maps <code>outputConfig</code>; Codex adapter initially uses explicit unknown/tool fallback.</td></tr>
+      <tr><td>openprogram/runtime/agent/loop/types.py<br>openprogram/runtime/agent/loop/<br>openprogram/runtime/conversation/event_parsing.py</td><td>Forward schemas; implement no-tool terminal validation, hidden tools, one repair, derived events and final parsed messages.</td></tr>
+      <tr><td>openprogram/runtime/agent/runtime.py<br>openprogram/runtime/agent/runtime/callable_model.py</td><td>Fix silent provider-path omission; add overloads/parsed returns and identical final validation for callable models.</td></tr>
+      <tr><td>openprogram/models/providers/recording/recording.py<br>openprogram/models/providers/recording/replay.py</td><td>Format v2, normalized option comparison and multi-call validation-retry tests; raw provider event set unchanged.</td></tr>
+      <tr><td>openprogram/interfaces/cli/commands/chat.py<br>openprogram/interfaces/cli/application.py<br>openprogram/interfaces/cli/chat.py<br>openprogram/interfaces/cli/repl/turn.py</td><td>One-shot schema argument, typed result, stdout/stderr/exit codes and session persistence.</td></tr>
+      <tr><td>openprogram/interfaces/server/ws_actions/chat/turn.py<br>openprogram/interfaces/server/routes/chat.py<br>openprogram/interfaces/server/server.py</td><td>Request validation, schema forwarding and structured stream/result/error envelopes.</td></tr>
+      <tr><td>apps/cli/src/ws/client.ts<br>apps/cli/src/screens/repl/wsHandlers/handleChatResponse.ts<br>apps/cli/src/screens/repl/wsHandlers/streamingHelpers.ts</td><td>TS request/event types, candidate clearing on retry and typed-result reception; no schema editor.</td></tr>
+      <tr><td>openprogram/runtime/conversation/turn_runtime/titles.py</td><td>Migrate title consumer, remove format cleanup and retain length/best-effort boundaries.</td></tr>
+      <tr><td>pyproject.toml<br>uv.lock</td><td>Direct dependency on <code>jsonschema</code> and update lockfile.</td></tr>
+      <tr><td>docs/reference/design/runtime/session/name.md<br>docs/reference/design/feature-matrix.html</td><td>After implementation, update documentation status and actual contracts.</td></tr>
+    </tbody>
+  </table>
+
+  <h2>14. Test matrix and acceptance</h2>
+  <table>
+    <thead><tr><th>Layer</th><th>Required coverage</th><th>Suggested files</th></tr></thead>
+    <tbody>
+      <tr><td>Normalization/validator</td><td>Bare schema, envelope, invalid meta-schema, object/array/scalar/null, non-finite values, fences/trailing text, stable issue paths; zero-network remote refs, local direct-reference cycles and global 1 MiB/4096 nodes/8192 edges/100 depth budgets.</td><td><code>tests/component/providers/adapters/test_structured_output.py</code> (new)</td></tr>
+      <tr><td>Negotiation</td><td>true/false/unknown × adapter support; lossy schemas; fallback none/auto/prompt; tool_choice/parallel conflicts.</td><td>Above plus <code>test_provider_meta.py</code></td></tr>
+      <tr><td>Provider payload</td><td>Per-adapter payload snapshots; Anthropic effort+format merge; Bedrock schema JSON string; unknown adapters send no private fields.</td><td>Existing <code>tests/component/providers/adapters/test_openai.py</code>, <code>test_anthropic.py</code>, <code>test_gemini.py</code> + new Bedrock cases</td></tr>
+      <tr><td>Streaming</td><td>One-attempt success; invalid delta→retry→clear→success; second failure without done; no retry on cancellation/deadline; no synthesized success for EOF without raw terminal.</td><td><code>tests/providers/test_structured_output_streaming.py</code> (new)</td></tr>
+      <tr><td>Tools</td><td>Native+tools; hidden tool alone; ordinary multiround tools then submit; reject ordinary+submit together; forced/none/parallel conflicts.</td><td><code>tests/unit/programs/runtime/test_tools_runtime.py</code> + new Agent loop cases</td></tr>
+      <tr><td>Runtime</td><td>No schema returns str; schema returns JsonValue; default provider forwards it; callable models validate locally; sync/async prove initial, repair and transport-retry calls share <code>max_retries</code> budget.</td><td><code>tests/component/programs/tools/test_runtime_structured_output.py</code> (new)</td></tr>
+      <tr><td>Record/replay</td><td>v2 single call, two-call validation retry, schema-mismatch paths, v1 rejection and identical offline derived events.</td><td><code>tests/component/providers/registry/test_record_replay.py</code></td></tr>
+      <tr><td>CLI</td><td>Successful stdout is JSON only; exit 2/3/4; no full candidates on stderr; ordinary <code>--print</code> unchanged.</td><td><code>tests/component/providers/adapters/test_cli.py</code> + CLI integration</td></tr>
+      <tr><td>WS/API</td><td>Request schema, retry event, typed result, machine error, foreign-session routing and old-client field ignoring.</td><td><code>tests/component/webui/runtime/test_structured_output_web.py</code> + TS tests</td></tr>
+      <tr><td>Session title</td><td>Valid title, structured-failure placeholder, Unicode/80-character boundaries and no old regex dependency.</td><td><code>tests/unit/context/test_dispatcher_compaction_title.py</code></td></tr>
+      <tr><td>Regression</td><td>All provider streams, tool loops, ordinary chat, DAG, session persistence, typecheck and docs HTML.</td><td>Existing suites + <code>npm test</code>/<code>npm run typecheck</code></td></tr>
+    </tbody>
+  </table>
+  <div class="callout okline"><strong>Acceptance threshold:</strong> Every native adapter needs payload contract tests and at least one controlled integration test; successful values pass the original local schema. Total Runtime provider calls do not exceed <code>max_retries</code> and semantic repairs do not exceed <code>max_validation_retries</code>; ordinary text recordings, events and return types remain unchanged.</div>
+
+  <h2>15. Implementation order and completion</h2>
+  <ol>
+    <li>Public types, direct dependency, schema preflight/validator/errors; establish pure unit tests first.</li>
+    <li>Capability registry, models.dev tri-state retention and provider schema profiles.</li>
+    <li>Provider payload mappings and adapter contracts; unverified adapters stay unknown.</li>
+    <li>Agent-loop terminal validation, hidden tools, events and one repair; Runtime parsed returns.</li>
+    <li>Record/replay v2, CLI and WS/API consumers; verify old text behavior unchanged.</li>
+    <li>Migrate session titles; update feature matrix and naming documentation.</li>
+  </ol>
+  <p>Provider capabilities, contracts and title consumer are implemented. Feature matrix retains the user-approved score 78.5 and existing status cells; complete regression gates and specific trust-boundary evidence remain separately recorded here. Adding payload fields alone is not feature completion.</p>
+
+  <h2>16. Implementation and verification evidence</h2>
+  <table>
+    <thead><tr><th>Scope</th><th>Reviewed implementation</th><th>Boundary</th></tr></thead>
+    <tbody>
+      <tr><td>Public contract and providers</td><td><code>JsonSchemaOutput</code> Normalization/preflight; native/hidden-tool/explicit-prompt negotiation against a registry snapshot; verified OpenAI, Anthropic, Google and Bedrock mappings; final local validation against the caller schema.</td><td>Unverified adapters, models without explicit opt-in, lossy schema projection or tool-control conflicts never send unverified native payloads; <code>fallback="prompt"</code> must be explicitly requested.</td></tr>
+      <tr><td>Agent / Runtime</td><td>The Agent loop owns negotiation, typed retry/end events, at most one validation repair and parsed terminal; <code>Runtime.exec</code>/<code>async_exec</code> returns validated Python JSON values, while ordinary calls return text.</td><td>Invalid candidates do not enter final assistant messages; cancellation, deadlines, refusal and incomplete do not become repairs.</td></tr>
+      <tr><td>Entries and reproduction</td><td>CLI <code>--json-schema PATH|-</code>, Web typed lifecycle, recording v2 and strict offline replay share normalization; structured one-shot CLI stdout has exactly one JSON document.</td><td>No Web schema editor, cross-language generation or incremental JSON AST; explicitly reject v1 structured recordings while retaining ordinary-v1 compatibility.</td></tr>
+      <tr><td>Session title</td><td>Default Agent provider/model, <code>toolset="none"</code>, at most two model iterations and one schema repair; accepts only <code>{title:string}</code>, with only Unicode trim and 80-code-point storage protection in the consumer.</td><td>Setup, exec and close failures are best-effort and log only fixed lifecycle labels; provider exception bodies and tracebacks never enter logs.</td></tr>
+    </tbody>
+  </table>
+  <p><strong>Commit evidence:</strong> Task 1 <code>00945c85..27a5aa8a</code>; Task 2 <code>da4ececd..8ca7b04c</code>; Task 3 <code>6f8c80b7..546c2bc7</code>; Task 4 <code>27e4764f..510f60ee</code>; Task 5 <code>9743f3e1..86ca66d5</code>; Task 6 <code>5bba3e64..2fb471b3</code>. Final scoped SPEC and QUALITY reviews for Tasks 1–6 are PASS with remaining 0.</p>
+  <p><strong>Verification state:</strong> Task 6 affected selection: <code>219 passed, 1 skipped</code>; Task 7 focused selection: <code>226 passed, 1 skipped</code>; documentation build: <code>453 pages</code>, link check: <code>0 broken</code>. The complete Python selection on the final Task 7 tree produced <code>3290 passed, 5 skipped, 1 xfailed, 2 failed</code>; the two failures were the existing tool-cancellation <code>ExecInterrupt</code> assertion and memory-writer turn-order assertion, independently reproduced before implementation at baseline <code>86ca66d5</code> . They are not attributed to this structured-output diff, but do not satisfy complete-gate release requirements.</p>
+  <p><strong>Subsequent quality fixes:</strong> Global preflight now enforces 1 MiB/4096 nodes/8192 edges/100 depth budgets and rejects external resources/direct cycles. Local validation uses a no-retrieval registry; structured streams commit only after a provider raw terminal. Scoped SPEC/QUALITY conclusions will be recorded after review.</p>
+
+  <div class="foot">
+    <p>Repository evidence: <code>openprogram/models/providers/types.py</code>, <code>sources/models_dev.py</code>, seven provider adapters, <code>agent/loop/</code>, <code>agent/runtime.py</code>, <code>conversation/event_parsing.py</code>, CLI/WebSocket chain, <code>recording.py</code>/<code>replay.py</code>, <code>conversation/turn_runtime/titles.py</code>, <code>references/pi-ai</code>. Line numbers are not tied to source snapshots; locate implementation by symbols/tests.</p>
+    <p>External provider documentation only confirms current payloads/constraints; OpenProgram adapter contracts remain the prerequisite for enabling capabilities.</p>
+  </div>
+</main>
+</body>
+</html>

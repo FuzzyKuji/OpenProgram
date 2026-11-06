@@ -1,0 +1,100 @@
+/* 右栏视图宿主：.right-view-host 单视图切换、Detail/Context 开关、
+   折叠态。
+   对应组件：components/right-sidebar/right-sidebar.tsx */
+
+/* Right sidebar — mirror of the left sidebar. The shell layout
+   (`flex flex-col`, bg, width, transitions, border-LEFT) is now
+   Tailwind utilities on the root `<aside>` in `right-sidebar.tsx`.
+   The nav rows, icons, labels and toggle use the same class constants
+   from `components/sidebar/nav-classes.ts` so heights / colors /
+   strokes stay aligned. Diffs vs. left sidebar:
+     * border on the LEFT, not the right (Tailwind `border-l`)
+     * `.right-view-host` replaces the favorites/conversations blocks
+     * active nav item uses --bg-hover tint (rule below)
+     * collapsed state fades the view host (instead of favorites/conversations)
+*/
+
+/* Active nav-item state (currently-showing view) is applied via
+   `sidebarNavItemActiveClass` from `nav-classes.ts` in
+   `right-sidebar.tsx`. The legacy `.right-sidebar .sidebar-nav-item.active`
+   rule no longer matches since nav rows are class strings of Tailwind
+   utilities now (no `.sidebar-nav-item` class). */
+
+/* Shared text roles for right-side panels; reused components keep their fallback elsewhere. */
+.right-sidebar {
+  --right-panel-text-size: var(--fs-base);
+  --right-panel-meta-size: var(--fs-sm);
+  --right-panel-font-family: var(--font-sans);
+  --right-panel-font-weight: 400;
+  --right-panel-line-height: 20px;
+  /* The rail is a white floating card (components/ui/sidebar.tsx);
+     panels that paint their own deep-tone fill take the card's surface. */
+  --files-tree-bg: var(--color-sidebar);
+  --ui-button-font-size: var(--right-panel-text-size);
+  --ui-button-line-height: var(--right-panel-line-height);
+  --ui-button-font-weight: var(--right-panel-font-weight);
+  font-weight: var(--right-panel-font-weight);
+  font-size: var(--right-panel-text-size);
+  line-height: var(--right-panel-line-height);
+  font-family: var(--right-panel-font-family);
+}
+
+/* View host — one child visible at a time, matching data-view. */
+.right-view-host {
+  margin-top: 12px;
+  min-height: 0;
+  flex: 1;
+  overflow: hidden;
+  position: relative;
+}
+.right-view {
+  position: absolute;
+  inset: 0;
+  display: none;
+  flex-direction: column;
+}
+.right-sidebar[data-view="resources"] .right-view[data-view="resources"],
+.right-sidebar[data-view="detail"] .right-view[data-view="detail"],
+.right-sidebar[data-view="context"] .right-view[data-view="context"],
+.right-sidebar[data-view="running"] .right-view[data-view="running"],
+.right-sidebar[data-view="debugger"] .right-view[data-view="debugger"],
+.right-sidebar[data-view="files"] .right-view[data-view="files"] {
+  display: flex;
+}
+
+/* Detail / Context 的入口开关（在中央 DAG 视角里选中节点后出现在这两个
+   视图顶部）。它们不是图标轨的并列入口，是节点的从属视图，所以开关跟着
+   节点走。几何同 DAG 视角里的高亮模式开关。 */
+.session-view-switch {
+  display: flex;
+  flex-shrink: 0;
+  gap: 4px;
+  padding: 6px 8px;
+  border-bottom: 1px solid var(--border);
+}
+.session-view-switch-btn {
+  flex: 1;
+  padding: 4px 8px;
+  font-size: var(--right-panel-text-size, var(--fs-xs));
+  line-height: var(--right-panel-line-height, normal);
+  font-family: inherit;
+  color: var(--text-muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: background var(--motion-medium), color var(--motion-medium);
+}
+.session-view-switch-btn.is-active {
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+
+/* Collapsed, the views stay mounted at the open width against the card's
+   right edge and fade out (.rail-open-only, .rail-open-width in
+   styles/base/layout.css). */
+
+[data-resource-drop-over="true"] {
+  /* The shared canvas-drop-preview draws the drop boundary. */
+  background: var(--bg-tertiary);
+}

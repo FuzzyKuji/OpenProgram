@@ -1,0 +1,368 @@
+/* Settings page — ported from apps/web/app/styles/03-settings.css.
+   Settings-only rules; sidebar / conv-item / fn-item rules in the
+   legacy file belong elsewhere and are not duplicated here. */
+
+.view {
+  /* Decoupled panes: `.view` itself never scrolls. It pins the
+     Settings body within the viewport; the panes inside .body
+     (2nd-level nav, provider list, detail) own their own
+     overflow:auto so wheeling one column doesn't drag the others. */
+  height: 100vh;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--bg-secondary);
+}
+
+/* At narrow app widths the main sidebar is position:fixed. Reserve only its
+   collapsed 49px rail so Settings chrome is never covered; an expanded main
+   sidebar remains an intentional temporary overlay. */
+@media (max-width: 900px) {
+  .view { padding-left: var(--rail-collapsed-w); }
+}
+
+/* ─── Unified page shell ────────────────────────────────────────────────
+   Every settings subpage (Providers / Search / Channels / General)
+   wraps its content in this same shell so the four pages look like
+   siblings — same title position, same description font, same divider,
+   same body padding. The shell lives at the top of the content column
+   (right of the 2nd-level nav). */
+.page {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+  font-family: var(--font-sans);
+}
+.pageHeader {
+  padding: 20px 28px 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+  /* Fixed header at the top of the content column; pageBody (below)
+     gets the remaining vertical room and owns the scroll. */
+  flex-shrink: 0;
+}
+.pageTitle {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--text-bright);
+  margin: 0;
+  line-height: 1.3;
+  overflow-wrap: anywhere;
+}
+.pageMeta {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  line-height: 1.55;
+  max-width: 760px;
+  margin: 0;
+}
+.pageBody {
+  /* Single-column variant (Channels / General): own the vertical
+     overflow, leave the page-header anchored above. */
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 28px;
+  padding: 24px 28px 32px;
+}
+.skelMeta {
+  width: 420px;
+  max-width: 100%;
+  height: 14px;
+  border-radius: var(--radius-xs);
+  background: var(--bg-tertiary);
+  animation: settingsSkelPulse 1.2s ease-in-out infinite;
+}
+.skelBlock {
+  width: 100%;
+  max-width: 720px;
+  height: 92px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  animation: settingsSkelPulse 1.2s ease-in-out infinite;
+}
+.skelBlockShort {
+  width: 60%;
+  max-width: 480px;
+  height: 92px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-tertiary);
+  animation: settingsSkelPulse 1.2s ease-in-out infinite;
+}
+@keyframes settingsSkelPulse {
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
+}
+.sectionTitle {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-bright);
+  margin: 0;
+  /* Lives at the top of providersSidebar (3rd column) which has 8px
+     outer padding. With 8 (sidebar) + 8 (title) = 16 above text,
+     same as .detail's padding-top 16, the AI Providers heading and the
+     4th-level header ("Claude (Max plan)") sit on the same line. */
+  padding: 8px;
+}
+
+.card {
+  /* View is now bg-secondary; cards use bg-tertiary to lift visually.
+     No outer margin — the parent (`.pageBody`) supplies horizontal
+     padding so the card sits flush with the page-header divider above
+     and the page-body's 28px gutters. */
+  background: var(--bg-tertiary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: 14px 18px;
+}
+.card + .card {
+  margin-top: 12px;
+}
+/* Section title used inside `.pageBody` — sits 8px above its card so
+   the heading reads as the card's label. */
+.pageBody .sectionTitle {
+  padding: 0 0 8px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text-muted);
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 0;
+  min-width: 0;
+}
+.row + .row {
+  border-top: 1px solid var(--border);
+}
+/* Top-align variant for rows whose value column is tall (e.g. the
+   avatar picker with its tile grid + variant grid). Centering
+   the short left-hand label against that tall block leaves the label
+   floating in the middle; this pins it to the top so it reads as the
+   heading of the block beside it. A little top padding on the label
+   nudges it onto the same baseline as the first row of tiles. */
+.rowTop {
+  align-items: flex-start;
+}
+.rowTop .label {
+  padding-top: 6px;
+}
+
+.label {
+  flex: 0 1 auto;
+  font-size: var(--fs-base);
+  color: var(--text-primary);
+}
+/* Chrome column — theme cards, dropdowns, profile editors, helpers.
+   Shrink-wraps and hugs the right edge. `.value` stays reserved for
+   codes (paths, model ids). */
+.control {
+  flex: 0 1 auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  margin-left: auto;
+  min-width: 0;
+  max-width: min(520px, calc(100% - 6rem));
+  text-align: right;
+  font-size: var(--fs-base);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+}
+/* System rows isolate the copy from the control. Shared `.label` is
+   content-sized (`flex: 0 1 auto`) so a long Ports help line wraps at
+   full row width and runs under the field. These overrides keep wrap
+   inside the left column only. Main / theme / updater stay on `.label`
+   + `.control` as-is. */
+.systemRow {
+  align-items: flex-start;
+}
+.systemRow .label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.systemRow .control {
+  flex: 0 0 auto;
+  margin-left: auto;
+  min-width: 7.5rem;
+  max-width: none;
+}
+/* System access: group heading, label + status badge, process details. */
+.accessGroupTitle {
+  margin: 0;
+  padding: 12px 0 4px;
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+}
+.accessDetails {
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.accessDetails code {
+  display: block;
+  margin-top: 4px;
+  font-family: var(--font-mono);
+  overflow-wrap: anywhere;
+}
+.authSectionHead .sectionTitle { margin-bottom: 0; }
+.authMono {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  overflow-wrap: anywhere;
+}
+.authForm {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+  padding: 16px;
+}
+.authField {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+}
+.authFieldWide { grid-column: 1 / -1; }
+@media (max-width: 760px) {
+  .authForm { grid-template-columns: minmax(0, 1fr); }
+}
+/* Help and save status under a settings row label. */
+.rowHelp {
+  margin-top: 2px;
+  font-size: var(--fs-sm);
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+.rowStatus,
+.rowStatusOk,
+.rowStatusError {
+  margin-top: 3px;
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.rowStatusOk { color: var(--accent-green); }
+.rowStatusError { color: var(--danger-soft); }
+/* Bare checkboxes/radios that sit directly on a `.row`. */
+.row > input[type="checkbox"],
+.row > input[type="radio"] {
+  margin-left: auto;
+  flex: 0 0 auto;
+}
+
+/* ===== 主题选择器 ========================================== */
+/* Theme tiles (Mode, Color style): one compact row of mini window
+   previews, the radio and label under each. */
+.themeTile {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  width: 112px;
+  cursor: pointer;
+}
+/* The preview carries data-theme, so var() inside resolves to that
+   theme's values — the preview is the real palette. A thin top band
+   stands in for the tab strip, coloured like base/desktop-chrome.css --tabrow-bg. */
+.themeSwatch {
+  height: 56px;
+  border-radius: var(--radius-md);
+  background: linear-gradient(
+    color-mix(in oklab, var(--bg-secondary), var(--tabrow-color) var(--tabrow-tint)) 0 10px,
+    var(--bg-primary) 10px
+  );
+  padding-top: 10px;
+  box-sizing: border-box;
+  border: 1px solid var(--border-light);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+}
+.themeTile:has([data-state="checked"]) .themeSwatch,
+.swatch[aria-pressed="true"],
+.swatchCustom[data-active] {
+  outline: 2px solid var(--accent-orange);
+  outline-offset: 2px;
+}
+.themeDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+}
+/* Theme row: Code rain and Gradient previews draw their own backdrop. */
+.themeSwatch[data-scene="code-rain"] { background: var(--theme-scene-rain-bg); border-color: var(--theme-scene-rain-edge); padding-top: 0; }
+.themeRain { font-family: ui-monospace, Menlo, monospace; font-size: var(--fs-xs); font-weight: 600; line-height: 1; letter-spacing: 0.12em; color: var(--theme-scene-rain-ink); text-shadow: 0 0 6px var(--theme-scene-rain-glow); }
+.themeSwatch[data-scene="gradient"] {
+  padding-top: 0;
+  background:
+    radial-gradient(60% 80% at 20% 25%, var(--theme-scene-gradient-1) 0, transparent 70%),
+    radial-gradient(60% 80% at 85% 30%, var(--theme-scene-gradient-2) 0, transparent 70%),
+    radial-gradient(70% 80% at 60% 100%, var(--theme-scene-gradient-3) 0, transparent 70%),
+    var(--theme-scene-gradient-base);
+}
+
+/* Colour rows (Tab bar color, Accent color): round swatches, then the
+   custom-colour well, all the same size and selection ring. */
+.swatch,
+.swatchCustom {
+  width: var(--ui-button-h-xs);
+  height: var(--ui-button-h-xs);
+  border-radius: 50%;
+  padding: 0;
+  border: 1px solid color-mix(in oklab, var(--text-bright) 12%, transparent);
+  cursor: pointer;
+}
+.swatchCustom {
+  display: grid;
+  place-items: center;
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+}
+.swatchCustom[data-active] {
+  color: var(--ink-on-fill);
+}
+.swatch:focus-visible,
+.swatchCustom:has(input:focus-visible) {
+  outline: 2px solid var(--ring);
+  outline-offset: 2px;
+}
+.effectsPreviewBackground {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 92px;
+  border-radius: var(--radius-xl);
+  background: repeating-linear-gradient(110deg, var(--bg-secondary) 0 30px,
+    color-mix(in oklch, var(--accent-orange) 22%, var(--bg-primary)) 30px 60px);
+}
+.effectsPreviewBackdrop {
+  position: absolute;
+  color: var(--text-secondary);
+  font-size: var(--fs-lg);
+  white-space: nowrap;
+}
+.effectsPreviewTab {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 12px;
+  height: 32px;
+  border-radius: var(--radius-md);
+  color: var(--text-bright);
+}

@@ -1,0 +1,379 @@
+"""Tell an agent when work it handed off in the background ends.
+
+As in Claude Code, a background agent (``agent(run_in_background=true)``,
+``agent(to=…)``, ``send_message``) that finishes starts a turn in the
+conversation that sent it, saying so. Nothing is said when the sender
+already read the result with ``job_output``. A conversation that is
+mid-turn gets the notice once its foreground turn ends, and every agent
+that finished meanwhile arrives in that one notice. The notice is an
+automated event, never a message from the user.
+
+``send_message(to=…, notify_when_idle=true)`` with no message rides the
+same queue: a watch entry that turns into one notice, carrying the
+target's latest reply, once the target branch or session goes idle.
+
+Pending notices live in ``<caller-session-dir>/notices.json`` so a worker
+restart does not lose them; the worker loop (``run_job_notices``) delivers
+them.
+"""
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Any, Optional
+
+from openprogram.runtime.jobs.types import Job, JobStatus
+
+POLL_SECONDS = 2.0
+_REPLY_CHARS = 20_000
+# Jobs already told or read, remembered so a second terminal projection
+# of the same job cannot notify twice. Only recent ids matter: the
+# projections of one job's end happen within seconds of each other.
+_DONE_KEPT = 500
+_log = logging.getLogger(__name__)
+
+_lock = threading.Lock()
+# Sessions that may hold a pending notice. Seeded from disk on the first
+# sweep, then kept by queue()/consume().
+_due: set[str] = set()
+_seeded = False
+
+
+def deliver_session_of(job: Job) -> str:
+    return job.caller_session_id or job.parent_session_id
+
+
+def _path(session_id: str) -> Optional[Path]:
+    from openprogram.runtime.context.session_db import default_db
+    sdir = default_db()._session_dir(session_id)  # noqa: SLF001 — same as inbox
+    return sdir / "notices.json" if sdir.exists() else None
+
+
+def _load(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+    try:
+        blob = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return [], []
+    if not isinstance(blob, dict):
+        return [], []
+    entries, done = blob.get("entries"), blob.get("done")
+    return (entries if isinstance(entries, list) else [],
+            done if isinstance(done, list) else [])
+
+
+def _write(path: Path, entries: list[dict[str, Any]], done: list[str]) -> None:
+    tmp = path.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps({"version": 1, "entries": entries,
+                               "done": done[-_DONE_KEPT:]}), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _settle(path: Path, ids: set[str]) -> None:
+    """Drop these entries (job ids or watch ids) and remember them as
+    done. Caller holds _lock."""
+    entries, done = _load(path)
+    _write(path, [e for e in entries if (e.get("job_id") or e.get("id")) not in ids],
+           done + sorted(ids - set(done)))
+
+
+def queue(job: Job) -> bool:
+    """Record that ``job``'s sender should hear it ended. Only background
+    jobs that completed or failed qualify: a waited-on job returned its
+    result to the caller, and a cancelled one was stopped on purpose."""
+    if job.wait or job.status not in (JobStatus.COMPLETED, JobStatus.ERRORED):
+        return False
+    session_id = deliver_session_of(job)
+    path = _path(session_id) if session_id else None
+    if path is None:
+        return False
+    with _lock:
+        entries, done = _load(path) if path.exists() else ([], [])
+        if job.id in done or any(e.get("job_id") == job.id for e in entries):
+            return False
+        entries.append({"job_id": job.id, "job_session_id": job.parent_session_id,
+                        "queued_at": time.time()})
+        _write(path, entries, done)
+        _due.add(session_id)
+    return True
+
+
+def watch(
+    *, sender_session_id: str, target_session_id: str, target_head_id: str,
+    label: str, agent_id: str, chain_messages: int, chain_generations: int,
+    authority: dict[str, Any],
+) -> bool:
+    """Tell the sender once when ``target_session_id:target_head_id`` goes
+    idle. False when the sender's session cannot hold the watch."""
+    import uuid
+    from openprogram.state.authority import normalize_authority
+    path = _path(sender_session_id)
+    if path is None:
+        return False
+    with _lock:
+        entries, done = _load(path) if path.exists() else ([], [])
+        if any(e.get("kind") == "watch" and e.get("target_session_id") == target_session_id
+               and e.get("target_head_id") == target_head_id for e in entries):
+            return True
+        entries.append({
+            "kind": "watch", "id": f"watch_{uuid.uuid4().hex[:12]}",
+            "target_session_id": target_session_id, "target_head_id": target_head_id,
+            "label": label, "agent_id": agent_id,
+            "chain_messages": int(chain_messages), "chain_generations": int(chain_generations),
+            "queued_at": time.time(), **normalize_authority(authority),
+        })
+        _write(path, entries, done)
+        _due.add(sender_session_id)
+    return True
+
+
+def tip_reply(session_id: str, tip_id: str) -> str:
+    """The text of a branch's tip, for an idle notice."""
+    from openprogram.runtime.context.session_db import default_db
+    for msg in reversed(default_db().get_messages(session_id)):
+        if msg.get("id") == tip_id:
+            content = msg.get("content")
+            return content.strip() if isinstance(content, str) else ""
+    return ""
+
+
+def _idle_watch_job(session_id: str, entry: dict[str, Any]) -> Optional[Job]:
+    """The watch as a finished Job once its target is idle, else None."""
+    from openprogram.runtime.conversation import inbox
+    from openprogram.state.authority import normalize_authority
+    target = str(entry.get("target_session_id") or "")
+    tip = inbox._branch_tip(target, entry.get("target_head_id"))  # noqa: SLF001
+    if not target or not tip or inbox.target_busy(target, tip, session_id):
+        return None
+    return Job(
+        id=str(entry["id"]), parent_session_id=target,
+        caller_session_id=session_id if target != session_id else None,
+        prompt="", agent_id=str(entry.get("agent_id") or "main"),
+        status=JobStatus.COMPLETED, head_id=tip, result_text=tip_reply(target, tip),
+        label=str(entry.get("label") or "") or None, source="idle_watch",
+        chain_messages=int(entry.get("chain_messages") or 0),
+        caller_chain_generations=int(entry.get("chain_generations") or 0),
+        **normalize_authority(entry),
+    )
+
+
+def consume(job: Job) -> None:
+    """The sender read ``job``'s result itself; drop its notice."""
+    session_id = deliver_session_of(job)
+    path = _path(session_id) if session_id else None
+    if path is None:
+        return
+    with _lock:
+        _settle(path, {job.id})
+
+
+def consume_reply(session_id: str, target_session_id: str, head_id: str) -> None:
+    """The sender read the reply at ``target_session_id:head_id`` itself
+    (an idle watch answers with it); drop notices of finished jobs that
+    ended on that node, which would only repeat it."""
+    from openprogram.runtime.jobs.store import load_job
+    path = _path(session_id)
+    if path is None or not path.exists():
+        return
+    with _lock:
+        entries, _done = _load(path)
+        ids = set()
+        for e in entries:
+            if e.get("kind") == "watch" or str(e.get("job_session_id") or session_id) != target_session_id:
+                continue
+            job = load_job(target_session_id, str(e.get("job_id") or ""))
+            if job is not None and job.head_id == head_id:
+                ids.add(job.id)
+        if ids:
+            _settle(path, ids)
+
+
+def _pending_jobs(session_id: str, entries: list[dict[str, Any]]) -> tuple[list[Job], set[str]]:
+    """The jobs these entries stand for, and the entry ids that are
+    settled by delivering them. A watch whose target is still busy stays."""
+    from openprogram.runtime.jobs.store import load_job
+    jobs, settled = [], set()
+    for e in entries:
+        if e.get("kind") == "watch":
+            job = _idle_watch_job(session_id, e)
+            if job is not None:
+                jobs.append(job)
+                settled.add(job.id)
+            continue
+        settled.add(str(e.get("job_id")))
+        job = load_job(str(e.get("job_session_id") or session_id), str(e.get("job_id") or ""))
+        if job is not None:
+            jobs.append(job)
+    return jobs, settled
+
+
+def _busy(session_id: str, jobs: list[Job]) -> bool:
+    """True while the conversation has a foreground turn, or while an agent
+    that dispatched one of these jobs still runs and may read it itself.
+    Background agents running in the same session do not count: a
+    conversation waiting on three agents hears from each as it ends."""
+    from openprogram.runtime.conversation.run_control import is_worker_stopping
+    from openprogram.runtime.execution import default_store
+    from openprogram.runtime.jobs.store import list_jobs
+    from openprogram.runtime.jobs.types import is_terminal
+
+    if is_worker_stopping():
+        return True
+    background = {j.id for j in list_jobs(session_id) if not j.wait}
+    if any(r.execution_id not in background
+           for r in default_store().list_nonterminal(session_id=session_id)):
+        return True
+    from openprogram.runtime.jobs.store import load_job
+    for job in jobs:
+        if job.parent_job_id:
+            parent = load_job(job.parent_session_id, job.parent_job_id)
+            if parent is not None and not is_terminal(parent.status):
+                return True
+    return False
+
+
+def deliver(session_id: str) -> bool:
+    """Start the notice turn for ``session_id``; False while it must wait."""
+    path = _path(session_id)
+    if path is None or not path.exists():
+        return True
+    with _lock:
+        entries, _ = _load(path)
+    if not entries:
+        return True
+    jobs, ids = _pending_jobs(session_id, entries)
+    if jobs and _busy(session_id, jobs):
+        return False
+    with _lock:
+        _settle(path, ids)
+    if not jobs:
+        return len(ids) == len(entries)
+    from openprogram.runtime.jobs import get_runner
+    get_runner()._dispatch_followup(*jobs)
+    return True
+
+
+def _clip(text: str) -> str:
+    text = text.strip()
+    return text[:_REPLY_CHARS] + "…" if len(text) > _REPLY_CHARS else text
+
+
+def _kind(job: Job) -> str:
+    if job.source == "idle_watch":
+        return "idle"
+    # A spawn's attach pointer puts its report in context; a delivery to
+    # an existing branch has no pointer, so its reply travels inline.
+    return "report" if job.attach_pointer_id else "reply"
+
+
+def _address(job: Job) -> str:
+    return f"{job.parent_session_id}:{job.head_id or '?'}"
+
+
+def _first_line(job: Job) -> str:
+    label = job.label or job.subject or job.id[:8]
+    if _kind(job) == "idle":
+        return f"Branch {_address(job)} (\"{label}\") you asked to watch is idle now."
+    outcome = "failed" if job.status == JobStatus.ERRORED else "finished"
+    return f"Agent \"{label}\" {outcome} (job {job.id})."
+
+
+def notice_items(jobs: list[Job]) -> list[dict[str, Any]]:
+    """What the notice says, per job, for the chat to draw one row each:
+    ``kind`` (report / reply / idle), the agent or branch ``name`` (empty
+    when it has none), whether it ``failed``, its ``address``, and the
+    ``line`` that starts its part of the notice text."""
+    return [{
+        "kind": _kind(job), "name": job.label or "",
+        "failed": job.status == JobStatus.ERRORED,
+        "address": _address(job), "line": _first_line(job),
+    } for job in jobs]
+
+
+def notice_text(jobs: list[Job]) -> str:
+    """The automated notice for one or more finished jobs."""
+    many = len(jobs) > 1
+    if all(j.source == "idle_watch" for j in jobs):
+        head = "Agents you are watching are idle." if many else "An agent you are watching is idle."
+    else:
+        head = ("Background agents you started have finished." if many
+                else "A background agent you started has finished.")
+    lines = [head + " This is an automated notice, not a message from the user."]
+    for job in jobs:
+        kind, address = _kind(job), _address(job)
+        lines.append("")
+        lines.append(_first_line(job))
+        if kind == "idle":
+            lines.append("Its latest reply:")
+            lines.append(_clip(job.result_text or "") or "(no text)")
+            lines.append(f"To continue with it, use send_message(to=\"{address}\").")
+            continue
+        task = (job.prompt or job.description or "").strip()
+        if task:
+            lines.append(f"Task: {task[:500]}")
+        if kind == "report":
+            lines.append("Its report is attached above.")
+        else:
+            lines.append(f"Reply from branch {address}:")
+            lines.append(_clip(job.result_text or job.error or "") or "(no output)")
+            lines.append(f"To continue with it, use send_message(to=\"{address}\").")
+    lines.append("")
+    lines.append(
+        "Carry on with the user's request from here: tell the user what "
+        + ("they" if many else "it")
+        + " found in your own words, or decide the next step. If you have "
+        "already used this result, reply briefly."
+    )
+    return "\n".join(lines)
+
+
+def _seed() -> None:
+    global _seeded
+    from openprogram.state.store import default_store
+    from openprogram.state.store.session.placement import iter_session_dirs
+    root = default_store().root_path
+    if root.exists():
+        found = {sid for sid, sdir in iter_session_dirs(root)
+                 if (sdir / "notices.json").exists() and _load(sdir / "notices.json")[0]}
+        with _lock:
+            _due.update(found)
+    _seeded = True
+
+
+def sweep() -> None:
+    if not _seeded:
+        _seed()
+    with _lock:
+        due = list(_due)
+    for session_id in due:
+        try:
+            done = deliver(session_id)
+        except Exception:
+            _log.warning("agent notice for %s deferred", session_id, exc_info=True)
+            continue
+        if done:
+            with _lock:
+                path = _path(session_id)
+                if path is None or not path.exists() or not _load(path)[0]:
+                    _due.discard(session_id)
+
+
+def _sweep_all() -> None:
+    sweep()
+    # Messages queued for busy agents ride the same loop (agent/inbox.py).
+    from openprogram.runtime.conversation import inbox
+    inbox.sweep()
+
+
+async def run_job_notices(stop: asyncio.Event) -> None:
+    """Worker loop: deliver due notices and queued messages until
+    ``stop`` is set."""
+    while not stop.is_set():
+        await asyncio.to_thread(_sweep_all)
+        try:
+            await asyncio.wait_for(stop.wait(), POLL_SECONDS)
+        except asyncio.TimeoutError:
+            pass

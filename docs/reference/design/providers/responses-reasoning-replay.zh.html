@@ -1,0 +1,7 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>Responses 推理记录重放</title><body>
+<h1>Responses 推理记录重放</h1>
+<p>共享 Responses 转换器在同一模型的历史请求中复用已保存的推理签名。SDK 输出对象可能把缺失的可选字段序列化为 null。把这样的输出再次作为输入时，兼容端点可能拒绝 reasoning 中的 content:null，返回 HTTP 422。</p>
+<h2>契约</h2><p>在出站消息转换边界，省略 reasoning 条目中值为 null 的可选 content、encrypted_content 和 status 字段。保留非 null 值、summary 数组及不透明的加密内容。继续沿用服务端分配 ID 的移除逻辑，以及现有跨模型签名处理。不改写已保存的历史、不解密载荷、不变更权限，也不重试已经失败的外部操作。</p>
+<h2>参考与范围</h2><p>已安装的 OpenAI SDK 中，ResponseReasoningItem 将 content、encrypted_content 和 status 声明为可选字段；输出序列化规则与输入要求不同。所有 Responses 适配器共用 convert_responses_messages，因此规范化在这里完成，不放入某个单独的转发适配器。不新增队列、服务商回退或重试策略。</p>
+<h2>验收</h2><p>通过共享公开消息转换器处理 SDK 形状的已保存推理签名。输入中不含值为 null 的可选字段；有效内容与加密载荷保留；源历史逐字节不变。已有跨服务商工具调用和流式推理测试通过。</p>
+<h2>实现状态</h2><p>已在 convert_responses_messages 中实现。四个回归用例验证 null 省略、非 null 保留和已保存签名不变。独立规格审查与质量审查通过；打包仍须满足合并后的验证要求。</p></body></html>

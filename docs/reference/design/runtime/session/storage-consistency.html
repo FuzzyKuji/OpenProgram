@@ -1,0 +1,63 @@
+<h1 id="session-storage-consistency">Storage consistency</h1>
+<p>This document defines timestamp, snapshot, merged-head and lock-scope contracts for SessionStore. See <a href="storage.md">Session storage</a> for the data model. Each contract has its own acceptance boundary; implementation evidence is collected at the end.</p>
+<h2 id="registry">Registry timestamps and snapshots</h2>
+<p><code>updated_at</code> is the last content-append time, not the time of an arbitrary metadata write. Registry reads, mutations and snapshots share a state lock. Disk publication is serialized separately; filesystem I/O never holds that state lock. Deferred flush must preserve mutations newer than its snapshot.</p>
+<table><thead><tr><th>Operation</th><th>Contract</th></tr></thead><tbody>
+<tr><td><code>_persist_meta</code></td><td>Rename, pin, read markers, branch markers and HEAD persistence preserve the content timestamp. Append explicitly advances it.</td></tr>
+<tr><td><code>_index</code> and <code>list_sessions()</code></td><td>Readers get a point-in-time copy of each row. Concurrent creation, mutation and deletion cannot tear fields or invalidate iteration.</td></tr>
+<tr><td>Deferred flush</td><td>An older snapshot cannot overwrite a newer one. Mutations during publication remain dirty and are saved by a subsequent flush.</td></tr>
+</tbody></table>
+<h3 id="mechanisms">Mechanisms and alternatives</h3>
+<p>Reuse the SessionMemoryIndex boundary: update state under its lock and perform file I/O after release. Use standard <code>threading</code> locks: one registry state lock for dictionaries, dirty state and timers, and one write lock for publication ordering. Existing <code>atomic_write_text</code> provides atomic replacement.</p>
+<p>Adopt explicit content timestamps, shallow row snapshots and serialized atomic writes. Remove implicit timestamp advancement from metadata persistence. Reject a global lock around every store operation, synchronous registry writes for every append, a new timestamp field requiring consumer migration, a database, cross-process registry locks and new background services.</p>
+<h3 id="registry-flow">State flow</h3>
+<ol>
+<li>Appending a message or node generates one timestamp for both session metadata and its registry entry.</li>
+<li>Rename, pin, read and branch/head changes persist the existing timestamp.</li>
+<li>Registry mutations hold the state lock. Listing copies each row under the same lock, then filters and sorts outside it.</li>
+<li>A writer acquires the write lock, then captures JSON state and clears only the covered dirty state under the state lock. It releases the state lock before atomic disk publication.</li>
+<li>A concurrent mutation marks the registry dirty again. A later timer or exit flush publishes that subsequent state.</li>
+</ol>
+<h3 id="failure-compatibility">Failure and compatibility</h3>
+<ul><li>Disk failures retain the existing warning behavior. In-memory state remains available; a subsequent mutation/flush can attempt publication again.</li><li>Returned rows are copies: caller mutations cannot modify the registry.</li><li>Creation preserves an explicitly supplied historical timestamp. Rebuilding an index does not migrate its schema.</li><li>Sort by descending <code>updated_at</code>, treating absent values as zero. Wire shape and fields remain unchanged.</li><li>Registry work does not alter the node DAG concurrency model, credentials, authentication or orphan cleanup. Merged heads and location publication have the separate contracts below.</li></ul>
+<h3 id="registry-acceptance">Registry acceptance</h3>
+<table><thead><tr><th>Public entry</th><th>Scenario</th><th>Observable result</th></tr></thead><tbody>
+<tr><td><code>update_session</code></td><td>Rename, pin or mark a session read</td><td>Metadata/index timestamps and list ordering stay unchanged.</td></tr>
+<tr><td><code>append_message</code></td><td>Append content</td><td>Metadata/index advance together and the list uses the new timestamp.</td></tr>
+<tr><td><code>list_sessions</code></td><td>Mutate a returned row</td><td>A subsequent list is unaffected.</td></tr>
+<tr><td>Deferred flush</td><td>Mutate while an earlier snapshot writes</td><td>A subsequent flush retains the new fields in <code>index.json</code>.</td></tr>
+<tr><td>Concurrent update/list/flush</td><td>Run readers and writers together</td><td>No iteration errors; JSON remains parseable; final memory and disk state agree.</td></tr>
+</tbody></table>
+<h2 id="merged-heads">Atomic merged-head updates</h2>
+<p><code>mark_merged(session_id, head_ids)</code> is a set-union operation. Child-agent completion, task runners and Web branch actions can call it concurrently; both updates must survive.</p>
+<table><thead><tr><th>Property</th><th>Requirement</th></tr></thead><tbody>
+<tr><td>Atomicity</td><td>Read the existing list, deduplicate/append, and update <code>idx.meta</code> in one <code>idx._lock</code> critical section.</td></tr>
+<tr><td>Ordering</td><td>Preserve existing order; append new, nonempty, stripped IDs in each call's input order.</td></tr>
+<tr><td>Idempotency</td><td>Repeated IDs create no duplicates. No new values means no disk write.</td></tr>
+<tr><td>Persistence</td><td>Update memory under lock, then call <code>_persist_meta</code> outside it. At least one final snapshot from concurrent calls contains the complete union.</td></tr>
+</tbody></table>
+<p>This contract is limited to the read-modify-write operation. It does not introduce a transaction API or alter branch naming, DAG deletion or the session-index flush protocol.</p>
+<p>Acceptance: two concurrent callers appending different heads preserve both in memory and after reload; whitespace and duplicate inputs preserve normalization and idempotency; persistence runs outside <code>idx._lock</code>; exceptions and caller behavior remain unchanged.</p>
+<h2 id="lock-scope">Store lock scope</h2>
+<p><code>SessionStore._lock</code> protects location mappings and the LRU cache only. Directory scans, atomic writes, fsync and recursive deletion must not hold it, so slow I/O for one session does not block unrelated sessions.</p>
+<table><thead><tr><th>Resource</th><th>Lock</th><th>Requirement</th></tr></thead><tbody>
+<tr><td><code>_locations</code>, <code>_sessions</code>, LRU order</td><td><code>_lock</code></td><td>Read, mutate or copy memory only; no filesystem I/O.</td></tr>
+<tr><td>Initial load, rebuild, deletion and cache invalidation for a session</td><td>Per-session <code>RLock</code></td><td>Serialize the same session; allow different sessions to proceed concurrently. No generic transaction layer.</td></tr>
+<tr><td><code>locations.json</code> publication</td><td>Dedicated write lock</td><td>Serialize snapshot capture and publication; capture under the global state lock, then release that state lock before writing. An old snapshot cannot overwrite a newer one.</td></tr>
+<tr><td>SessionMemoryIndex persistence</td><td><code>_persist_lock</code> then <code>idx._lock</code></td><td>Preserve lock ordering and stale-rebuild semantics. No I/O under <code>idx._lock</code>.</td></tr>
+</tbody></table>
+<p>This boundary does not change file formats, LRU capacity, deletion semantics, cross-process stale detection or Windows behavior.</p>
+<ul><li>While session A blocks in <code>read_meta/list_history</code>, session B's cached read completes in bounded time.</li><li>While A's recursive deletion blocks, B's read does not wait for A.</li><li>Concurrent first loads of one session publish only one cached object; deletion and loading cannot republish a deleted object.</li><li>After concurrent location updates for two sessions, reloaded <code>locations.json</code> contains both.</li></ul>
+<h2 id="cache-snapshot">Cache snapshot freshness</h2>
+<p>Warm rebuilds and first loads capture the disk fingerprint before reading history and metadata. The rebuilt index records that captured fingerprint. A concurrent atomic replacement changes the fingerprint, so the next public read rebuilds again. An old snapshot must never be marked with a newer disk fingerprint. This preserves dynamic DAG context and terminal-state visibility without new storage or global locks.</p>
+<p>Acceptance uses two real SessionStore instances. A history or metadata write completes after a reader has loaded the prior snapshot and before it marks synchronization. The next get_nodes or get_session call sees the new value, for both cached and first-load paths. Cancellation retry keeps its existing deadline and observes the actual cancelled file.</p>
+<h2 id="windows-removal">Windows session directory removal</h2>
+<p>Explicit deletion, expired-session cleanup and capacity cleanup share the platform removal adapter. If removing a regular Git object fails because its Windows read-only attribute is set, clear that attribute and retry the failed removal once. Other permission failures retain each caller's best-effort behavior. Do not change ACLs or follow links to change target permissions. Missing-history eligibility and archive retention rules are unchanged.</p>
+<p>Acceptance uses public SessionStore reopen and <code>delete_session</code> entries with a read-only Git object. The native Windows regression checks that the directory is actually gone, not merely absent from the index. This follows the standard <a href="https://docs.python.org/3/library/shutil.html#rmtree-example">shutil read-only removal recipe</a>, with Python 3.11-compatible error callbacks and a read-only attribute check.</p>
+<h2 id="implementation-status">Implementation status and evidence</h2>
+<table><thead><tr><th>Source</th><th>Responsibility</th></tr></thead><tbody>
+<tr><td><code>openprogram/state/store/session/session_store.py</code></td><td>Timestamps, registry state/write locks, snapshots and deferred flush.</td></tr>
+<tr><td><code>openprogram/state/store/session/session_node_writer.py</code></td><td>One activity timestamp per append, shared by metadata and index.</td></tr>
+<tr><td><code>tests/component/store/test_session_index_consistency.py</code></td><td>Public regressions for ordering timestamps, snapshots and concurrent writes.</td></tr>
+</tbody></table>
+<p>The registry timestamp/snapshot implementation and the Windows removal adapter have independent specification and quality review evidence recorded in their task ledgers. Windows acceptance requires native Windows CI; local simulation is insufficient. The merged-head and lock-scope sections preserve their design and acceptance contracts; consolidating these documents does not add implementation or platform-acceptance evidence.</p>

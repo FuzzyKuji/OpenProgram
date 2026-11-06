@@ -1,0 +1,347 @@
+[build-system]
+requires = ["setuptools>=83,<85", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "openprogram"
+version = "1.0.0"
+description = "OpenProgram: Self-Programming AI Agent Framework"
+readme = "README.md"
+requires-python = ">=3.11"
+license = {text = "AGPL-3.0-or-later"}
+authors = [
+    {name = "Fzkuji"},
+]
+keywords = ["llm", "agentic", "agentic-programming", "self-programming", "multi-agent", "ai-agent", "agent-framework", "workflow-automation", "autonomous-agents", "ai", "function", "decorator", "context"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: GNU Affero General Public License v3 or later (AGPLv3+)",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+    "Typing :: Typed",
+]
+dependencies = [
+    # Workflow publication requires sandboxed behavior tests, including generated packages.
+    "pytest>=8.0.0",
+    # Used by `openprogram providers setup` / `login` for an interactive
+    # arrow-key menu. Falls back to plain input() when not installed,
+    # so this is officially optional in source-development environments.
+    "questionary>=2.0.0",
+    # Web UI is a first-class entry point alongside the TUI (the
+    # whole platform pitch is "TUI or browser, same backend"), so the
+    # FastAPI/uvicorn/websockets stack ships with the core package
+    # instead of being a `[web]` extra. Complete product runtimes always
+    # include it. The TUI itself needs no Python
+    # dep: it is the Ink renderer (cli/, TypeScript) with a Rich-based
+    # REPL fallback.
+    "fastapi>=0.141.1,<1",
+    "uvicorn[standard]>=0.29.0",
+    "websockets>=12.0",
+    # PKCE OAuth login (used by `openprogram providers login` against
+    # ChatGPT/Codex, Anthropic, etc.) starts a localhost callback
+    # server to receive the redirect. Implementation lives in
+    # ``openprogram.models.auth.methods.pkce_oauth`` and uses ``aiohttp.web``.
+    # Was previously a lazy import that raised a missing-dependency hint at
+    # login time — moved into base deps so the
+    # ChatGPT subscription flow works out of the box.
+    "aiohttp>=3.14.3,<4",
+    # Model Context Protocol Python SDK. ``webui/routes/mcp.py`` does
+    # ``from mcp.types import ...`` at module top, which is reached
+    # during FastAPI app construction. Without this dep,
+    # ``/api/providers/list`` (and the whole MCP page) raise
+    # ``ModuleNotFoundError: No module named 'mcp'`` and the LLM
+    # Providers settings panel renders empty. MCP is also a headline
+    # feature of OpenProgram, not an optional extra.
+    # Capped below 2.0: mcp 2.0 reworked the client auth API —
+    # ``OAuthClientProvider`` lost its ``timeout`` kwarg and no longer
+    # satisfies httpx's ``auth=`` protocol, which breaks
+    # ``PersistentOAuthProvider`` (see openprogram/extensions/mcp/token_storage.py).
+    # Lift the cap once that module is ported to the 2.x auth API.
+    "mcp>=1.0.0,<2.0.0",
+    # AnyIO is imported by the MCP server and is also the async substrate for
+    # FastAPI/provider paths. Keep the transitive dependency on its patched
+    # security line instead of relying on a stale lock selection.
+    "anyio>=4.14.2,<5",
+    # ── LLM provider SDKs ─────────────────────────────────────────
+    # The transport for every provider routes through just these three
+    # wire SDKs: Anthropic Messages (anthropic — used by anthropic AND
+    # third-party anthropic-wire providers like minimax / kimi / vercel),
+    # OpenAI (openai — used by openai AND every openai-compatible
+    # provider), and Google. "Any LLM" is the product pitch, so these
+    # ship with the core package — installed by default, no separate
+    # extra. Otherwise picking a provider in the UI works but the first
+    # turn raises ``No module named 'anthropic'``.
+    "anthropic>=0.30.0",
+    "openai>=1.30.0",
+    "google-genai>=1.0.0",
+    # ── Imported at module load on core paths ─────────────────────
+    # These are unguarded top-level imports reached during normal
+    # startup / CLI use, so a base install MUST carry them or the import
+    # itself tracebacks (not a graceful "install the extra" message):
+    #   typer    — the ``openprogram providers`` CLI (providers/settings/cli.py)
+    #   PyYAML   — skill / command frontmatter parsing (commands/)
+    #   requests — channel transport + misc HTTP
+    #   httpx    — the MCP client + provider SDKs' HTTP layer
+    #   pydantic — agent/types + FastAPI models (also a FastAPI dep, but
+    #              used directly so we pin it explicitly)
+    "typer>=0.12.0",
+    "PyYAML>=6.0",
+    "requests>=2.31.0",
+    # [socks]: a socks5:// ALL_PROXY in the user's shell makes httpx demand
+    # socksio at client construction, even for requests routed elsewhere
+    "httpx[socks]>=0.27.0",
+    "pydantic>=2.0",
+    "jsonschema>=4.23",
+    # Built-in terminal chat falls back to the Python Rich REPL when the Ink
+    # bundle or Node runtime is unavailable (including managed releases).
+    "rich>=13.0",
+    # Built-in `pdf` and `read` tools extract text with pypdf. This is a
+    # complete-product capability, so release runtimes must always carry it.
+    "pypdf>=6.19.0",
+    # Window-scoped GUI capture and Accessibility actions; no ML perception required.
+    "pyobjc-framework-ScreenCaptureKit>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-ApplicationServices>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-AVFoundation>=10; sys_platform == 'darwin'",
+    "pyobjc-framework-EventKit>=10; sys_platform == 'darwin'",
+    # computer_use reads text off the screenshot when an app exposes no Accessibility tree.
+    "pyobjc-framework-Vision>=10; sys_platform == 'darwin'",
+    # computer_use on Windows reads windows through UI Automation and records an
+    # app's own sound through WASAPI process loopback, both COM interfaces.
+    "comtypes>=1.4; sys_platform == 'win32'",
+    # Windows ConPTY binding (import name ``winpty``). Drives the interactive
+    # Claude-account browser login through a pseudo-terminal on Windows, where
+    # stdlib ``pty`` doesn't exist (POSIX reuses ``pty``). Windows-only marker;
+    # a no-op install on macOS/Linux. Optional in practice — the claude-code
+    # account flow falls back to the token-paste method when it's unavailable
+    # (see openprogram/host/_platform/terminal.py::InteractivePty).
+    "pywinpty>=2.0; sys_platform == 'win32'",
+    # Memory counts tokens to decide when a batch is worth writing and to
+    # keep core.md inside the budget it is injected under. Reading and
+    # searching memory need this; only writing needs the agent SDK, which
+    # is imported where a writer is actually constructed.
+    "tiktoken>=0.7",
+    # Memory retrieval ships both lexical and semantic backends. The encoder
+    # weights remain an explicit download from Memory Settings.
+    "rank-bm25>=0.2.2",
+    # Managed memory-tool schema plus the legacy Claude Code adapter used by
+    # benchmark paths. The product writer itself follows OpenProgram's default
+    # chat provider through AgentSession.
+    # 0.1.51 is where `permission_mode="dontAsk"` became a permission mode;
+    # an older SDK sends the writer's runs with a mode the CLI rejects.
+    "claude-agent-sdk>=0.1.51",
+]
+
+[project.optional-dependencies]
+dev = [
+    "build>=1.2",
+    # Documentation rendering is exercised by the normal repository tests.
+    "markdown-it-py>=4.2",
+    "mdit-py-plugins>=0.6.1",
+    "pygments>=2.20",
+    # Exercises the optional Amazon Bedrock adapter without AWS credentials.
+    "boto3>=1.34",
+    # Wheel-content tests invoke the active interpreter's pip module to
+    # install the built artifact into an isolated target directory.
+    "pip>=24",
+    # test_wheel_contains_both_runtime_shims builds with --no-isolation, so
+    # the backend must be importable in the dev env (not bundled on 3.12+)
+    "setuptools>=83,<85",
+    "pytest-timeout>=2.3",
+    # full-suite runs go 126s -> 27s with -n auto; keep serial default so
+    # single-file debugging stays overhead-free
+    "pytest-xdist>=3.5",
+    "coverage>=7.6",
+    "cryptography>=50.0.0,<51",
+    "trio>=0.30",
+    "ruff>=0.16",
+]
+# The LLM SDKs (anthropic / openai / google-genai) and the web stack are
+# in the base `dependencies` above — installed by default, no separate
+# provider extra; there is intentionally no ``[anthropic]`` /
+# ``[openai]`` / ``[gemini]`` extra.
+# Semantic + lexical code search (tree-sitter chunks + Model2Vec static
+# embeddings + BM25) behind the `semble_search` / `semble_find_related`
+# tools. Heavy transitive deps for one leaf tool, so it is opt-in; the
+# tools answer with the install hint when the package is absent.
+search = ["semble>=0.5.3"]
+# Semantic memory recall. Pulls torch via sentence-transformers; product
+# runtimes omit this extra and keep BM25. Source checkouts that need it:
+#   uv sync --extra embedding
+embedding = [
+    # Intel macOS keeps the core runtime and BM25, but deliberately omits
+    # semantic embeddings because PyPI has no patched torch wheel for it.
+    # The runtime reports this limitation instead of installing torch 2.2.2.
+    "sentence-transformers>=6.1,<7; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+    "torch>=2.13,<3; sys_platform != 'darwin' or platform_machine != 'x86_64'",
+]
+# Speaker separation in Meetings (programs/applications/meeting/diarize.py):
+# sherpa-onnx's offline speaker diarization tells the other people in a call
+# apart. Imported only when a meeting stops; without it the computer's sound
+# stays one "Others" speaker. The two ONNX models download on first use.
+meetings = [
+    "sherpa-onnx>=1.10",
+    "numpy>=1.26",
+]
+# NOTE: agentic *programs* (harnesses) have no
+# extras here. Each harness is self-describing — its own
+# pyproject.toml declares its third-party deps, and ``openprogram
+# programs install <name>`` clones it and prepares its isolated environment, so
+# its deps come from the harness, not from OpenProgram. OpenProgram does
+# not carry per-harness dependencies.
+channels = [
+    # WeChat (iLink bot) QR login renders a QR code in the terminal
+    # from the server-provided URL. Pure Python, tiny. No Pillow
+    # needed for print_ascii() rendering.
+    "qrcode>=7.0",
+    # Discord channel bot.
+    "discord.py>=2.3.0",
+    # Slack Socket Mode bot.
+    "slack_sdk>=3.27.0",
+]
+# The built-in browser application (programs/applications/browser).
+# Source developers also run `playwright install chromium` to fetch the
+# browser binary (~150MB, into ~/Library/Caches/ms-playwright/ on macOS).
+browser = [
+    "playwright>=1.45.0",
+]
+# Stealth-patched browser backends for sites with bot protection
+# (Cloudflare Turnstile, DataDome, etc.). After install also run
+# `patchright install chromium` and/or `camoufox fetch`.
+browser-stealth = [
+    "playwright>=1.45.0",
+    "patchright>=1.40",
+    "camoufox>=0.4.0",
+]
+all = [
+    # LLM provider SDKs are in base `dependencies` now — not repeated here.
+    # Channels
+    "qrcode>=7.0",
+    "discord.py>=2.3.0",
+    "slack_sdk>=3.27.0",
+    # Browser tool (run `playwright install chromium` after install)
+    "playwright>=1.45.0",
+    # Meetings speaker separation (same as the `meetings` extra): the App
+    # runtime installs `all`, so the packaged App tells speakers apart too.
+    "sherpa-onnx>=1.10",
+    "numpy>=1.26",
+    # NOTE: agentic programs (harnesses) are NOT here — they're
+    # installed via ``openprogram programs install <name>``, which pulls
+    # each harness's own declared deps. See the note by ``channels``.
+]
+
+[project.scripts]
+openprogram = "openprogram.interfaces.cli:main"
+
+[project.urls]
+Homepage = "https://openprogram.io/"
+Repository = "https://github.com/FuzzyKuji/OpenProgram"
+Documentation = "https://openprogram.io/docs/"
+Issues = "https://github.com/FuzzyKuji/OpenProgram/issues"
+Changelog = "https://github.com/FuzzyKuji/OpenProgram/releases"
+Discussions = "https://github.com/FuzzyKuji/OpenProgram/discussions"
+Paper = "https://arxiv.org/abs/2606.15874"
+
+# The optional embedding extra pulls torch on supported platforms. Intel
+# macOS remains a core/BM25 environment; its embedding extra is excluded
+# because no patched torch wheel is published for that platform.
+[tool.uv]
+required-environments = [
+    "sys_platform == 'darwin' and platform_machine == 'x86_64'",
+    "sys_platform == 'darwin' and platform_machine == 'arm64'",
+    "sys_platform == 'linux' and platform_machine == 'x86_64'",
+    "sys_platform == 'linux' and platform_machine == 'aarch64'",
+]
+
+[tool.setuptools.packages.find]
+# Every package lives under openprogram/, the Server and CLI applications
+# included (openprogram/interfaces/{server,cli}/). Core agentic functions such
+# as ask_user and goal are imported by the worker and must ship in the wheel.
+# Programs the user installs live in ~/.openprogram/programs/ and are not part
+# of the wheel.
+include = ["openprogram", "openprogram.*"]
+
+[tool.setuptools.package-data]
+# Non-.py files the package reads at RUNTIME. Without these the wheel
+# installs but blows up on first use: `openprogram providers` finds zero
+# providers or the web UI 404s its own assets.
+"openprogram" = [
+    "programs/_host/framework/interface_commands.json",
+    "host/sandbox/shims/*.cjs",
+    "host/sandbox/shims/*.py",
+    "programs/applications/browser/web_use/*.cjs",
+    # computer_use_agent target guides, sent on a target's first call.
+    "programs/tools/computer_use/computer_use_agent/guides/*.md",
+    # Base prompt and on-demand channel guides (runtime/context/components.py).
+    "runtime/context/guides/*.md",
+    # Provider registry — endpoints/model metadata read by
+    # models/providers/catalog/metadata.py and enabled_models.py.
+    "models/providers/adapters/*/provider.json",
+]
+"openprogram.interfaces.server" = [
+    "routes/application-sdk.js",
+    # Generated by scripts/release/stage-release-assets.sh before wheel builds.
+    "_frontend/*",
+    "_frontend/**/*",
+]
+"openprogram.interfaces.cli" = ["dist/*.mjs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: tests whose expected runtime is materially longer than the layer default",
+    "browser: tests that require the built Web and Playwright test environment",
+    "sandbox: tests that require the host sandbox implementation",
+    "live: tests that require external services, network access, or credentials",
+    "macos: tests that require macOS system tools",
+]
+addopts = "-m 'not live and not browser' --strict-markers --strict-config"
+xfail_strict = true
+filterwarnings = [
+    "error::pytest.PytestUnhandledThreadExceptionWarning",
+]
+# Any single test that runs 120 s is hung, not slow — fail it instead of
+# freezing the whole suite (a blind ws receive_text did exactly that once).
+timeout = 120
+timeout_method = "thread"
+
+[tool.ruff]
+# Ruff enforces the exception-handling gate described in
+# docs/reference/design/error-handling.md. It is not a general style gate —
+# formatting and import order are deliberately left alone.
+target-version = "py311"
+
+[tool.ruff.lint]
+# E722  bare `except:` — swallows KeyboardInterrupt and SystemExit too.
+# S110  `try`/`except`/`pass` — an exception discarded with no log, no
+#       comment, and no fallback. This is the rule that finds hidden bugs.
+# T201  `print` — library code logs through `logging`; `print` is only for a
+#       command's output, a stdout protocol or a prompt to a human, and each
+#       such call outside the paths below says so with `# noqa: T201 - why`.
+select = ["E722", "S110", "T201"]
+
+[tool.ruff.lint.per-file-ignores]
+# The gate covers the whole package. Tests and scripts stay muted: a test
+# that swallows an exception on purpose is asserting on what follows, and the
+# scripts are run by hand and print their results.
+"tests/*" = ["E722", "S110", "T201"]
+"scripts/*" = ["E722", "S110", "T201"]
+# Command-line surfaces whose prints are the command's output: the CLI, the
+# `openprogram worker ...` commands (worker_print is the worker's own status
+# line format) and the upgrade commands.
+"openprogram/interfaces/cli/**" = ["T201"]
+"openprogram/operations/worker/lifecycle.py" = ["T201"]
+"openprogram/operations/worker/runner.py" = ["T201"]
+"openprogram/operations/worker/startup_log.py" = ["T201"]
+"openprogram/operations/worker/services/**" = ["T201"]
+"openprogram/operations/self_update/**" = ["T201"]
+# Developer tools run by hand that print what they recorded or measured.
+"openprogram/models/providers/recording/**" = ["T201"]
+"openprogram/**/probe_thinking.py" = ["T201"]

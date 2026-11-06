@@ -1,0 +1,187 @@
+"use client";
+
+/**
+ * Web-search provider settings — pick + configure backends like
+ * Tavily, Exa, DuckDuckGo. Originally a 526-line single file;
+ * split into one file per subcomponent for maintainability.
+ */
+import { useCallback, useEffect, useMemo, useState } from "react";
+
+import pageStyles from "../settings-page.module.css";
+import styles from "../providers/provider-pane.module.css";
+import { SearchInput } from "@/components/ui/search-input";
+import { jsonFetch } from "@/lib/net/fetch-client";
+import { cachedFetch, invalidate } from "@/lib/prefs/settings-cache";
+import { useTranslation } from "@/lib/i18n";
+import { SearchProviderDetail } from "./detail";
+import { SearchProviderItem } from "./item";
+import type { SearchProvider } from "./types";
+
+export function SearchProvidersSection() {
+  const { t, text } = useTranslation();
+  const [providers, setProviders] = useState<SearchProvider[]>([]);
+  const [defaultId, setDefaultId] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [search, setSearch] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const d = await cachedFetch<{ providers?: SearchProvider[]; default?: string | null }>(
+        "/api/search-providers/list",
+      );
+      const list: SearchProvider[] = d.providers || [];
+      const def = d.default ?? null;
+      setProviders(list);
+      setDefaultId(def);
+      // Initial selection: prefer the configured default, then the
+      // first available backend, then the first row. Picking
+      // ``list[0]`` blindly lands on Tavily (priority 100) which is
+      // typically un-configured — confusing.
+      setSelectedId((cur) => {
+        if (cur) return cur;
+        if (def && list.some((p) => p.id === def)) return def;
+        const firstAvailable = list.find((p) => p.available);
+        if (firstAvailable) return firstAvailable.id;
+        return list[0]?.id ?? null;
+      });
+    } catch {
+      /* ignore */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => { load(); }, [load]);
+
+  const setDefault = useCallback(async (id: string | null) => {
+    setSaving(true);
+    setError(null);
+    try {
+      await jsonFetch("/api/search-providers/default", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: id }),
+      });
+      invalidate("/api/search-providers/list");
+      setDefaultId(id);
+      // Refresh `is_default` flags on every row.
+      setProviders((prev) =>
+        prev.map((p) => ({ ...p, is_default: p.id === id })),
+      );
+    } catch {
+      setError(text("Could not save the search provider. Retry after reconnecting.", "无法保存搜索后端，请在重新连接后重试。"));
+    } finally {
+      setSaving(false);
+    }
+  }, [text]);
+
+  const matches = useCallback(
+    (p: SearchProvider) =>
+      !search.trim() ||
+      p.name.toLowerCase().includes(search.toLowerCase()) ||
+      p.id.toLowerCase().includes(search.toLowerCase()),
+    [search],
+  );
+
+  const { active, inactive } = useMemo(() => {
+    const visible = providers.filter(matches).sort((a, b) => a.priority - b.priority);
+    return {
+      active: visible.filter((p) => p.available),
+      inactive: visible.filter((p) => !p.available),
+    };
+  }, [providers, matches]);
+
+  const selected = providers.find((p) => p.id === selectedId);
+
+  if (loading) {
+    return (
+      <div className={pageStyles.page}>
+        <div className={pageStyles.pageHeader}>
+          <h2 className={pageStyles.pageTitle}>{t("settings.tab.search")}</h2>
+        </div>
+        <div className={pageStyles.pageBody} style={{ opacity: 0.6 }}>{text("Loading...", "加载中...")}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className={pageStyles.page}>
+      <div className={pageStyles.pageHeader}>
+        <h2 className={pageStyles.pageTitle}>{t("settings.tab.search")}</h2>
+        <p className={pageStyles.pageMeta}>
+          {text(
+            "Pick which backend handles web_search calls. Tavily / Exa / Brave / Perplexity need an API key; DuckDuckGo and SearXNG work zero-config as fallbacks.",
+            "选择由哪个后端处理 web_search 调用。Tavily / Exa / Brave / Perplexity 需要 API key；DuckDuckGo 和 SearXNG 可作为零配置 fallback。",
+          )}
+        </p>
+      </div>
+      {error && <p role="alert">{error}</p>}
+      <div className={`${pageStyles.pageBody} ${styles.pageBodyTwoPane}`}>
+        <div className={styles.providersLayout}>
+          <div className={styles.providersSidebar}>
+            <div className="p-[0_0_8px]">
+              <div className="flex items-center w-full min-w-0">
+                <div className="w-full min-w-0">
+                  <SearchInput
+                    placeholder={text("Search backends...", "搜索后端...")}
+                    value={search}
+                    onChange={setSearch}
+                  />
+                </div>
+              </div>
+            </div>
+            <div className={`${styles.providerListItems} flex flex-col gap-[1px]`}>
+              {active.length > 0 && (
+                <>
+                  <div className={styles.providersGroupLabel}>{text("Available", "可用")}</div>
+                  {active.map((p) => (
+                    <SearchProviderItem
+                      key={p.id}
+                      p={p}
+                      active={selectedId === p.id}
+                      onSelect={() => setSelectedId(p.id)}
+                    />
+                  ))}
+                </>
+              )}
+              {inactive.length > 0 && (
+                <>
+                  <div className={styles.providersGroupLabel}>{text("Not configured", "未配置")}</div>
+                  {inactive.map((p) => (
+                    <SearchProviderItem
+                      key={p.id}
+                      p={p}
+                      active={selectedId === p.id}
+                      onSelect={() => setSelectedId(p.id)}
+                    />
+                  ))}
+                </>
+              )}
+            </div>
+          </div>
+
+          <div className={styles.detail}>
+            {selected ? (
+              <SearchProviderDetail
+                provider={selected}
+                defaultId={defaultId}
+                saving={saving}
+                onSetDefault={setDefault}
+                onChanged={load}
+              />
+            ) : (
+              <div className={`${styles.detailSurface} flex flex-col gap-[16px] min-w-0 p-[16px_20px_20px]`}>
+                <div className={styles.detailEmpty}>
+                  {text("Select a search backend on the left", "选择左侧搜索后端")}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}

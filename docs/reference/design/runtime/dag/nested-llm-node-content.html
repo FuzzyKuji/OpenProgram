@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Nested LLM Node Content · Ordered Chat Blocks · OpenProgram</title>
+<style>
+:root{
+  --bg:#0f1115;--elev:#151820;--panel:#161920;--text:#e8eaef;--muted:#8b919e;--faint:#5c6370;
+  --line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.14);
+  --acc:#5b8cff;--acc-soft:rgba(91,140,255,.12);--ok:#3dba8a;--warn:#e0b020;--danger:#e85d5d;
+  --think:#a78bfa;--llm:#34d399;--fn:#9db8ff;
+  --font:Inter,system-ui,-apple-system,"PingFang SC","Hiragino Sans GB",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--text);font:14.5px/1.65 var(--font);background:var(--bg);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background:
+  radial-gradient(900px 520px at 14% -10%,rgba(91,140,255,.08),transparent 55%),
+  radial-gradient(700px 480px at 90% 0%,rgba(52,211,153,.05),transparent 50%)}
+main{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:36px 22px 96px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.eyebrow::before{content:"";width:16px;height:1px;background:var(--line2)}
+h1{font-size:clamp(26px,3.6vw,38px);line-height:1.2;letter-spacing:-.03em;font-weight:650;margin:12px 0 10px;max-width:24ch}
+.lede{font-size:15.5px;color:var(--muted);max-width:74ch;margin:0 0 8px}
+.lede b{color:#dfe3ec;font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 8px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--line2);background:var(--panel);color:var(--muted)}
+.pill.acc{border-color:rgba(91,140,255,.4);color:#a8c4ff;background:var(--acc-soft)}
+.pill.ok{border-color:rgba(61,186,138,.4);color:#8fd4b0;background:#1e2a24}
+.pill.warn{border-color:rgba(224,176,32,.4);color:#e0c48a;background:#3a3228}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 8px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--elev)}
+.toc a{color:var(--muted);text-decoration:none;font-size:12.5px;padding:4px 8px;border-radius:8px;border:1px solid transparent}
+.toc a:hover{color:var(--text);background:rgba(255,255,255,.04);border-color:var(--line)}
+section{margin-top:40px;scroll-margin-top:18px}
+h2{font-size:1.35rem;margin:0 0 12px;padding-left:12px;border-left:3px solid var(--acc);letter-spacing:-.02em}
+h3{font-size:1.05rem;margin:22px 0 8px;color:#d5dae6}
+p,li{color:#c5cad6}
+ul,ol{padding-left:1.35rem}
+code,pre{font-family:var(--mono);font-size:12.5px}
+code{background:rgba(255,255,255,.06);padding:1px 6px;border-radius:5px;overflow-wrap:anywhere}
+pre{background:#0c0e12;border:1px solid var(--line2);border-radius:12px;padding:14px 16px;overflow:auto;line-height:1.5;color:#d7dbe6}
+.card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:16px 18px;margin:14px 0}
+.callout{border-left:3px solid var(--acc);padding:10px 14px;margin:14px 0;background:var(--acc-soft);border-radius:0 10px 10px 0;color:#c9d7f5}
+.callout.warn{border-left-color:var(--warn);background:rgba(224,176,32,.08);color:#e8d7a8}
+.callout.ok{border-left-color:var(--ok);background:rgba(61,186,138,.08);color:#b7e6d0}
+.callout.danger{border-left-color:var(--danger);background:rgba(232,93,93,.08);color:#f0b4b4}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
+.scroll{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:12px}
+th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+th{background:#12151b;color:#b8bfd0;font-weight:600}
+td{color:#c8cdd8}
+.mock{border:1px solid var(--line2);border-radius:14px;background:#0c0e12;padding:14px 16px;max-width:560px}
+.m-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.m-title{font-weight:600;color:#e8eaef}
+.badge{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid var(--line2);color:var(--muted)}
+.badge.run{color:#9db8ff;border-color:rgba(91,140,255,.4);background:var(--acc-soft)}
+.badge.done{color:#8fd4b0;border-color:rgba(61,186,138,.4)}
+.blk{margin:10px 0}
+.blk.think{border-left:2px solid var(--think);padding:6px 10px;background:rgba(167,139,250,.06);border-radius:0 8px 8px 0;color:#c4b5fd;font-size:13px}
+.blk.md{color:#dfe7f5;line-height:1.7}
+.blk.md code{font-size:12px}
+.fn{border:1px solid var(--line2);border-radius:10px;padding:8px 10px;margin:8px 0;background:#12151b}
+.fn-h{display:flex;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
+.fn-name{color:var(--fn);font-family:var(--mono);font-size:12.5px}
+.fn-body{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);color:var(--muted);font-size:12.5px;display:none}
+.fn.open .fn-body{display:block}
+.par{border:1px dashed rgba(91,140,255,.35);border-radius:10px;padding:8px 10px;margin:8px 0}
+.par-t{font-size:12px;color:var(--muted);margin-bottom:6px}
+.par-row{display:flex;justify-content:space-between;padding:4px 0;font-family:var(--mono);font-size:12px;color:var(--fn)}
+.att{margin:14px 0;padding:10px;border:1px solid rgba(224,176,32,.35);border-radius:10px;background:rgba(224,176,32,.06)}
+.att summary{cursor:pointer;color:#e0c48a;font-size:12.5px}
+.ctrl{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.btn{appearance:none;border:1px solid var(--line2);background:#1a1e28;color:var(--text);font:inherit;font-size:12.5px;padding:7px 12px;border-radius:9px;cursor:pointer}
+.btn:hover{border-color:#4a5568}
+.btn.primary{background:var(--acc-soft);border-color:rgba(91,140,255,.45);color:#c5d8ff}
+.phase li{margin-bottom:8px}
+.phase li::marker{color:var(--acc);font-weight:700}
+footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
+a{color:#9db8ff}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">OpenProgram · Design · Runtime / UI</div>
+  <h1>Nested LLM node content: ordered chat blocks</h1>
+  <p class="lede">Expanding an LLM node shows all displayable content in <strong>execution order</strong>: Markdown, reasoning summaries, function references, parallel groups and retry boundaries. Reuse chat components. Remove fixed LLM Reply / Reasoning sections while retaining distinct underlying content types. This page defines the current protocol, persistence and UI semantics.</p>
+  <div class="meta">
+    <span class="pill acc">Authoritative design</span>
+    <span class="pill ok">Extend execution_stream.v1 instead of creating another chat protocol</span>
+    <span class="pill warn">Streaming, DAG and persistence share one identity</span>
+    <span class="pill">Reference: agentic-llm-streaming.zh.html</span>
+  </div>
+
+  <nav class="toc" aria-label="Contents">
+    <a href="#s0">0 Current implementation</a>
+    <a href="#s1">1 Expanded layout</a>
+    <a href="#s2">2 Tree vs. content</a>
+    <a href="#s3">3 Recursion</a>
+    <a href="#s4">4 Parallelism</a>
+    <a href="#s5">5 Ordered block protocol</a>
+    <a href="#s6">6 Streaming and scrolling</a>
+    <a href="#s7">7 Refresh recovery</a>
+    <a href="#s8">8 Implementation order</a>
+    <a href="#s9">9 Acceptance</a>
+    <a href="#demo">Interaction example</a>
+  </nav>
+
+  <section id="s0">
+    <h2>0. Current implementation (checked against current code)</h2>
+    <div class="scroll"><table>
+      <tr><th>Capability</th><th>Implementation boundary</th><th>Required invariant</th></tr>
+      <tr><td>execution_stream.v1</td><td>Each nested LLM node maintains attempts and ordered blocks, including types such as <code>text</code>, <code>reasoning_summary</code>, <code>tool_ref</code>, <code>tool_arguments</code>, <code>refusal</code>.</td><td>All deltas and snapshots use the same <code>block_id</code>, <code>block_index</code>; the frontend does not reorder by WS arrival time.</td></tr>
+      <tr><td>DAG / tool identity</td><td>Tool-node metadata stores the original <code>tool_call_id</code> and qualified <code>tool_call_occurrence_id</code>; <code>tool_ref</code> stores only the referenced <code>ref_node_id</code>, name and occurrence.</td><td>One occurrence corresponds to exactly one tool row. If the provider reuses a raw call ID, a round/message-qualified occurrence creates a new row. Arguments, progress, results and errors come from that DAG node; streams must not duplicate terminal data.</td></tr>
+      <tr><td>Attempt semantics</td><td>A model request after normal tool results remains in the current attempt. Only actual recovery, such as transport or structured-output failure, creates a new attempt.</td><td><code>turn_end</code> means only that one provider round ended; it does not automatically create an attempt boundary. New attempts require an explicit failure reason.</td></tr>
+      <tr><td>Persistence</td><td>checkpoint, <code>metadata.stream</code>, live snapshots and terminal snapshots contain complete displayable attempts/blocks subject to retention policy; legacy previews may still be truncated.</td><td>After the owner disappears or the worker restarts, historical reads restore ordering, references and terminal states solely from persistent snapshots, without calling the model again. Live snapshots must not silently drop Markdown prefixes.</td></tr>
+    </table></div>
+    <div class="callout ok"><b>Tool reference identity</b>: do not retransmit complete tool arguments/results. When execution creates or discovers a DAG tool node, it records the original <code>tool_call_id</code> and qualified occurrence, then the stream publishes a reference through <code>occurrence_id → ref_node_id</code>. If the mapping is not yet visible, publish a placeholder with a stable occurrence, then use the same <code>block_id</code> to fill in <code>ref_node_id</code>; do not create a second row or fabricate completion.</div>
+    <div class="callout warn">Existing <code>tool_arguments</code> blocks suit transient previews while arguments are being generated. Terminal display uses the tree node to avoid two sources of truth.</div>
+  </section>
+
+  <section id="s1">
+    <h2>1. Expanded layout</h2>
+    <ul>
+      <li>Render text directly as Markdown, with <b>no</b> LLM Reply heading.</li>
+      <li>Reasoning summaries appear where they occurred and are collapsible by default. Show them only when the model returns a displayable summary; never infer or generate one.</li>
+      <li>Function rows appear at invocation time; expand to view arguments, progress, results and errors from the referenced node.</li>
+      <li>New text after a function follows its row and must not merge into the preceding text block.</li>
+      <li>Internal signatures are not chat content.</li>
+      <li>“Complete” means all displayable content is accessible. Large tool results may collapse or load on demand, but a truncated preview must not be the only accessible representation.</li>
+    </ul>
+  </section>
+
+  <section id="s2">
+    <h2>2. Execution tree and node-content responsibilities</h2>
+    <div class="scroll"><table>
+      <tr><th>View</th><th>Purpose</th></tr>
+      <tr><td>Execution tree</td><td>Call relationships, parallel branches, execution status, duration and failure location</td></tr>
+      <tr><td>Node content</td><td>Ordered text / reasoning / function references within the LLM node</td></tr>
+    </table></div>
+    <ul>
+      <li>Collapsed card: name, status, duration and short preview.</li>
+      <li>Expanded cards and right-side details use the <b>same</b> <code>LlmNodeContent</code> component; two implementations are prohibited.</li>
+      <li>A function row references a real execution node. Clicking locates that node in the tree; do not copy tool state or results.</li>
+    </ul>
+  </section>
+
+  <section id="s3">
+    <h2>3. Model calls inside functions</h2>
+    <ul>
+      <li>Recursion is supported: expanded functions show inner LLM calls using the same content component.</li>
+      <li>Default: expand the selected LLM; show internal functions as summary rows until the user expands them.</li>
+      <li>At the recursion limit, show an explicit boundary and an Open in details action; the detail panel renders that DAG node as a new content root.</li>
+      <li>Persist expansion state by <code>node_id</code>, <code>attempt_id</code>, <code>block_id</code> in session UI state; streaming updates and remounting do not reset it.</li>
+      <li>Render at most eight nested content levels. The limit hides further inline content only; it does not change the execution tree, tool state or history.</li>
+      <li>Ordinary code functions show arguments, status, logs and return values. Nest model content only when the function contains model calls.</li>
+    </ul>
+  </section>
+
+  <section id="s4">
+    <h2>4. Parallel functions</h2>
+    <ul>
+      <li>Only when execution actually starts a concurrent batch with known membership may multiple tool_call entries become one <code>parallel_group</code> block. The current Python dispatcher executes tool_call entries sequentially, so it does not publish group_id.</li>
+      <li>Group order is <b>invocation order</b>, stably. Completion order changes status only, never row order.</li>
+      <li>Every member carries the same <code>group_id</code> from its first publication. If the group ID is created only when the second member arrives, publish updated events with that ID for all earlier members. The frontend must not infer parallelism from adjacent tool rows.</li>
+      <li>Function rows update independently; early completion must not move a row ahead of text.</li>
+    </ul>
+  </section>
+
+  <section id="s5">
+    <h2>5. Ordered block protocol (execution_stream.v1 extension)</h2>
+    <p>Each LLM <code>node_id</code> maintains, within each <code>attempt</code>, ordered <code>blocks[]</code>. Execution determines ordering; the frontend must not infer it from WS arrival time.</p>
+    <div class="scroll"><table>
+      <tr><th>Block kind</th><th>Required fields</th><th>Description</th></tr>
+      <tr><td><code>text</code></td><td><code>block_id</code>, content, status</td><td>Markdown text with streaming deltas</td></tr>
+      <tr><td><code>reasoning_summary</code></td><td><code>block_id</code>, content, status, retention</td><td>Displayable reasoning; persistence may be omitted by policy</td></tr>
+      <tr><td><code>tool_ref</code></td><td><code>block_id</code>, <code>tool_call_id</code>, <code>occurrence_id</code>, <code>node_id</code>, optional group_id</td><td>Reference to a tree node without complete inline results. Missing occurrence is supported only for legacy records.</td></tr>
+      <tr><td><code>tool_arguments</code></td><td>(may remain)</td><td>Streaming argument preview; the tree determines terminal state</td></tr>
+      <tr><td><code>parallel_group</code></td><td><code>group_id</code>, ordered <code>tool_ref</code> ids</td><td>Parallel container with an execution-generated group ID and references in invocation order. Do not create one without an explicit concurrent batch.</td></tr>
+      <tr><td><code>attempt_boundary</code></td><td><code>attempt_id</code>, reason, status</td><td>Failure-retry boundary; older attempts remain collapsed</td></tr>
+      <tr><td><code>refusal</code> / <code>unsupported</code></td><td>Existing</td><td>Retained</td></tr>
+    </table></div>
+    <h3>Continuation vs. failure retry</h3>
+    <ul>
+      <li><b>Continuation after normal tools</b>: append text / tool_ref within the same attempt.</li>
+      <li><b>Failure retry</b>: create a new attempt and show the boundary; new output must not join the prior incomplete Markdown.</li>
+      <li>Duplicate events: the same qualified <code>occurrence_id</code> does not create a second row; raw <code>tool_call_id</code> may repeat in different provider rounds.</li>
+      <li>Late tool node: first show a placeholder <code>tool_ref</code> with a stable ID, then fill in tree data.</li>
+      <li>If a provider round produces tool results, the next model request continues writing to the same attempt. A new attempt appears only when the recovery policy explicitly calls <code>start_attempt(reason=...)</code>.</li>
+    </ul>
+<pre>{
+  "type": "execution_stream",
+  "schema_version": 1,
+  "op": "block_started",
+  "node_id": "call_9f3e",
+  "attempt_id": "att_2",
+  "block_id": "blk_tool_7",
+  "block_index": 4,
+  "kind": "tool_ref",
+  "tool_call_id": "call_abc",
+  "occurrence_id": "occ_7e4c",
+  "ref_node_id": "exec_read_file_01",
+  "group_id": "par_1"
+}</pre>
+  </section>
+
+  <section id="s6">
+    <h2>6. Markdown streaming and scrolling</h2>
+    <ul>
+      <li>Reuse the top-level chat <code>renderMarkdown</code> / ThinkingStep / FunctionStep presentation and safety policies.</li>
+      <li>Incrementally update active text blocks; do not rerender entire completed blocks.</li>
+      <li>Unclosed code fences, tables or links must not make the whole region disappear.</li>
+      <li>Virtualize large content by block or load it on demand.</li>
+      <li>Follow while at the bottom; scrolling up stops following. Function expansion and syntax highlighting should preserve the reading position.</li>
+      <li>Copy text differs from Copy full execution record; the latter may include reasoning and tool arguments.</li>
+    </ul>
+  </section>
+
+  <section id="s7">
+    <h2>7. Disconnect / refresh / failure</h2>
+    <ul>
+      <li>Persist ordered blocks, function references and attempts. Do not store only the final reply and reconstruct interleaving from the tree later.</li>
+      <li>After refresh, interleaving matches the live view; completed functions must not appear running.</li>
+      <li>Retain incomplete text and mark interruption, cancellation or failure.</li>
+      <li>For reasoning not persisted, show “This content was not saved” rather than an empty success state.</li>
+      <li>Recover from snapshots; never call a model merely to render history.</li>
+      <li>Live and durable snapshots retain complete displayable block content; only compatibility preview fields may be limited.</li>
+      <li>Historical reads prefer <code>metadata.stream.snapshot</code>; for legacy records, build a single legacy attempt from <code>metadata.blocks</code> and retain persisted tool blocks. Unresolved references show an unresolved state and retain <code>tool_call_id</code>.</li>
+    </ul>
+  </section>
+
+  <section id="s8">
+    <h2>8. Implementation order</h2>
+    <ol class="phase">
+      <li><b>Ordered protocol and persistence</b>: extend kinds, tool_ref and parallel_group; persist complete attempt.blocks in metadata and checkpoints.</li>
+      <li><b>Unified content component</b> <code>LlmNodeContent</code>: reuse chat Markdown, collapsible reasoning and function rows that read the tree only.</li>
+      <li><b>Connect node details</b>: remove Reply/Reasoning sections and verify sequence, refresh and recovery.</li>
+      <li><b>Reuse the same component for expanded cards</b>.</li>
+      <li><b>Parallelism, recursion, retry boundaries and scrolling</b> acceptance.</li>
+    </ol>
+    <div class="callout">No stage may reduce this to concatenating two strings first and adding features later; that would violate ordering.</div>
+  </section>
+
+  <section id="s9">
+    <h2>9. Required acceptance scenarios</h2>
+    <p>The model emits Markdown, calls two functions in parallel, one function calls an inner model with read_file, and the outer model continues. Disconnect and refresh during execution. After recovery, block order, function states and hierarchy must match the earlier live state.</p>
+    <ul>
+      <li>No Reply/Reasoning header bars.</li>
+      <li>Parallel members are not reordered by completion.</li>
+      <li>Retries show attempt boundaries without joining incomplete Markdown.</li>
+      <li>tool_ref and tree nodes correspond one to one without duplicate result copies.</li>
+      <li>After the owner disappears, historical reads restore identical block ordering; recovered tool state comes from persistent DAG nodes.</li>
+    </ul>
+  </section>
+
+  <section id="status">
+    <h2>Implementation status</h2>
+    <div class="scroll"><table>
+      <tr><th>Scope</th><th>Status</th><th>Evidence boundary</th></tr>
+      <tr><td>Protocol and state merging</td><td>Implemented</td><td><code>CallStreamState</code>, the execution-stream reducer and protocol tests cover ordered blocks, tool_ref, attempts and version recovery.</td></tr>
+      <tr><td>Unified node-content component</td><td>Implemented</td><td>Expanded cards and right-side details use <code>LlmNodeContent</code>; Markdown, collapsible reasoning, tool references and earlier attempts share one rendering path.</td></tr>
+      <tr><td>Authority boundaries, expansion state and recursive details</td><td>Implemented</td><td>Hidden nodes are discarded before projection; <code>io/llm</code> shows permitted descendants only. Node/attempt/block expansion persists; content beyond eight recursive levels offers a details action.</td></tr>
+      <tr><td>Tool identity, normal continuation and parallel-event consistency</td><td>Repaired in this task</td><td>Acceptance uses real DAG-node mappings, continuation within one attempt and explicit concurrent batches.</td></tr>
+      <tr><td>Complete recovery after owner loss / worker restart</td><td>Repaired in this task</td><td>Use persistent snapshots and observable historical-read results as evidence; long real-model tasks still require live acceptance.</td></tr>
+      <tr><td>Real-model and default-App acceptance</td><td>Awaiting live execution</td><td>Run deterministic nested-tool scenarios in the default profile, port <code>18100</code>, and existing App. Unit tests are not live acceptance evidence for this page.</td></tr>
+    </table></div>
+  </section>
+
+  <section id="demo">
+    <h2>Interaction example</h2>
+    <div class="ctrl">
+      <button class="btn primary" type="button" id="play">Play complete scenario</button>
+      <button class="btn" type="button" id="reset">Reset</button>
+    </div>
+    <div class="mock" id="mock" aria-live="polite"></div>
+  </section>
+
+  <footer>OpenProgram design · nested-llm-node-content</footer>
+</main>
+<script>
+(function(){
+  const mock = document.getElementById('mock');
+  const steps = [
+    () => head('gpt-5', 'run'),
+    () => think('Read configuration first, then run tests in parallel…'),
+    () => md('I will read the configuration to confirm the current output parameters.\n\nThis supports **Markdown**, `code`, and links.'),
+    () => par(['read_config · Completed', 'run_tests · Running']),
+    () => md('Continue analysis after both results return…'),
+    () => fn('analyze_repository', true, 'Inner model · reasoning summary\nMarkdown body\n▾ read_file · Arguments and results\nMarkdown body'),
+    () => md('Based on the test results, make these changes: …'),
+    () => head('gpt-5', 'done'),
+  ];
+  let i = 0, timer = null;
+  function head(name, st){
+    mock.innerHTML = `<div class="m-head"><span class="m-title">${name}</span><span class="badge ${st==='run'?'run':'done'}">${st==='run'?'Running':'Completed'}</span></div><div id="body"></div>`;
+  }
+  function body(){ return mock.querySelector('#body') || mock; }
+  function think(t){ body().insertAdjacentHTML('beforeend', `<div class="blk think">Reasoning summary (collapsible)<br>${esc(t)}</div>`); }
+  function md(t){ body().insertAdjacentHTML('beforeend', `<div class="blk md">${esc(t).replace(/\\n/g,'<br>')}</div>`); }
+  function fn(name, open, inner){
+    body().insertAdjacentHTML('beforeend', `<div class="fn ${open?'open':''}"><div class="fn-h" onclick="this.parentElement.classList.toggle('open')"><span class="fn-name">▾ ${esc(name)}</span><span class="badge done">Referenced node</span></div><div class="fn-body">${esc(inner).replace(/\\n/g,'<br>')}</div></div>`);
+  }
+  function par(rows){
+    body().insertAdjacentHTML('beforeend', `<div class="par"><div class="par-t">Parallel calls · ${rows.length} items</div>${rows.map(r=>`<div class="par-row"><span>${esc(r.split('·')[0])}</span><span>${esc(r.split('·')[1]||'')}</span></div>`).join('')}</div>`);
+  }
+  function esc(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+  function reset(){ clearInterval(timer); timer=null; i=0; mock.innerHTML='<div class="m-head"><span class="m-title">LLM node</span><span class="badge">Idle</span></div><div style="color:var(--muted);font-size:13px">Click “Play full scenario”</div>'; }
+  document.getElementById('reset').onclick = reset;
+  document.getElementById('play').onclick = () => {
+    reset(); i=0;
+    timer = setInterval(() => {
+      if (i >= steps.length) { clearInterval(timer); return; }
+      steps[i++]();
+    }, 700);
+  };
+  reset();
+})();
+</script>
+</body>
+</html>

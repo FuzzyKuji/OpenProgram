@@ -1,0 +1,322 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>嵌套 LLM 节点内容 · 聊天式有序块 · OpenProgram</title>
+<style>
+:root{
+  --bg:#0f1115;--elev:#151820;--panel:#161920;--text:#e8eaef;--muted:#8b919e;--faint:#5c6370;
+  --line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.14);
+  --acc:#5b8cff;--acc-soft:rgba(91,140,255,.12);--ok:#3dba8a;--warn:#e0b020;--danger:#e85d5d;
+  --think:#a78bfa;--llm:#34d399;--fn:#9db8ff;
+  --font:Inter,system-ui,-apple-system,"PingFang SC","Hiragino Sans GB",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;
+}
+*{box-sizing:border-box}
+body{margin:0;min-height:100vh;color:var(--text);font:14.5px/1.65 var(--font);background:var(--bg);-webkit-font-smoothing:antialiased}
+body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background:
+  radial-gradient(900px 520px at 14% -10%,rgba(91,140,255,.08),transparent 55%),
+  radial-gradient(700px 480px at 90% 0%,rgba(52,211,153,.05),transparent 50%)}
+main{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:36px 22px 96px}
+.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600}
+.eyebrow::before{content:"";width:16px;height:1px;background:var(--line2)}
+h1{font-size:clamp(26px,3.6vw,38px);line-height:1.2;letter-spacing:-.03em;font-weight:650;margin:12px 0 10px;max-width:24ch}
+.lede{font-size:15.5px;color:var(--muted);max-width:74ch;margin:0 0 8px}
+.lede b{color:#dfe3ec;font-weight:600}
+.meta{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 8px}
+.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--line2);background:var(--panel);color:var(--muted)}
+.pill.acc{border-color:rgba(91,140,255,.4);color:#a8c4ff;background:var(--acc-soft)}
+.pill.ok{border-color:rgba(61,186,138,.4);color:#8fd4b0;background:#1e2a24}
+.pill.warn{border-color:rgba(224,176,32,.4);color:#e0c48a;background:#3a3228}
+.toc{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 8px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--elev)}
+.toc a{color:var(--muted);text-decoration:none;font-size:12.5px;padding:4px 8px;border-radius:8px;border:1px solid transparent}
+.toc a:hover{color:var(--text);background:rgba(255,255,255,.04);border-color:var(--line)}
+section{margin-top:40px;scroll-margin-top:18px}
+h2{font-size:1.35rem;margin:0 0 12px;padding-left:12px;border-left:3px solid var(--acc);letter-spacing:-.02em}
+h3{font-size:1.05rem;margin:22px 0 8px;color:#d5dae6}
+p,li{color:#c5cad6}
+ul,ol{padding-left:1.35rem}
+code,pre{font-family:var(--mono);font-size:12.5px}
+code{background:rgba(255,255,255,.06);padding:1px 6px;border-radius:5px;overflow-wrap:anywhere}
+pre{background:#0c0e12;border:1px solid var(--line2);border-radius:12px;padding:14px 16px;overflow:auto;line-height:1.5;color:#d7dbe6}
+.card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:16px 18px;margin:14px 0}
+.callout{border-left:3px solid var(--acc);padding:10px 14px;margin:14px 0;background:var(--acc-soft);border-radius:0 10px 10px 0;color:#c9d7f5}
+.callout.warn{border-left-color:var(--warn);background:rgba(224,176,32,.08);color:#e8d7a8}
+.callout.ok{border-left-color:var(--ok);background:rgba(61,186,138,.08);color:#b7e6d0}
+.callout.danger{border-left-color:var(--danger);background:rgba(232,93,93,.08);color:#f0b4b4}
+table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
+.scroll{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:12px}
+th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
+th{background:#12151b;color:#b8bfd0;font-weight:600}
+td{color:#c8cdd8}
+.mock{border:1px solid var(--line2);border-radius:14px;background:#0c0e12;padding:14px 16px;max-width:560px}
+.m-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid var(--line)}
+.m-title{font-weight:600;color:#e8eaef}
+.badge{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid var(--line2);color:var(--muted)}
+.badge.run{color:#9db8ff;border-color:rgba(91,140,255,.4);background:var(--acc-soft)}
+.badge.done{color:#8fd4b0;border-color:rgba(61,186,138,.4)}
+.blk{margin:10px 0}
+.blk.think{border-left:2px solid var(--think);padding:6px 10px;background:rgba(167,139,250,.06);border-radius:0 8px 8px 0;color:#c4b5fd;font-size:13px}
+.blk.md{color:#dfe7f5;line-height:1.7}
+.blk.md code{font-size:12px}
+.fn{border:1px solid var(--line2);border-radius:10px;padding:8px 10px;margin:8px 0;background:#12151b}
+.fn-h{display:flex;justify-content:space-between;gap:8px;cursor:pointer;user-select:none}
+.fn-name{color:var(--fn);font-family:var(--mono);font-size:12.5px}
+.fn-body{margin-top:8px;padding-top:8px;border-top:1px dashed var(--line);color:var(--muted);font-size:12.5px;display:none}
+.fn.open .fn-body{display:block}
+.par{border:1px dashed rgba(91,140,255,.35);border-radius:10px;padding:8px 10px;margin:8px 0}
+.par-t{font-size:12px;color:var(--muted);margin-bottom:6px}
+.par-row{display:flex;justify-content:space-between;padding:4px 0;font-family:var(--mono);font-size:12px;color:var(--fn)}
+.att{margin:14px 0;padding:10px;border:1px solid rgba(224,176,32,.35);border-radius:10px;background:rgba(224,176,32,.06)}
+.att summary{cursor:pointer;color:#e0c48a;font-size:12.5px}
+.ctrl{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.btn{appearance:none;border:1px solid var(--line2);background:#1a1e28;color:var(--text);font:inherit;font-size:12.5px;padding:7px 12px;border-radius:9px;cursor:pointer}
+.btn:hover{border-color:#4a5568}
+.btn.primary{background:var(--acc-soft);border-color:rgba(91,140,255,.45);color:#c5d8ff}
+.phase li{margin-bottom:8px}
+.phase li::marker{color:var(--acc);font-weight:700}
+footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
+a{color:#9db8ff}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+@media(max-width:820px){.grid2{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<main>
+  <div class="eyebrow">OpenProgram · 设计 · 运行时 / UI</div>
+  <h1>嵌套 LLM 节点内容：聊天式有序块</h1>
+  <p class="lede">展开 LLM 节点后，按<strong>执行顺序</strong>显示完整可展示内容：Markdown 正文、思考摘要、函数引用、并行组、重试边界。复用聊天窗口组件。取消固定的「LLM Reply / Reasoning」分区；底层仍区分内容类型。本页定义当前协议、持久化和 UI 语义。</p>
+  <div class="meta">
+    <span class="pill acc">权威设计</span>
+    <span class="pill ok">扩展 execution_stream.v1，不另起聊天协议</span>
+    <span class="pill warn">流式、DAG 与持久化使用同一身份</span>
+    <span class="pill">对照：agentic-llm-streaming.zh.html</span>
+  </div>
+
+  <nav class="toc" aria-label="目录">
+    <a href="#s0">0 现状复核</a>
+    <a href="#s1">1 展开排列</a>
+    <a href="#s2">2 树 vs 内容</a>
+    <a href="#s3">3 递归</a>
+    <a href="#s4">4 并行</a>
+    <a href="#s5">5 有序块协议</a>
+    <a href="#s6">6 流式与滚动</a>
+    <a href="#s7">7 刷新恢复</a>
+    <a href="#s8">8 实现顺序</a>
+    <a href="#s9">9 验收</a>
+    <a href="#demo">交互示意</a>
+  </nav>
+
+  <section id="s0">
+    <h2>0. 现状复核（对照最新代码）</h2>
+    <div class="scroll"><table>
+      <tr><th>能力</th><th>实现边界</th><th>必须保持的约束</th></tr>
+      <tr><td>execution_stream.v1</td><td>每个嵌套 LLM 节点维护 attempt 与有序 blocks；块包含 <code>text</code>、<code>reasoning_summary</code>、<code>tool_ref</code>、<code>tool_arguments</code>、<code>refusal</code> 等类型。</td><td>所有增量和 snapshot 都使用相同的 <code>block_id</code>、<code>block_index</code>；前端不根据 WS 到达时间重排。</td></tr>
+      <tr><td>DAG / tool identity</td><td>工具节点的 metadata 保存原始 <code>tool_call_id</code> 与 qualified <code>tool_call_occurrence_id</code>；<code>tool_ref</code> 只保存引用的 <code>ref_node_id</code>、名称和 occurrence。</td><td>同一个 occurrence 只能对应一个工具行；provider 重新使用原始 call id 时，按 round/message-qualified occurrence 建立新行。参数、进度、结果和错误从该 DAG 节点读取，不能在 stream 中复制第二份终态数据。</td></tr>
+      <tr><td>attempt 语义</td><td>正常工具结果后的模型请求仍属于当前 attempt；传输失败、结构化输出失败等真正恢复才创建新 attempt。</td><td><code>turn_end</code> 只表示一次 provider round 结束，不自动创建 attempt 边界；新 attempt 必须有明确失败原因。</td></tr>
+      <tr><td>持久化</td><td>checkpoint、<code>metadata.stream</code>、live snapshot 和 terminal snapshot 都包含完整可展示 attempts/blocks（受 retention 策略约束）；legacy preview 字段仍可截断。</td><td>owner 消失或 worker 重启后，历史读取接口只凭持久化 snapshot 恢复顺序、引用和终态，不重新调用模型。live snapshot 也不能静默丢失 Markdown 前缀。</td></tr>
+    </table></div>
+    <div class="callout ok"><b>工具引用身份</b>：不重复传输工具参数/结果全文。工具执行入口在创建或发现 DAG 工具节点时写入原始 <code>tool_call_id</code> 和 qualified occurrence，stream 再通过 <code>occurrence_id → ref_node_id</code> 发布引用。映射未及时可见时先发布带稳定 occurrence 的占位行，随后用同一 <code>block_id</code> 补齐 <code>ref_node_id</code>；不能改成第二行或伪造完成状态。</div>
+    <div class="callout warn">现有 <code>tool_arguments</code> 块适合「参数仍在生成」的瞬时预览；终态展示以树节点为准，避免双源真相。</div>
+  </section>
+
+  <section id="s1">
+    <h2>1. 展开后如何排列</h2>
+    <ul>
+      <li>正文直接 Markdown，<b>无</b>「LLM Reply」标题。</li>
+      <li>思考摘要出现在实际发生的位置，默认可折叠；仅当模型返回可展示摘要时显示，不推测不补写。</li>
+      <li>函数行出现在调用发起位置；展开看参数/进度/结果/错误（数据来自被引用节点）。</li>
+      <li>函数之后的新正文接在函数行之后，不得并入前一段正文。</li>
+      <li>内部签名等不作为聊天内容。</li>
+      <li>「完整」= 全部可展示内容可访问；大工具结果可折叠/按需加载，但不能只留截断摘要却无法打开全文。</li>
+    </ul>
+  </section>
+
+  <section id="s2">
+    <h2>2. 执行树与节点内容的职责</h2>
+    <div class="scroll"><table>
+      <tr><th>视图</th><th>用途</th></tr>
+      <tr><td>执行树</td><td>调用关系、并行分支、运行状态、耗时、失败位置</td></tr>
+      <tr><td>节点内容</td><td>该 LLM 节点内部按序发生的正文 / 思考 / 函数引用</td></tr>
+    </table></div>
+    <ul>
+      <li>卡片折叠：名称、状态、耗时、短预览。</li>
+      <li>卡片展开与右侧详情：<b>同一</b> <code>LlmNodeContent</code> 组件，禁止两套逻辑。</li>
+      <li>函数行 = 对真实执行节点的引用；点击定位树节点；禁止复制工具状态/结果。</li>
+    </ul>
+  </section>
+
+  <section id="s3">
+    <h2>3. 函数内部再调模型</h2>
+    <ul>
+      <li>允许递归：函数展开后可见内层 LLM 的同一内容组件。</li>
+      <li>默认：当前选中 LLM 展开；内部函数只显示摘要行；用户展开后再进子内容。</li>
+      <li>深层达到递归上限时显示明确边界，并提供「在详情中查看」入口；详情面板从该 DAG 节点重新以根节点渲染内容。</li>
+      <li>展开状态按 <code>node_id</code>、<code>attempt_id</code>、<code>block_id</code> 持久在会话 UI 状态；流式更新和重新挂载不重置。</li>
+      <li>递归内容最多渲染 8 层；达到上限只隐藏后续内嵌内容，不改变执行树、工具状态或历史数据。</li>
+      <li>普通代码函数：参数/状态/日志/返回值；仅当内部有模型调用才嵌套模型内容。</li>
+    </ul>
+  </section>
+
+  <section id="s4">
+    <h2>4. 并行函数</h2>
+    <ul>
+      <li>只有执行端实际启动并发批次并明确知道其成员时，多个 tool_call → 一个 <code>parallel_group</code> 块。当前 Python dispatcher 按顺序执行多个 tool_call，因此不发布 group_id。</li>
+      <li>组内顺序 = <b>发起顺序</b>，稳定；完成先后只改状态，不重排。</li>
+      <li>每个组成员从第一次发布开始就带同一个 <code>group_id</code>；如果组 id 在第二个成员到达时才生成，必须为此前所有成员发布带新组 id 的更新事件。前端不能通过“相邻工具行”推断并行。</li>
+      <li>各函数行独立更新；禁止因某函数先完成而挪到正文前。</li>
+    </ul>
+  </section>
+
+  <section id="s5">
+    <h2>5. 有序块协议（扩展 execution_stream.v1）</h2>
+    <p>每个 LLM <code>node_id</code> 在每次 <code>attempt</code> 内维护有序 <code>blocks[]</code>。顺序由执行端确定；前端不得按 WS 到达时间猜测。</p>
+    <div class="scroll"><table>
+      <tr><th>块 kind</th><th>必要字段</th><th>说明</th></tr>
+      <tr><td><code>text</code></td><td><code>block_id</code>, content, status</td><td>Markdown 正文；流式 delta</td></tr>
+      <tr><td><code>reasoning_summary</code></td><td><code>block_id</code>, content, status, retention</td><td>可展示思考；策略可省略持久化</td></tr>
+      <tr><td><code>tool_ref</code></td><td><code>block_id</code>, <code>tool_call_id</code>, <code>occurrence_id</code>, <code>node_id</code>, optional group_id</td><td>引用树节点；不内嵌结果全文。occurrence 缺失时仅兼容旧记录。</td></tr>
+      <tr><td><code>tool_arguments</code></td><td>（可保留）</td><td>参数流式预览；终态以树为准</td></tr>
+      <tr><td><code>parallel_group</code></td><td><code>group_id</code>, ordered <code>tool_ref</code> ids</td><td>并行外壳；组 id 由执行端产生；子引用保持发起序。没有明确并发批次时不得创建。</td></tr>
+      <tr><td><code>attempt_boundary</code></td><td><code>attempt_id</code>, reason, status</td><td>失败重试边界；旧 attempt 折叠保留</td></tr>
+      <tr><td><code>refusal</code> / <code>unsupported</code></td><td>已有</td><td>保持</td></tr>
+    </table></div>
+    <h3>继续生成 vs 失败重试</h3>
+    <ul>
+      <li><b>正常工具后继续</b>：同一 attempt 内接着追加 text / tool_ref。</li>
+      <li><b>失败重试</b>：新 attempt；UI 显示边界；新输出不得拼到上一段半截 Markdown。</li>
+      <li>重复事件：同一 qualified <code>occurrence_id</code> 不生成第二行；原始 <code>tool_call_id</code> 可在不同 provider round 中重复。</li>
+      <li>工具节点晚到：先占位 <code>tool_ref</code>（稳定 id），再补齐树数据。</li>
+      <li>一次 provider round 结束后，如果产生了工具结果，下一次模型请求继续写入同一个 attempt；只有恢复策略显式调用 <code>start_attempt(reason=...)</code> 才产生新的 attempt。</li>
+    </ul>
+<pre>{
+  "type": "execution_stream",
+  "schema_version": 1,
+  "op": "block_started",
+  "node_id": "call_9f3e",
+  "attempt_id": "att_2",
+  "block_id": "blk_tool_7",
+  "block_index": 4,
+  "kind": "tool_ref",
+  "tool_call_id": "call_abc",
+  "occurrence_id": "occ_7e4c",
+  "ref_node_id": "exec_read_file_01",
+  "group_id": "par_1"
+}</pre>
+  </section>
+
+  <section id="s6">
+    <h2>6. Markdown 流式与滚动</h2>
+    <ul>
+      <li>复用顶层 chat 的 <code>renderMarkdown</code> / ThinkingStep / FunctionStep 视觉与安全策略。</li>
+      <li>进行中的 text 块增量更新；已结束块不整段重渲。</li>
+      <li>未闭合代码块/表格/链接不导致整区消失。</li>
+      <li>大内容按块虚拟化或按需加载。</li>
+      <li>贴底跟随；上滚停止跟随；展开函数/高亮完成尽量保阅读位置。</li>
+      <li>「复制正文」≠「复制完整执行记录」（后者可含思考与工具参数）。</li>
+    </ul>
+  </section>
+
+  <section id="s7">
+    <h2>7. 断线 / 刷新 / 失败</h2>
+    <ul>
+      <li>持久化有序块 + 函数引用（及 attempt 列表）；禁止仅存最终 reply 再靠树临时拼接。</li>
+      <li>刷新后交织顺序与实时一致；已完成函数不得显示为执行中。</li>
+      <li>未完成正文保留，并标明中断/取消/失败。</li>
+      <li>未持久化的思考显示「此内容未保存」，不伪造空白成功。</li>
+      <li>恢复用 snapshot，禁止为了显示再调模型。</li>
+      <li>live snapshot 与 durable snapshot 都保留完整可展示 block 内容；只有兼容用的短 preview 字段允许受限。</li>
+      <li>历史读取优先取 <code>metadata.stream.snapshot</code>；兼容旧记录时从 <code>metadata.blocks</code> 构造单一 legacy attempt，并保留已持久化的工具块。无法解析引用时显示未解析状态，并保留 <code>tool_call_id</code>。</li>
+    </ul>
+  </section>
+
+  <section id="s8">
+    <h2>8. 实现顺序</h2>
+    <ol class="phase">
+      <li><b>有序块协议 + 持久化</b>：扩展 kind；tool_ref / parallel_group；metadata 与 checkpoint 写入完整 attempt.blocks。</li>
+      <li><b>统一内容组件</b> <code>LlmNodeContent</code>：复用 chat Markdown / 思考折叠 / 函数行（只读树）。</li>
+      <li><b>接入节点详情</b>：去掉 Reply/Reasoning 分区；验证序列、刷新、恢复。</li>
+      <li><b>卡片展开复用同一组件</b>。</li>
+      <li><b>并行、递归、重试边界、滚动</b>验收。</li>
+    </ol>
+    <div class="callout">任一阶段不得缩成「先拼两个字符串再慢慢加」——那会破坏顺序契约。</div>
+  </section>
+
+  <section id="s9">
+    <h2>9. 验收场景（必须）</h2>
+    <p>模型先输出 Markdown → 并行调用两个函数 → 其中一个函数内部再调模型（含 read_file）→ 外层继续输出；期间断线并刷新。恢复后：块顺序、函数状态、层级与断线前一致。</p>
+    <ul>
+      <li>无 Reply/Reasoning 标题栏。</li>
+      <li>并行组内顺序不因完成先后重排。</li>
+      <li>重试出现 attempt 边界，半截 Markdown 不拼接。</li>
+      <li>tool_ref 与树节点一一对应，无重复结果副本。</li>
+      <li>owner 消失后从历史接口恢复同一 blocks 顺序；恢复的工具状态来自持久化 DAG 节点。</li>
+    </ul>
+  </section>
+
+  <section id="status">
+    <h2>实现状态</h2>
+    <div class="scroll"><table>
+      <tr><th>范围</th><th>状态</th><th>证据边界</th></tr>
+      <tr><td>协议与状态合并</td><td>已实现</td><td><code>CallStreamState</code>、execution-stream reducer 与协议测试覆盖有序 blocks、tool_ref、attempt 和版本恢复。</td></tr>
+      <tr><td>统一节点内容组件</td><td>已实现</td><td>卡片展开和右侧详情使用 <code>LlmNodeContent</code>；Markdown、思考折叠、工具引用和 earlier attempt 使用同一渲染路径。</td></tr>
+      <tr><td>权限边界、展开状态与递归详情</td><td>已实现</td><td>隐藏节点在投影前丢弃；<code>io/llm</code> 仅显示允许的后代；节点/attempt/block 展开状态持久化；递归超过 8 层显示详情入口。</td></tr>
+      <tr><td>工具身份、正常续写、并行事件一致性</td><td>本任务修复</td><td>以真实 DAG 节点映射、同一 attempt 续写和显式并行批次为验收边界。</td></tr>
+      <tr><td>owner 消失 / worker 重启后的完整恢复</td><td>本任务修复</td><td>以持久化 snapshot 和历史读取接口的可观测结果为准；真实模型长任务仍需现场验收。</td></tr>
+      <tr><td>真实模型与默认 App 验收</td><td>待现场执行</td><td>需要在默认 profile、端口 <code>18100</code>、现有 App 中执行确定性 nested tool 场景；本页不把单元测试当作现场验收。</td></tr>
+    </table></div>
+  </section>
+
+  <section id="demo">
+    <h2>交互示意</h2>
+    <div class="ctrl">
+      <button class="btn primary" type="button" id="play">播放完整场景</button>
+      <button class="btn" type="button" id="reset">重置</button>
+    </div>
+    <div class="mock" id="mock" aria-live="polite"></div>
+  </section>
+
+  <footer>OpenProgram 设计 · nested-llm-node-content</footer>
+</main>
+<script>
+(function(){
+  const mock = document.getElementById('mock');
+  const steps = [
+    () => head('gpt-5', 'run'),
+    () => think('先读配置，再并行跑测试……'),
+    () => md('我先读取配置，确认当前输出参数。\n\n这里支持 **Markdown**、`代码` 与链接。'),
+    () => par(['read_config · 已完成', 'run_tests · 执行中']),
+    () => md('两项结果返回后，继续分析……'),
+    () => fn('analyze_repository', true, '内层模型 · 思考摘要\nMarkdown 正文\n▾ read_file · 参数与结果\nMarkdown 正文'),
+    () => md('根据测试结果，修改如下：……'),
+    () => head('gpt-5', 'done'),
+  ];
+  let i = 0, timer = null;
+  function head(name, st){
+    mock.innerHTML = `<div class="m-head"><span class="m-title">${name}</span><span class="badge ${st==='run'?'run':'done'}">${st==='run'?'执行中':'已完成'}</span></div><div id="body"></div>`;
+  }
+  function body(){ return mock.querySelector('#body') || mock; }
+  function think(t){ body().insertAdjacentHTML('beforeend', `<div class="blk think">思考摘要（可折叠）<br>${esc(t)}</div>`); }
+  function md(t){ body().insertAdjacentHTML('beforeend', `<div class="blk md">${esc(t).replace(/\\n/g,'<br>')}</div>`); }
+  function fn(name, open, inner){
+    body().insertAdjacentHTML('beforeend', `<div class="fn ${open?'open':''}"><div class="fn-h" onclick="this.parentElement.classList.toggle('open')"><span class="fn-name">▾ ${esc(name)}</span><span class="badge done">引用节点</span></div><div class="fn-body">${esc(inner).replace(/\\n/g,'<br>')}</div></div>`);
+  }
+  function par(rows){
+    body().insertAdjacentHTML('beforeend', `<div class="par"><div class="par-t">并行调用 · ${rows.length} 项</div>${rows.map(r=>`<div class="par-row"><span>${esc(r.split('·')[0])}</span><span>${esc(r.split('·')[1]||'')}</span></div>`).join('')}</div>`);
+  }
+  function esc(s){ return String(s).replace(/[&<>"']/g, c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c])); }
+  function reset(){ clearInterval(timer); timer=null; i=0; mock.innerHTML='<div class="m-head"><span class="m-title">LLM 节点</span><span class="badge">空闲</span></div><div style="color:var(--muted);font-size:13px">点击「播放完整场景」</div>'; }
+  document.getElementById('reset').onclick = reset;
+  document.getElementById('play').onclick = () => {
+    reset(); i=0;
+    timer = setInterval(() => {
+      if (i >= steps.length) { clearInterval(timer); return; }
+      steps[i++]();
+    }, 700);
+  };
+  reset();
+})();
+</script>
+</body>
+</html>

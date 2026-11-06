@@ -1,0 +1,212 @@
+"""context.nodes.render_context — pure-function helper that picks the
+ids that should go into the next LLM call's ``reads``.
+
+Tests build small graphs manually and assert the algorithm's behavior
+under various frame / expose / render_range configurations.
+"""
+
+from __future__ import annotations
+
+
+from openprogram.state.store.session.nodes import Call, Graph, ROLE_USER, ROLE_LLM, ROLE_CODE
+from openprogram.runtime.context.nodes import render_context
+
+
+def _spine_tip(g: Graph) -> str | None:
+    """Id of the newest node with no caller — the top-level chain tip.
+
+    dag/overview.md §6 makes membership path-native: a node enters the
+    render only via ``head_id``'s predecessor chain. These fixtures are
+    plain single-branch chains, so each new top-level node links to the
+    previous one; sub-called nodes (caller set) stay off the chain and
+    ride in as caller-subtree members, exactly as in a real session.
+    """
+    top = [n for n in g.nodes.values() if not n.caller]
+    return max(top, key=lambda n: n.seq).id if top else None
+
+
+def _user(g: Graph, content: str) -> Call:
+    return g.add(Call(role=ROLE_USER, output=content,
+                      predecessor=_spine_tip(g)))
+
+
+def _llm(g: Graph, output: str, *, caller: str = "") -> Call:
+    return g.add(Call(role=ROLE_LLM, output=output, caller=caller,
+                      predecessor=None if caller else _spine_tip(g)))
+
+
+def _code(g: Graph, name: str, *, expose: str = "io",
+          caller: str = "") -> Call:
+    return g.add(Call(role=ROLE_CODE, name=name, caller=caller,
+                      predecessor=None if caller else _spine_tip(g),
+                      metadata={"expose": expose}))
+
+
+# No frame: top-level chat returns the linear chain
+
+
+def test_top_level_returns_full_chain_in_seq_order():
+    g = Graph()
+    u = _user(g, "q1")
+    m = _llm(g, "a1")
+    u2 = _user(g, "q2")
+    assert render_context(g) == [u.id, m.id, u2.id]
+
+
+def test_head_seq_caps_the_chain():
+    g = Graph()
+    u = _user(g, "q1")
+    m = _llm(g, "a1")
+    _user(g, "q2")
+    # Slice at m: u2 excluded.
+    assert render_context(g, head_seq=m.seq) == [u.id, m.id]
+
+
+def test_empty_graph_returns_empty_list():
+    g = Graph()
+    assert render_context(g) == []
+
+
+# Inside a frame: in-frame uncapped by default
+
+
+def test_in_frame_visible_by_default():
+    """A frame naturally sees its own in-frame progress. Default
+    ``subcalls`` is -1 (uncapped); expose handles hiding internals
+    of child Agent methods, not subcalls counting."""
+    g = Graph()
+    u = _user(g, "q")
+    m = _llm(g, "a")
+    entry = m.seq
+    s1 = _llm(g, "step1")
+    s2 = _llm(g, "step2")
+    reads = render_context(g, frame_entry_seq=entry)
+    assert reads == [u.id, m.id, s1.id, s2.id]
+
+
+def test_subcalls_zero_explicitly_hides_in_frame():
+    """Opt in to ``subcalls=0`` to actively wall off in-frame nodes."""
+    g = Graph()
+    u = _user(g, "q")
+    m = _llm(g, "a")
+    entry = m.seq
+    _llm(g, "step1")
+    _llm(g, "step2")
+    reads = render_context(
+        g, frame_entry_seq=entry, render_range={"subcalls": 0}
+    )
+    assert reads == [u.id, m.id]
+
+
+def test_subcalls_uncapped_shows_all_in_frame():
+    """``siblings=-1`` opts back into seeing every in-frame node."""
+    g = Graph()
+    u = _user(g, "q")
+    m = _llm(g, "a")
+    entry = m.seq
+    in1 = _llm(g, "step1")
+    in2 = _llm(g, "step2")
+    reads = render_context(g, frame_entry_seq=entry,
+                          render_range={"subcalls": -1})
+    assert reads == [u.id, m.id, in1.id, in2.id]
+
+
+def test_callers_zero_isolates_in_frame():
+    g = Graph()
+    _user(g, "q")
+    _llm(g, "a")
+    entry = g.last().seq
+    s1 = _llm(g, "s1")
+    reads = render_context(g, frame_entry_seq=entry,
+                          render_range={"callers": 0, "subcalls": -1})
+    assert reads == [s1.id]
+
+
+def test_callers_keeps_recent_pre_frame_only():
+    g = Graph()
+    _user(g, "1")
+    _llm(g, "2")
+    c = _user(g, "3")
+    d = _llm(g, "4")
+    entry = d.seq
+    s = _llm(g, "step")
+    # callers=2 → keep most recent 2 pre-frame (c, d); subcalls=-1 → all
+    # in-frame (s).
+    reads = render_context(g, frame_entry_seq=entry,
+                          render_range={"callers": 2, "subcalls": -1})
+    assert reads == [c.id, d.id, s.id]
+
+
+def test_subcalls_cap_keeps_recent_in_frame_nodes_only():
+    g = Graph()
+    u = _user(g, "q")
+    entry = u.seq
+    s1 = _llm(g, "1")
+    s2 = _llm(g, "2")
+    s3 = _llm(g, "3")
+    reads = render_context(g, frame_entry_seq=entry,
+                          render_range={"subcalls": 2})
+    assert u.id in reads
+    assert s3.id in reads
+    assert s2.id in reads
+    assert s1.id not in reads
+
+
+# Expose filtering on code Calls
+
+
+def test_io_function_hides_internal_llm():
+    """code Call with expose='io' suppresses llm Calls that point at
+    it via ``caller``."""
+    g = Graph()
+    u = _user(g, "q")
+    fn = _code(g, "agent", expose="io")
+    internal = _llm(g, "internal", caller=fn.id)
+    final = _llm(g, "after")
+    reads = render_context(g)
+    assert u.id in reads
+    assert fn.id in reads             # the summary visible
+    assert internal.id not in reads   # internal hidden
+    assert final.id in reads
+
+
+def test_full_function_keeps_internal_llm():
+    g = Graph()
+    u = _user(g, "q")
+    fn = _code(g, "agent", expose="full")
+    internal = _llm(g, "internal", caller=fn.id)
+    reads = render_context(g)
+    assert u.id in reads
+    assert fn.id in reads
+    assert internal.id in reads       # transparent
+
+
+def test_io_only_suppresses_its_own_internals():
+    """Internal llm calls of one function don't get suppressed by a
+    sibling function's expose=io."""
+    g = Graph()
+    a = _code(g, "a", expose="io")
+    a_llm = _llm(g, "a-internal", caller=a.id)
+    b = _code(g, "b", expose="full")
+    b_llm = _llm(g, "b-internal", caller=b.id)
+    reads = render_context(g)
+    assert a.id in reads
+    assert a_llm.id not in reads       # a is io → hide a's internals
+    assert b.id in reads
+    assert b_llm.id in reads           # b is full → keep b's internals
+
+
+# head_seq + frame combo
+
+
+def test_head_seq_limits_chain_inside_frame_too():
+    g = Graph()
+    u = _user(g, "q")
+    entry = u.seq
+    s1 = _llm(g, "1")
+    s2 = _llm(g, "2")
+    s3 = _llm(g, "3")
+    reads = render_context(g, head_seq=s2.seq, frame_entry_seq=entry,
+                          render_range={"subcalls": -1})
+    assert reads == [u.id, s1.id, s2.id]
+    assert s3.id not in reads

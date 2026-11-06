@@ -1,0 +1,339 @@
+/**
+ * Pass: the call-thread model (dag/rendering.md §12).
+ *
+ * One triangle = everything the model did from one reply until the next
+ * user message. Three consequences, all computed here:
+ *
+ *   * A runtime-notice reply — the turn an agent's return
+ *     (``job_followup``) or a background command ending
+ *     (``process_exit``) triggers — is not a chain node. A function's
+ *     return does not get a new node when the model keeps talking, and
+ *     these returns are the same event at a different scale. The reply merges into its ANCHOR: the
+ *     turn found by climbing ``predecessor`` past every followup. A
+ *     ``resumed`` reply — the rest of a reply a restart cut off — merges
+ *     the same way.
+ *
+ *   * A spawned agent's internal turns are not chain nodes either. The
+ *     spawn root IS the agent: one glyph on the caller's thread, its
+ *     own calls behind it. Everything in the agent's lane merges into
+ *     the root.
+ *
+ *   * What a turn did — every function call, every agent it spawned —
+ *     is one time-ordered event sequence, the turn's THREAD. Folded,
+ *     the thread is a count on the node's shoulder and nothing else.
+ *     Open, every event is a real node hanging on a dotted line beside
+ *     the turn; an agent on the line opens recursively into its own
+ *     thread, one column further right.
+ *
+ * View state (which threads are open) lives in ``_threadOpen`` — the
+ * same never-persisted contract as the compaction fold.
+ */
+
+import type { GNode } from "../types";
+import { _headAncestors } from "../layout/assign-lanes";
+import { _threadOpen } from "../store/globals";
+import {
+  isChainNode,
+  isFollowup,
+  isSpawnRoot,
+} from "./thread-nodes";
+export {
+  isChainNode,
+  isIndependentRootProgram,
+  isSpawnRoot,
+  isTopProgramRun,
+} from "./thread-nodes";
+
+export interface ThreadEvent {
+  t: number;
+  kind: "exec" | "spawn";
+  id: string;
+}
+
+export interface ThreadModel {
+  /** Graph the layout sees: chain nodes + the open threads' items. */
+  visible: GNode[];
+  /** ``anchorId → ordered events`` — the anchor's whole thread. */
+  events: Record<string, ThreadEvent[]>;
+  /** ``spawnRootId → the anchor whose thread carries it``. */
+  spawnOwnerOf: Record<string, string>;
+  /** ``spawnRootId → agent display name`` (tooltip / inspector only —
+   *  the canvas draws no captions). */
+  nameOf: Record<string, string>;
+  /** True while every thread from the chain down to ``id`` is open. */
+  isOpen: (id: string) => boolean;
+  /** The chain node ``id`` merged into (itself when it didn't). Used to
+   *  re-seat HEAD when it points at a merged followup reply. */
+  anchorOf: (id: string) => string;
+}
+
+function nodeTime(n: GNode): number {
+  return (n.created_at ?? n.timestamp ?? 0) as number;
+}
+
+/** The agent's name for a spawn root — tooltip/inspector material.
+ *  ``spawned_from.label`` when the runner stamped it, else the branch
+ *  name the session recorded. */
+function _spawnName(
+  root: GNode,
+  laneFirstName: Record<number, { id: string; name: string }>,
+): string {
+  const direct = (root as Record<string, unknown>).spawned_from as
+    | { label?: string | null }
+    | undefined;
+  const fromRoot = (direct?.label || "").trim();
+  if (fromRoot) return fromRoot;
+  const own = ((root as Record<string, unknown>).branch_name as string) || "";
+  if (own.trim()) return own.trim();
+  const hit = laneFirstName[root._lane || 0];
+  return hit && hit.id !== root.id ? hit.name : "";
+}
+
+function _latestBefore(
+  rows: GNode[],
+  composerFns: GNode[],
+  spawn: GNode,
+  order: Map<string, number>,
+): GNode | undefined {
+  const t = nodeTime(spawn);
+  const spawnOrder = order.get(spawn.id) ?? Number.MAX_SAFE_INTEGER;
+  const beforeSpawn = (row: GNode): boolean => {
+    const rt = nodeTime(row);
+    return rt < t || (rt === t && (order.get(row.id) ?? -1) < spawnOrder);
+  };
+  const later = (row: GNode, current: GNode | undefined): boolean => {
+    if (!current) return true;
+    const rt = nodeTime(row);
+    const ct = nodeTime(current);
+    return rt > ct || (rt === ct
+      && (order.get(row.id) ?? -1) > (order.get(current.id) ?? -1));
+  };
+  let best: GNode | undefined;
+  composerFns.forEach((row) => {
+    if (beforeSpawn(row) && later(row, best)) best = row;
+  });
+  let cut: GNode | undefined;
+  rows.forEach((row) => {
+    if (beforeSpawn(row) && later(row, cut)) cut = row;
+  });
+  return best && later(best, cut) ? best : cut;
+}
+
+export function buildThreadModel(
+  graph: GNode[],
+  headId?: string | null,
+): ThreadModel {
+  const byId: Record<string, GNode> = Object.create(null);
+  const laneSpawn: Record<number, string> = Object.create(null);
+  const laneFirstName: Record<number, { id: string; name: string }> =
+    Object.create(null);
+  const composerFns: GNode[] = [];
+  const order = new Map<string, number>();
+  graph.forEach((n, index) => {
+    order.set(n.id, index);
+    byId[n.id] = n;
+    if (isSpawnRoot(n)) laneSpawn[n._lane || 0] = n.id;
+    const nm = ((n as Record<string, unknown>).branch_name as string) || "";
+    const trimmed = nm.trim();
+    if (trimmed && !laneFirstName[n._lane || 0]) {
+      laneFirstName[n._lane || 0] = { id: n.id, name: trimmed };
+    }
+  });
+  graph.forEach((n) => {
+    if (
+      isChainNode(n, byId)
+      && n.display !== "root"
+      && (n.role === "tool" || n._runNode)
+    ) {
+      composerFns.push(n);
+    }
+  });
+  composerFns.sort((a, b) => nodeTime(a) - nodeTime(b));
+  const onHead = new Set(_headAncestors(byId, headId ?? null));
+  const talkCuts = graph.filter((n) => {
+    if (!isChainNode(n, byId) || n.display === "root") return false;
+    if (n.role !== "user" && n.role !== "assistant") return false;
+    if (isFollowup(n)) return false;
+    if ((n as Record<string, unknown>).source === "agent_spawn") return false;
+    const laneRoot = laneSpawn[n._lane || 0];
+    if (laneRoot && n.id !== laneRoot) return false;
+    return !headId || onHead.has(n.id);
+  });
+
+  // ── anchor resolution ──
+  // agent-internal chain node → its lane's spawn root; followup reply →
+  // climb predecessors. Composed, so a followup inside an agent still
+  // lands on the agent's root.
+  const anchorCache: Record<string, string> = Object.create(null);
+  function anchorOf(id: string): string {
+    if (anchorCache[id]) return anchorCache[id];
+    let cur = byId[id];
+    let hops = 0;
+    while (cur && hops < 200) {
+      if (isSpawnRoot(cur)) break;
+      const ls = laneSpawn[cur._lane || 0];
+      if (ls && cur.id !== ls) { cur = byId[ls]; hops++; continue; }
+      if (isFollowup(cur) && cur.predecessor && byId[cur.predecessor]) {
+        cur = byId[cur.predecessor]; hops++; continue;
+      }
+      break;
+    }
+    const out = cur ? cur.id : id;
+    anchorCache[id] = out;
+    return out;
+  }
+
+  // ── event attribution ──
+  // Execution nodes climb predecessor/caller to the first chain node or
+  // spawn root; that node's anchor owns the event. Spawn roots climb
+  // their caller the same way.
+  function ownerOf(n: GNode): string | null {
+    let cur: GNode | undefined = n;
+    let hops = 0;
+    while (cur && hops < 200) {
+      const pid: string =
+        (cur.caller as string) || (cur.predecessor as string) || "";
+      const p: GNode | undefined = pid ? byId[pid] : undefined;
+      if (!p) return null;
+      if (p.display === "root") {
+        // Scarred clean-spawn: caller/predecessor stamped ROOT instead
+        // of the composer-launched function. Attach to that function
+        // so the diamond is not four fork lanes.
+        if (isSpawnRoot(n) || (n as Record<string, unknown>).source === "agent_spawn") {
+          const fn = _latestBefore(talkCuts, composerFns, n, order);
+          if (fn) return anchorOf(fn.id);
+        }
+        return null;
+      }
+      if (isChainNode(p, byId) || isSpawnRoot(p)) return anchorOf(p.id);
+      cur = p;
+      hops++;
+    }
+    return null;
+  }
+
+  const events: Record<string, ThreadEvent[]> = Object.create(null);
+  const spawnOwnerOf: Record<string, string> = Object.create(null);
+  const nameOf: Record<string, string> = Object.create(null);
+  graph.forEach((n) => {
+    if (n.display === "root") return;
+    if (isSpawnRoot(n)) {
+      const o = ownerOf(n);
+      if (o) {
+        spawnOwnerOf[n.id] = o;
+        (events[o] = events[o] || []).push(
+          { t: nodeTime(n), kind: "spawn", id: n.id });
+      }
+      nameOf[n.id] = _spawnName(n, laneFirstName);
+      return;
+    }
+    if (isChainNode(n, byId)) {
+      // An agent-internal turn (its lane merged into a spawn root) is
+      // the agent's own activity: an event on the AGENT's thread. Once
+      // the square opens, its replies come back as triangles in the
+      // agent's colour — the conversation is in the graph, one level
+      // down, not deleted. Followup replies on the main chain keep
+      // merging invisibly (their anchor is a chain turn, not a spawn).
+      const a = anchorOf(n.id);
+      if (a !== n.id && byId[a] && isSpawnRoot(byId[a])) {
+        (events[a] = events[a] || []).push(
+          { t: nodeTime(n), kind: "exec", id: n.id });
+      }
+      return;
+    }
+    const o = ownerOf(n);
+    if (o) {
+      (events[o] = events[o] || []).push(
+        { t: nodeTime(n), kind: "exec", id: n.id });
+    }
+  });
+  Object.values(events).forEach((evs) => evs.sort((a, b) => a.t - b.t));
+
+  // ── one spawn, one glyph ──
+  // A dispatch call (``agent`` / ``send_message``) and the spawn root
+  // it opened are the same act; drawing both puts two squares on the
+  // thread for one event. The spawn root — the node that expands into
+  // the agent's own activity — is the one that stays; the dispatch
+  // call folds into it (its arguments live on in the spawn's tooltip
+  // material). A dispatch that opened NO spawn (the call failed)
+  // keeps its own square: that failure is worth a glyph.
+  const isDispatchCall = (n: GNode): boolean =>
+    n.name === "agent" || n.name === "send_message"
+    || n.function === "agent" || n.function === "send_message";
+  const dispatchHidden = new Set<string>();
+  Object.keys(events).forEach((anchor) => {
+    const evs = events[anchor];
+    if (!evs.some((e) => e.kind === "spawn")) return;
+    events[anchor] = evs.filter((e) => {
+      if (e.kind !== "exec") return true;
+      const n = byId[e.id];
+      if (!n || !isDispatchCall(n)) return true;
+      dispatchHidden.add(e.id);
+      return false;
+    });
+  });
+
+  // ── visibility ──
+  // A spawn root shows only while every thread above it is open; its
+  // items likewise. Chain nodes show unless they merged into an anchor.
+  const openCache: Record<string, boolean> = Object.create(null);
+  function chainOpen(id: string, visiting = new Set<string>()): boolean {
+    if (id in openCache) return openCache[id];
+    if (visiting.has(id)) return false;
+    visiting.add(id);
+    let ok = !!_threadOpen[id];
+    if (ok) {
+      const owner = spawnOwnerOf[id];
+      if (owner) ok = chainOpen(owner, visiting);
+      // a chain anchor is always reachable — nothing above it folds it
+    }
+    visiting.delete(id);
+    openCache[id] = ok;
+    return ok;
+  }
+  const isOpen = (id: string): boolean => chainOpen(id);
+
+  const spawnVisible = (id: string): boolean => {
+    const owner = spawnOwnerOf[id];
+    return !owner || chainOpen(owner);
+  };
+
+  const visible = graph.filter((n) => {
+    if (n.display === "root") return true;
+    if (isSpawnRoot(n)) return spawnVisible(n.id);
+    if (isChainNode(n, byId)) {
+      const a = anchorOf(n.id);
+      if (a === n.id) return true;
+      // Agent-internal turn: a thread item while the agent is open.
+      return !!byId[a] && isSpawnRoot(byId[a])
+        && chainOpen(a) && spawnVisible(a);
+    }
+    // execution node: on screen only while its anchor's thread is open
+    if (dispatchHidden.has(n.id)) return false;
+    const o = ownerOf(n);
+    return !!o && chainOpen(o) && (spawnOwnerOf[o] ? spawnVisible(o) : true);
+  }).map((n) => {
+    // Stamp the surfaced agent turns so downstream passes lay them out
+    // as thread items (isChainNode above keys on the stamp). View-only
+    // clones — the graph rows themselves stay untouched.
+    if (!isChainNode(n, byId) || n.display === "root") return n;
+    const a = anchorOf(n.id);
+    if (a !== n.id && byId[a] && isSpawnRoot(byId[a])) {
+      return { ...n, _agentTurn: true } as GNode;
+    }
+    // The turn after a merged followup / resumed reply chains to the
+    // glyph that stands for it, or the layout finds no parent, starts
+    // the turn as a fresh lane root at its raw depth and leaves empty
+    // rows where the merged reply used to sit.
+    const p = n.predecessor ? byId[n.predecessor] : undefined;
+    if (p && isFollowup(p)) {
+      const pa = anchorOf(p.id);
+      if (pa !== p.id && byId[pa] && !isSpawnRoot(byId[pa])) {
+        return { ...n, predecessor: pa } as GNode;
+      }
+    }
+    return n;
+  });
+
+  return { visible, events, spawnOwnerOf, nameOf, isOpen, anchorOf };
+}

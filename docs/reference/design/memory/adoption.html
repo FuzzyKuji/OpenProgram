@@ -1,0 +1,754 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Adoption and Adaptation</title>
+<style>
+  :root{
+    --bg:#16150f; --pan:#1d1c14; --bd:#2e2c20; --tx:#bdb9a6; --acc:#d4843a;
+    --cb:#12110b; --dim:#8a8675;
+    --c0:#4f8ef7; --c1:#5aad4e; --c2:#d4843a; --c3:#9d6fe0; --c4:#2db3d5;
+    --no:#e0445a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:40px 24px 96px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:23px;color:#f0eee6;margin:0 0 6px}
+  .sub{color:var(--tx);margin:0 0 18px;max-width:78ch}
+  .sub a{color:var(--acc)}
+  h2{font-size:16px;color:var(--acc);margin:34px 0 8px;scroll-margin-top:20px}
+  h2 .num{color:var(--dim);font-size:12px;margin-right:8px;letter-spacing:.16em}
+  h2 .verd{font-size:10px;letter-spacing:.18em;border:1px solid;border-radius:99px;
+    padding:2px 8px;margin-left:9px;vertical-align:2px;font-weight:400}
+  .vno{color:var(--no);border-color:var(--no)}
+  .vmod{color:var(--c2);border-color:var(--c2)}
+  .vyes{color:var(--c1);border-color:var(--c1)}
+  .lead{color:var(--dim);font-size:13px;margin:0 0 12px;max-width:82ch}
+  .card{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:8px;margin-bottom:16px}
+  .card.scroll{overflow-x:auto}
+  .card.scroll svg{min-width:900px}
+  svg{display:block;width:100%;height:auto;background:var(--cb);border-radius:8px}
+  .legend{font-size:12.5px;color:var(--dim);padding:8px 10px;line-height:1.8}
+  .legend b{color:#f0eee6}
+  code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
+  text{font-family:-apple-system,"Segoe UI",sans-serif}
+
+  .toc{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 26px}
+  .toc a{font-size:12px;color:var(--tx);text-decoration:none;border:1px solid var(--bd);
+    background:var(--pan);border-radius:99px;padding:4px 12px}
+  .toc a:hover{border-color:var(--acc);color:#f0eee6}
+
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}
+  .st{background:var(--pan);border:1px solid var(--bd);border-top-width:3px;border-radius:12px;padding:13px 15px}
+  .st .k{font-size:10.5px;letter-spacing:.2em;color:var(--dim);margin-bottom:5px}
+  .st h3{margin:0 0 5px;font-size:15px;font-weight:700;color:#f0eee6}
+  .st p{margin:0;font-size:12.5px;color:#a5a190;line-height:1.65}
+  .st a{color:var(--acc)}
+  @media(max-width:820px){.grid3{grid-template-columns:1fr}}
+
+  .tbl{overflow-x:auto;background:var(--pan);border:1px solid var(--bd);border-radius:12px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:820px}
+  th{text-align:left;padding:10px 14px;color:var(--dim);font-weight:600;font-size:11px;
+    letter-spacing:.14em;border-bottom:1px solid var(--bd);white-space:nowrap}
+  td{padding:9px 14px;border-bottom:1px solid #26241a;vertical-align:top;line-height:1.6}
+  tr:last-child td{border-bottom:none}
+  td.y{color:var(--c1)} td.n{color:var(--no)} td.q{color:var(--dim)} td.h{color:var(--c2)}
+  td b{color:#f0eee6;font-weight:600}
+  td .src{display:block;font:11px Menlo,monospace;color:#6b6a63;margin-top:3px;word-break:break-all}
+  tr.us td{background:#141a12}
+  tr.us td:first-child{box-shadow:inset 3px 0 0 var(--c1)}
+  tr.plan td{background:#1a1622}
+  tr.plan td:first-child{box-shadow:inset 3px 0 0 var(--c3)}
+
+  .note{border-left:3px solid var(--bd);padding:2px 0 2px 13px;color:var(--dim);
+    font-size:12.5px;margin:0 0 16px;max-width:86ch;line-height:1.8}
+  .note b{color:#f0eee6}
+  .note a{color:var(--acc)}
+  .note.k{border-left-color:var(--acc)}
+  .note.p{border-left-color:var(--c3)}
+  .note.no{border-left-color:var(--no)}
+  .note code{font-size:11.5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Adoption and Adaptation</h1>
+  <p class="sub">
+    <a href="comparison.html">Comparison of eight frameworks</a>identified several areas where other implementations do better.
+    This page answers the next question: how each practice fits our structure, or why it does not.
+    The authoritative text is in <a href="overview.html">overview.md</a>, and mechanism diagrams are in
+    <a href="architecture.html">Memory subsystem: mechanisms illustrated</a>.
+  </p>
+
+  <div class="grid3">
+    <div class="st" style="border-top-color:var(--c1)">
+      <div class="k">Layer 1</div>
+      <h3>Our current implementation</h3>
+      <p>Verified against the running code in <code>openprogram/state/memory/</code>, with line numbers recorded verbatim. Measured results include numbers.</p>
+    </div>
+    <div class="st" style="border-top-color:var(--c0)">
+      <div class="k">Layer 2</div>
+      <h3>Other implementations</h3>
+      <p>The original approach in the referenced implementation and why it takes that form. The form may not apply; the motivation usually does.</p>
+    </div>
+    <div class="st" style="border-top-color:var(--c3)">
+      <div class="k">Layer 3</div>
+      <h3>Our plan</h3>
+      <p>The adapted design, or the reason not to adopt it. Each item has a decision, not a “worth investigating” conclusion.</p>
+    </div>
+  </div>
+
+  <div class="toc">
+    <a href="#board">00 Four decisions</a>
+    <a href="#recall">01 Retrieval without an index</a>
+    <a href="#core">02 Trimming resident content</a>
+    <a href="#branch">03 Departed branches</a>
+    <a href="#cursor">04 Cursor fallback</a>
+    <a href="#land">05 Change locations</a>
+  </div>
+
+  <!-- ============================ 00 ============================ -->
+  <h2 id="board"><span class="num">00</span>Four decisions</h2>
+  <p class="lead">The conclusions come first. Three practices are adopted directly or after adaptation; one is rejected because our structure already handles its purpose elsewhere or places its cost on the wrong operation.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 322" role="img" aria-label="Decisions on four reference practices">
+      <text x="18" y="24" fill="#8a8675" font-size="11" letter-spacing="1.6">Reference practice</text>
+      <text x="470" y="24" fill="#8a8675" font-size="11" letter-spacing="1.6">Source</text>
+      <text x="620" y="24" fill="#8a8675" font-size="11" letter-spacing="1.6">Decision</text>
+      <text x="790" y="24" fill="#8a8675" font-size="11" letter-spacing="1.6">One-sentence reason</text>
+      <line x1="18" y1="34" x2="1122" y2="34" stroke="#2e2c20"/>
+
+      <!-- lane 1 -->
+      <rect x="18" y="46" width="1104" height="58" rx="9" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="46" width="3" height="58" fill="#e0445a"/>
+      <text x="36" y="70" fill="#f0eee6" font-size="13" font-weight="600">Index-free retrieval: file-header descriptions and model selection of five files</text>
+      <text x="36" y="90" fill="#8a8675" font-size="11.5">Replace the index with one extra small-model call per retrieval</text>
+      <text x="470" y="78" fill="#4f8ef7" font-size="12">claude-code</text>
+      <rect x="620" y="63" width="72" height="24" rx="12" fill="none" stroke="#e0445a"/>
+      <text x="656" y="79" fill="#e0445a" font-size="12" text-anchor="middle">Reject</text>
+      <text x="790" y="72" fill="#bdb9a6" font-size="11.5">That call provides semantic matching without an index; </text>
+      <text x="790" y="90" fill="#bdb9a6" font-size="11.5">we already have an index at finer-than-file granularity</text>
+
+      <!-- lane 2 -->
+      <rect x="18" y="112" width="1104" height="58" rx="9" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="112" width="3" height="58" fill="#d4843a"/>
+      <text x="36" y="136" fill="#f0eee6" font-size="13" font-weight="600">Trim resident content by ownership: remove only automatically promoted paragraphs, never handwritten ones</text>
+      <text x="36" y="156" fill="#8a8675" font-size="11.5">Return the removed-item list to the caller</text>
+      <text x="470" y="144" fill="#4f8ef7" font-size="12">openclaw</text>
+      <rect x="620" y="129" width="132" height="24" rx="12" fill="none" stroke="#5aad4e"/>
+      <text x="686" y="145" fill="#5aad4e" font-size="12" text-anchor="middle">Adopt with adaptation · implemented</text>
+      <text x="790" y="138" fill="#bdb9a6" font-size="11.5">Ownership matters because removal destroys the content. </text>
+      <text x="790" y="156" fill="#bdb9a6" font-size="11.5">Derive core.md; removal preserves source content</text>
+
+      <!-- lane 3 -->
+      <rect x="18" y="178" width="1104" height="58" rx="9" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="178" width="3" height="58" fill="#d4843a"/>
+      <text x="36" y="202" fill="#f0eee6" font-size="13" font-weight="600">Summarize a branch when leaving it and attach the summary to the tree</text>
+      <text x="36" y="222" fill="#8a8675" font-size="11.5">Preserve statements from abandoned branches</text>
+      <text x="470" y="210" fill="#4f8ef7" font-size="12">pi-mono</text>
+      <rect x="620" y="195" width="112" height="24" rx="12" fill="none" stroke="#d4843a"/>
+      <text x="676" y="211" fill="#d4843a" font-size="12" text-anchor="middle">Adopt with adaptation</text>
+      <text x="790" y="204" fill="#bdb9a6" font-size="11.5">Keep the objective, omit summary nodes. Enumerate all </text>
+      <text x="790" y="222" fill="#bdb9a6" font-size="11.5"> branches at session boundaries and stop at marked prefixes</text>
+
+      <!-- lane 4 -->
+      <rect x="18" y="244" width="1104" height="58" rx="9" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="244" width="3" height="58" fill="#5aad4e"/>
+      <text x="36" y="268" fill="#f0eee6" font-size="13" font-weight="600">If a cursor cannot be found, treat all messages as unwritten again</text>
+      <text x="36" y="288" fill="#8a8675" font-size="11.5">Returning zero messages stops extraction permanently; repeating work has bounded cost</text>
+      <text x="470" y="276" fill="#4f8ef7" font-size="12">claude-code</text>
+      <rect x="620" y="261" width="72" height="24" rx="12" fill="none" stroke="#5aad4e"/>
+      <text x="656" y="277" fill="#5aad4e" font-size="12" text-anchor="middle">Adopt</text>
+      <text x="790" y="270" fill="#bdb9a6" font-size="11.5">Migration already covers half; the other half remains: </text>
+      <text x="790" y="288" fill="#bdb9a6" font-size="11.5">an unreadable ledger currently raises and retries indefinitely</text>
+    </svg>
+  </div>
+
+  <!-- ============================ 01 ============================ -->
+  <h2 id="recall"><span class="num">01</span>Retrieval without an index<span class="verd vno">Reject</span></h2>
+  <p class="lead">claude-code puts a one-line description at the start of each memory file. Retrieval lists those descriptions and uses one inexpensive small-model call to choose five filenames, without building an index. Our retrieval runs BM25 every turn between the user message and model call.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 372" role="img" aria-label="Three-layer retrieval comparison">
+      <!-- headers -->
+      <rect x="14" y="14" width="356" height="24" rx="6" fill="#141a12"/>
+      <text x="26" y="31" fill="#5aad4e" font-size="11.5" letter-spacing="1.4">Layer 1 · our current implementation</text>
+      <rect x="392" y="14" width="356" height="24" rx="6" fill="#101722"/>
+      <text x="404" y="31" fill="#4f8ef7" font-size="11.5" letter-spacing="1.4">Layer 2 · claude-code</text>
+      <rect x="770" y="14" width="356" height="24" rx="6" fill="#211316"/>
+      <text x="782" y="31" fill="#e0445a" font-size="11.5" letter-spacing="1.4">Layer 3 · our plan</text>
+
+      <!-- col 1 -->
+      <rect x="14" y="52" width="356" height="34" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="30" y="74" fill="#f0eee6" font-size="12">A user sends a message</text>
+      <path d="M192 86 L192 104" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="14" y="106" width="356" height="52" rx="7" fill="#1d1c14" stroke="#5aad4e"/>
+      <text x="30" y="126" fill="#f0eee6" font-size="12">provider.search() once per turn</text>
+      <text x="30" y="145" fill="#8a8675" font-size="11">retrieval/inspect.search, top_k=5, internally capped at 10</text>
+      <path d="M192 158 L192 176" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="14" y="178" width="356" height="70" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="30" y="198" fill="#f0eee6" font-size="12">BM25 index, persist=False</text>
+      <text x="30" y="217" fill="#8a8675" font-size="11">Fully rehash and reparse topics/ every turn</text>
+      <text x="30" y="235" fill="#e0445a" font-size="11">Time is proportional to workspace size; see the chart below</text>
+      <path d="M192 248 L192 266" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="14" y="268" width="356" height="52" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="30" y="288" fill="#f0eee6" font-size="12">Five paragraphs with block IDs and footnotes</text>
+      <text x="30" y="307" fill="#8a8675" font-size="11">Insert directly into the prompt inside memory-context; zero model calls</text>
+      <rect x="14" y="330" width="356" height="30" rx="7" fill="#141a12" stroke="#2e2c20"/>
+      <text x="30" y="350" fill="#5aad4e" font-size="11.5">Extra model round trips in the same turn: 0</text>
+
+      <!-- col 2 -->
+      <rect x="392" y="52" width="356" height="34" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="408" y="74" fill="#f0eee6" font-size="12">One description at each memory file’s start</text>
+      <path d="M570 86 L570 104" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="392" y="106" width="356" height="52" rx="7" fill="#1d1c14" stroke="#4f8ef7"/>
+      <text x="408" y="126" fill="#f0eee6" font-size="12">List all descriptions</text>
+      <text x="408" y="145" fill="#8a8675" font-size="11">No inverted index, vectors, or cache to maintain</text>
+      <path d="M570 158 L570 176" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="392" y="178" width="356" height="70" rx="7" fill="#1d1c14" stroke="#4f8ef7"/>
+      <text x="408" y="198" fill="#f0eee6" font-size="12">One inexpensive small-model call</text>
+      <text x="408" y="217" fill="#8a8675" font-size="11">More selective than “choose if relevant”: omit uncertain matches, prefer empty results</text>
+      <text x="408" y="235" fill="#4f8ef7" font-size="11">findRelevantMemories.ts:18-24</text>
+      <path d="M570 248 L570 266" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a1)"/>
+      <rect x="392" y="268" width="356" height="52" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="408" y="288" fill="#f0eee6" font-size="12">Five filenames</text>
+      <text x="408" y="307" fill="#8a8675" font-size="11">The agent receives names and performs Read itself</text>
+      <rect x="392" y="330" width="356" height="30" rx="7" fill="#101722" stroke="#2e2c20"/>
+      <text x="408" y="350" fill="#4f8ef7" font-size="11.5">Extra model round trips in the same turn: 1, on the user’s wait path</text>
+
+      <!-- col 3 -->
+      <rect x="770" y="52" width="356" height="88" rx="7" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="786" y="74" fill="#e0445a" font-size="12" font-weight="600">Do not introduce this call</text>
+      <text x="786" y="94" fill="#bdb9a6" font-size="11">It provides semantic lookup without an index.</text>
+      <text x="786" y="112" fill="#bdb9a6" font-size="11">We already have an index: BM25 exists, and the semantic path has</text>
+      <text x="786" y="130" fill="#bdb9a6" font-size="11">retrieval/embedding.py; neither adds a model round trip.</text>
+
+      <rect x="770" y="150" width="356" height="88" rx="7" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="786" y="172" fill="#e0445a" font-size="12" font-weight="600">Do not introduce file descriptions</text>
+      <text x="786" y="192" fill="#bdb9a6" font-size="11">Our return unit is a paragraph, not a file. The filename</text>
+      <text x="786" y="210" fill="#bdb9a6" font-size="11">already describes it: one topic per file is the write contract;</text>
+      <text x="786" y="228" fill="#bdb9a6" font-size="11">topics/people/dave.md needs no repeated explanation.</text>
+
+      <rect x="770" y="248" width="356" height="112" rx="7" fill="#1d1c14" stroke="#5aad4e"/>
+      <text x="786" y="270" fill="#5aad4e" font-size="12" font-weight="600">Keep only one selection criterion</text>
+      <text x="786" y="290" fill="#bdb9a6" font-size="11">“Omit uncertain matches; prefer empty results.” Our current</text>
+      <text x="786" y="308" fill="#bdb9a6" font-size="11">cutoff drops results only when lexical&lt;=0 and adjustment&lt;=0.02,</text>
+      <text x="786" y="326" fill="#bdb9a6" font-size="11">effectively matching any shared word, so even an unrelated</text>
+      <text x="786" y="344" fill="#bdb9a6" font-size="11">turn gets five paragraphs. Add a score threshold.</text>
+
+      <defs>
+        <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#4a4736"/>
+        </marker>
+      </defs>
+    </svg>
+    <div class="legend">
+      <b>Measured</b>: In this workspace, inserting an introductory paragraph without footnotes into <code>topics/</code> is immediately rejected by strict parsing
+      (<code>TopicFormatError: memory block ID required</code>); blockquotes are also rejected, and only HTML comments pass.
+      A file-header description would therefore require changing our parser contract, while the path already provides that information.
+    </div>
+  </div>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 208" role="img" aria-label="Per-turn retrieval time grows with workspace size">
+      <text x="18" y="26" fill="#f0eee6" font-size="12.5" font-weight="600">Measured per-turn retrieval time (local machine, synthetic workspaces, mean of three runs)</text>
+      <text x="18" y="46" fill="#8a8675" font-size="11">This is where an extra model call would add latency. The current time budget is already tight because of local parsing, not ranking.</text>
+
+      <!-- axis -->
+      <line x1="196" y1="62" x2="196" y2="188" stroke="#2e2c20"/>
+      <line x1="196" y1="188" x2="1110" y2="188" stroke="#2e2c20"/>
+
+      <!-- bars: scale 1400ms -> 900px -->
+      <rect x="196" y="72" width="42" height="20" rx="3" fill="#5aad4e"/>
+      <text x="186" y="87" fill="#bdb9a6" font-size="11.5" text-anchor="end">0.50 MB cold</text>
+      <text x="248" y="87" fill="#5aad4e" font-size="11.5">66 ms</text>
+
+      <rect x="196" y="100" width="277" height="20" rx="3" fill="#d4843a"/>
+      <text x="186" y="115" fill="#bdb9a6" font-size="11.5" text-anchor="end">3.34 MB cold</text>
+      <text x="483" y="115" fill="#d4843a" font-size="11.5">431 ms</text>
+
+      <rect x="196" y="128" width="631" height="20" rx="3" fill="#e0445a"/>
+      <text x="186" y="143" fill="#bdb9a6" font-size="11.5" text-anchor="end">9.80 MB cold</text>
+      <text x="837" y="143" fill="#e0445a" font-size="11.5">1292 ms</text>
+
+      <rect x="196" y="156" width="479" height="20" rx="3" fill="#8a8675"/>
+      <text x="186" y="171" fill="#bdb9a6" font-size="11.5" text-anchor="end">9.80 MB warm cache</text>
+      <text x="685" y="171" fill="#8a8675" font-size="11.5">981 ms (persist=True; a cache hit still rebuilds the scoring corpus)</text>
+
+      <text x="196" y="202" fill="#6b6a63" font-size="10">0</text>
+      <text x="518" y="202" fill="#6b6a63" font-size="10">500 ms</text>
+      <text x="840" y="202" fill="#6b6a63" font-size="10">1000 ms</text>
+    </svg>
+    <div class="legend">
+      Synthetic workspace: 12 blocks per topic file and 60 messages per source archive, generated in the real format.
+      Time grows linearly with total workspace bytes because <code>inspect.search</code> uses <code>persist=False</code>,
+      fully rehashing and parsing both directory trees every turn.<b>Implication</b>: Per-turn retrieval’s time-budget problem is local
+      and can be fixed locally; an added model round trip can only be avoided.
+    </div>
+  </div>
+
+  <p class="note no"><b>Rejected because it duplicates an existing capability.</b>
+  claude-code has no index; this approach avoids building one and helps minimize its implementation size in the same comparison.
+  We have already paid the indexing cost. Adding another model round trip duplicates that capability at the cost of waiting every turn.
+  The first two retrieval-quality improvements are local: avoid full reparsing on every retrieval, and add a meaningful minimum result score.</p>
+
+  <!-- ============================ 02 ============================ -->
+  <h2 id="core"><span class="num">02</span>How to trim full resident content<span class="verd vyes">Adopt with adaptation · implemented</span></h2>
+  <p class="lead">When openclaw trims MEMORY.md, it removes only automatically promoted paragraphs, preserves handwritten content unchanged, and returns removed dates to the caller. Adopting this first requires answering: <b>what is core.md in the new structure</b>? Once answered, ownership itself need no longer be distinguished.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 300" role="img" aria-label="The core.md write path before the change">
+      <rect x="14" y="14" width="200" height="24" rx="6" fill="#141a12"/>
+      <text x="26" y="31" fill="#5aad4e" font-size="11.5" letter-spacing="1.4">Layer 1 · before our change</text>
+
+      <rect x="14" y="52" width="200" height="62" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="30" y="74" fill="#f0eee6" font-size="12">Writer agent</text>
+      <text x="30" y="93" fill="#8a8675" font-size="11">Prompt: update core.md</text>
+      <text x="30" y="108" fill="#8a8675" font-size="11">only for stable information</text>
+      <path d="M214 83 L252 83" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a2)"/>
+
+      <rect x="256" y="52" width="200" height="62" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="272" y="74" fill="#f0eee6" font-size="12">Append a paragraph to core.md</text>
+      <text x="272" y="93" fill="#8a8675" font-size="11">With a block ID and evidence footnotes</text>
+      <text x="272" y="108" fill="#8a8675" font-size="11">Same contract as topic files</text>
+      <path d="M456 83 L494 83" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a2)"/>
+
+      <rect x="498" y="52" width="220" height="62" rx="7" fill="#1d1c14" stroke="#d4843a"/>
+      <text x="514" y="74" fill="#d4843a" font-size="12">2000-token gate</text>
+      <text x="514" y="93" fill="#8a8675" font-size="11">block_views.py:27-36</text>
+      <text x="514" y="108" fill="#8a8675" font-size="11">Raise if exceeded</text>
+      <path d="M718 83 L756 83" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a2)"/>
+
+      <rect x="760" y="52" width="230" height="62" rx="7" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="776" y="74" fill="#e0445a" font-size="12">Reject the entire transaction</text>
+      <text x="776" y="93" fill="#8a8675" font-size="11">Roll back this turn’s topic-file changes too</text>
+      <text x="776" y="108" fill="#8a8675" font-size="11">The workspace remains byte-for-byte unchanged</text>
+
+      <path d="M875 114 L875 140" stroke="#e0445a" stroke-width="1.5" marker-end="url(#a3)"/>
+      <rect x="640" y="142" width="470" height="46" rx="7" fill="#211316" stroke="#e0445a"/>
+      <text x="656" y="163" fill="#f0eee6" font-size="12">Repair instruction: core.md is full. Leave it alone and put this in a Topic file.</text>
+      <text x="656" y="180" fill="#8a8675" font-size="11">agent.py:96-99</text>
+
+      <path d="M640 165 L560 165" stroke="#e0445a" stroke-width="1.5" marker-end="url(#a3)"/>
+      <rect x="180" y="142" width="376" height="46" rx="7" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="196" y="163" fill="#e0445a" font-size="12" font-weight="600">Every subsequent stable fact is directed elsewhere</text>
+      <text x="196" y="180" fill="#8a8675" font-size="11">core.md remains as it was when first filled and never changes</text>
+
+      <rect x="14" y="208" width="1096" height="76" rx="7" fill="#12110b" stroke="#2e2c20"/>
+      <text x="30" y="230" fill="#f0eee6" font-size="12" font-weight="600">Nothing maintains it</text>
+      <text x="30" y="250" fill="#bdb9a6" font-size="11.5">Nightly reorganization handles only topics/: organize_topics lists topics/**.md in its prompt, excluding core.md (management/api.py:83-94).</text>
+      <text x="30" y="269" fill="#bdb9a6" font-size="11.5">Before the refactor, a deterministic rebuild maintained it as a mirror of a designated page; the refactor removed that process without replacement.</text>
+    </svg>
+  </div>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 296" role="img" aria-label="openclaw trimming versus ours">
+      <rect x="14" y="14" width="540" height="24" rx="6" fill="#101722"/>
+      <text x="26" y="31" fill="#4f8ef7" font-size="11.5" letter-spacing="1.4">Layer 2 · openclaw: one file, removal destroys content</text>
+      <rect x="586" y="14" width="540" height="24" rx="6" fill="#1a1622"/>
+      <text x="598" y="31" fill="#9d6fe0" font-size="11.5" letter-spacing="1.4">Layer 3 · our current design: canonical content plus derived view, removal is non-destructive</text>
+
+      <!-- openclaw -->
+      <rect x="14" y="50" width="540" height="146" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="30" y="72" fill="#f0eee6" font-size="12">MEMORY.md is the entire store, with a 10000-character limit</text>
+      <rect x="30" y="84" width="240" height="22" rx="4" fill="#2a2a1c" stroke="#5aad4e"/>
+      <text x="42" y="99" fill="#5aad4e" font-size="11">Handwritten paragraphs · preserve all</text>
+      <rect x="30" y="110" width="240" height="22" rx="4" fill="#2a2118" stroke="#d4843a"/>
+      <text x="42" y="125" fill="#d4843a" font-size="11">Automatically promoted · remove oldest dates first</text>
+      <rect x="30" y="136" width="240" height="22" rx="4" fill="#211316" stroke="#e0445a"/>
+      <text x="42" y="151" fill="#e0445a" font-size="11">Removed content · no other copy remains</text>
+      <text x="30" y="180" fill="#8a8675" font-size="11">Because removal destroys content, ownership must be distinguished first. Returning removed dates supplies an audit record.</text>
+      <path d="M290 95 L340 95" stroke="#4a4736" stroke-width="1.2" marker-end="url(#a2)"/>
+      <path d="M290 121 L340 121" stroke="#4a4736" stroke-width="1.2" marker-end="url(#a2)"/>
+      <rect x="344" y="82" width="192" height="52" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="360" y="103" fill="#bdb9a6" font-size="11">memory-budget.ts:25,100-164</text>
+      <text x="360" y="121" fill="#bdb9a6" font-size="11">By ownership, not time</text>
+
+      <!-- ours -->
+      <rect x="586" y="50" width="250" height="146" rx="8" fill="#1d1c14" stroke="#5aad4e"/>
+      <text x="602" y="72" fill="#5aad4e" font-size="12" font-weight="600">topics/core.md canonical source</text>
+      <text x="602" y="90" fill="#8a8675" font-size="11">A topic file using the same contract</text>
+      <text x="602" y="106" fill="#8a8675" font-size="11">as other topic files, with no limit</text>
+      <rect x="602" y="116" width="218" height="18" rx="3" fill="#2a2a1c"/>
+      <text x="612" y="129" fill="#bdb9a6" font-size="10.5">Paragraph ^a1 · resident</text>
+      <rect x="602" y="138" width="218" height="18" rx="3" fill="#2a2a1c"/>
+      <text x="612" y="151" fill="#bdb9a6" font-size="10.5">Paragraph ^b2 · resident</text>
+      <rect x="602" y="160" width="218" height="18" rx="3" fill="#241f14"/>
+      <text x="612" y="173" fill="#8a8675" font-size="10.5">Paragraph ^c3 · exceeds budget, remains here</text>
+
+      <path d="M840 118 L878 118" stroke="#9d6fe0" stroke-width="1.5" marker-end="url(#a4)"/>
+      <text x="842" y="110" fill="#9d6fe0" font-size="10">Render</text>
+
+      <rect x="882" y="50" width="244" height="146" rx="8" fill="#1d1c14" stroke="#9d6fe0"/>
+      <text x="898" y="72" fill="#9d6fe0" font-size="12" font-weight="600">core.md derived view</text>
+      <text x="898" y="90" fill="#8a8675" font-size="11">Rebuild after each successful write alongside</text>
+      <text x="898" y="106" fill="#8a8675" font-size="11">the timeline/ views</text>
+      <rect x="898" y="116" width="212" height="18" rx="3" fill="#2a2a1c"/>
+      <text x="908" y="129" fill="#bdb9a6" font-size="10.5">Paragraph ^a1</text>
+      <rect x="898" y="138" width="212" height="18" rx="3" fill="#2a2a1c"/>
+      <text x="908" y="151" fill="#bdb9a6" font-size="10.5">Paragraph ^b2</text>
+      <text x="898" y="176" fill="#5aad4e" font-size="10.5">2000-token budget; overflow allowed</text>
+
+      <rect x="586" y="206" width="540" height="76" rx="8" fill="#12110b" stroke="#9d6fe0"/>
+      <text x="602" y="228" fill="#f0eee6" font-size="12" font-weight="600">Ownership is no longer an issue</text>
+      <text x="602" y="248" fill="#bdb9a6" font-size="11.5">Excluded text stays canonical and retrievable; footnotes still cite original statements.</text>
+      <text x="602" y="267" fill="#bdb9a6" font-size="11.5">Since removal does not destroy content, deciding who wrote a paragraph is unnecessary.</text>
+
+      <rect x="14" y="206" width="540" height="76" rx="8" fill="#12110b" stroke="#2e2c20"/>
+      <text x="30" y="228" fill="#f0eee6" font-size="12" font-weight="600">Put a paragraph first to keep it resident</text>
+      <text x="30" y="248" fill="#bdb9a6" font-size="11.5">Render in canonical file order; overflow comes from the end. Manual source edits and nightly ordering changes</text>
+      <text x="30" y="267" fill="#bdb9a6" font-size="11.5">are existing actions; resident content needs no new marker.</text>
+
+      <defs>
+        <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#4a4736"/>
+        </marker>
+        <marker id="a3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#e0445a"/>
+        </marker>
+        <marker id="a4" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#9d6fe0"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <p class="note k"><b>Answer to the prerequisite question</b>: core.md is a derived view, not independent content.
+  It renders the single topic file <code>topics/core.md</code>, in the same category as <code>timeline/</code>,
+  <code>recent_events.jsonl</code>, <code>relations.json</code>; manual edits to the view have no effect,
+  so edit the canonical source. The writer prompt changes from “update core.md” to “put stable facts that should always be visible in
+  <code>topics/core.md</code>”, leaving only one file type for the writer to understand. The old statement “core.md mirrors a designated page” remains true;
+  the designated page is now a topic file rather than a wiki page.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 210" role="img" aria-label="The block-ID contract determines what can be trimmed">
+      <text x="18" y="26" fill="#f0eee6" font-size="12.5" font-weight="600">Why a derived view is required before trimming</text>
+      <text x="18" y="46" fill="#8a8675" font-size="11">The workspace enforces a hard contract: every block ID present before editing must remain findable afterward, or the entire transaction is rejected.</text>
+      <text x="18" y="63" fill="#6b6a63" font-size="10.5">workspace.py:147-162 includes core.md block IDs in the baseline set; topic_normalization.py:296-322 compares them and rejects with “block ID must not be removed”.</text>
+
+      <!-- now -->
+      <rect x="18" y="82" width="540" height="110" rx="8" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="34" y="104" fill="#e0445a" font-size="12" font-weight="600">Before derivation: core.md may hold unique IDs</text>
+      <rect x="34" y="116" width="230" height="26" rx="4" fill="#12110b" stroke="#2e2c20"/>
+      <text x="46" y="133" fill="#bdb9a6" font-size="11">core.md paragraph ^c3</text>
+      <rect x="300" y="116" width="240" height="26" rx="4" fill="#12110b" stroke="#2e2c20"/>
+      <text x="312" y="133" fill="#6b6a63" font-size="11">No identical ID exists in topics/</text>
+      <path d="M264 129 L296 129" stroke="#e0445a" stroke-width="1.2" stroke-dasharray="3 3"/>
+      <text x="34" y="164" fill="#bdb9a6" font-size="11">Trimming it removes ^c3 from the entire workspace, violating “block ID must not be removed”;</text>
+      <text x="34" y="182" fill="#bdb9a6" font-size="11">the transaction and all other changes are rejected. Trimming is invalid in this structure.</text>
+
+      <!-- planned -->
+      <rect x="586" y="82" width="540" height="110" rx="8" fill="#1d1c14" stroke="#5aad4e"/>
+      <text x="602" y="104" fill="#5aad4e" font-size="12" font-weight="600">After derivation: core.md IDs are always a subset</text>
+      <rect x="602" y="116" width="230" height="26" rx="4" fill="#12110b" stroke="#2e2c20"/>
+      <text x="614" y="133" fill="#bdb9a6" font-size="11">core.md paragraph ^c3</text>
+      <rect x="868" y="116" width="240" height="26" rx="4" fill="#12110b" stroke="#5aad4e"/>
+      <text x="880" y="133" fill="#5aad4e" font-size="11">^c3 in topics/core.md</text>
+      <path d="M832 129 L864 129" stroke="#5aad4e" stroke-width="1.2" marker-end="url(#a5)"/>
+      <text x="602" y="164" fill="#bdb9a6" font-size="11">Remove rendered ^c3 while its canonical ID remains; the contract is satisfied.</text>
+      <text x="602" y="182" fill="#bdb9a6" font-size="11">Remove two core.md special cases: baseline collection and validation.</text>
+
+      <defs>
+        <marker id="a5" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#5aad4e"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <tr>
+        <th>Dimension</th><th>Before our change</th><th>openclaw</th><th>Our current implementation</th>
+      </tr>
+      <tr>
+        <td><b>Who writes</b></td>
+        <td>The writer agent edits core.md directly</td>
+        <td>Automatic promotion and manual edits share one file</td>
+        <td class="h">Nobody writes it. Write <code>topics/core.md</code>; Runtime renders</td>
+      </tr>
+      <tr>
+        <td><b>Limit</b></td>
+        <td>2000 tokens; exceeding it raises<span class="src">management/config.py:7</span></td>
+        <td>10000 characters</td>
+        <td class="h">2000 tokens becomes a rendering budget, not an exception</td>
+      </tr>
+      <tr>
+        <td><b>When full</b></td>
+        <td class="n">Reject the transaction; the repair instruction directs the writer elsewhere, permanently freezing core.md</td>
+        <td>Remove automatic paragraphs, preserve handwritten ones</td>
+        <td class="h">Render in canonical file order up to budget; overflow remains in the source</td>
+      </tr>
+      <tr>
+        <td><b>Does removal destroy content</b></td>
+        <td class="q">Not applicable; nothing was ever removed</td>
+        <td class="n">Yes, so ownership must be distinguished first</td>
+        <td class="y">No; the canonical source is complete and remains retrievable</td>
+      </tr>
+      <tr>
+        <td><b>When it runs</b></td>
+        <td class="n">Never. Nightly reorganization lists only topics/</td>
+        <td>Trim to budget during writes</td>
+        <td class="h">Rebuild with other derived views after each write transaction installs successfully</td>
+      </tr>
+      <tr>
+        <td><b>What it reports</b></td>
+        <td class="n">reorganize returns <code>{"status":"ok","topics":N}</code>, with no place for core</td>
+        <td class="y">Return the list of removed dates</td>
+        <td class="y">Return rendered token count and excluded block IDs</td>
+      </tr>
+    </table>
+  </div>
+
+  <p class="note"><b>Also report whether anything actually changed</b>. Nightly reorganization depends on model judgment,
+  whose failure mode is silently doing nothing while satisfying its own criterion:
+  under the same reorganization prompt, a 520,000-character single-topic conversation produced a 34.4k-character file that was never split despite repeated reorganization,
+  because the criterion was “covers two topics,” not size. Therefore <code>reorganize</code> must also return the files actually changed in the run;
+  an empty list visibly means “nothing changed.” Revising the criterion is separate, but without visibility we cannot even assess whether revision is needed.</p>
+
+  <!-- ============================ 03 ============================ -->
+  <h2 id="branch"><span class="num">03</span>Departed branches<span class="verd vmod">Adopt with adaptation · implemented</span></h2>
+  <p class="lead">pi-mono summarizes a branch when the user leaves it and attaches the summary to the tree. This addresses the gap acknowledged in overview.md: both write paths use only the branch beneath head, and nobody revisits branches abandoned midway. Keep the objective, omit summary nodes.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 380" role="img" aria-label="Three layers of branch writing">
+      <rect x="14" y="14" width="356" height="24" rx="6" fill="#141a12"/>
+      <text x="26" y="31" fill="#5aad4e" font-size="11.5" letter-spacing="1.4">Layer 1 · our current implementation</text>
+      <rect x="392" y="14" width="356" height="24" rx="6" fill="#101722"/>
+      <text x="404" y="31" fill="#4f8ef7" font-size="11.5" letter-spacing="1.4">Layer 2 · pi-mono</text>
+      <rect x="770" y="14" width="356" height="24" rx="6" fill="#1a1622"/>
+      <text x="782" y="31" fill="#9d6fe0" font-size="11.5" letter-spacing="1.4">Layer 3 · our plan</text>
+
+      <!-- col1 dag -->
+      <rect x="14" y="50" width="356" height="230" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+      <circle cx="80" cy="86" r="9" fill="#5aad4e"/><text x="98" y="90" fill="#bdb9a6" font-size="11">Start</text>
+      <line x1="80" y1="95" x2="80" y2="121" stroke="#4a4736" stroke-width="1.5"/>
+      <circle cx="80" cy="130" r="9" fill="#5aad4e"/><text x="98" y="134" fill="#bdb9a6" font-size="11">Shared prefix</text>
+      <line x1="80" y1="139" x2="80" y2="165" stroke="#4a4736" stroke-width="1.5"/>
+      <line x1="80" y1="139" x2="200" y2="165" stroke="#4a4736" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <circle cx="80" cy="174" r="9" fill="#5aad4e"/>
+      <line x1="80" y1="183" x2="80" y2="209" stroke="#4a4736" stroke-width="1.5"/>
+      <circle cx="80" cy="218" r="10" fill="#5aad4e" stroke="#f0eee6" stroke-width="2"/>
+      <text x="98" y="222" fill="#f0eee6" font-size="11">head, will be written</text>
+      <circle cx="208" cy="174" r="9" fill="#3a382a"/>
+      <line x1="208" y1="183" x2="208" y2="209" stroke="#3a382a" stroke-width="1.5"/>
+      <circle cx="208" cy="218" r="9" fill="#3a382a"/>
+      <text x="226" y="222" fill="#6b6a63" font-size="11">Never revisited</text>
+      <text x="30" y="256" fill="#8a8675" font-size="11">Both write paths call get_branch(session_id),</text>
+      <text x="30" y="272" fill="#8a8675" font-size="11">receiving only the head branch; other branches are unseen.</text>
+
+      <!-- col2 -->
+      <rect x="392" y="50" width="356" height="230" rx="8" fill="#1d1c14" stroke="#4f8ef7"/>
+      <circle cx="458" cy="86" r="9" fill="#4f8ef7"/>
+      <line x1="458" y1="95" x2="458" y2="121" stroke="#4a4736" stroke-width="1.5"/>
+      <circle cx="458" cy="130" r="9" fill="#4f8ef7"/>
+      <line x1="458" y1="139" x2="458" y2="165" stroke="#4a4736" stroke-width="1.5"/>
+      <line x1="458" y1="139" x2="578" y2="165" stroke="#4a4736" stroke-width="1.5" stroke-dasharray="4 3"/>
+      <circle cx="458" cy="174" r="10" fill="#4f8ef7" stroke="#f0eee6" stroke-width="2"/>
+      <circle cx="586" cy="174" r="9" fill="#3a382a"/>
+      <line x1="586" y1="183" x2="586" y2="200" stroke="#3a382a" stroke-width="1.5"/>
+      <rect x="536" y="200" width="100" height="30" rx="6" fill="#101722" stroke="#4f8ef7"/>
+      <text x="586" y="220" fill="#4f8ef7" font-size="11" text-anchor="middle">Branch summary</text>
+      <text x="408" y="256" fill="#8a8675" font-size="11">It has no long-term memory layer, so the summary is the only destination for abandoned statements.</text>
+      <text x="408" y="272" fill="#8a8675" font-size="11">branch-summarization.ts:200-262</text>
+
+      <!-- col3 -->
+      <rect x="770" y="50" width="356" height="230" rx="8" fill="#1d1c14" stroke="#9d6fe0"/>
+      <text x="786" y="74" fill="#9d6fe0" font-size="12" font-weight="600">Enumerate all branches at session boundaries</text>
+      <rect x="786" y="86" width="324" height="26" rx="5" fill="#12110b" stroke="#2e2c20"/>
+      <text x="798" y="103" fill="#bdb9a6" font-size="11">list_branches(session_id) returns every branch tip</text>
+      <rect x="786" y="118" width="324" height="26" rx="5" fill="#12110b" stroke="#2e2c20"/>
+      <text x="798" y="135" fill="#bdb9a6" font-size="11">Call get_branch(session_id, tip) for each tip</text>
+      <rect x="786" y="150" width="324" height="26" rx="5" fill="#12110b" stroke="#5aad4e"/>
+      <text x="798" y="167" fill="#5aad4e" font-size="11">Written-message IDs exclude shared prefixes</text>
+      <rect x="786" y="182" width="324" height="26" rx="5" fill="#12110b" stroke="#5aad4e"/>
+      <text x="798" y="199" fill="#5aad4e" font-size="11">get_branch already filters rewound nodes</text>
+      <rect x="786" y="214" width="324" height="26" rx="5" fill="#12110b" stroke="#d4843a"/>
+      <text x="798" y="231" fill="#d4843a" font-size="11">Non-head: batch threshold; head: forced writes</text>
+      <text x="786" y="262" fill="#8a8675" font-size="11">No new node types, events, or model calls.</text>
+
+      <rect x="14" y="292" width="1112" height="76" rx="8" fill="#12110b" stroke="#2e2c20"/>
+      <text x="30" y="314" fill="#f0eee6" font-size="12" font-weight="600">We need not infer deliberate abandonment; session storage records it</text>
+      <text x="30" y="334" fill="#bdb9a6" font-size="11.5">When the user rewinds, _rewind.py marks the entire segment rewound. Nodes remain in the graph but leave the conversation path; get_branch filters them directly (session_store.py:1030).</text>
+      <text x="30" y="353" fill="#bdb9a6" font-size="11.5">Retry sibling branches have only one or two turns and naturally fall below batch size. Branches with substantial work before returning meet the threshold, exactly matching the gap.</text>
+    </svg>
+  </div>
+
+  <p class="note p"><b>Why not summary nodes.</b>
+  pi-mono’s session JSONL tree serves replay and branching; across sessions, only AGENTS.md remains, so abandoned branches truly disappear without summaries.
+  We have a full topic-organized memory layer. Facts stated on a branch belong in <code>topics/people/dave.md</code>,
+  not in a summary node attached to the DAG, where they have no footnotes or block IDs and cannot be retrieved.
+  We already have a DAG-attached summary type (the compaction summary in <code>context/summary</code>), serving the context window rather than memory.
+  Another type would add another location to search for a statement.</p>
+
+  <p class="note no"><b>Furthermore, leaving a branch is not currently an observable event in our system.</b>
+  The event registry has no head-movement or branch-switch event. Head writes are spread across five locations
+  (chain advancement in <code>set_head</code>, <code>append_message</code>, direct index modification in <code>SessionNodeWriter.append</code>,
+  <code>update_session</code>, <code>_rewind.py</code>); their only common call is
+  <code>SessionMemoryIndex.set_head</code>, which discards the old value.
+  Copying pi-mono would require a new event in this path and retention of the previous head,
+  solely to trigger work that is equally useful at session end. The session-boundary entry already exists:
+  <code>session_watcher.py:103</code> currently queries only the head branch.</p>
+
+  <p class="note"><b>One criterion must change together.</b>
+  <code>should_incremental_write</code> currently has two conditions: pending tokens exceed the threshold, or something is pending and the last message is over an hour old.
+  An abandoned branch’s last message is necessarily old, so the second condition would also write one-turn retry siblings.
+  Non-head branches must therefore use only the first condition and disable <code>idle_after</code>. This is the only additional decision this design needs.</p>
+
+  <!-- ============================ 04 ============================ -->
+  <h2 id="cursor"><span class="num">04</span>Cursor fallback<span class="verd vyes">Adopt · implemented</span></h2>
+  <p class="lead">When claude-code cannot find the cursor’s message, it treats all messages as unwritten again. Its comment explains that returning zero messages would stop extraction for the remainder of the session. Seeding from source archives in our write-cursor design makes the same tradeoff, but covers only migration; a similar ordinary-runtime failure remains.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 320" role="img" aria-label="Two paths when a cursor fails">
+      <rect x="14" y="14" width="356" height="24" rx="6" fill="#101722"/>
+      <text x="26" y="31" fill="#4f8ef7" font-size="11.5" letter-spacing="1.4">Layer 2 · the path claude-code handles</text>
+      <rect x="392" y="14" width="356" height="24" rx="6" fill="#141a12"/>
+      <text x="404" y="31" fill="#5aad4e" font-size="11.5" letter-spacing="1.4">Layer 1 · our analogous current path</text>
+      <rect x="770" y="14" width="356" height="24" rx="6" fill="#1a1622"/>
+      <text x="782" y="31" fill="#9d6fe0" font-size="11.5" letter-spacing="1.4">Layer 3 · one rule</text>
+
+      <rect x="14" y="50" width="356" height="42" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="30" y="76" fill="#f0eee6" font-size="12">The cursor is a message UUID; scan backward</text>
+      <path d="M192 92 L192 108" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a6)"/>
+      <rect x="14" y="110" width="356" height="42" rx="7" fill="#1d1c14" stroke="#d4843a"/>
+      <text x="30" y="136" fill="#d4843a" font-size="12">That message is no longer found in the session</text>
+      <path d="M192 152 L192 168" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a6)"/>
+      <rect x="14" y="170" width="356" height="60" rx="7" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="30" y="192" fill="#e0445a" font-size="12">Naive result: zero messages</text>
+      <text x="30" y="212" fill="#8a8675" font-size="11">No further extraction for the rest of the session</text>
+      <path d="M192 230 L192 246" stroke="#5aad4e" stroke-width="1.5" marker-end="url(#a5)"/>
+      <rect x="14" y="248" width="356" height="56" rx="7" fill="#141a12" stroke="#5aad4e"/>
+      <text x="30" y="270" fill="#5aad4e" font-size="12">Its choice: treat everything as unwritten</text>
+      <text x="30" y="290" fill="#8a8675" font-size="11">Repeated writes: bounded cost; silent stops: unbounded</text>
+
+      <rect x="392" y="50" width="356" height="42" rx="7" fill="#1d1c14" stroke="#2e2c20"/>
+      <text x="408" y="76" fill="#f0eee6" font-size="12">Cursor state is in runtime.json</text>
+      <path d="M570 92 L570 108" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a6)"/>
+      <rect x="392" y="110" width="356" height="42" rx="7" fill="#1d1c14" stroke="#d4843a"/>
+      <text x="408" y="136" fill="#d4843a" font-size="12">The file is unreadable or invalid JSON</text>
+      <path d="M570 152 L570 168" stroke="#4a4736" stroke-width="1.5" marker-end="url(#a6)"/>
+      <rect x="392" y="170" width="356" height="60" rx="7" fill="#1d1c14" stroke="#e0445a"/>
+      <text x="408" y="192" fill="#e0445a" font-size="12">RuntimeStateStore.load raises directly</text>
+      <text x="408" y="212" fill="#8a8675" font-size="11">state.py:51-55: json.loads has no fallback</text>
+      <path d="M570 230 L570 246" stroke="#e0445a" stroke-width="1.5" marker-end="url(#a3)"/>
+      <rect x="392" y="248" width="356" height="56" rx="7" fill="#211316" stroke="#e0445a"/>
+      <text x="408" y="270" fill="#e0445a" font-size="12">Becomes WriteFailure(retryable=True)</text>
+      <text x="408" y="290" fill="#8a8675" font-size="11">The watchdog never marks the session, retries every turn, and never writes successfully</text>
+
+      <rect x="770" y="50" width="356" height="140" rx="8" fill="#1d1c14" stroke="#9d6fe0"/>
+      <text x="786" y="74" fill="#9d6fe0" font-size="12" font-weight="600">Unreadable cursor → empty set</text>
+      <text x="786" y="96" fill="#bdb9a6" font-size="11.5">It is not an exception. An unreadable cursor means</text>
+      <text x="786" y="114" fill="#bdb9a6" font-size="11.5">“I do not know what was written”; in a set-based model,</text>
+      <text x="786" y="132" fill="#bdb9a6" font-size="11.5">the only safe interpretation is “nothing was written.”</text>
+      <text x="786" y="156" fill="#8a8675" font-size="11">Rewriting a batch has bounded cost, and transactions already</text>
+      <text x="786" y="174" fill="#8a8675" font-size="11">merge paragraphs that state the same fact.</text>
+
+      <rect x="770" y="200" width="356" height="104" rx="8" fill="#12110b" stroke="#2e2c20"/>
+      <text x="786" y="222" fill="#f0eee6" font-size="12" font-weight="600">The structure already covers the other half</text>
+      <text x="786" y="242" fill="#bdb9a6" font-size="11">The cursor file is inside the workspace, not alongside it:</text>
+      <text x="786" y="260" fill="#bdb9a6" font-size="11">memory/.scriptorium/cursors/. Backups, Git commits,</text>
+      <text x="786" y="278" fill="#bdb9a6" font-size="11">and rollbacks include it, preventing content from reverting</text>
+      <text x="786" y="296" fill="#bdb9a6" font-size="11">a week while a current cursor marks that whole week written.</text>
+
+      <defs>
+        <marker id="a6" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto">
+          <path d="M0 0 L10 5 L0 10 z" fill="#4a4736"/>
+        </marker>
+      </defs>
+    </svg>
+  </div>
+
+  <p class="note"><b>How this differs from migration.</b>
+  “Migrating off the position cursor” in <a href="written-marker.html">written-marker.md</a> addresses a one-time event: the old state cannot reconstruct the ledger, so an old session is offered whole once,
+  preferring a repeated batch to dropping everything. The tradeoff is the same, but occurs only during upgrade.
+  Here, the ledger itself fails during ordinary operation, independent of migration. Both paths are needed and follow the same principle.</p>
+
+  <p class="note k"><b>Where this applies after the ledger changes shape.</b>
+  The final write-cursor design uses <b>“written” markers on nodes</b>, rather than a separate memory-owned ID set,
+  so there is no cursor file to become unreadable. The principle still applies to a different object:
+  unreadable accounting means “nothing written,” rather than an exception that prevents the session from ever writing.
+  For node markers, a missing marker causes repeated work; additionally, <code>RuntimeStateStore.load</code>
+  encountering an unparseable <code>runtime.json</code> should return empty counters rather than raise.
+  The two approaches are compared side by side in layer 3 of <a href="written-marker.html">written-marker.md</a>.</p>
+
+  <!-- ============================ 05 ============================ -->
+  <h2 id="land"><span class="num">05</span>Change locations</h2>
+  <p class="lead">These are the file locations for the three adopted practices. The rejected practice changes no files.</p>
+
+  <div class="card scroll">
+    <svg viewBox="0 0 1140 440" role="img" aria-label="Change locations for three designs">
+      <text x="18" y="26" fill="#8a8675" font-size="11" letter-spacing="1.6">Design</text>
+      <text x="250" y="26" fill="#8a8675" font-size="11" letter-spacing="1.6">Location</text>
+      <text x="700" y="26" fill="#8a8675" font-size="11" letter-spacing="1.6">What the location currently does</text>
+      <line x1="18" y1="36" x2="1122" y2="36" stroke="#2e2c20"/>
+
+      <rect x="18" y="46" width="1104" height="222" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="46" width="3" height="222" fill="#d4843a"/>
+      <text x="36" y="70" fill="#5aad4e" font-size="12.5" font-weight="600">Derived core.md · implemented</text>
+      <text x="36" y="90" fill="#8a8675" font-size="11">Section 02</text>
+      <text x="36" y="118" fill="#8a8675" font-size="10.5">The first five rows change behavior;</text>
+      <text x="36" y="134" fill="#8a8675" font-size="10.5">the next five remove special cases</text>
+      <text x="36" y="150" fill="#8a8675" font-size="10.5">that are unnecessary once core.md</text>
+      <text x="36" y="166" fill="#8a8675" font-size="10.5">is no longer canonical content</text>
+
+      <text x="250" y="70" fill="#d4843a" font-size="11.5">runtime/derived_views.py</text>
+      <text x="700" y="70" fill="#bdb9a6" font-size="11.5">Rebuild timeline, recent_events, and relations; add core.md</text>
+      <text x="250" y="90" fill="#d4843a" font-size="11.5">management/block_views.py:24-36</text>
+      <text x="700" y="90" fill="#bdb9a6" font-size="11.5">_synchronize: budget 2000 tokens; report excluded block IDs</text>
+      <text x="250" y="110" fill="#d4843a" font-size="11.5">management/agent.py:96-99</text>
+      <text x="700" y="110" fill="#bdb9a6" font-size="11.5">Remove the repair instruction “core.md is full; leave it alone”</text>
+      <text x="250" y="130" fill="#d4843a" font-size="11.5">prompts/write.py:15</text>
+      <text x="700" y="130" fill="#bdb9a6" font-size="11.5">Change direct writer edits of core.md to topics/core.md</text>
+      <text x="250" y="150" fill="#d4843a" font-size="11.5">prompts/system.py:7,15</text>
+      <text x="700" y="150" fill="#bdb9a6" font-size="11.5">The system prompt repeats the same instruction twice; change both</text>
+
+      <text x="250" y="176" fill="#8a8675" font-size="11.5">management/transaction.py:27,169-190</text>
+      <text x="700" y="176" fill="#bdb9a6" font-size="11.5">WRITABLE_FILES: derived core.md becomes read-only</text>
+      <text x="250" y="196" fill="#8a8675" font-size="11.5">management/patching.py:1-5</text>
+      <text x="700" y="196" fill="#bdb9a6" font-size="11.5">The patch writable surface likewise lists topics/** and core.md</text>
+      <text x="250" y="216" fill="#8a8675" font-size="11.5">Four baseline locations in workspace.py and transaction.py</text>
+      <text x="700" y="216" fill="#bdb9a6" font-size="11.5">All four include core.md block IDs in validation baselines; remove them</text>
+      <text x="250" y="236" fill="#8a8675" font-size="11.5">topic_normalization.py:100,222,250,311</text>
+      <text x="700" y="236" fill="#bdb9a6" font-size="11.5">Block-ID allocation appends core.md to the file list as a fifth topic file</text>
+      <text x="250" y="256" fill="#8a8675" font-size="11.5">store.py:95</text>
+      <text x="700" y="256" fill="#bdb9a6" font-size="11.5">ensure() initializes an empty # Core; rendering owns it after derivation</text>
+
+      <rect x="18" y="278" width="1104" height="90" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="278" width="3" height="90" fill="#9d6fe0"/>
+      <text x="36" y="302" fill="#f0eee6" font-size="12.5" font-weight="600">Boundary: write all branches</text>
+      <text x="36" y="322" fill="#8a8675" font-size="11">Section 03</text>
+
+      <text x="250" y="302" fill="#9d6fe0" font-size="11.5">memory/writing.py:231-291</text>
+      <text x="700" y="302" fill="#bdb9a6" font-size="11.5">_branch takes only head; forced mode loops until no pending content remains</text>
+      <text x="250" y="322" fill="#9d6fe0" font-size="11.5">runtime/state.py:111-121</text>
+      <text x="700" y="322" fill="#bdb9a6" font-size="11.5">The idle branch of should_incremental_write must be disableable</text>
+      <text x="250" y="342" fill="#9d6fe0" font-size="11.5">memory/session_watcher.py:103</text>
+      <text x="700" y="342" fill="#bdb9a6" font-size="11.5">Idle entry: db.get_branch(sid) returns only head</text>
+
+      <rect x="18" y="378" width="1104" height="40" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+      <rect x="18" y="378" width="3" height="40" fill="#5aad4e"/>
+      <text x="36" y="403" fill="#f0eee6" font-size="12.5" font-weight="600">Unreadable cursor → empty set</text>
+      <text x="250" y="403" fill="#5aad4e" font-size="11.5">runtime/state.py:51-55</text>
+      <text x="700" y="403" fill="#bdb9a6" font-size="11.5">json.loads in load has no fallback and raises on unreadable state</text>
+    </svg>
+  </div>
+
+  <p class="note"><b>Node markers have replaced positional cursors.</b>
+  Implementation resides in SessionDB node metadata, <code>runtime/online.py</code>and<code>writing.py</code> at the
+  <code>_records</code> boundary. Legacy migration restores verifiable nodes from strictly parsed Source prefixes.
+  Session boundaries now process the current head first, then enumerate other live branches; node markers deduplicate shared prefixes.
+  For the full definition, see <a href="written-marker.html">written-marker.md</a>. The derived-view change replaces _synchronize’s exception above 2000 tokens with a rendering budget and reports excluded block IDs. WRITABLE_FILES previously listed core.md as manually writable; the derived file is read-only.</p>
+
+  <p class="note k"><b>Implementation status (2026-08-11)</b>: Section 01 rejects index-free model selection based on measured latency;
+  section 02 implements the canonical <code>topics/core.md</code> source and deterministic <code>core.md</code> derived view; section 03 implements live-branch enumeration
+  at session boundaries; section 04 recovers corrupt state as empty state together with strict legacy migration and node markers.
+  The current implementation still uses post-turn thresholds and an idle watcher, with no direct writer notification from head-change events.</p>
+
+</div>
+</body>
+</html>

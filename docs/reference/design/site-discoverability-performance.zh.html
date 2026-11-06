@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>站点可发现性与性能设计 · OpenProgram</title>
+<style>
+body{max-width:980px;margin:40px auto;padding:0 24px;font:16px/1.6 system-ui,sans-serif;color:#20242a}h1,h2{line-height:1.2}code{background:#f2f4f6;padding:.1em .3em}table{border-collapse:collapse;width:100%}th,td{border:1px solid #ccd2d8;padding:8px;text-align:left;vertical-align:top}th{background:#f4f6f8}.pass{color:#166534}.gap{color:#9a3412}
+</style>
+</head>
+<body>
+<h1>站点可发现性与性能设计</h1>
+<p>本设计覆盖公开首页和双语文档元数据，在不改变产品定位、托管方式、应用行为或文档内容的前提下，改善页面体验和语言版本发现。</p>
+
+<h2>当前实现与已验证缺口</h2>
+<p>站点是由 GitHub Pages 发布的静态 HTML。首页已有规范 URL、说明、Open Graph 和 Twitter 卡片、 <code>SoftwareSourceCode</code> JSON-LD、robots.txt、sitemap.xml 和 llms.txt。文档页已有绝对规范链接及配对的中英文文件。</p>
+<p>历史移动端 Lighthouse 对 <code>https://openprogram.io/</code> 的 2026-08-13 测量得分为性能 92、无障碍 95、最佳实践 100、SEO 100。其图像、对比度、复制按钮和传输发现保留为测量基线。当前文档构建为发现的中英文配对生成互相对应的 <code>hreflang</code> 链接；无配对页面有意不输出替代语言链接。</p>
+
+<h2>参考资料与比较</h2>
+<table>
+<thead><tr><th>参考</th><th>建议行为</th><th>当前状态</th><th>决策</th></tr></thead>
+<tbody>
+<tr><td><a href="https://developers.google.com/search/docs/specialty/international/localized-versions">Google Search：本地化版本</a></td><td>每个本地化页面通过完整绝对 URL 和互相对应的 <code>hreflang</code> 标注链接自身及全部替代版本。</td><td class="pass">文档模板已对发现的中英文配对实现。</td><td>保持扫描器与模板的配对发现逻辑同步。</td></tr>
+<tr><td><a href="https://web.dev/articles/optimize-lcp">web.dev：优化 LCP</a></td><td>让初始 HTML 可发现 LCP 资源，避免懒加载，并对可能成为 LCP 的图像使用 <code>fetchpriority="high"</code> 。</td><td class="gap">图像可发现且立即加载，但未提示优先级。</td><td>采用一张高优先级主视觉图。</td></tr>
+<tr><td><a href="https://web.dev/learn/design/responsive-images">web.dev：响应式图像</a></td><td>按实际渲染尺寸提供图像，并在适用时采用现代格式。</td><td class="gap">一张宽 3024 像素、446 KiB 的 PNG 在桌面约渲染为 905 像素宽，移动端审计约为 517 像素。</td><td>首页使用专用 800 像素 AVIF，保留原文档资源。</td></tr>
+<tr><td><a href="https://developers.google.com/search/docs/appearance/structured-data/software-app">Google Search：SoftwareApplication 数据</a></td><td>软件富媒体搜索结果要求应用专用属性及真实报价/评分数据。</td><td class="pass">当前 <code>SoftwareSourceCode</code> 数据准确描述框架和源码仓库。</td><td>不为获得富媒体结果资格而修改类型；当前不存在评分或商业报价数据。</td></tr>
+<tr><td><a href="https://developers.google.com/search/docs/appearance/structured-data/breadcrumb">Google Search：面包屑数据</a></td><td>包含至少两个有序条目的 <code>BreadcrumbList</code> 可以描述典型可见导航路径。</td><td class="gap">文档页显示面包屑和文档根链接，但未输出对应结构化数据。</td><td>采用“文档根 → 当前页”两级路径，文档根页自身不输出。</td></tr>
+</tbody>
+</table>
+
+<h2>目标行为与边界</h2>
+<ul>
+<li>首页主视觉使用专用 AVIF，保留固有尺寸，出现在初始 HTML 中，且是唯一标记为 <code>fetchpriority="high"</code>.</li>
+<li>的图像。首页每张图像显式声明宽高。次要文字满足 WCAG AA 对比度。复制按钮从可见内容获得无障碍名称。单词 <code>program</code> 使用独立高对比度品牌色，周围标题保留渐变。</li>
+<li>每组生成的中英文文档输出一致且互相对应的语言标注，包括 <code>en</code>, <code>zh-Hans</code>，以及 <code>x-default</code>；英文 URL 作为默认回退。无配对页面不输出不完整语言组。</li>
+<li>规范 URL 始终指向自身，现有语言切换行为不变。</li>
+<li>每个生成的文档内容页输出一个 <code>BreadcrumbList</code> ，对应 <code>OpenProgram Docs → current page</code>。文档根不输出，避免虚构第二级。</li>
+<li>首页声明 GitHub 现有 Releases Atom 订阅，使阅读器发现项目更新，不增加发布服务。</li>
+<li>不引入分析、跟踪、Cookie 横幅、新运行时依赖、CDN 迁移或托管变化。GitHub Pages 缓存响应头不受仓库控制。</li>
+</ul>
+
+<h2>失败与兼容行为</h2>
+<p>构建仅依据文档扫描器已发现的页面配对生成替代版本。URL 与规范链接使用相同站点源和部署前缀，避免相对或跨源标注。无配对时，页面仍有效并保留规范链接，但没有 <code>hreflang</code>。面包屑 JSON 由 Python 标准库序列化，并转义左尖括号，防止页面标题终止 script 元素。文档及现有链接仍可使用 PNG 资源。</p>
+
+<h2>验收标准</h2>
+<ol>
+<li><code>python -m scripts.docs_site.check_landing</code> 先拒绝旧首页标记和旧双语构建，再通过最终候选。</li>
+<li><code>python -m scripts.docs_site.build</code> 和 <code>python -m scripts.docs_site.checklinks</code> 通过。</li>
+<li>优化后的主视觉显著小于现有 PNG，且具备声明的固有尺寸。</li>
+<li>新的移动端 Lighthouse 在未声明尺寸图像、颜色对比度、标签内容与名称不匹配、图像传输和 LCP 发现方面无失败；SEO 和最佳实践保持 100。</li>
+<li>完整仓库 CI 在已审查提交上通过，该提交包含于 <code>origin/main</code>，且部署页面重现已验证标记。</li>
+<li>生成的文档根不包含 <code>BreadcrumbList</code>；每个规范内容页恰有一条有效双条目路径，根为 <code>https://openprogram.io/docs/</code>.</li>
+<li>首页提供一个 <code>application/atom+xml</code> 替代链接，指向 <code>https://github.com/FuzzyKuji/OpenProgram/releases.atom</code>.</li>
+</ol>
+
+<h2>实现证据</h2>
+<ul>
+<li>实现提交 <code>e554b1b5</code> 在强化验收检查以验证主 AVIF 条目、其 <code>&lt;picture&gt;</code> 关联、回退尺寸以及语义 <code>hreflang</code> 属性后，通过独立规格和代码质量审查。</li>
+<li>拉取请求 <a href="https://github.com/FuzzyKuji/OpenProgram/pull/3">#3</a> 合并为 <code>e1fb4d55</code>。CI 运行 <a href="https://github.com/FuzzyKuji/OpenProgram/actions/runs/31655884877">31655884877</a> 在重跑一个无关级联取消时序失败后，通过文档、Web 和 Python 3.11/3.12/3.13 任务。</li>
+<li>发布工作流产生站点提交 <code>b16efa3</code>；Pages 部署 <a href="https://github.com/Fzkuji/openprogram-site/actions/runs/31656714682">31656714682</a> 通过。线上 HTML 与资源探测确认强调显示的 <code>program</code> 文字、AVIF 响应、高优先级主视觉及中英文互相对应标注。</li>
+<li>部署站点的新移动端 Lighthouse 审计获得性能 100、无障碍 100、最佳实践 100、SEO 100，LCP 为 1.0 秒，无二值审计失败项。</li>
+<li>拉取请求 <a href="https://github.com/FuzzyKuji/OpenProgram/pull/5">#5</a> 合并为 <code>c586299e</code> ；Web、文档和 Python 3.11–3.13 CI 均通过。发布运行 <a href="https://github.com/FuzzyKuji/OpenProgram/actions/runs/31659339733">31659339733</a> 成功；线上探测确认双条目 <code>BreadcrumbList</code>、v0.6.0 文档链接及当前中文自主编程定位。</li>
+<li>发布订阅发现实现 <code>e63c2974</code> 在检查器强化为拒绝重复、不相关及大小写变体的第二个 Atom feed 后，通过独立规格和质量审查。文档构建器报告 498 页；首页、链接、diff 检查及线上 GitHub feed 探测通过。</li>
+</ul>
+</body>
+</html>

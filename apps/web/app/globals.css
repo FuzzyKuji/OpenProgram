@@ -1,0 +1,25 @@
+/* The app's one stylesheet entry (imported by layout.tsx). Order:
+
+     tailwindcss          Tailwind's layers and default theme
+     styles/design/       the design system: tiers for every size, shape
+                          and ink, and Tailwind's names for them
+     styles/themes/       colour values per theme (data, one file each)
+     styles/              the app's global styles, by area
+
+   Unlayered app rules beat Tailwind's layered ones wherever they sit;
+   the design files come after tailwindcss so their @theme values
+   replace Tailwind's defaults. */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+/* Inter Variable — loaded locally so the font picker's "Inter" option
+   actually resolves (was a CSS reference to an uninstalled family).
+   Inter has the high x-height we need to match Claude's Anthropic Sans
+   visual weight in the user-menu footer and other UI text. */
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/jetbrains-mono";
+
+@import "./styles/design/tailwind.css";
+@import "./styles/design/index.css";
+@import "./styles/themes/index.css";
+@import "./styles/index.css";

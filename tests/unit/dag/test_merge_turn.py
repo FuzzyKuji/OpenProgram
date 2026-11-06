@@ -1,0 +1,276 @@
+"""process_merge_turn — peer-session merge.
+
+The merge aggregates N independent peer sessions into one new turn on
+the target session, writing a multi-parent ContextCommit. No git
+branches, no worktrees — just session ids.
+"""
+from __future__ import annotations
+
+import time
+
+import pytest
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch, request):
+    from openprogram.state.store.session.session_store import SessionStore
+    from openprogram.runtime.context import session_db as sdb_mod
+
+    s = SessionStore(tmp_path / "sessions-git")
+    request.addfinalizer(s.close)
+    monkeypatch.setattr(sdb_mod, "default_store", lambda: s)
+    monkeypatch.setattr(
+        "openprogram.state.store.session.session_store.default_store", lambda: s,
+    )
+
+    # Target session the merge writes onto.
+    s.create_session("p1", "main", title="parent")
+    s.append_message("p1", {
+        "id": "u1", "role": "user", "content": "kick off",
+        "timestamp": 0, "predecessor": None,
+    })
+    s.append_message("p1", {
+        "id": "a1", "role": "assistant", "content": "ok",
+        "timestamp": 0, "predecessor": "u1",
+    })
+    s.commit_turn("p1", "parent init")
+
+    # Two peer sessions with their own assistant replies.
+    for sid, reply, label in [
+        ("peer_a", "result from agent A", "A"),
+        ("peer_b", "result from agent B", "B"),
+    ]:
+        s.create_session(sid, "main", title=label, label=label)
+        s.append_message(sid, {
+            "id": f"u_{sid}", "role": "user", "content": "go",
+            "timestamp": 0, "predecessor": None,
+        })
+        s.append_message(sid, {
+            "id": f"a_{sid}", "role": "assistant", "content": reply,
+            "timestamp": time.time(), "predecessor": f"u_{sid}",
+        })
+        s.commit_turn(sid, f"{label} turn")
+    return s
+
+
+@pytest.fixture
+def fake_dispatcher(monkeypatch):
+    from openprogram.runtime.conversation import turn_runtime as disp
+
+    captured: dict = {}
+
+    class _R:
+        def __init__(self, text):
+            self.final_text = text
+            self.user_msg_id = "merge_u"
+            self.assistant_msg_id = "merge_a"
+            self.tool_calls = []
+            self.usage = {}
+            self.duration_ms = 1
+            self.failed = False
+            self.error = None
+
+    def fake_run(req, *, on_event=None, cancel_event=None):
+        captured["prompt"] = req.user_text
+        captured["session_id"] = req.session_id
+        captured["history_override"] = req.history_override
+        from openprogram.runtime.context.session_db import default_db
+        # Snapshot attach pointers on the target as the dispatcher
+        # sees them — useful because process_merge_turn drops them
+        # again after the turn completes for DAG hygiene.
+        captured["attaches_at_dispatch"] = [
+            dict(m) for m in (default_db().get_messages(req.session_id) or [])
+            if m.get("function") == "attach"
+        ]
+        default_db().append_message(req.session_id, {
+            "id": "merge_a", "role": "assistant",
+            "content": "(merged)", "predecessor": "a1",
+            "timestamp": time.time(),
+        })
+        return _R("(merged)")
+
+    monkeypatch.setattr(disp, "process_user_turn", fake_run)
+    return captured
+
+
+def test_merges_two_peer_sessions(store, fake_dispatcher):
+    from openprogram.runtime.conversation.merge import process_merge_turn
+
+    out = process_merge_turn(
+        target_session_id="p1",
+        peers=[
+            {"session_id": "peer_a"},
+            {"session_id": "peer_b"},
+        ],
+        message="reconcile",
+        agent_id="main",
+    )
+
+    assert out.error is None, out.error
+    assert not out.failed
+    assert out.final_text == "(merged)"
+    assert out.commit_id and out.commit_id.startswith("commit_")
+    # New routing: peers' content goes into context via attach pointers
+    # (expanded by the generator), not bundled inline. Prompt still
+    # carries the label list so a transcript scan can recover which
+    # branches contributed.
+    assert "session label=\"A\"" in fake_dispatcher["prompt"]
+    assert "session label=\"B\"" in fake_dispatcher["prompt"]
+    assert "reconcile" in fake_dispatcher["prompt"]
+    # Merge runs on the TARGET session with normal history (not the
+    # legacy override-to-empty path) so the attach pointers we wrote
+    # before the turn reach ensure_latest_commit.
+    assert fake_dispatcher["session_id"] == "p1"
+    assert fake_dispatcher["history_override"] is None
+
+    # An attach pointer for each peer landed on the target session
+    # ahead of the merge turn, anchored to the previous head via
+    # caller (so the splicer picks them up and the generator
+    # expands them). Snapshot was taken at the dispatcher entry —
+    # the cleanup at the end of process_merge_turn drops them again.
+    attaches = fake_dispatcher.get("attaches_at_dispatch") or []
+    referenced_heads = {
+        (m.get("attach") or {}).get("head_id") for m in attaches
+    }
+    assert "a_peer_a" in referenced_heads
+    assert "a_peer_b" in referenced_heads
+
+    # ContextCommit is written with commit_parents covering each peer's
+    # latest commit id (plus any prior target commit).
+    from openprogram.state.store.session.context_commit.store import load_commit
+    commit = load_commit(store, out.commit_id, session_id="p1")
+    assert commit is not None
+    assert commit.commit_parents == out.commit_parents
+
+
+def test_unknown_peers_drop_to_error(store, fake_dispatcher):
+    from openprogram.runtime.conversation.merge import process_merge_turn
+    out = process_merge_turn(
+        target_session_id="p1",
+        peers=[{"session_id": "never_existed"}],
+        message="x",
+        agent_id="main",
+    )
+    assert out.failed
+    assert out.error and "no peer branches yielded content" in out.error
+
+
+def test_unknown_target_errors(store, fake_dispatcher):
+    from openprogram.runtime.conversation.merge import process_merge_turn
+    out = process_merge_turn(
+        target_session_id="nope",
+        peers=[{"session_id": "peer_a"}],
+        message="x", agent_id="main",
+    )
+    assert out.failed
+    assert out.error and "not found" in out.error
+
+
+def test_same_session_two_branches_merge(store, fake_dispatcher):
+    """Pass two peers with the same session_id but different head_ids
+    — should merge them as if they were independent branches."""
+    from openprogram.runtime.conversation.merge import process_merge_turn
+
+    # peer_a has assistant id 'a_peer_a' (fixture). Add a sibling
+    # head on peer_a to play "the other branch".
+    store.append_message("peer_a", {
+        "id": "u_peer_a_alt", "role": "user", "content": "alternate path",
+        "timestamp": 0, "predecessor": "ROOT",
+    })
+    store.append_message("peer_a", {
+        "id": "a_peer_a_alt", "role": "assistant",
+        "content": "alternate reply",
+        "timestamp": 0, "predecessor": "u_peer_a_alt",
+    })
+    store.commit_turn("peer_a", "sibling branch")
+
+    out = process_merge_turn(
+        target_session_id="p1",
+        peers=[
+            {"session_id": "peer_a", "head_id": "a_peer_a"},
+            {"session_id": "peer_a", "head_id": "a_peer_a_alt"},
+        ],
+        message="reconcile both branches",
+        agent_id="main",
+    )
+    assert out.error is None, out.error
+    # Peer text is no longer in the prompt — it's attached via the
+    # generator expansion. Same-session peers get disambiguated
+    # labels (@<hex>) which still surfaces in the prompt's label list.
+    assert "@" in fake_dispatcher["prompt"]
+    # Both peers' attach pointers landed on the target ahead of the
+    # turn (head_id distinguishes them).
+    referenced_heads = {
+        (m.get("attach") or {}).get("head_id")
+        for m in fake_dispatcher.get("attaches_at_dispatch") or []
+    }
+    assert "a_peer_a" in referenced_heads
+    assert "a_peer_a_alt" in referenced_heads
+
+
+def test_legacy_sub_sessions_field_still_works(store, fake_dispatcher):
+    """Backward-compat: callers passing ``sub_sessions=[sid, ...]``
+    should still get the merge done."""
+    from openprogram.runtime.conversation.merge import process_merge_turn
+    out = process_merge_turn(
+        target_session_id="p1",
+        sub_sessions=["peer_a", "peer_b"],
+        message="legacy call",
+        agent_id="main",
+    )
+    assert out.error is None, out.error
+    assert not out.failed
+
+
+def test_base_peer_marks_one_branch_as_base(store, fake_dispatcher):
+    """base_peer=N tells the merge agent to write its reply as a
+    continuation of peers[N]. The prompt gets a ``role="base"``
+    attribute on that branch's tag + a different lead-in line, and
+    the peer_b attach pointer carries is_base=True so the generator
+    locks its expanded items."""
+    from openprogram.runtime.conversation.merge import process_merge_turn
+    out = process_merge_turn(
+        target_session_id="p1",
+        peers=[
+            {"session_id": "peer_a"},
+            {"session_id": "peer_b"},
+        ],
+        message="x",
+        agent_id="main",
+        base_peer=1,
+    )
+    assert out.error is None, out.error
+    assert out.base_peer == 1
+    prompt = fake_dispatcher["prompt"]
+    # Only peer_b's tag carries role="base".
+    assert 'label="B" role="base"' in prompt
+    assert 'label="A" role="base"' not in prompt
+    # Lead-in mentions "BASE" so the LLM knows the asymmetry.
+    assert "BASE" in prompt
+    # is_base flag lands on the right attach pointer (the one
+    # referencing peer_b's head).
+    attaches = fake_dispatcher.get("attaches_at_dispatch") or []
+    base_attaches = [
+        m for m in attaches
+        if (m.get("attach") or {}).get("is_base")
+    ]
+    assert len(base_attaches) == 1
+    assert (base_attaches[0].get("attach") or {}).get("head_id") == "a_peer_b"
+
+
+def test_base_peer_out_of_range_treated_as_none(store, fake_dispatcher):
+    """An out-of-range index (e.g. caller passed 5 but only 2 peers
+    resolved) silently degrades to symmetric merge."""
+    from openprogram.runtime.conversation.merge import process_merge_turn
+    out = process_merge_turn(
+        target_session_id="p1",
+        peers=[
+            {"session_id": "peer_a"},
+            {"session_id": "peer_b"},
+        ],
+        message="x",
+        agent_id="main",
+        base_peer=5,
+    )
+    assert out.base_peer is None  # silently dropped
+    assert 'role="base"' not in fake_dispatcher["prompt"]

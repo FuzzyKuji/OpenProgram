@@ -1,0 +1,263 @@
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>MCP client integration</title>
+<style>body{margin:0;background:#101722;color:#dae4ef;font:16px/1.65 system-ui,sans-serif}main{max-width:1040px;margin:auto;padding:36px 24px 80px}h1,h2,h3{line-height:1.25}h2{margin-top:36px}a{color:#91c8ff}code,pre{font-family:ui-monospace,monospace;background:#1d2939}code{padding:2px 4px}pre{overflow:auto;padding:18px;border-radius:8px}pre code{padding:0}table{width:100%;border-collapse:collapse;display:block;overflow:auto}th,td{border:1px solid #3c4c63;padding:10px;text-align:left}blockquote{margin:0;border-left:3px solid #7186a4;padding:0 18px}</style></head><body><main>
+<h1>MCP Tool Integration</h1>
+<p>OpenProgram is an MCP client. Servers listed in <code>mcp_servers.json</code> (local stdio processes or remote Streamable HTTP and SSE endpoints) connect in the background when the worker starts, and each tool they offer is registered as an ordinary <code>AgentTool</code> named <code>{server}__{tool}</code>. The model calls these tools exactly like built-in ones; results come back as text and images in the conversation. Remote servers can use bearer tokens or OAuth 2.1, credentials are stored owner-only and never returned by the API, and Settings can add, restart or remove a server without restarting the worker. The code lives in <code>openprogram/extensions/mcp/</code>.</p>
+<h2>MCP client role</h2>
+<p>Register the tools provided by an external MCP server as in-framework <code>AgentTool</code>s, so the LLM calls them exactly the way it calls a local Program tool. On worker startup the client connects every enabled server in the config file (a subprocess speaking JSON-RPC over stdio, or a remote HTTP/SSE endpoint), wraps its <code>tools/list</code>, and mounts the result into the tool <code>_registry</code>.</p>
+<h2>Role — we are the client, not the server</h2>
+<p>MCP is a protocol that defines a &quot;tool provider&quot; (server) and a &quot;tool consumer&quot; (client).</p>
+<table>
+<thead>
+<tr>
+<th>Role</th>
+<th>Who plays it</th>
+<th>Examples</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Server</td>
+<td>The process that provides tools</td>
+<td><code>@drawio/mcp</code>, <code>@modelcontextprotocol/server-filesystem</code></td>
+</tr>
+<tr>
+<td>Client</td>
+<td>The LLM framework, which exposes the server's tools to the LLM</td>
+<td>OpenProgram, Claude Desktop, Claude Code, Cursor, Cline, opencode</td>
+</tr>
+</tbody>
+</table>
+<p>We are the client. This design <strong>does not cover</strong> exposing OpenProgram's own tools to an external client — that direction lives in <code>openprogram/extensions/mcp/server/</code> and does not reuse the client modules, documented in the authoritative <a href="mcp-server.html">MCP server design and evidence</a>.</p>
+<h2>Directory location</h2>
+<p><code>openprogram/extensions/mcp/</code> is a <strong>core package</strong> in the extensions group, beside <code>openprogram/extensions/plugins/</code> and <code>openprogram/extensions/skills/</code>. It does <strong>not</strong> live under <code>openprogram/programs/</code>.</p>
+<p>Rationale:</p>
+<ul>
+<li>MCP is an <strong>external-protocol adapter layer</strong>, which is a different thing from &quot;the implementation of a function.&quot; Programs under <code>openprogram/programs/</code> are locally implemented tools; MCP is tools fetched from an external process. The two layers are orthogonal concepts.</li>
+<li>Both opencode (<code>src/mcp/</code>) and Claude Code (<code>src/services/mcp/</code>) treat MCP as a standalone module, fully separate from local tool implementations.</li>
+<li>In our project, <code>channels/</code> (message channels) is the existing precedent for an &quot;external-protocol adapter&quot; — it brings external message sources in. MCP also brings something external in, just a tool source instead, so its <strong>location should match channels</strong>.</li>
+</ul>
+<h2>Reference implementation</h2>
+<p>For a full side-by-side, see <code>references/opencode/packages/opencode/src/mcp/</code>. OpenProgram's MCP layer is essentially a Python translation of opencode's.</p>
+<p><code>references/hermes-agent/mcp_serve.py</code> and <code>references/openclaw/src/mcp/</code> also provide MCP, but <strong>both are the server side</strong> (exposing their own capabilities to Claude Desktop and the like), which is the opposite direction of what we're doing.</p>
+<h2>Configuration</h2>
+<p><code>&lt;state_dir&gt;/mcp_servers.json</code> (default <code>~/.openprogram/mcp_servers.json</code>; the path follows profile switches automatically via <code>paths.get_state_dir</code>).</p>
+<pre><code class="language-json">{
+  &quot;servers&quot;: {
+    &quot;drawio&quot;: {
+      &quot;type&quot;: &quot;local&quot;,
+      &quot;command&quot;: [&quot;npx&quot;, &quot;-y&quot;, &quot;@drawio/mcp&quot;],
+      &quot;env&quot;: {},
+      &quot;enabled&quot;: true,
+      &quot;timeout_seconds&quot;: 60
+    }
+  }
+}
+</code></pre>
+<table>
+<thead>
+<tr>
+<th>Field</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>type</code></td>
+<td><code>&quot;local&quot;</code> (stdio subprocess), <code>&quot;http&quot;</code> (Streamable HTTP), or <code>&quot;sse&quot;</code> (legacy SSE). Remote types take <code>url</code> / <code>headers</code> / <code>auth</code> (<code>none</code>, <code>bearer</code>, or <code>oauth</code>)</td>
+</tr>
+<tr>
+<td><code>command</code></td>
+<td>Subprocess command + argument list</td>
+</tr>
+<tr>
+<td><code>env</code></td>
+<td>Environment variables injected into the subprocess (the base environment is inherited from the parent process; this overrides / appends to it)</td>
+</tr>
+<tr>
+<td><code>enabled</code></td>
+<td>Set false to temporarily disable a server without deleting its config</td>
+</tr>
+<tr>
+<td><code>timeout_seconds</code></td>
+<td>Startup wait + the read timeout for a single call</td>
+</tr>
+</tbody>
+</table>
+<p>A missing file or a parse failure is non-fatal — <code>load_configs()</code> returns an empty list, the worker starts normally, and one warning line is logged. MCP is an opt-in feature.</p>
+<h3>Credentials</h3>
+<p><code>env</code> and <code>headers</code> are free-form, so any entry can hold a credential: <code>ENDPOINT</code> can carry a signed URL as readily as <code>API_KEY</code> carries a key. Rather than guess from names, every value in both maps is treated as a secret, alongside the bearer token and the OAuth client secret.</p>
+<p>Two serializations keep that separation explicit. <code>MCPServerConfig.to_storage_dict()</code> carries full values and is used only to write <code>mcp_servers.json</code>. <code>to_response_dict()</code> replaces each value with <code>{&quot;has_value&quot;: bool, &quot;masked&quot;: str}</code> and reduces the auth secrets to <code>has_token</code> / <code>has_client_secret</code> plus a mask, and it is what every route returns — <code>/api/mcp/servers</code>, <code>/api/mcp/servers/{name}</code>, <code>/api/mcp/catalog</code>, and <code>/api/mcp/catalog/diff</code>. No route returns a stored MCP credential.</p>
+<p><code>PATCH /api/mcp/servers/{name}</code> therefore cannot ask the client to send back what it was shown. It applies preserve / replace / delete per name:</p>
+<table>
+<thead>
+<tr>
+<th>Body</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>name absent (or the whole <code>env</code> / <code>headers</code> field absent)</td>
+<td><strong>preserve</strong> the stored value</td>
+</tr>
+<tr>
+<td>name present with a value</td>
+<td><strong>replace</strong> with that value</td>
+</tr>
+<tr>
+<td>name present with an empty string</td>
+<td><strong>delete</strong> the name</td>
+</tr>
+</tbody>
+</table>
+<p>The same rule covers <code>auth.token</code> and <code>auth.client_secret</code>. Changing <code>auth.kind</code> drops the other kind's secret, since it is no longer reachable or useful. The Web UI opens its secret inputs empty and lists only the stored names, so an untouched field is omitted and preserved.</p>
+<p>The config file holds these secrets, so <code>save_configs()</code> writes it owner-only: a temp file created <code>0600</code> in one syscall, <code>fsync</code>, then <code>os.replace</code>. A file left <code>0644</code> by an older version narrows on its next save. The route persists only after the restart succeeds, so an edit that fails to start leaves the stored credentials intact.</p>
+<h2>Code structure</h2>
+<pre><code>openprogram/extensions/mcp/
+  __init__.py        public re-exports: load_mcp_servers / shutdown_mcp_servers / server_status
+  config.py          MCPServerConfig + load_configs / save_configs (mcp_servers.json)
+  client.py          MCPClient — one server's transport + ClientSession + supervisor task
+  adapter.py         MCP wire types ↔ AgentTool translation (pure functions, stateless)
+  registry.py        global manager: load_mcp_servers / shutdown_mcp_servers / server_status
+  oauth_flow.py      OAuth 2.1 PKCE consent flow and loopback callback
+  token_storage.py   PersistentOAuthProvider — tokens, client registration, server metadata
+  sampling.py        sampling callback backed by the configured host model
+  server/            the separate MCP server direction (see the MCP server design)
+</code></pre>
+<p>The client side has one responsibility per file: configuration, a single connection, translation, management, and the OAuth and sampling helpers a connection needs.</p>
+<h2>Call path — there is only one, LLM-initiated automatically</h2>
+<pre><code>You type "draw a flowchart" in the webui
+  ↓
+worker → agent_loop → calls the LLM API with all tools (local + MCP)
+  ↓
+LLM decides, emits tool_call(name="drawio__open_drawio_xml", args={...})
+  ↓
+agent_loop looks up the AgentTool in _registry, awaits execute(args)
+  ↓ execute is the closure built in adapter.register_remote_tool
+  ↓ the closure has captured the corresponding MCPClient, and directly calls client.call_tool(original tool name, args)
+  ↓ MCPClient sends it over stdio JSON-RPC to the corresponding drawio subprocess
+  ↓
+the drawio MCP subprocess executes (invokes the macOS open command to launch the browser)
+  ↓ returns CallToolResult
+  ↓
+adapter.convert_call_result turns the MCP content blocks into an AgentToolResult
+  ↓
+agent_loop stuffs the result into chat history and calls the LLM once more
+  ↓
+the LLM sees the tool result and generates the final text reply "Done"
+  ↓
+the webui displays it
+</code></pre>
+<p>The whole chain completes synchronously on the FastAPI main loop, with <strong>no cross-thread / cross-event-loop scheduling involved</strong>.</p>
+<p><code>/api/run/{name}</code> / the CLI <code>programs run</code> / the <code>/programs</code> page do <strong>not</strong> wire up MCP tools — those are entry points for local functions. MCP tools are invisible to the user; the LLM uses them implicitly.</p>
+<h2>Key technical decisions</h2>
+<h3>1. Persistent connection + supervisor task</h3>
+<p>MCP is designed around a long-lived bidirectional connection (the server can push progress notifications, resource-update notifications, etc.). The official Python SDK exposes the session as a nested async-context-manager:</p>
+<pre><code class="language-python">async with stdio_client(params) as (r, w):
+    async with ClientSession(r, w) as session:
+        await session.initialize()
+        ...
+</code></pre>
+<p>Holding a context manager across function calls requires keeping <code>__aexit__</code> pending, for which Python has no direct API. The cleanest approach is to wrap the whole nested block in a long-lived coroutine and put it in an <code>asyncio.Task</code> acting as a supervisor:</p>
+<pre><code class="language-python">async def _supervisor(self):
+    async with stdio_client(params) as (r, w):
+        async with ClientSession(r, w) as session:
+            await session.initialize()
+            result = await session.list_tools()
+            self._session = session
+            self.tools = list(result.tools)
+            self._ready.set()
+            await self._shutdown.wait()      # stay parked here, waiting for the shutdown signal
+</code></pre>
+<p><code>start()</code> creates the supervisor task and <code>await self._ready.wait()</code>; <code>call_tool()</code> simply reuses <code>self._session</code>; <code>stop()</code> sets <code>self._shutdown</code>, the supervisor exits the nested <code>async with</code>, and the subprocess closes automatically.</p>
+<p>A startup failure (the spawn doesn't come up, or initialize errors out) also goes through <code>self._ready.set()</code>, sets <code>self.error</code> to the reason string, unblocks <code>start()</code>, and the manager, seeing the error, skips tool registration and logs one line.</p>
+<h3>2. Tool namespace <code>{server}__{tool}</code></h3>
+<p>opencode uses <code>{server}:{tool}</code> as the namespace separator. We switch to a double underscore, <code>{server}__{tool}</code>, because OpenAI's tool-name regex is <code>^[a-zA-Z0-9_-]+$</code>, which rejects the colon. Anthropic uses the same character set.</p>
+<p><code>adapter.namespace_tool_name(server, tool)</code> does both:</p>
+<ul>
+<li>replaces any character outside <code>[A-Za-z0-9_-]</code> with <code>_</code></li>
+<li>truncates to 64 characters (OpenAI's hard limit), preserving the tool suffix</li>
+</ul>
+<p>Same-named tools across servers will collide, and the later-registered one overrides the earlier — consistent with last-wins elsewhere in the framework.</p>
+<h3>3. Worker readiness and optional MCP lifecycle</h3>
+<p>The worker eagerly begins connecting enabled MCP servers in a managed background task on its own event loop. Core FastAPI lifespan readiness and <code>/healthz</code> do not wait for optional transport initialization, npm download or OAuth consent. Canonical execution recovery remains a startup gate. Owner-configured per-server timeouts and sequential connection order remain unchanged; readiness is not obtained by enlarging the worker health deadline or disabling a configured integration.</p>
+<p>Each starting client is published in the existing registry before its connection is awaited. Status remains truthful: <code>ready=false</code>, no remote tools, and existing error/auth fields as they become known. Tools are registered only after successful initialization; failed or disabled servers do not acquire tools. A pending connection does not imply authentication or usable remote capabilities. The current masked management API remains available while MCP startup is pending.</p>
+<p>Startup uses the current persisted configuration when each queued server is reached. An owner deletion prevents that server from starting; disabling keeps it disabled without launching a process or registering tools. A same-name client installed by a management action takes precedence over the startup snapshot. Resuming an earlier pending connection does not undo these actions.</p>
+<p>The app owns the background task. It observes startup failures, and shutdown cancels and drains pending startup before shutting down every published client and unregistering its tools. This includes clients that have not finished initialization. An owned OAuth callback closes its socket/thread and releases its executor waiter when canceled; it never fabricates a code, state or successful authentication. Normal callback validation and configured authentication behavior remain unchanged.</p>
+<table>
+<thead>
+<tr>
+<th>Entry</th>
+<th>Observable acceptance</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Real app lifespan and <code>/healthz</code></td>
+<td>Ready while a controlled optional MCP transport is pending; canonical recovery still gates readiness</td>
+</tr>
+<tr>
+<td>Existing MCP status and tool registry</td>
+<td>Starting/failed clients are visible with actual ready/error/auth fields, masked secrets and no premature tools</td>
+</tr>
+<tr>
+<td>Successful connection</td>
+<td>Existing namespaced tools and prompts become available through the current APIs</td>
+</tr>
+<tr>
+<td>Shutdown during startup</td>
+<td>Startup is canceled and drained; clients, supervisors, callback resources and registrations are released; no late registration</td>
+</tr>
+<tr><td>Owner deletion or disabling during queued startup</td><td>The queued server stays absent or disabled after the earlier connection resumes; no new process or tools appear, and a management replacement remains authoritative</td></tr>
+<tr>
+<td>Owned callback cancellation and success</td>
+<td>Cancellation releases the waiter without a false code; normal callback code/state validation remains intact</td>
+</tr>
+</tbody>
+</table>
+<p>Lazy connection only on first tool use is not adopted. Waiting for every optional connection before core serving is rejected because authentication may legitimately outlast the health deadline. Creating another worker, changing owner timeouts, suppressing auth errors or marking a pending client ready does not satisfy this contract.</p>
+<h3>4. Tolerant content conversion</h3>
+<p><code>adapter.convert_call_result()</code> handles the MCP return value:</p>
+<table>
+<thead>
+<tr>
+<th>MCP type</th>
+<th>Converted to</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>TextContent</code></td>
+<td><code>providers.types.TextContent</code> (chat history)</td>
+</tr>
+<tr>
+<td><code>ImageContent</code></td>
+<td><code>providers.types.ImageContent</code> (multimodal LLM)</td>
+</tr>
+<tr>
+<td><code>EmbeddedResource</code></td>
+<td>expanded into <code>[resource: &lt;uri&gt;]</code> text — raw bytes are not stuffed into chat</td>
+</tr>
+<tr>
+<td>unknown / future types</td>
+<td><code>repr(block)</code> text — at least the LLM can see that something came back</td>
+</tr>
+</tbody>
+</table>
+<p>An <code>isError=True</code> return is reflected in <code>details[&quot;is_error&quot;]</code>, and what the LLM sees in chat history is the tool-result text, consistent with the error path of local tools.</p>
+<h3>5. Test isolation — beware of <code>from openprogram.state.paths import get_state_dir</code></h3>
+<p><code>tests/integration/store/test_attach_lazy_session.py</code> uses <code>monkeypatch.setattr(&quot;openprogram.state.paths.get_state_dir&quot;, ...)</code> to redirect the state directory. If <code>config.py</code> pulls it in via <code>from openprogram.state.paths import get_state_dir</code>, the first import happens <strong>during</strong> the attach test (because the webui startup hook triggers <code>_start_mcp_servers</code> → import <code>openprogram.extensions.mcp</code> → import <code>config</code>), and the lambda gets permanently bound into our module, leaking after the attach test ends.</p>
+<p>Fix: <code>from openprogram.state import paths as _paths</code>, and look up the attribute live on every call to <code>_paths.get_state_dir()</code>. Watch out: if the test suite adds a new paths monkeypatch, confirm our <code>config.py</code> still goes through the module reference.</p>
+<h2>Appendix: Implementation Status</h2>
+<p>The design above is implemented. Its current boundaries:</p>
+<ol>
+<li><strong>All three transports are implemented</strong> (stdio, Streamable HTTP, SSE). Remote auth supports static bearer tokens and OAuth 2.1 PKCE. OAuth is delegated to the MCP SDK's <code>OAuthClientProvider</code> via <code>token_storage.PersistentOAuthProvider</code>, which persists what a silent reconnect needs across worker restarts: tokens plus an absolute <code>expires_at</code>, the dynamic client registration (whose loopback redirect port is reused so re-auth presents a registered redirect_uri), and the discovered authorization-server metadata (so a cold-start refresh POSTs to the real token endpoint, not the <code>&lt;server&gt;/token</code> fallback). An expired access token is renewed with the refresh token in the background; the browser consent flow only runs on first auth or when refresh is rejected, which the supervisor surfaces as <code>error_kind=&quot;needs_reauth&quot;</code>.</li>
+<li><strong>Tools, resources, prompts and sampling use the existing client APIs.</strong> Resource/prompt meta tools reuse the persistent client; MCP prompts synchronize with the slash-command registry. Sampling has a configured-host-model callback and returns a structured error when no host model is configured.</li>
+<li><strong>Management mutations reuse the existing add/remove/restart APIs.</strong> They control the selected client and registrations without requiring a whole worker restart.</li>
+<li><strong>Concurrent calls to one server serialize on the ClientSession lock.</strong> <code>MCPClient._call_lock</code> queues them. This is not a performance problem — an MCP server is single-flight to begin with — but one slow tool blocks other tool calls on the same server.</li>
+<li><strong>The tool list is read once.</strong> The supervisor pulls <code>list_tools</code> at startup and never asks again, so tools a server adds or removes mid-flight are invisible. The protocol's <code>tools/list_changed</code> notification is not listened for.</li>
+<li><strong><code>_loaded</code> is a module global.</strong> Tests reset it before re-testing; see the <code>tests/integration/programs/test_mcp_client.py::_reset_mcp_loader_flag</code> fixture.</li>
+</ol>
+<p>The management API exposes <code>server_status()</code> and individual server details with ready/error/auth status, tool count and masked credentials. Core readiness does not wait for MCP: the server lifespan starts <code>load_mcp_servers()</code> as a background task and cancels and drains it on shutdown.</p>
+</main></body></html>

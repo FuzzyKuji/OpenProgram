@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent 控制提示层</title>
+<style>
+:root{
+  color-scheme:light;
+  --page:#faf9f5; --surface:#fff; --line:rgba(36,36,32,.12);
+  --text-primary:#3d3d3a; --text-secondary:#5e5d59; --text-muted:#91908c;
+  /* 与 --agent-accent（base.css）一致。 */
+  --agent-accent:#5b5bd6;
+  --glass:rgba(28,28,33,.86); --glass-edge:rgba(255,255,255,.10);
+  --old-purple:rgba(89,69,235,.94); --old-purple-soft:rgba(89,69,235,.30);
+  --mono:"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text-primary);
+  font:15px/1.65 -apple-system,"PingFang SC","Helvetica Neue",system-ui,sans-serif}
+main{max-width:920px;margin:0 auto;padding:40px 16px 96px}
+h1{font-size:24px;line-height:1.3;margin:0 0 6px}
+h2{font-size:18px;margin:36px 0 8px;line-height:1.35}
+h3{font-size:15px;margin:22px 0 6px}
+p,li{color:var(--text-secondary)}
+code{font-family:var(--mono);font-size:12.5px;background:rgba(36,36,32,.06);padding:1px 5px;border-radius:4px}
+.table-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 4px}
+th,td{text-align:left;vertical-align:top;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--text-muted);font-weight:500}
+.lede{color:var(--text-secondary);margin:0 0 20px}
+</style>
+</head>
+<body>
+<main>
+<h1>Agent 控制提示层</h1>
+<p class="lede">agent 操作 macOS 原生窗口期间，OpenProgram 在该窗口上画三样东西：沿窗口边缘向内的强调色发光、变成强调色的关闭/最小化/缩放三颗灯，以及一直留在窗口里、滑向每一步的 agent 光标。agent 在网页标签页或对话的浮动预览里操作网页时，网页上也画同样的发光和光标，只是没有红绿灯。本文规定它们的外观与动效、使用的颜色，以及保证它们不妨碍用户的规则。</p>
+
+<h2>绘制位置</h2>
+<div class="table-wrap"><table>
+<tr><th>目标</th><th>画什么</th><th>代码位置</th></tr>
+<tr><td>macOS 原生窗口（<code>computer_use</code> 窗口动作）</td><td>向内发光、强调色红绿灯和 agent 光标，画在一个透明、点击穿透、不可聚焦的窗口里；每个对话一个，盖在受控窗口上，四周留 32pt 边距。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/tools/computer_use/computer_use_agent/desktop/window_watch.py">window_watch.py</a> 上报窗口位置；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/worker/agent-control.js">apps/desktop/main/worker/agent-control.js</a> 摆放窗口；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/app/menu-overlay/agent-control/page.tsx">menu-overlay/agent-control</a> 负责渲染。</td></tr>
+<tr><td>桌面 App 中的网页：网页标签页或对话的浮动预览</td><td>向内发光和 agent 光标，画在一个透明、点击穿透、不可聚焦的窗口里；每个网页一个，盖在它的原生视图上，四周留 24pt 边距，只在视图显示时显示。发光沿网页的圆角走：浮动预览是 10pt，标签页是圆角的底边两角。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/windows/action-cues.js">apps/desktop/main/windows/action-cues.js</a> 摆放窗口，喂给它的数据和 <code>agent-control.js</code> 相同；渲染端上报 agent 持有哪些网页（<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/desktop/bridge/bridge-events.ts">bridge-events.ts</a> 中的 <code>subscribeAgentPageGlow</code>）；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/app/menu-overlay/agent-control/page.tsx">menu-overlay/agent-control</a> 负责渲染。</td></tr>
+<tr><td>对话预览（PiP）和 Web 版</td><td>agent 光标，画在预览图上方一个 <code>pointer-events: none</code> 的图层里。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/browser/toolbar/browser-control-bar.tsx">browser-control-bar.tsx</a> 中的 <code>ActionCueTravel</code>。</td></tr>
+</table></div>
+<p>所有界面使用同一个光标组件 <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/agent-cursor/agent-cursor.tsx">AgentCursor</a>。agent 持有网页期间网页发光：网页的控制状态是正在操作、仍在停止或尚未确认停止，并且它所在对话的运行还没结束。运行一结束，不论控制状态是什么，网页都算空闲，因为后端在最后一步之后、对账之前会一直把网页记为正在操作（<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/browser/control/browser-control.ts">browser-control.ts</a> 中的 <code>presentedControlState</code>）；界面本身没有“暂停中”状态，也不在网页四周画框。网页标题栏和工具栏只在需要用户（需要你确认）或状态无法判断时出声。</p>
+
+<h2>窗口在哪里</h2>
+<p>会话持有一个窗口期间（从第一次读取或动作开始，到最后一步之后 20 秒，或 agent 换到别的窗口为止），worker 每 0.12 秒读一次窗口服务器的屏幕窗口列表，有变化时上报：窗口在屏幕上的位置（point），关闭、最小化、缩放按钮相对窗口的位置（通过辅助功能读取一次），以及挡在它前面、进入边距范围的窗口。App 自己的提示层窗口标题为 <code>OpenProgram agent overlay</code>，不计入遮挡。最后一次上报带 <code>active: false</code>，表示控制结束。上报以 <code>native.control</code> 帧传递，每一步的落点以 <code>native.action</code> 帧传递；两者只在<b>显示操作</b>打开时交给桌面端。</p>
+
+<h2>向内发光</h2>
+<ul>
+<li><b>形状。</b> 沿窗口圆角边缘（圆角 10pt）画一道 18pt 的强调色描边，模糊 11pt、不透明度 55%，并裁剪在窗口内，所以光从边缘开始、向窗口中间渐隐。边缘上没有描边线，窗口外不画任何东西。</li>
+<li><b>呼吸。</b> agent 持有窗口期间，发光以 2.6 秒为周期在这个强度的 60% 到 100% 之间呼吸。</li>
+<li><b>被遮挡的部分。</b> 挡在受控窗口前面的窗口从发光和红绿灯中挖掉，提示层不会画到别的应用窗口上面。</li>
+</ul>
+
+<h2>标题栏红绿灯</h2>
+<ul>
+<li><b>位置。</b> 三个圆盖在关闭、最小化、缩放三个按钮上，按按钮区域等距排开，比按钮大半个点，让人一眼看出这个窗口正被 agent 占用。没有这三个按钮的窗口不画。</li>
+<li><b>外观。</b> 每个圆填强调色，上面一层白色每 1.4 秒升到 40% 再落回，三颗依次相隔 0.2 秒。</li>
+<li><b>鼠标。</b> 红绿灯和整个提示层一样忽略鼠标，点在上面仍然会点到下面的按钮。</li>
+</ul>
+
+<h2>Agent 光标</h2>
+<ul>
+<li><b>图形。</b> App 图标库里的双色光标（Solar <code>cursor</code>，bold duotone），26px，强调色，尾巴为半透明；下面垫一层同形状的整块白色剪影（Solar <code>cursor-bold</code>）作白边，外露 2px，另加一层很淡的投影。</li>
+<li><b>热点。</b> 光标方框以动作点为中心摆放，箭头尖端在动作点右下 2px，让点击圆点露在尖端旁边。元素的动作点是它在动作前的边界中心；坐标的动作点是截图坐标换算到屏幕上的点。</li>
+<li><b>停留。</b> 在桌面应用上，只要 agent 还持有窗口，光标就停在上一步的位置，并随窗口移动。第一步从窗口中央出发。</li>
+<li><b>移动。</b> 沿一条平缓的弧线滑到新的动作点（弯曲幅度为距离的 16%，最多 56pt），按距离在 240–680 毫秒内以 ease-in-out 曲线完成。网页光标移动方式相同。在 agent 持有的网页上，光标在两步之间停留；没有持有时显示的一步在 2.8 秒后淡出。</li>
+<li><b>按下。</b> 到达点击、按下、选择、拖动或打开的位置后，箭头朝尖端缩到 82% 并在 0.26 秒内弹回，同时动作点上弹出一个带 2px 白圈的 8px 强调色圆点，停稳后在 1 秒内淡出。输入和滚动不按下、不留圆点。</li>
+<li><b>减弱动态效果。</b> 系统要求减弱动态效果时，光标直接跳到位，关闭按下、圆点、呼吸和红绿灯脉动。</li>
+</ul>
+
+<h2 id="accent">强调色</h2>
+<p><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/app/styles/base.css">apps/web/app/styles/base.css</a> 中 <code>:root</code> 的 <code>--agent-accent</code> 取主题强调色（<code>--theme-accent</code>），提示层跟随用户的主题配色。发光、红绿灯、光标和点击圆点使用它；白边、圆点的白圈和红绿灯的脉动是白色。提示层页面与 App 同源、共用主题设置，切换主题会立即生效。</p>
+
+<h2>安全规则</h2>
+<ul>
+<li><b>不接收输入。</b> 提示层窗口忽略鼠标，不能获得焦点，也不激活。所有界面都不移动系统指针。</li>
+<li><b>控制期间始终可见。</b> 提示层在整个窗口会话期间保持显示，控制结束时在 0.36 秒内淡出。窗口最小化或在另一个桌面空间时隐藏，窗口回来后恢复。</li>
+<li><b>每个对话一个提示层。</b> 两个对话控制两个窗口时，各自显示自己的发光、红绿灯和光标。</li>
+<li><b>只负责显示。</b> 上报和绘制都不改变动作结果；失败时直接丢弃，步骤照常进行。</li>
+</ul>
+
+<h2>停止</h2>
+<p>提示层上没有停止按钮。提示层上的一切都忽略鼠标；可点击的区域会盖在受控应用上，拦截本该给应用的点击。停止仍在 OpenProgram 中进行：对话里的停止控件和 Running 面板。网页浮动控制条也没有暂停控件，只在 agent 等待确认时提供“查看请求”。</p>
+
+<h2 id="status">实现状态</h2>
+<p>macOS 和三处 Web 界面均已按本文实现。Linux 和 Windows 后端不上报窗口位置和动作点，那里不显示提示层。实时窗口捕获带来的 macOS 系统标记（标题栏按钮上的徽标和菜单栏的屏幕共享图标）仍会请求，但它不出现在截图里，所以由 App 自己的强调色红绿灯标出按钮。</p>
+</main>
+</body>
+</html>

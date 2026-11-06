@@ -1,0 +1,361 @@
+/* Styles for the function parameter form. The Composer's own module
+   keeps the rules that toggle the *wrapper* into fn-form mode (padding,
+   bottom-row separator, send-button position); everything that lives
+   inside the form itself is here. */
+
+/* The wrapper has `overflow: hidden` and an inline `height` driven by
+   React. As the wrapper's height grows from chat-mode to fn-form-mode,
+   the form slides UP into view — the wrapper is bottom-anchored inside
+   the inputArea, so it grows upward over the transcript while the
+   detached controls row below stays put. */
+/* Header and body are two flat siblings of the wrapper. No `.panel`
+   div wraps the body — body is the bottom row of the wrapper. */
+
+/* Header / body fade in with the staggered timings shared by the
+   composer (header first, body slightly later) so the form reads as
+   one continuous reveal. Close fades both out together over 0.12s
+   before the wrapper begins its height transition.
+
+   Header height is 48px:
+       1 (border-bottom)
+       + 11 (padding-bottom)
+       + 24 (button size)
+       + 12 (padding-top)
+   which vertically centres the 24px run/close buttons pinned at
+   top:12 (see .actionBtn / .closeBtn in composer.module.css). */
+.header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  /* Right padding reserves space for the wrapper-level [↑][×] pair
+     (12 inset + 24 + 8 gap + 24 + 8 breathing = 76). */
+  padding: 12px 76px 11px 12px;
+  min-height: 48px;
+  border-bottom: 1px solid var(--border);
+  box-sizing: border-box;
+  flex-shrink: 0;
+  /* Default opacity 1 (don't rely on the fade-in animation to reach
+     the visible state). Background-tab Chrome pauses the animation
+     timeline at currentTime=0, so the previous opacity:0 + animation
+     keyframe combo left the fn-form blank whenever the tab wasn't
+     focused at mount. Closing transition (.header.closing below)
+     still drives a 1 → 0 fade. */
+  opacity: 1;
+}
+
+.header.closing,
+.body.closing {
+  animation: none;
+  opacity: 0;
+  /* Matches the open fade-in duration so the close is a true mirror
+     image: wrapper shrinks (0.3s) while header/body fade 1→0 (0.25s)
+     in parallel, instead of fading out first and then animating the
+     height. */
+  transition: opacity var(--composer-fade-duration) ease;
+}
+/* Header title — same single-line + fade-on-overflow + hover-to-expand
+   treatment as the field labels below, so long function descriptions
+   don't get cut with an ellipsis but instead trail off with a mask
+   gradient and reveal fully when the user hovers the row. */
+.title {
+  display: block;
+  flex: 1 1 auto;
+  min-width: 0;
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 48px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 48px),
+    transparent 100%
+  );
+  cursor: default;
+}
+/* No hover-expand on the header title either — same reason as .label.
+   The full text is reachable via the `title` attribute set in the
+   FunctionForm header. */
+.name {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--accent-orange);
+  flex-shrink: 0;
+}
+.keyword {
+  color: var(--text-secondary);
+  font-weight: 400;
+}
+.dash {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  color: var(--text-muted);
+  flex-shrink: 0;
+}
+.desc {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  color: var(--text-muted);
+}
+/* Close button moved out to composer.module.css (.closeBtn) — it
+   lives at the wrapper level so it stays mounted across fn-form
+   switches. */
+
+.body {
+  padding: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  /* See .header above — opacity defaults to 1 to survive
+     background-tab animation-timeline pauses. */
+  opacity: 1;
+  /* 自然高度（不 `flex: 1` 撑满）：flex 填充会把 wrapper 多出来的高度
+     堆到 body 底部，造成「底 padding 比顶多几 px」的不可控余量。改成
+     内容高度后顶底 padding 严格对称、所见即所得。内容超长仍可内部滚动。 */
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
+  /* Keep the body scrollable but hide the scrollbar chrome — same
+     treatment as `.slashMenu` / `.scroll-overlay` elsewhere in the app. */
+  scrollbar-width: none; /* Firefox */
+}
+.body::-webkit-scrollbar {
+  display: none; /* WebKit / Chromium */
+}
+.field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+/* Field label — PyTorch-docs style, all on one line at the same size.
+   The only typographic distinction is `--font-mono` on the param name
+   (to mark it as a code identifier). Everything else is plain
+   sans-serif prose so the row reads as a single sentence:
+     param_name (type, optional) – description.
+
+   Long descriptions are clipped to a single line by default; the
+   trailing edge fades out via a mask gradient (no ellipsis dots) so
+   the truncation reads as "more content here" rather than a hard cut.
+   Hovering the row drops the clip + mask so the full description
+   wraps and reveals. */
+.label {
+  display: block;
+  flex-shrink: 0;
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: nowrap;
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 48px),
+    transparent 100%
+  );
+  mask-image: linear-gradient(
+    to right,
+    #000 calc(100% - 48px),
+    transparent 100%
+  );
+  cursor: default;
+}
+/* No hover-expand on the label any more — the inline-grow caused
+   the wrapper to resize on every hover, which read as jarring.
+   Full text is now shown via a native `title` tooltip set in
+   FieldRow (fn-form-fields.tsx) so the layout doesn't move at all. */
+.labelName {
+  font-family: var(--font-sans);
+  font-weight: 600;
+  /* Cream / off-white — dimmer than `--text-bright` so it doesn't
+     glare next to the muted prose around it. */
+  color: var(--text-primary);
+}
+.labelMeta {
+  font-style: italic;
+  color: var(--text-secondary);
+}
+.labelDash {
+  color: var(--text-muted);
+}
+.labelDesc {
+  color: var(--text-secondary);
+}
+
+/* Single-line inputs share the same 32px height / 8px radius / 0 12
+   padding. The multi-line textarea variant breaks out below. */
+.input {
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  padding: 0 12px;
+  height: var(--ui-button-h-lg);
+  line-height: 30px;
+  color: var(--text-bright);
+  font-size: var(--fs-base);
+  font-family: var(--font-sans);
+  outline: none;
+  transition: border-color 180ms ease;
+  width: 100%;
+  box-sizing: border-box;
+}
+.input:focus {
+  border-color: var(--accent-blue);
+}
+.input::placeholder {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+}
+.field:has(.textareaWrap) {
+  flex: 1 0 auto;
+  min-height: 0;
+}
+.textareaWrap {
+  position: relative;
+  flex: 1 1 auto;
+  min-height: 48px;
+  display: flex;
+  flex-direction: column;
+}
+.expandBtn {
+  position: absolute;
+  top: 6px;
+  right: 6px;
+  width: var(--ui-button-h-xs);
+  height: var(--ui-button-h-xs);
+  padding: 0;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--text-secondary) 12%, transparent);
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  z-index: 1;
+}
+.expandBtn:hover,
+.expandBtn[aria-pressed="true"] {
+  background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+  color: var(--text-bright);
+}
+.input.textarea {
+  flex: 1 1 auto;
+  height: auto;
+  min-height: 48px;
+  max-height: none;
+  line-height: 1.5;
+  padding: 8px 12px;
+  resize: none;
+  overflow-y: auto;
+}
+.inputError {
+  border-color: var(--accent-red) !important;
+}
+
+/* Bool toggle */
+.toggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+/* Solid rounded-rect — no border, no pill (round buttons are out of
+   the design language). Idle state uses a low-opacity tint, hover
+   bumps it a notch, active flips to the accent-blue tint. */
+.toggleBtn {
+  padding: 0 12px;
+  height: var(--ui-button-h-sm);
+  line-height: 28px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  cursor: pointer;
+  transition: background 180ms ease, color 180ms ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+.toggleBtn:hover {
+  background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+  color: var(--text-primary);
+}
+.toggleBtn.toggleActive {
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+  color: var(--accent-blue);
+}
+.toggleBtn.toggleActive:hover {
+  background: color-mix(in srgb, var(--accent-blue) 26%, transparent);
+}
+
+/* Option chips */
+.options {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.chip {
+  padding: 0 12px;
+  height: var(--ui-button-h-sm);
+  line-height: 28px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  color: var(--text-secondary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  cursor: pointer;
+  transition: background 180ms ease, color 180ms ease;
+  user-select: none;
+  box-sizing: border-box;
+}
+.chip:hover {
+  background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+  color: var(--text-primary);
+}
+.chip.chipActive {
+  background: color-mix(in srgb, var(--accent-blue) 18%, transparent);
+  color: var(--accent-blue);
+}
+.chip.chipActive:hover {
+  background: color-mix(in srgb, var(--accent-blue) 26%, transparent);
+}
+/* chipCustom is a text input alongside the option chips — same
+   pill geometry. Idle state matches `.chip`'s tinted-fill so it
+   visually reads as another chip in the row. When the user actually
+   focuses it (about to type), it flips to a solid input look — solid
+   `bg-primary` background + a 1px `text-secondary` border. */
+.chipCustom {
+  padding: 0 12px;
+  height: var(--ui-button-h-sm);
+  line-height: 28px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+  color: var(--text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  width: 60px;
+  outline: none;
+  transition: background 180ms ease, border-color 180ms ease;
+  box-sizing: border-box;
+}
+.chipCustom:hover {
+  background: color-mix(in srgb, var(--text-secondary) 18%, transparent);
+}
+.chipCustom:focus {
+  background: var(--bg-primary);
+  border-color: var(--accent-blue);
+}
+
+.noParams {
+  color: var(--text-muted);
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  padding: 4px 0;
+}

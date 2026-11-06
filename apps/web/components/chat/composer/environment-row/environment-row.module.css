@@ -1,0 +1,187 @@
+.surfaceChip {
+  max-width: none;
+  cursor: default;
+  font: inherit;
+}
+
+/* Clickable only while it can bring the floating preview back. */
+button.surfaceChip {
+  cursor: pointer;
+}
+
+.surfaceChipLabel {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: clip;
+  white-space: nowrap;
+}
+
+/* The legend panel opens upward from this row and must not be clipped. */
+.envChips:has(:global(.dag-legend) [aria-expanded="true"]) {
+  overflow: visible;
+}
+
+.envChips {
+  display: flex;
+  align-items: center;
+  /* Same 8px as the control row under the input box, so the two rows'
+     circles line up in columns. */
+  gap: 8px;
+  /* overflow-x: auto also clips the y axis, and the row is exactly as
+     tall as its pills, so the pills' drop shadow was cut off flat. The
+     6px padding is room for the shadow; the negative top margin, the
+     shortened bottom margin and the wider max-width give that room back
+     so the chips sit exactly where they did. */
+  max-width: min(calc(var(--chat-column-max) + 12px), calc(100% - 2 * var(--composer-column-gutter, var(--chat-column-gutter)) + 12px));
+  margin: -6px auto 4px;
+  padding: 6px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.envChips::-webkit-scrollbar { display: none; }
+.envChips > * { flex-shrink: 0; }
+
+/* Labels shrink in steps (use-compact-environment-row.ts), never by
+   flexing into fragments:
+     level 1  [data-squeeze]       long labels capped with an ellipsis,
+                                   the Local chip icon-only
+     level 2  [data-squeeze="2"]   git branch names hidden (icon + badge)
+     level 3  [data-compact=true]  every label hidden, the git diff badge
+                                   reduced to a half-green, half-red dot */
+.envChips > .surfaceChip,
+.envChips :global(.status-badge),
+.envChips :global(.runtime-badge.project-badge),
+.envChips :global(.runtime-badge.workdir-badge) {
+  flex-shrink: 0;
+  min-width: 24px;
+}
+
+.envChips .surfaceChipLabel,
+.envChips :global(.status-badge .badge-short),
+.envChips :global(.project-badge .badge-short),
+.envChips :global(.workdir-badge .badge-short),
+.envChips :global(.git-seg-label),
+.envChips :global(.git-seg-badge) {
+  flex: 0 0 auto;
+  max-width: 40ch;
+  opacity: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  transform: translateX(0);
+  transition:
+    max-width 170ms ease,
+    opacity 130ms ease,
+    padding 170ms ease,
+    margin 170ms ease,
+    transform 170ms ease;
+}
+
+.envChips :global(.git-seg-label) { max-width: 24ch; }
+.envChips :global(.git-seg-dot) {
+  transition: width 170ms ease, margin 170ms ease, opacity 130ms ease;
+}
+
+/* Level 1: long names capped. */
+.envChips[data-squeeze] .surfaceChipLabel,
+.envChips[data-squeeze] :global(.project-badge .badge-short),
+.envChips[data-squeeze] :global(.workdir-badge .badge-short),
+.envChips[data-squeeze] :global(.git-seg-label) {
+  max-width: 12ch;
+}
+
+/* Hidden labels: level 1 hides Local's, level 2 the branch names, level 3 all. */
+.envChips[data-squeeze] :global(.status-badge):not(.surfaceChip) :global(.badge-short),
+.envChips[data-squeeze="2"] :global(.git-seg-label),
+.envChips[data-compact="true"] .surfaceChipLabel,
+.envChips[data-compact="true"] :global(.status-badge .badge-short),
+.envChips[data-compact="true"] :global(.project-badge .badge-short),
+.envChips[data-compact="true"] :global(.workdir-badge .badge-short),
+.envChips[data-compact="true"] :global(.git-seg-label),
+.envChips[data-compact="true"] :global(.git-seg-badge) {
+  max-width: 0;
+  min-width: 0;
+  padding-left: 0;
+  padding-right: 0;
+  margin-left: 0;
+  margin-right: 0;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(-2px);
+}
+
+.envChips[data-compact="true"] :global(.git-seg-dot) {
+  width: 8px;
+  margin-left: 0;
+  opacity: 1;
+}
+
+.envChips[data-squeeze] :global(.status-badge):not(.surfaceChip),
+.envChips[data-compact="true"] > .surfaceChip,
+.envChips[data-compact="true"] :global(.status-badge),
+.envChips[data-compact="true"] :global(.workdir-add-badge) {
+  /* Icon-only chips are the same 28px circle as the icon pills under
+     the input box. */
+  min-width: 28px;
+  padding-left: 0;
+  padding-right: 0;
+  gap: 0;
+  justify-content: center;
+}
+
+
+/* Measuring pass: lay out every level instantly. */
+.envChips[data-measuring] *,
+.envChips[data-measuring] {
+  transition: none !important;
+}
+/* …and with the right-aligned chips packed left, so their auto margin
+   doesn't count as used width (use-compact-environment-row.ts). */
+/* …with every chip at its natural width, so the needs hold at any row
+   width… */
+.envChips[data-measuring] > * {
+  flex-shrink: 0 !important;
+}
+.envChips[data-measuring] > .surfaceChip {
+  margin-left: 0 !important;
+}
+
+/* The web page chip is right-aligned: it takes the free space. */
+.envChips > .surfaceChip { margin-left: auto; }
+
+.envChips :global(.indicator-dot) {
+  width: 8px;
+  height: 8px;
+}
+
+.envChips :global(.badge-short) {
+  padding: 0 2px 0 0;
+}
+
+/* The same 16px glyph and 5px glyph–label gap as the control row below
+   (composer.module.css). A working folder's ✕ keeps its own size. */
+.envChips :is(button, [role="button"], :global(.folder-pill-seg)):not(:global(.workdir-remove)) svg {
+  width: 16px;
+  height: 16px;
+}
+.envChips :is(button, [role="button"], :global(.folder-pill-seg), :global(.folder-pill-name)) {
+  gap: 5px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .envChips .surfaceChipLabel,
+  .envChips :global(.status-badge .badge-short),
+  .envChips :global(.project-badge .badge-short),
+  .envChips :global(.workdir-badge .badge-short),
+  .envChips :global(.status-badge),
+  .envChips :global(.runtime-badge.project-badge),
+  .envChips :global(.runtime-badge.workdir-badge),
+  .envChips :global(.git-seg-label),
+  .envChips :global(.git-seg-badge),
+  .envChips :global(.git-seg-dot),
+  .envChips :global(.folder-pill-seg) {
+    transition: none;
+  }
+}

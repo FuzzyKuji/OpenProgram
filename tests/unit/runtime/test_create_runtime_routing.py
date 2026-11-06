@@ -1,0 +1,87 @@
+"""create_runtime() supports api-routed providers, not just the named backends.
+
+The recurring agent confusion: someone greps for "where are providers
+registered", lands on registry.PROVIDERS, sees no minimax /
+deepseek / etc., and concludes they're unsupported. PROVIDERS is only the
+five first-class backends (two subscription/CLI Runtime classes + three
+API-key providers with table-level key resolution). Everything else is
+supported via its model's wire `api` + the api_registry — the same path
+chat uses. create_runtime falls through to that, so it matches chat
+coverage instead of raising "Unknown provider".
+"""
+from __future__ import annotations
+
+import pytest
+
+from openprogram.models.providers.catalog.registry import PROVIDERS
+
+from openprogram.runtime.agent.runtime.factory import create_runtime
+
+import openprogram.models.providers.settings.config_read as cr
+import openprogram.models.providers.catalog.models as pm
+import openprogram.models.providers.catalog.enabled_models as mg
+
+
+@pytest.fixture(autouse=True)
+def _enable_routed_models(monkeypatch):
+    # Post-Task-3 create_runtime resolves the model from the (enabled-only)
+    # registry, so enable the api-routed models these tests build runtimes
+    # for. They inherit their wire api from each provider.json.
+    cfg = {
+        "minimax-cn": {"models": [{"id": "MiniMax-M2.5", "name": "MiniMax M2.5"}]},
+        "minimax-cn-coding-plan": {"models": [
+            {"id": "MiniMax-M3", "name": "MiniMax M3"},
+        ]},
+        "deepseek": {"models": [{"id": "deepseek-chat", "name": "DeepSeek Chat"}]},
+    }
+    monkeypatch.setattr(cr, "read_providers_config", lambda: cfg)
+    reg = mg._load()
+    monkeypatch.setattr(mg, "ENABLED_MODELS", reg)
+    monkeypatch.setattr(pm, "ENABLED_MODELS", reg)
+
+
+def test_providers_table_is_only_the_first_class_backends():
+    # If this set grows, that's fine — but it is NOT the list of supported
+    # providers, which is enabled_models + the api_registry.
+    assert set(PROVIDERS) == {
+        "openai-codex", "gemini-cli",
+        "anthropic", "openai", "gemini",
+    }
+
+
+@pytest.mark.parametrize("provider,model,expected_prefix", [
+    ("minimax-cn", "MiniMax-M2.5", "minimax-cn:MiniMax-M2.5"),  # anthropic-wire
+    ("deepseek", "deepseek-chat", "deepseek:deepseek-chat"),    # openai-wire
+])
+def test_api_routed_provider_builds_runtime_not_error(provider, model, expected_prefix):
+    # Must NOT raise "Unknown provider" — these aren't in PROVIDERS but are
+    # supported through their model's api.
+    rt = create_runtime(provider=provider, model=model)
+    assert str(getattr(rt, "model", "")) == expected_prefix
+
+
+def test_api_routed_provider_defaults_to_a_known_model():
+    rt = create_runtime(provider="minimax-cn")
+    assert str(getattr(rt, "model", "")).startswith("minimax-cn:")
+
+
+def test_auto_detected_api_routed_provider_builds_runtime(monkeypatch):
+    import openprogram.models.providers.catalog.registry as registry
+
+    monkeypatch.setattr(
+        registry,
+        "detect_provider",
+        lambda: ("minimax-cn", "MiniMax-M2.5"),
+    )
+    rt = create_runtime()
+    assert rt.provider_id == "minimax-cn"
+    assert rt.model == "minimax-cn:MiniMax-M2.5"
+
+
+def test_explicit_api_routed_provider_accepts_runtime_prefixed_model():
+    rt = create_runtime(
+        provider="minimax-cn-coding-plan",
+        model="minimax-cn-coding-plan:MiniMax-M3",
+    )
+    assert rt.provider_id == "minimax-cn-coding-plan"
+    assert rt.model == "minimax-cn-coding-plan:MiniMax-M3"

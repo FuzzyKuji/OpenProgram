@@ -1,0 +1,62 @@
+export interface ChannelAccount {
+  channel: string;
+  account_id: string;
+  name: string;
+  enabled: boolean;
+  configured: boolean;
+}
+
+export interface ChannelBindingMatch {
+  channel?: string;
+  account_id?: string;
+  peer?: {
+    kind?: string;
+    id?: string;
+  };
+}
+
+export interface ChannelBinding {
+  id: string;
+  agent_id: string;
+  match: ChannelBindingMatch;
+  created_at?: number;
+}
+
+export const PLATFORMS = [
+  "telegram",
+  "discord",
+  "slack",
+  "wechat",
+] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
+export const PLATFORM_LABEL: Record<string, string> = {
+  telegram: "Telegram",
+  discord: "Discord",
+  slack: "Slack",
+  wechat: "WeChat",
+};
+
+export interface ChannelHealthStatus {
+  alive: boolean;
+  state: "alive" | "stale" | "unknown";
+  last_seen_at: number | null;
+  age_seconds: number | null;
+}
+
+export type StatusMap = Record<string, ChannelHealthStatus>;
+
+export interface ChannelAccessSender {
+  user_id: string;
+  display: string;
+  code?: string;
+  requested_at?: number;
+  approved_at?: number;
+}
+
+export interface ChannelAccessAccount {
+  channel: string;
+  account_id: string;
+  paired: ChannelAccessSender[];
+  pending: Array<ChannelAccessSender & { code: string }>;
+}

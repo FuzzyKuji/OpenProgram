@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool group summary</title>
+<style>
+:root{
+  color-scheme:light;
+  --page:#faf9f5; --surface:#fff; --line:rgba(36,36,32,.12);
+  --text-primary:#3d3d3a; --text-secondary:#5e5d59; --text-muted:#91908c;
+  --accent-green:#3f7a4e; --accent-red:#c24e42; --accent-orange:#b4532a;
+  --fs-chat:15px;
+  --mono:"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text-primary);
+  font:15px/1.65 -apple-system,"PingFang SC","Helvetica Neue",system-ui,sans-serif}
+main{max-width:880px;margin:0 auto;padding:40px 16px 96px}
+h1{font-size:24px;line-height:1.3;margin:0 0 6px}
+h2{font-size:18px;margin:36px 0 8px;line-height:1.35}
+h3{font-size:15px;margin:22px 0 6px}
+p,li{color:var(--text-secondary)}
+code{font-family:var(--mono);font-size:12.5px;background:rgba(36,36,32,.06);padding:1px 5px;border-radius:4px}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 4px}
+th,td{text-align:left;vertical-align:top;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--text-muted);font-weight:500}
+td code{white-space:nowrap}
+.lede{color:var(--text-secondary);margin:0 0 20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px 18px 10px;margin:12px 0}
+.pair{display:grid;grid-template-columns:72px 1fr;align-items:center;column-gap:12px;min-height:40px;border-bottom:1px dashed var(--line)}
+.pair:last-child{border-bottom:0}
+.case{font-size:12px;color:var(--text-muted);margin:12px 0 0;font-weight:500}
+.tag{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.tag.after{color:var(--accent-orange)}
+/* The collapsed row, as in app/styles/chat/execution/execution-strip.css */
+.tl-toggle{display:inline-flex;align-items:center;gap:8px;height:28px;max-width:100%;min-width:0;
+  color:var(--text-muted);font-size:var(--fs-chat);cursor:pointer;user-select:none;border:0;background:none;padding:0;font-family:inherit}
+.tl-toggle:hover{color:var(--text-secondary)}
+.tl-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl-chev{font-size:11px;flex:none}
+.tl-fail{flex:none;font-size:13px;color:var(--accent-red)}
+.diff{--git-added:light-dark(#1e9e3c,#32d74b);--git-removed:light-dark(#cd2054,#ff2c56);display:inline-flex;height:18px;border-radius:4.5px;overflow:hidden;flex:none;font:500 11px/14px ui-sans-serif,-apple-system,sans-serif;font-variant-numeric:tabular-nums lining-nums}
+.diff>span{display:flex;align-items:center;gap:1px;padding:0 6px}
+.diff .add{color:var(--git-added);background:color-mix(in srgb,var(--git-added) 20%,transparent)}
+.diff .del{color:var(--git-removed);background:color-mix(in srgb,var(--git-removed) 20%,transparent)}
+.shimmer{background:linear-gradient(90deg,var(--text-muted) 35%,var(--text-primary) 50%,var(--text-muted) 65%);
+  background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:sweep 1.6s linear infinite}
+@keyframes sweep{from{background-position:100% 0}to{background-position:-100% 0}}
+@media (prefers-reduced-motion:reduce){.shimmer{animation:none}}
+.narrow{max-width:420px}
+@media (max-width:560px){.pair{grid-template-columns:1fr;row-gap:2px;padding:6px 0}}
+</style>
+</head>
+<body>
+<main>
+<h1>Tool group summary</h1>
+<p class="lede">A folded run of tool calls in the chat transcript is headed by one line. This page defines what that line says: a short account of what the calls did, built on the client from the tool calls already in the transcript, with a <code>+N −M</code> badge when the run changed files. It also covers whether a turn-level summary is worth adding.</p>
+
+<h2>Where the row comes from</h2>
+<p><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/bubbles/assistant-bubble.tsx">assistant-bubble.tsx</a> splits a turn's ordered <code>blocks</code> into segments. Each text block stands alone. Each run of consecutive thinking and tool blocks becomes one <code>ExecutionStrip</code> from <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/execution-strip.tsx">execution-strip.tsx</a>, and <code>summarizeToolGroup()</code> writes its header. Older records without ordered blocks go through <code>LegacyRuntimeTrace</code>, which feeds its calls to the same function. The collapsed row is a single 28px line, as <a href="chat-turn-visual-spec.html">the chat-turn visual spec</a> requires.</p>
+
+<h2>Data each call carries</h2>
+<table>
+<tr><th>Field</th><th>Source</th><th>Use</th></tr>
+<tr><td><code>tool</code></td><td>block</td><td>Category through <code>presentTool()</code> in <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/tool-presentation.ts">tool-presentation.ts</a>; this is the same categorisation the timeline rows use.</td></tr>
+<tr><td><code>input</code></td><td>block, full JSON of the call arguments</td><td>Paths (<code>file_path</code>, <code>path</code>), commands, search patterns, URLs. <code>edit</code> carries <code>old_string</code>/<code>new_string</code>, <code>write</code> carries <code>content</code>, and <code>apply_patch</code> carries the whole patch.</td></tr>
+<tr><td><code>result</code>, <code>is_error</code>, <code>outcome</code></td><td>block</td><td>Success or failure. The <code>edit</code> result says <code>(N replacements)</code>, and the <code>apply_patch</code> result says <code>Added</code>, <code>Updated</code> or <code>Deleted</code>.</td></tr>
+<tr><td>running</td><td><code>msg.tools[].status</code></td><td>Which call is in progress.</td></tr>
+<tr><td><code>turnFiles</code></td><td>assistant message, written at finalize from the mutation journal</td><td>Authoritative per-file <code>op</code> (<code>create</code>/<code>modify</code>/<code>delete</code>) and <code>added</code>/<code>removed</code> for the whole turn. It is aggregated per path, has no tool-call id, and only exists once the turn settles.</td></tr>
+</table>
+<p>So per-group stats cannot be read straight from <code>turnFiles</code> when two groups in a turn touch the same file. They can be derived from the arguments, and <code>turnFiles</code> fills the gaps.</p>
+
+<h2>Summary grammar</h2>
+<h3>Phrases</h3>
+<p>Calls in a group are bucketed by kind. Each bucket yields one phrase, placed where its first call occurred, so the line reads in the order things happened. The first phrase is capitalised. Phrases are joined with ", " (Chinese "，"). Thinking gives "Thought" only when the group has nothing else; otherwise it is left out, because every turn thinks.</p>
+<table>
+<tr><th>Kind (tools)</th><th>One</th><th>Several</th><th>Running</th></tr>
+<tr><td>Command (<code>bash</code>, <code>process</code>, <code>terminal_use</code>, <code>execute_code</code>)</td><td>Ran a command</td><td>Ran 3 commands</td><td>Running a command…</td></tr>
+<tr><td>Created file (<code>write</code> to a new path, <code>apply_patch</code> Add File)</td><td>Created pill-shadow.html</td><td>Created 2 files</td><td>Creating pill-shadow.html…</td></tr>
+<tr><td>Edited file (<code>edit</code>, <code>write</code> over an existing file, <code>apply_patch</code> Update)</td><td>Edited app.tsx</td><td>Edited 4 files</td><td>Editing app.tsx…</td></tr>
+<tr><td>Deleted file (<code>apply_patch</code> Delete File)</td><td>Deleted old.css</td><td>Deleted 2 files</td><td>Deleting old.css…</td></tr>
+<tr><td>Read (<code>read</code>, <code>pdf</code>)</td><td>Read package.json</td><td>Read 3 files</td><td>Reading package.json…</td></tr>
+<tr><td>List (<code>list</code>)</td><td>Listed a folder</td><td>Listed 2 folders</td><td>Listing a folder…</td></tr>
+<tr><td>Code search (<code>grep</code>, <code>glob</code>, <code>semble_*</code>, <code>lsp_*</code>)</td><td>Searched for "tl-toggle"</td><td>Ran 3 searches</td><td>Searching for "tl-toggle"…</td></tr>
+<tr><td>Web search (<code>web_search</code>)</td><td>Searched the web</td><td>Searched the web 2 times</td><td>Searching the web…</td></tr>
+<tr><td>Fetch (<code>web_fetch</code>)</td><td>Fetched docs.anthropic.com</td><td>Fetched 3 pages</td><td>Fetching docs.anthropic.com…</td></tr>
+<tr><td>Browser (<code>web_use</code>; <code>agent_browser</code>, <code>playwright_browser</code> and <code>browser_use</code> are deleted tools whose names only render old conversations)</td><td colspan="2">Operated the browser</td><td>Operating the browser…</td></tr>
+<tr><td>Sub-agent (<code>agent</code>, <code>task</code>, <code>send_message</code>)</td><td>Ran sub-agent Reviewer</td><td>Ran 2 sub-agents</td><td>Running sub-agent Reviewer…</td></tr>
+<tr><td>Image (<code>image_generate</code> / <code>image_analyze</code>)</td><td>Generated an image</td><td>Generated 2 images</td><td>Generating an image…</td></tr>
+<tr><td>Todos (<code>todo_*</code>)</td><td colspan="2">Updated todos</td><td>Updating todos…</td></tr>
+<tr><td>Question (<code>ask_user_question</code>)</td><td colspan="2">Asked a question</td><td>Asking a question…</td></tr>
+<tr><td>Memory (<code>memory_*</code>)</td><td colspan="2">Accessed memory</td><td>Accessing memory…</td></tr>
+<tr><td>Program / skill</td><td>Ran program deploy, Used skill pdf</td><td>Ran 2 programs</td><td>Running program deploy…</td></tr>
+<tr><td>Anything else (MCP, custom)</td><td>Used linear_search (×2 adds " 2 times")</td><td>Used linear_search and jira_create; Used 3 tools</td><td>Using linear_search…</td></tr>
+</table>
+<p>Names: one distinct file shows its basename. A command is never named in the header, because commands are long and the expanded row already shows them. A search pattern is quoted and cut to 24 characters. A fetch shows the host only. A bucket names its single target only when it has exactly one distinct target, so "Read a.ts" turns into "Read 2 files" once a second file appears. Repeated calls on the same file count once.</p>
+<p>Numbers: English uses "a"/"an" for one and digits for two or more. Chinese always uses digits with a measure word (<code>1 条命令</code>, <code>3 个文件</code>, <code>2 次</code>).</p>
+<p>Failures: if any call in the group failed, a muted red "· 1 failed" follows the label. A failed call still counts in its bucket, and failed file writes add nothing to the badge.</p>
+
+<h3>Running state</h3>
+<p>While the group is the live part of a streaming turn, completed buckets keep the past tense and the bucket of the call in progress switches to the present tense with a trailing "…". It moves to the end of the line, where the eye expects the newest step, for example "Read 2 files, running a command…". The shimmer stays. When the call finishes, the phrase settles back to the past tense in its first-occurrence position. If the group only has thinking so far, the label is "Thinking…".</p>
+
+<h3>Truncation</h3>
+<p>On screen the label is one line: the label span has <code>min-width:0</code> with a CSS ellipsis, and the failure note, badge and chevron are <code>flex:none</code>, so they never drop off. There is no character budget, so the same label fits a narrow side pane and a wide window. The row has no hover tip of any kind: it is transcript content, not a control whose purpose needs explaining, and expanding it shows every call.</p>
+
+<h3>Change badge</h3>
+<p>The badge shows when at least one file-writing call in the group succeeded and every successful one has known counts. It sums those counts, shows zeros (<code>+16 −0</code>), and reuses the turn file card's <code>.turn-files-diff</code> pill. Counts per call:</p>
+<ul>
+<li><code>apply_patch</code>: count the <code>+</code> and <code>-</code> lines of the patch body. This is exact.</li>
+<li><code>edit</code>: a line diff of <code>old_string</code> against <code>new_string</code>, multiplied by the replacement count from the result. Above 2,000 lines on either side it falls back to the plain line counts.</li>
+<li><code>write</code>: when <code>turnFiles</code> marks the path as <code>create</code>, it is <code>+lines(content) −0</code>. When the path is <code>modify</code> and every write to it in the turn is inside this group, it takes the <code>turnFiles</code> numbers. Otherwise the count is unknown, and the badge waits; during streaming that usually means it appears when the turn settles.</li>
+</ul>
+<p>This also decides create versus edit for <code>write</code>. Until <code>turnFiles</code> exists, a <code>write</code> counts as "Created" only if the turn has not read or edited that path before. When <code>turnFiles</code> says <code>modify</code>, it becomes "Edited".</p>
+
+<h3>Strings</h3>
+<p>Every phrase goes through the existing <code>text(en, zh)</code> from <code>useTranslation()</code>. Each bucket has one entry: a past and a present form, each in a one-target and a count variant. Chinese uses <code>了</code> for the past and <code>正在</code> for the present: <code>运行了 1 条命令，创建了 pill-shadow.html</code> and <code>读取了 2 个文件，正在运行命令…</code>.</p>
+
+<h3>Where the summary is built</h3>
+<p>All of it is built on the client from structured tool data, as a pure function next to <code>tool-presentation.ts</code>. No model call and no backend change is needed. One optional backend refinement would make <code>write</code> exact while streaming and give exact per-group counts when two groups touch one file: stamp the tool-call id on each mutation-journal entry and send per-call <code>{path, op, added, removed}</code> with the tool result.</p>
+
+<h2>Preview</h2>
+<p>Each pair contrasts a category-count header with this design's header for the same calls. Both are collapsed rows at the transcript's 15px size.</p>
+<div class="card">
+  <div class="case">Command, then a new file</div>
+  <div class="pair"><span class="tag">Counts</span><button class="tl-toggle"><span class="tl-label">Thought, edited 1 file, ran 1 command</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label">Ran a command, created pill-shadow.html</span><span class="diff"><span class="add">+16</span><span class="del">−0</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">Investigate, then fix one file</div>
+  <div class="pair"><span class="tag">Counts</span><button class="tl-toggle"><span class="tl-label">Thought, edited 1 file, read 3 files, searched 1 time</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label">Read 3 files, searched for "tl-toggle", edited execution-strip.tsx</span><span class="diff"><span class="add">+12</span><span class="del">−4</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">Web research</div>
+  <div class="pair"><span class="tag">Counts</span><button class="tl-toggle"><span class="tl-label">Browsed 3 times</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label">Searched the web 2 times, fetched docs.anthropic.com</span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">MCP and custom tools</div>
+  <div class="pair"><span class="tag">Counts</span><button class="tl-toggle"><span class="tl-label">Ran 1 command, called 2 functions</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label">Used linear_search 2 times, ran a command</span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">A command failed</div>
+  <div class="pair"><span class="tag">Counts</span><button class="tl-toggle"><span class="tl-label">Edited 1 file, ran 2 commands</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label">Edited app.tsx, ran 2 commands</span><span class="tl-fail">· 1 failed</span><span class="diff"><span class="add">+3</span><span class="del">−3</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">Running (streaming)</div>
+  <div class="pair"><span class="tag">Counts</span><button class="tl-toggle"><span class="tl-label shimmer">Thought, read 2 files, ran 1 command</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label shimmer">Read 2 files, running a command…</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">Summary</span><button class="tl-toggle"><span class="tl-label shimmer">Ran 2 commands, editing turn-files-chips.tsx…</span><span class="diff"><span class="add">+8</span><span class="del">−2</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">Long group in a narrow pane (hover shows the full label)</div>
+  <div class="pair"><span class="tag">Counts</span><div class="narrow"><button class="tl-toggle"><span class="tl-label">Thought, edited 4 files, ran 5 commands, read 6 files, searched 3 times, browsed 1 time</span><span class="tl-chev">›</span></button></div></div>
+  <div class="pair"><span class="tag after">Summary</span><div class="narrow"><button class="tl-toggle"><span class="tl-label">Read 6 files, ran 3 searches, edited 4 files, ran 5 commands, fetched github.com</span><span class="diff"><span class="add">+210</span><span class="del">−88</span></span><span class="tl-chev">›</span></button></div></div>
+</div>
+
+<h2>Turn-level summary</h2>
+<p>A single line at the top of a turn, such as "Read 9 files, edited 3 files, ran 6 commands · +40 −12", was considered.</p>
+<ul>
+<li><b>A deterministic version</b> is free: the same function runs over every tool block in the turn. But the turn already ends with the file card's per-turn totals, each group already has its own header, and the reply text is the model's own account of the turn. A top line would repeat both.</li>
+<li><b>A model-written version</b> ("Fixed the pill shadow and verified the build") would need an extra call per turn through the title-model path that <a href="../sidebar/session-auto-rename.html">session auto rename</a> uses. It costs tokens and latency, can only appear after the turn ends, and sends the turn's content to a model a second time. It is also most likely to say the same thing as the reply.</li>
+</ul>
+<p>The turn-level line is not built. Where a turn must collapse to one line elsewhere, such as the message minimap, a hover preview, or a sub-agent row in the parent turn, that surface calls the deterministic aggregate.</p>
+
+<h2>Implementation</h2>
+<ul>
+<li><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/tool-group-summary.ts">tool-group-summary.ts</a> is a pure module. <code>summarizeToolGroup(blocks, {text, active, runningIds, spawnNames, turnFiles, turnBlocks})</code> returns <code>{label, failed, added, removed}</code>; <code>added</code> and <code>removed</code> are both <code>null</code> when there is no badge. It owns <code>SPAWNING_TOOL_NAMES</code>, reuses <code>presentTool()</code>'s tones for tools it has no bucket for, and exports <code>lineDiff()</code> (LCS over lines after trimming the common head and tail, capped at <code>LINE_DIFF_CAP</code> = 2,000 lines) and <code>parsePatch()</code>.</li>
+<li><code>ExecutionStrip</code> takes <code>label: string | ToolGroupSummary</code>. A plain string, as the workflow runtime card and the debugger panel pass, renders as before with no note or badge. The row renders the ellipsis label, the red failure note, the badge (the <code>.turn-files-diff</code> / <code>.turn-files-stat</code> pill of the turn file card), the chevron, and the hover tip.</li>
+<li><code>AssistantBubble</code> passes each segment's blocks with the whole turn's blocks, <code>msg.turnFiles</code>, the running-call ids, and whether the segment is the live tail.</li>
+<li>Legacy records go through the same function. <code>LegacyRuntimeTrace</code> (agent calls stored without ordered blocks) turns each call into a tool block named after its function, so the header reads "Used extract_tables" rather than "Called 1 function", and it now shimmers while a call runs. Legacy sub-agent strips with no tool blocks pass only their spawn labels.</li>
+<li>CSS in <code>app/styles/chat/execution/execution-strip.css</code>: <code>.tl-label</code> ellipsis, <code>.tl-fail</code>, and <code>flex:none</code> on <code>.tl-diff</code> and <code>.tl-chev</code>.</li>
+<li>Tests: <code>apps/web/tests/chat/messages/tool-group-summary.test.mjs</code> covers grammar per bucket, plurals in both languages, ordering, the running tense, failures, badge sources and unknown counts, apply_patch parsing, and the capped line diff.</li>
+</ul>
+
+<h2>Implementation status</h2>
+<p>Implemented as described. The optional backend refinement (tool-call ids on mutation-journal entries) is not built, so a <code>write</code> over an existing file shows its badge only once the turn settles.</p>
+</main>
+</body>
+</html>

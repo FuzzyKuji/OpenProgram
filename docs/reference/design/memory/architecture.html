@@ -1,0 +1,1489 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Mechanism diagrams</title>
+<style>
+  :root{
+    --bg:#16150f; --pan:#1d1c14; --bd:#2e2c20; --tx:#bdb9a6; --acc:#d4843a;
+    --cb:#12110b; --dim:#8a8675;
+    --c0:#4f8ef7; --c1:#5aad4e; --c2:#d4843a; --c3:#9d6fe0; --c4:#2db3d5;
+    --no:#e0445a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:40px 24px 96px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:23px;color:#f0eee6;margin:0 0 6px}
+  .sub{color:var(--tx);margin:0 0 20px;max-width:78ch}
+  .sub a{color:var(--acc)}
+  h2{font-size:16px;color:var(--acc);margin:34px 0 8px;scroll-margin-top:20px}
+  h2 .num{color:var(--dim);font-size:12px;margin-right:8px;letter-spacing:.16em}
+  .lead{color:var(--dim);font-size:13px;margin:0 0 12px;max-width:80ch}
+  .card{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:8px;margin-bottom:16px}
+  svg{display:block;width:100%;height:auto;background:var(--cb);border-radius:8px}
+  .legend{font-size:12.5px;color:var(--dim);padding:8px 10px;line-height:1.8}
+  .legend b{color:#f0eee6}
+  code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
+  text{font-family:-apple-system,"Segoe UI",sans-serif}
+
+  .toc{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 22px}
+  .toc a{font-size:12px;color:var(--tx);text-decoration:none;border:1px solid var(--bd);
+    background:var(--pan);border-radius:99px;padding:4px 12px}
+  .toc a:hover{border-color:var(--acc);color:#f0eee6}
+
+  /* Three status columns */
+  .grid3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 22px}
+  .st{background:var(--pan);border:1px solid var(--bd);border-top-width:3px;border-radius:12px;padding:12px 15px}
+  .st .k{font-size:10.5px;letter-spacing:.2em;color:var(--dim);margin-bottom:5px}
+  .st p{margin:0;font-size:12.5px;color:#a5a190;line-height:1.7}
+  .st p b{color:#f0eee6;font-weight:600}
+  @media(max-width:860px){.grid3{grid-template-columns:1fr}}
+
+  /* Two-column cards */
+  .grid2{display:grid;grid-template-columns:repeat(2,1fr);gap:14px;margin-bottom:16px}
+  .oc{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:8px 8px 12px}
+  .oc h4{margin:6px 4px 8px;font-size:13.5px;color:#f0eee6}
+  .oc .d{margin:8px 10px 0;font-size:12.5px;color:#a5a190;line-height:1.7}
+  .oc .d b{color:var(--no);font-weight:600}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+
+  .tbl{overflow-x:auto;background:var(--pan);border:1px solid var(--bd);border-radius:12px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:720px}
+  th{text-align:left;padding:10px 14px;color:var(--dim);font-weight:600;font-size:11px;
+    letter-spacing:.14em;border-bottom:1px solid var(--bd);white-space:nowrap}
+  td{padding:10px 14px;border-bottom:1px solid #26241a;vertical-align:top;line-height:1.65}
+  tr:last-child td{border-bottom:none}
+  td.y{color:var(--c1)} td.n{color:var(--no)}
+  td b{color:#f0eee6;font-weight:600}
+
+  .note{border-left:3px solid var(--bd);padding:2px 0 2px 13px;color:var(--dim);
+    font-size:12.5px;margin:0 0 16px;max-width:88ch;line-height:1.8}
+  .note b{color:#f0eee6}
+
+  /* Memory Web target UI — isolated light product mock inside the dark design page. */
+  .m-review{margin:16px 0 20px}
+  .m-review-head{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:0 0 10px}
+  .m-review-head h3{margin:0;color:#f0eee6;font-size:14px}
+  .m-review-head p{margin:0;color:var(--dim);font-size:12px}
+  .m-frame{overflow:hidden;border:1px solid #d9d9dd;border-radius:14px;background:#fff;color:#202124;
+    box-shadow:0 18px 48px rgba(0,0,0,.24)}
+  .m-top{height:64px;padding:0 20px;display:flex;align-items:center;border-bottom:1px solid #e5e5e8;background:#fbfbfc}
+  .m-title{font-size:20px;font-weight:650;letter-spacing:-.01em}
+  .m-top-meta{margin-left:auto;display:flex;align-items:center;gap:14px;color:#777982;font-size:12px}
+  .m-settings{height:32px;padding:0 11px;border:1px solid #d9d9dd;border-radius:8px;background:#f4f4f6;
+    color:#404148;font:600 12px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-decoration:none;
+    display:inline-flex;align-items:center;justify-content:center}
+  .m-shell{height:610px;display:grid;grid-template-columns:288px minmax(0,1fr);min-width:0}
+  .m-rail{min-width:0;display:flex;flex-direction:column;background:#f7f7f8;border-right:1px solid #e4e4e7}
+  .m-nav{padding:10px 10px 9px;border-bottom:1px solid #e4e4e7;display:grid;gap:2px}
+  .m-nav-item{width:100%;height:36px;padding:0 10px;display:flex;align-items:center;gap:10px;border:0;
+    border-radius:8px;background:transparent;color:#666871;font:500 13px/1 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;text-align:left}
+  .m-nav-item:hover{background:#ececef;color:#25262b}
+  .m-nav-item.active{background:#e7e7ea;color:#17181c;font-weight:600}
+  .m-glyph{width:18px;text-align:center;font-size:15px;color:inherit}
+  .m-count{margin-left:auto;color:#8a8c94;font-size:11px;font-variant-numeric:tabular-nums}
+  .m-context{display:none;min-height:0;flex:1;flex-direction:column}
+  .m-context.active{display:flex}
+  .m-search{height:34px;margin:10px;padding:0 11px;display:flex;align-items:center;gap:8px;border:1px solid #dedee2;
+    border-radius:9px;background:#fff;color:#989aa2;font-size:12px}
+  .m-section-label{padding:4px 14px 6px;color:#93959d;font-size:10px;font-weight:700;letter-spacing:.1em}
+  .m-list{padding:0 7px 10px;overflow:auto}
+  .m-row{min-height:38px;padding:7px 9px;display:flex;align-items:center;gap:8px;border-radius:8px;color:#5e6068;font-size:12.5px}
+  .m-row.active{background:#fff;color:#1f2025;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  .m-row-main{min-width:0;flex:1}
+  .m-row-title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-weight:550}
+  .m-row-sub{display:block;margin-top:2px;color:#9698a0;font-size:10.5px}
+  .m-time-tree{padding:8px 7px 14px;overflow:auto}
+  .m-time-tree details{margin:0}
+  .m-time-tree summary{list-style:none;cursor:pointer}
+  .m-time-tree summary::-webkit-details-marker{display:none}
+  .m-year-summary,.m-month-summary{height:34px;padding:0 8px;display:flex;align-items:center;gap:7px;color:#555760}
+  .m-year-summary{font-size:12px;font-weight:700}
+  .m-month-summary{padding-left:22px;color:#73757e;font-size:11px;font-weight:650}
+  .m-disclosure{width:14px;height:14px;flex:0 0 14px;color:#858891;transform:rotate(0);transition:transform .12s ease}
+  details[open]>.m-year-summary>.m-disclosure,details[open]>.m-month-summary>.m-disclosure{transform:rotate(90deg)}
+  .m-time-days{padding:0 0 5px 27px}
+  .m-time-day{min-height:42px;padding:6px 8px;display:grid;grid-template-columns:25px minmax(0,1fr) auto;align-items:center;gap:8px;border-radius:8px;color:#62646c}
+  .m-time-day.active{background:#fff;color:#202126;box-shadow:0 1px 2px rgba(0,0,0,.05)}
+  .m-time-number{font-variant-numeric:tabular-nums;font-size:13px;font-weight:650}
+  .m-time-name{min-width:0;font-size:11.5px}
+  .m-time-size{color:#999ba3;font-size:10px}
+  .m-rail-note{margin:auto 10px 10px;padding:12px;border:1px solid #dedee2;border-radius:10px;background:#fff}
+  .m-rail-note strong{display:block;margin-bottom:4px;color:#34353b;font-size:12px}
+  .m-rail-note span{display:block;color:#858790;font-size:10.5px;line-height:1.45}
+  .m-meter{height:5px;margin:9px 0 5px;overflow:hidden;border-radius:99px;background:#e9e9ec}
+  .m-meter i{display:block;width:21.25%;height:100%;background:#65a477;border-radius:inherit}
+  .m-main{min-width:0;min-height:0;background:#fdfdfd}
+  .m-panel{display:none;height:100%;min-width:0;flex-direction:column}
+  .m-panel.active{display:flex}
+  .m-detail-head{min-height:76px;padding:14px 22px;display:flex;align-items:center;gap:16px;border-bottom:1px solid #e7e7ea;background:#fff}
+  .m-detail-copy{min-width:0;flex:1}
+  .m-detail-title{display:flex;align-items:center;gap:8px;color:#1c1d21;font-size:18px;font-weight:650}
+  .m-detail-sub{margin-top:4px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:#858790;font-size:11.5px}
+  .m-badge{height:20px;padding:0 7px;display:inline-flex;align-items:center;border-radius:5px;background:#eeeef1;
+    color:#73757d;font-size:9.5px;font-weight:700;letter-spacing:.07em}
+  .m-actions{display:flex;align-items:center;gap:7px}
+  .m-segment{height:30px;padding:3px;display:flex;border:1px solid #dedee2;border-radius:8px;background:#f3f3f5}
+  .m-segment span{min-width:56px;padding:0 10px;display:flex;align-items:center;justify-content:center;border-radius:6px;color:#858790;font-size:11px}
+  .m-segment span.active{background:#fff;color:#303137;box-shadow:0 1px 2px rgba(0,0,0,.08)}
+  .m-doc-wrap{min-height:0;flex:1;overflow:auto;padding:28px 34px 56px;background:#fafafa}
+  .m-doc{max-width:780px;margin:0 auto;padding:30px 34px;border:1px solid #e4e4e7;border-radius:12px;background:#fff;
+    box-shadow:0 1px 2px rgba(0,0,0,.035)}
+  .m-empty-card{max-width:560px;margin:64px auto;padding:28px;border:1px solid #e4e4e7;border-radius:14px;background:#fff;
+    box-shadow:0 1px 2px rgba(0,0,0,.035);text-align:left}
+  .m-empty-card .m-glyph{width:40px;height:40px;margin-bottom:18px;display:flex;align-items:center;justify-content:center;
+    border:1px solid #e4e4e7;border-radius:10px;background:#f6f6f7;color:#676971;font-size:18px}
+  .m-empty-card h4{margin:0 0 7px;font-size:17px}
+  .m-empty-card p{max-width:420px;margin:0 0 18px;color:#74767e;font-size:12.5px;line-height:1.6}
+  .m-doc-kicker{margin-bottom:8px;color:#8b8d95;font-size:10px;font-weight:700;letter-spacing:.11em;text-transform:uppercase}
+  .m-doc h4{margin:0 0 10px;color:#202126;font-size:22px;line-height:1.25;letter-spacing:-.015em}
+  .m-doc .m-lede{margin:0 0 22px;color:#6e7078;font-size:13px;line-height:1.6}
+  .m-record{padding:16px 0;border-top:1px solid #ececef}
+  .m-record:first-of-type{border-top:0}
+  .m-record-meta{display:flex;align-items:center;gap:8px;margin-bottom:6px;color:#9799a1;font-size:10.5px}
+  .m-record p{margin:0;color:#3e4046;font-size:13px;line-height:1.65}
+  .m-recent-card{padding:16px 0;border-top:1px solid #ececef}
+  .m-recent-card:first-child{border-top:0}
+  .m-recent-card .m-record-meta{justify-content:space-between}
+  .m-core-status{display:flex;align-items:center;gap:8px;color:#5b7d63;font-size:11px}
+  .m-core-status::before{content:"";width:7px;height:7px;border-radius:50%;background:#65a477}
+  .m-placeholder{margin:auto;padding:28px;text-align:center;color:#8d8f97;font-size:12px}
+  .m-state-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0 18px}
+  .m-state{padding:14px;border:1px solid var(--bd);border-radius:12px;background:var(--pan)}
+  .m-state h4{margin:0 0 4px;color:#f0eee6;font-size:12.5px}
+  .m-state p{margin:0;color:var(--dim);font-size:11.5px;line-height:1.55}
+  .m-mobile{max-width:430px;margin:12px auto 4px;overflow:hidden;border:1px solid #d9d9dd;border-radius:12px;background:#fff;color:#24252a}
+  .m-mobile-head{height:52px;padding:0 12px;display:flex;align-items:center;border-bottom:1px solid #e5e5e8;font-weight:650}
+  .m-back{width:30px;height:30px;margin-right:6px;border:0;border-radius:7px;background:transparent;color:#6d6f77;font-size:20px}
+  .m-mobile-tabs{padding:7px;display:grid;grid-template-columns:repeat(4,1fr);gap:4px;border-bottom:1px solid #e5e5e8;background:#f7f7f8}
+  .m-mobile-tab{height:34px;display:flex;align-items:center;justify-content:center;border:0;border-radius:7px;background:transparent;color:#7b7d85;font-size:14px}
+  .m-mobile-tab.active{background:#fff;color:#24252a;box-shadow:0 1px 2px rgba(0,0,0,.06)}
+  .m-mobile-body{padding:18px 16px 28px}
+  .m-mobile-body h4{margin:0 0 4px;font-size:17px}
+  .m-mobile-body p{margin:0;color:#73757d;font-size:12px;line-height:1.55}
+  .m-mobile-row{width:100%;margin-top:10px;padding:13px;border:1px solid #e4e4e7;border-radius:9px;background:#fafafa;color:#24252a;text-align:left}
+  .m-mobile-row strong{display:block;margin-bottom:4px;font-size:12px}
+  .m-mobile-row span{font-size:11px;color:#777982}
+  .m-mobile-view[hidden]{display:none}
+  .m-mobile-context[hidden]{display:none}
+  .m-nav-item:focus-visible,.m-mobile-tab:focus-visible,.m-mobile-row:focus-visible,.m-back:focus-visible,.m-settings:focus-visible{
+    outline:2px solid #4f8ef7;outline-offset:2px}
+  @media(max-width:720px){
+    .m-review{display:none}
+    .m-review-head{display:block}.m-review-head p{margin-top:4px}
+    .m-shell{height:560px;grid-template-columns:1fr}.m-rail{display:none}
+    .m-detail-head{padding:12px 14px;align-items:flex-start}.m-actions{flex-wrap:wrap;justify-content:flex-end}
+    .m-doc-wrap{padding:16px}.m-doc{padding:22px 20px}.m-state-grid{grid-template-columns:1fr}
+  }
+  @media(prefers-reduced-motion:reduce){.m-nav-item{transition:none}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>Mechanism diagrams</h1>
+  <p class="sub">How a conversation becomes topic files on disk, what happens if a write fails midway, how forks track previously written messages, and who maintains the small memory block injected into every session. The main text is in <code>docs/reference/design/memory/overview.md</code>; the complete design for section 04 is in <a href="written-marker.html">written-marker.md</a>. This page illustrates mechanisms only. Comparisons with other implementations and the rationale for our choices are in <a href="comparison.html">Memory writing: comparison of eight frameworks</a>.</p>
+
+  <div class="grid3">
+    <div class="st" style="border-top-color:#5aad4e">
+      <div class="k">Running implementation</div>
+      <p>Two write entry points, five write steps, staged transactions, nightly organization, the <b>silence-means-success</b> return-value contract, and <b>Section 05</b> and its resident-block derived view: <code>core.md</code> is rendered from <code>topics/core.md</code>; exceeding the budget no longer rejects transactions.</p>
+    </div>
+    <div class="st" style="border-top-color:#d4843a">
+      <div class="k">Designed, not yet implemented</div>
+      <p><b>Section 04’s</b> write cursor: the running implementation still uses positions, which can omit an entire fork or write only a fragment starting mid-conversation. The planned approach <b>marks nodes as written</b> and walks backward from head to the first marked node.</p>
+    </div>
+    <div class="st" style="border-top-color:#8a8675">
+      <div class="k">Interface present but not connected</div>
+      <p><code>name</code> <code>is_available</code> <code>initialize</code> <code>shutdown</code>
+        <code>extract_before_discard</code>: five methods have no runtime callers.</p>
+    </div>
+  </div>
+
+  <div class="toc">
+    <a href="#flow">01 From conversation to long-term memory</a>
+    <a href="#steps">02 Five write steps</a>
+    <a href="#txn">03 Transactions: stage, validate, install</a>
+    <a href="#cursor">04 Cursor: identity versus position</a>
+    <a href="#core">05 Maintaining the resident block</a>
+    <a href="#hooks">06 Nine interface methods</a>
+    <a href="#fail">07 Failure behavior</a>
+    <a href="#open">08 Unresolved issues</a>
+    <a href="#web">09 Web page status</a>
+    <a href="#changes">10 Unified modification interface</a>
+  </div>
+
+  <!-- ══════════ 01 Overview ══════════ -->
+  <h2 id="flow"><span class="num">01</span> From conversation to long-term memory</h2>
+  <p class="lead">Two entry points share one write implementation. They differ only in the <code>force</code> switch: one waits for enough content; the other writes everything remaining.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 610" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="From conversation to long-term memory">
+    <defs>
+      <marker id="f-gn" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+      <marker id="f-bl" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#4f8ef7"/></marker>
+      <marker id="f-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+      <marker id="f-vi" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9d6fe0"/></marker>
+      <marker id="f-cy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2db3d5"/></marker>
+    </defs>
+
+    <text x="24" y="32" fill="#d4843a" font-size="16" font-weight="700">From conversation to long-term memory</text>
+    <text x="24" y="56" fill="#8a8675" font-size="12.5">Conversation content is not buffered in process memory for writing. Every write rereads session storage, so process restarts lose nothing.</text>
+
+    <!-- Session storage -->
+    <rect x="32" y="76" width="1096" height="86" rx="10" fill="#1e2630" stroke="#2db3d5" stroke-width="1.4"/>
+    <text x="50" y="102" fill="#2db3d5" font-size="13" font-weight="700">Sessions</text>
+    <text x="122" y="102" fill="#8a8675" font-size="11.5">Persistent and ordered; stable ID per message</text>
+    <g>
+      <rect x="50" y="114" width="76" height="28" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="88" y="132" fill="#bdb9a6" font-size="11.5" text-anchor="middle">User</text>
+      <rect x="134" y="114" width="76" height="28" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="172" y="132" fill="#bdb9a6" font-size="11.5" text-anchor="middle">Assistant</text>
+      <rect x="218" y="114" width="76" height="28" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="256" y="132" fill="#bdb9a6" font-size="11.5" text-anchor="middle">User</text>
+      <rect x="302" y="114" width="76" height="28" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="340" y="132" fill="#bdb9a6" font-size="11.5" text-anchor="middle">Assistant</text>
+      <rect x="386" y="114" width="76" height="28" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="424" y="132" fill="#bdb9a6" font-size="11.5" text-anchor="middle">User</text>
+      <rect x="470" y="114" width="76" height="28" rx="6" fill="#12110b" stroke="#2e2c20"/>
+      <text x="508" y="132" fill="#bdb9a6" font-size="11.5" text-anchor="middle">Assistant</text>
+      <text x="562" y="134" fill="#6b6a63" font-size="13">…</text>
+    </g>
+    <text x="606" y="124" fill="#bdb9a6" font-size="11.5">get_branch(session_id) walks backward along predecessor edges,</text>
+    <text x="606" y="144" fill="#bdb9a6" font-size="11.5">returning the head branch in order</text>
+
+    <text x="50" y="184" fill="#8a8675" font-size="11.5">Only user messages and assistant replies count. Tool calls/results, runtime-scheduled turns such as subagent reports or branch-merge notices, and empty messages never enter memory.</text>
+
+    <!-- Entry one -->
+    <rect x="32" y="206" width="272" height="122" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="50" y="232" fill="#5aad4e" font-size="13.5" font-weight="700">Entry one · end of each turn</text>
+    <text x="50" y="250" fill="#6b6a63" font-size="10.5" font-family="Menlo,monospace">conversation/turn_runtime</text>
+    <text x="50" y="272" fill="#d4843a" font-size="11" font-family="Menlo,monospace">write(session_id=…)  force=False</text>
+    <text x="50" y="294" fill="#bdb9a6" font-size="11">Read stored session messages</text>
+    <text x="50" y="314" fill="#8a8675" font-size="10.5">Called every turn; usually does nothing</text>
+
+    <!-- Entry two -->
+    <rect x="32" y="348" width="272" height="122" rx="9" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.5"/>
+    <text x="50" y="374" fill="#4f8ef7" font-size="13.5" font-weight="700">Entry two · session becomes idle</text>
+    <text x="50" y="392" fill="#6b6a63" font-size="10.5" font-family="Menlo,monospace">memory/session_watcher</text>
+    <text x="50" y="414" fill="#d4843a" font-size="11" font-family="Menlo,monospace">write(messages, …)  force=True</text>
+    <text x="50" y="436" fill="#bdb9a6" font-size="11">Scan every five minutes; idle after 30</text>
+    <text x="50" y="456" fill="#8a8675" font-size="10.5">Write all remaining content</text>
+
+    <!-- Entry three -->
+    <rect x="32" y="490" width="272" height="96" rx="9" fill="#221a30" stroke="#9d6fe0" stroke-width="1.5"/>
+    <text x="50" y="516" fill="#9d6fe0" font-size="13.5" font-weight="700">Daily 03:00 · organize</text>
+    <text x="50" y="534" fill="#6b6a63" font-size="10.5" font-family="Menlo,monospace">memory/scheduler</text>
+    <text x="50" y="556" fill="#d4843a" font-size="11" font-family="Menlo,monospace">reorganize(model=…)</text>
+    <text x="50" y="576" fill="#bdb9a6" font-size="11">Reorganize disk content; no new content</text>
+
+    <!-- Convergence -->
+    <rect x="344" y="206" width="236" height="264" rx="10" fill="#241f10" stroke="#d4843a" stroke-width="1.8"/>
+    <text x="362" y="234" fill="#d4843a" font-size="14" font-weight="700">writing.write()</text>
+    <text x="362" y="254" fill="#8a8675" font-size="11">Both paths converge here</text>
+    <line x1="362" y1="268" x2="562" y2="268" stroke="#2e2c20" stroke-width="1"/>
+    <text x="362" y="294" fill="#5aad4e" font-size="11.5" font-weight="700">force=False</text>
+    <text x="362" y="314" fill="#bdb9a6" font-size="11">Run once and return. Below threshold,</text>
+    <text x="362" y="332" fill="#bdb9a6" font-size="11">write nothing.</text>
+    <text x="362" y="366" fill="#4f8ef7" font-size="11.5" font-weight="700">force=True</text>
+    <text x="362" y="386" fill="#bdb9a6" font-size="11">Repeat passes while content remains</text>
+    <text x="362" y="404" fill="#bdb9a6" font-size="11">until nothing remains.</text>
+    <text x="362" y="432" fill="#8a8675" font-size="10.5">No next batch after session end;</text>
+    <text x="362" y="450" fill="#8a8675" font-size="10.5">partial writes leave content unwritten.</text>
+
+    <!-- One pass -->
+    <rect x="620" y="206" width="244" height="264" rx="10" fill="#12110b" stroke="#2e2c20" stroke-width="1.4"/>
+    <text x="638" y="234" fill="#d4843a" font-size="14" font-weight="700">One write_session() pass</text>
+    <text x="638" y="254" fill="#8a8675" font-size="11">Five steps; see section 02</text>
+    <g font-size="11.5" fill="#bdb9a6">
+      <circle cx="648" cy="286" r="9" fill="#1e2630" stroke="#2db3d5"/><text x="648" y="290" fill="#2db3d5" font-size="10.5" text-anchor="middle">1</text>
+      <text x="666" y="290">Select unwritten messages</text>
+      <circle cx="648" cy="322" r="9" fill="#1d2738" stroke="#4f8ef7"/><text x="648" y="326" fill="#4f8ef7" font-size="10.5" text-anchor="middle">2</text>
+      <text x="666" y="326">Accumulate 16k tokens</text>
+      <circle cx="648" cy="358" r="9" fill="#241f10" stroke="#d4843a"/><text x="648" y="362" fill="#d4843a" font-size="10.5" text-anchor="middle">3</text>
+      <text x="666" y="362">Model edits staged files</text>
+      <circle cx="648" cy="394" r="9" fill="#221a30" stroke="#9d6fe0"/><text x="648" y="398" fill="#9d6fe0" font-size="10.5" text-anchor="middle">4</text>
+      <text x="666" y="398">Organize at the threshold</text>
+      <circle cx="648" cy="430" r="9" fill="#101a10" stroke="#5aad4e"/><text x="648" y="434" fill="#5aad4e" font-size="10.5" text-anchor="middle">5</text>
+      <text x="666" y="434">Validate and install</text>
+    </g>
+
+    <!-- Memory repository -->
+    <rect x="900" y="176" width="228" height="352" rx="10" fill="#12110b" stroke="#2e2c20" stroke-width="1.4"/>
+    <text x="918" y="204" fill="#d4843a" font-size="14" font-weight="700">Memory repository</text>
+    <text x="918" y="224" fill="#6b6a63" font-size="10.5" font-family="Menlo,monospace">&lt;state&gt;/memory/</text>
+    <text x="918" y="256" fill="#d4843a" font-size="11.5" font-family="Menlo,monospace">topics/</text>
+    <text x="918" y="274" fill="#8a8675" font-size="11">Only model-editable files</text>
+    <text x="918" y="304" fill="#2db3d5" font-size="11.5" font-family="Menlo,monospace">/s/&lt;session&gt;#&lt;msg&gt;</text>
+    <text x="918" y="322" fill="#8a8675" font-size="11">Footnotes cite chat messages</text>
+    <text x="918" y="352" fill="#5aad4e" font-size="11.5" font-family="Menlo,monospace">core.md</text>
+    <text x="918" y="370" fill="#8a8675" font-size="11">Injected into every session</text>
+    <text x="918" y="400" fill="#9d6fe0" font-size="11.5" font-family="Menlo,monospace">timeline/ + two locations</text>
+    <text x="918" y="418" fill="#8a8675" font-size="11">Derived views rebuilt after writes</text>
+    <text x="918" y="448" fill="#8a8675" font-size="11.5" font-family="Menlo,monospace">.scriptorium/</text>
+    <text x="918" y="466" fill="#8a8675" font-size="11">Cursor, write lock, writer history</text>
+    <line x1="918" y1="486" x2="1110" y2="486" stroke="#2e2c20" stroke-width="1"/>
+    <text x="918" y="508" fill="#8a8675" font-size="10.5">One commit per successful write</text>
+
+    <!-- Connections -->
+    <line x1="304" y1="267" x2="340" y2="267" stroke="#5aad4e" stroke-width="1.6" marker-end="url(#f-gn)"/>
+    <line x1="304" y1="409" x2="340" y2="409" stroke="#4f8ef7" stroke-width="1.6" marker-end="url(#f-bl)"/>
+    <line x1="580" y1="338" x2="616" y2="338" stroke="#d4843a" stroke-width="1.6" marker-end="url(#f-or)"/>
+    <line x1="864" y1="338" x2="896" y2="338" stroke="#d4843a" stroke-width="1.6" marker-end="url(#f-or)"/>
+
+    <!-- force Loop -->
+    <path d="M742 470 L742 492 L462 492 L462 474" fill="none" stroke="#4f8ef7" stroke-width="1.5"
+      stroke-dasharray="6 4" marker-end="url(#f-bl)"/>
+    <text x="602" y="510" fill="#4f8ef7" font-size="11" text-anchor="middle">When forced: repeat while content remains</text>
+
+    <!-- Organization directly accesses memory -->
+    <path d="M304 538 C 520 570, 720 572, 894 520" fill="none" stroke="#9d6fe0" stroke-width="1.5"
+      marker-end="url(#f-vi)"/>
+    <text x="596" y="592" fill="#9d6fe0" font-size="11" text-anchor="middle">Organization bypasses ingestion: it rearranges topics/, cites no new message, and marks no turns</text>
+  </svg>
+  <p class="note">Diagram details: Session storage. No messages passed; read session storage. Scan every five minutes; idle after 30 minutes. Write everything remaining regardless of batch threshold. Reorganize existing disk content; add nothing new. While content remains, run successive passes. After a session ends there is no next batch; stopping halfway leaves content unwritten forever. Select unwritten messages not covered by the cursor. Batch by accumulating 16k tokens. Call the model to edit staged files. Organize when enough content accumulates. Commit: install everything after validation. Topic files; the model edits only these. timeline/ and two other locations.</p>
+  </div>
+  <div class="legend">
+    <b>Reading the diagram</b>: three entries on the left, shared logic in the center, disk on the right. Green triggers every turn but writes only after 16k tokens accumulate. Blue triggers after idleness and loops to write everything remaining. Purple produces no new content.<br>
+    <b>Why the per-turn entry passes no messages</b>: session storage is already persistent and ordered, with stable message IDs. A duplicate process buffer would be lost on restart and produce positions that vary between runs.
+  </div>
+
+  <!-- ══════════ 02 Five steps ══════════ -->
+  <h2 id="steps"><span class="num">02</span> Five write steps</h2>
+  <p class="lead">What happens in one pass. The threshold determines whether to call a model, not how much a single call writes; a day-long conversation may need several passes.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Five write steps">
+    <defs>
+      <marker id="s-gy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a8675"/></marker>
+    </defs>
+
+    <rect x="32" y="86" width="208" height="168" rx="10" fill="#1e2630" stroke="#2db3d5" stroke-width="1.4"/>
+    <circle cx="52" cy="70" r="13" fill="#12110b" stroke="#2db3d5" stroke-width="1.4"/>
+    <text x="52" y="75" fill="#2db3d5" font-size="13" font-weight="700" text-anchor="middle">1</text>
+    <text x="76" y="75" fill="#2db3d5" font-size="13.5" font-weight="700">Select unwritten content</text>
+    <text x="48" y="116" fill="#bdb9a6" font-size="11.5">Every message on the branch</text>
+    <text x="48" y="136" fill="#bdb9a6" font-size="11.5">minus cursor-covered messages</text>
+    <text x="48" y="156" fill="#f0eee6" font-size="11.5">= remaining session content</text>
+    <text x="48" y="186" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">runtime.pending()</text>
+    <text x="48" y="212" fill="#8a8675" font-size="10.5">Also exclude tool calls</text>
+    <text x="48" y="230" fill="#8a8675" font-size="10.5">and runtime-scheduled turns</text>
+
+    <rect x="254" y="86" width="208" height="168" rx="10" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.4"/>
+    <circle cx="274" cy="70" r="13" fill="#12110b" stroke="#4f8ef7" stroke-width="1.4"/>
+    <text x="274" y="75" fill="#4f8ef7" font-size="13" font-weight="700" text-anchor="middle">2</text>
+    <text x="298" y="75" fill="#4f8ef7" font-size="13.5" font-weight="700">Batch</text>
+    <text x="270" y="116" fill="#bdb9a6" font-size="11.5">Accumulate from the start</text>
+    <text x="270" y="136" fill="#bdb9a6" font-size="11.5">Cut a batch at 16k tokens</text>
+    <text x="270" y="164" fill="#f0eee6" font-size="11.5">That segment is the current batch</text>
+    <text x="270" y="192" fill="#8a8675" font-size="10.5">Leave the rest for the next pass;</text>
+    <text x="270" y="210" fill="#8a8675" font-size="10.5">one model call cannot contain</text>
+    <text x="270" y="228" fill="#8a8675" font-size="10.5">a whole day’s conversation</text>
+
+    <rect x="476" y="86" width="208" height="168" rx="10" fill="#241f10" stroke="#d4843a" stroke-width="1.6"/>
+    <circle cx="496" cy="70" r="13" fill="#12110b" stroke="#d4843a" stroke-width="1.4"/>
+    <text x="496" y="75" fill="#d4843a" font-size="13" font-weight="700" text-anchor="middle">3</text>
+    <text x="520" y="75" fill="#d4843a" font-size="13.5" font-weight="700">Call the model to edit topics</text>
+    <text x="492" y="116" fill="#bdb9a6" font-size="11.5">Writer receives batch source text</text>
+    <text x="492" y="136" fill="#bdb9a6" font-size="11.5">and the current directory structure</text>
+    <text x="492" y="164" fill="#f0eee6" font-size="11.5">File tools edit topics/</text>
+    <text x="492" y="192" fill="#8a8675" font-size="10.5">Edits affect copies in the staging</text>
+    <text x="492" y="210" fill="#8a8675" font-size="10.5">directory; see section 03. Runs using</text>
+    <text x="492" y="228" fill="#8a8675" font-size="10.5">the user’s own login</text>
+
+    <rect x="698" y="86" width="208" height="168" rx="10" fill="#221a30" stroke="#9d6fe0" stroke-width="1.4"/>
+    <circle cx="718" cy="70" r="13" fill="#12110b" stroke="#9d6fe0" stroke-width="1.4"/>
+    <text x="718" y="75" fill="#9d6fe0" font-size="13" font-weight="700" text-anchor="middle">4</text>
+    <text x="742" y="75" fill="#9d6fe0" font-size="13.5" font-weight="700">Organize</text>
+    <text x="714" y="116" fill="#bdb9a6" font-size="11.5">After five batches or 40k tokens</text>
+    <text x="714" y="136" fill="#bdb9a6" font-size="11.5">→ reorganize once</text>
+    <text x="714" y="164" fill="#bdb9a6" font-size="11.5">One day after global organization</text>
+    <text x="714" y="184" fill="#bdb9a6" font-size="11.5">→ reorganize again</text>
+    <text x="714" y="212" fill="#8a8675" font-size="10.5">One action, two triggers;</text>
+    <text x="714" y="230" fill="#8a8675" font-size="10.5">skip when neither applies</text>
+
+    <rect x="920" y="86" width="208" height="168" rx="10" fill="#101a10" stroke="#5aad4e" stroke-width="1.6"/>
+    <circle cx="940" cy="70" r="13" fill="#12110b" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="940" y="75" fill="#5aad4e" font-size="13" font-weight="700" text-anchor="middle">5</text>
+    <text x="964" y="75" fill="#5aad4e" font-size="13.5" font-weight="700">Commit the transaction</text>
+    <text x="936" y="116" fill="#bdb9a6" font-size="11.5">Validation passes → install all</text>
+    <text x="936" y="136" fill="#bdb9a6" font-size="11.5">Validation fails → discard the batch</text>
+    <text x="936" y="164" fill="#f0eee6" font-size="11.5">Advance cursor after installation</text>
+    <text x="936" y="192" fill="#8a8675" font-size="10.5">The batch stays in the chat history;</text>
+    <text x="936" y="210" fill="#8a8675" font-size="10.5">footnotes link its messages, so</text>
+    <text x="936" y="228" fill="#8a8675" font-size="10.5">nothing is copied</text>
+
+    <line x1="240" y1="170" x2="250" y2="170" stroke="#8a8675" stroke-width="1.4" marker-end="url(#s-gy)"/>
+    <line x1="462" y1="170" x2="472" y2="170" stroke="#8a8675" stroke-width="1.4" marker-end="url(#s-gy)"/>
+    <line x1="684" y1="170" x2="694" y2="170" stroke="#8a8675" stroke-width="1.4" marker-end="url(#s-gy)"/>
+    <line x1="906" y1="170" x2="916" y2="170" stroke="#8a8675" stroke-width="1.4" marker-end="url(#s-gy)"/>
+
+    <text x="32" y="286" fill="#8a8675" font-size="11.5">A cross-process write lock covers the entire pass. Give up if acquisition takes over one second: active conversations commonly write memory, so retrying next turn is preferable to delaying the user.</text>
+  </svg>
+  <p class="note">Diagram details: minus messages covered by the cursor. Leave the remainder for the next pass; After one day since global organization. Validation passes → install everything. Advance the cursor only after installation.</p>
+  <p class="note">Diagram details: Accumulate messages from the beginning. The writer receives this batch’s source text.</p>
+  </div>
+
+  <!-- ══════════ 03 Transaction ══════════ -->
+  <p class="note">Topic normalization rejects substantive uncited prose with <code>INVALID_TOPIC_FORMAT</code> before pruning empty sections or topics. Changes, patches, editor/CLI staged edits and writer shell commits share this validation. Rejection preserves committed topic/source bytes, Runtime state, revision and Git history. Cited native/legacy records and genuinely empty topics retain their existing rules.</p>
+  <p class="note">An instance-owned trusted pre-install callback records autosave or restore history only after validation and stage preparation, before committed files are moved. Invalid edits never create a manual checkpoint; callback failure never installs. A valid edit still records the exact pre-edit snapshot and the existing checkpoint deadline. Tools and request text cannot supply this callable.</p>
+  <h2 id="txn"><span class="num">03</span> Transactions: stage, validate, install</h2>
+  <p class="lead">The model never edits the repository directly. It edits a temporary copy, installed only after complete validation. Failed validation discards the copy without changing a byte in the repository.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 490" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Write transaction">
+    <defs>
+      <marker id="t-gy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a8675"/></marker>
+      <marker id="t-gn" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+      <marker id="t-no" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0445a"/></marker>
+      <marker id="t-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+    </defs>
+
+    <text x="24" y="32" fill="#d4843a" font-size="15" font-weight="700">Complete write-transaction lifecycle</text>
+
+    <!-- Memory repository -->
+    <rect x="32" y="60" width="196" height="196" rx="10" fill="#12110b" stroke="#2e2c20" stroke-width="1.4"/>
+    <text x="50" y="86" fill="#bdb9a6" font-size="13" font-weight="700">Memory repository</text>
+    <text x="50" y="112" fill="#d4843a" font-size="11" font-family="Menlo,monospace">topics/</text>
+    <text x="50" y="132" fill="#2db3d5" font-size="11" font-family="Menlo,monospace">timeline/</text>
+    <text x="50" y="152" fill="#5aad4e" font-size="11" font-family="Menlo,monospace">core.md</text>
+    <text x="50" y="184" fill="#8a8675" font-size="11">Read-only during the transaction;</text>
+    <text x="50" y="204" fill="#8a8675" font-size="11">a reference that nobody</text>
+    <text x="50" y="224" fill="#8a8675" font-size="11">edits directly</text>
+
+    <path d="M228 130 L294 130" fill="none" stroke="#8a8675" stroke-width="1.5" marker-end="url(#t-gy)"/>
+    <text x="261" y="120" fill="#8a8675" font-size="10.5" text-anchor="middle">Copy everything</text>
+
+    <!-- Staging -->
+    <rect x="298" y="60" width="290" height="196" rx="10" fill="#241f10" stroke="#d4843a" stroke-width="1.6"/>
+    <text x="316" y="86" fill="#d4843a" font-size="13" font-weight="700">Staging</text>
+    <text x="392" y="86" fill="#6b6a63" font-size="10.5" font-family="Menlo,monospace">System temporary directory</text>
+    <rect x="316" y="98" width="254" height="42" rx="6" fill="#12110b" stroke="#2e2c20"/>
+    <text x="330" y="115" fill="#d4843a" font-size="11" font-family="Menlo,monospace">topics/</text>
+    <text x="330" y="132" fill="#bdb9a6" font-size="11">Writable; all edits this turn go here</text>
+    <rect x="316" y="150" width="254" height="42" rx="6" fill="#12110b" stroke="#2e2c20"/>
+    <text x="330" y="167" fill="#2db3d5" font-size="11" font-family="Menlo,monospace">derived views</text>
+    <text x="330" y="184" fill="#bdb9a6" font-size="11">Rebuilt from topics/ after the edit</text>
+    <text x="316" y="214" fill="#8a8675" font-size="11">Read the repository baseline before copying.</text>
+    <text x="316" y="232" fill="#8a8675" font-size="11">A later baseline would miss deleted block IDs.</text>
+
+    <path d="M588 130 L644 130" fill="none" stroke="#8a8675" stroke-width="1.5" marker-end="url(#t-gy)"/>
+
+    <!-- Validation -->
+    <rect x="648" y="60" width="256" height="196" rx="10" fill="#12110b" stroke="#2e2c20" stroke-width="1.4"/>
+    <text x="666" y="86" fill="#bdb9a6" font-size="13" font-weight="700">Four validations</text>
+    <text x="666" y="112" fill="#bdb9a6" font-size="11.5">1 Topic format parses</text>
+    <text x="682" y="130" fill="#8a8675" font-size="10.5">Every paragraph cites a footnote</text>
+    <text x="666" y="154" fill="#bdb9a6" font-size="11.5">2 Every pre-existing block ID remains</text>
+    <text x="682" y="172" fill="#8a8675" font-size="10.5">Rewrite, merge, or move paragraphs</text>
+    <text x="666" y="196" fill="#bdb9a6" font-size="11.5">3 Cross-topic links target #^block IDs</text>
+    <text x="666" y="220" fill="#bdb9a6" font-size="11.5">4 New citations name citable messages</text>
+    <text x="682" y="238" fill="#8a8675" font-size="10.5">core.md budget; valid block links</text>
+
+    <!-- Outputs -->
+    <path d="M904 100 L948 100" fill="none" stroke="#5aad4e" stroke-width="1.6" marker-end="url(#t-gn)"/>
+    <path d="M904 200 L948 200" fill="none" stroke="#e0445a" stroke-width="1.6" marker-end="url(#t-no)"/>
+
+    <rect x="952" y="60" width="176" height="90" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="968" y="84" fill="#5aad4e" font-size="12.5" font-weight="700">Pass · install everything</text>
+    <text x="968" y="104" fill="#bdb9a6" font-size="11">Back up existing data</text>
+    <text x="968" y="122" fill="#bdb9a6" font-size="11">Install full staged copy</text>
+    <text x="968" y="140" fill="#bdb9a6" font-size="11">Rebuild views; commit</text>
+
+    <rect x="952" y="164" width="176" height="92" rx="9" fill="#241015" stroke="#e0445a" stroke-width="1.5"/>
+    <text x="968" y="188" fill="#e0445a" font-size="12.5" font-weight="700">Fail · discard the batch</text>
+    <text x="968" y="208" fill="#bdb9a6" font-size="11">Create fresh staging</text>
+    <text x="968" y="226" fill="#bdb9a6" font-size="11">Repository unchanged</text>
+    <text x="968" y="244" fill="#bdb9a6" font-size="11">Raise the rejection reason</text>
+
+    <!-- Repair -->
+    <text x="24" y="308" fill="#d4843a" font-size="14" font-weight="700">After rejection: one repair attempt only</text>
+    <rect x="32" y="326" width="300" height="88" rx="9" fill="#241015" stroke="#e0445a" stroke-width="1.3"/>
+    <text x="50" y="350" fill="#e0445a" font-size="12" font-weight="700">First rejection</text>
+    <text x="50" y="372" fill="#bdb9a6" font-size="11.5">Return rejected text and</text>
+    <text x="50" y="390" fill="#bdb9a6" font-size="11.5">rule-specific repair guidance</text>
+    <text x="50" y="408" fill="#8a8675" font-size="10.5">Workspace restored to its pre-turn state</text>
+
+    <path d="M332 370 L388 370" fill="none" stroke="#d4843a" stroke-width="1.5" marker-end="url(#t-or)"/>
+
+    <rect x="392" y="326" width="300" height="88" rx="9" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+    <text x="410" y="350" fill="#d4843a" font-size="12" font-weight="700">Retry the edit</text>
+    <text x="410" y="372" fill="#bdb9a6" font-size="11.5">Same staging and four validations</text>
+    <text x="410" y="394" fill="#8a8675" font-size="10.5">Take a fresh baseline before repair;</text>
+    <text x="410" y="410" fill="#8a8675" font-size="10.5">a later baseline may contain corrupt text.</text>
+
+    <path d="M692 370 L748 370" fill="none" stroke="#e0445a" stroke-width="1.5" marker-end="url(#t-no)"/>
+
+    <rect x="752" y="326" width="376" height="88" rx="9" fill="#241015" stroke="#e0445a" stroke-width="1.5"/>
+    <text x="770" y="350" fill="#e0445a" font-size="12" font-weight="700">Second rejection → do not write this batch</text>
+    <text x="770" y="372" fill="#bdb9a6" font-size="11.5">COMMIT_REJECTED; cursor unchanged; turns pending.</text>
+    <text x="770" y="394" fill="#bdb9a6" font-size="11.5">False success would skip content never installed on disk.</text>
+
+    <text x="32" y="452" fill="#8a8675" font-size="11.5">The same pipeline serves human edits: manually edited topics use identical staging and validation. Invalid edits are rejected immediately without changing committed files.</text>
+    <text x="32" y="474" fill="#8a8675" font-size="11.5">Block IDs are how other paragraphs, timelines, and relation graphs locate a paragraph. Content may change but IDs must remain: this is the strongest validation constraint.</text>
+  </svg>
+  <p class="note">Diagram details: Read-only throughout the transaction; Paragraphs may be rewritten, merged, or moved.</p>
+  <p class="note">Diagram details: Staging directory. Created under the system temporary directory. Writable; every writer edit this turn goes here. Filesystem-level denial prevents writes immediately. Read the baseline from the repository before copying. Reading it after copying. would compare an edit with itself and treat lost block IDs as though they never existed. core.md stays within budget; no dangling block links. Move existing data to backup. Install the complete staged copy. Rebuild derived views and commit. Recreate staging from a fresh copy. Leave the repository unchanged. Return the rejected text and a specific. instruction for correcting this rule to the writer. The workspace has already been restored to its pre-turn state. Take a fresh baseline before repair; taking it afterward would. parse text the model has just corrupted. Return COMMIT_REJECTED, leave the cursor unchanged, and keep these turns pending. Reporting success here would let the caller advance past content never installed on disk.</p>
+  </div>
+
+  <!-- ══════════ 04 Cursor ══════════ -->
+  <h2 id="cursor"><span class="num">04</span> Cursor: identity versus position</h2>
+  <p class="lead">A session is a graph, not a linear sequence. Re-asking, retrying a reply, or spawning a subagent creates a branch. Every branch’s messages should enter memory, but shared prefixes should not be written twice.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 700" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Write cursor: positions, node markers, and external sets">
+    <defs>
+      <marker id="c-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+      <marker id="c-gr" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+    </defs>
+
+    <text x="24" y="32" fill="#d4843a" font-size="15" font-weight="700">One session forks from message three after the main branch was written</text>
+    <text x="24" y="54" fill="#8a8675" font-size="12">Nine main-branch messages are already in memory. The user returns to m3 and asks again; six more messages follow, with head now at b9.</text>
+
+    <text x="104" y="104" fill="#8a8675" font-size="11.5" text-anchor="end">Main branch</text>
+    <g>
+      <line x1="150" y1="100" x2="880" y2="100" stroke="#3a382c" stroke-width="1.4"/>
+      <g font-size="11.5" text-anchor="middle">
+        <rect x="122" y="86" width="56" height="28" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/><text x="150" y="105" fill="#5aad4e">m1</text>
+        <rect x="212" y="86" width="56" height="28" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/><text x="240" y="105" fill="#5aad4e">m2</text>
+        <rect x="302" y="86" width="56" height="28" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/><text x="330" y="105" fill="#5aad4e">m3</text>
+        <rect x="392" y="86" width="56" height="28" rx="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="420" y="105" fill="#8a8675">m4</text>
+        <rect x="482" y="86" width="56" height="28" rx="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="510" y="105" fill="#8a8675">m5</text>
+        <rect x="572" y="86" width="56" height="28" rx="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="600" y="105" fill="#8a8675">m6</text>
+        <rect x="662" y="86" width="56" height="28" rx="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="690" y="105" fill="#8a8675">m7</text>
+        <rect x="752" y="86" width="56" height="28" rx="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="780" y="105" fill="#8a8675">m8</text>
+        <rect x="842" y="86" width="56" height="28" rx="8" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/><text x="870" y="105" fill="#8a8675">m9</text>
+      </g>
+      <text x="920" y="105" fill="#8a8675" font-size="11">These nine are already written</text>
+    </g>
+
+    <path d="M330 118 C 330 160, 392 158, 392 196" fill="none" stroke="#d4843a" stroke-width="1.6" marker-end="url(#c-or)"/>
+    <text x="348" y="152" fill="#d4843a" font-size="11">Fork from m3</text>
+
+    <text x="104" y="216" fill="#d4843a" font-size="11.5" text-anchor="end">New branch</text>
+    <g>
+      <line x1="420" y1="212" x2="880" y2="212" stroke="#3a382c" stroke-width="1.4"/>
+      <g font-size="11.5" text-anchor="middle">
+        <rect x="392" y="198" width="56" height="28" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/><text x="420" y="217" fill="#d4843a">b4</text>
+        <rect x="482" y="198" width="56" height="28" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/><text x="510" y="217" fill="#d4843a">b5</text>
+        <rect x="572" y="198" width="56" height="28" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/><text x="600" y="217" fill="#d4843a">b6</text>
+        <rect x="662" y="198" width="56" height="28" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/><text x="690" y="217" fill="#d4843a">b7</text>
+        <rect x="752" y="198" width="56" height="28" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/><text x="780" y="217" fill="#d4843a">b8</text>
+        <rect x="842" y="198" width="56" height="28" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="2.2"/><text x="870" y="217" fill="#d4843a">b9</text>
+      </g>
+      <text x="920" y="211" fill="#d4843a" font-size="11">Head is here</text>
+      <text x="920" y="228" fill="#8a8675" font-size="10.5">These six have never been written</text>
+    </g>
+
+    <path d="M122 130 L122 142 L358 142 L358 130" fill="none" stroke="#5aad4e" stroke-width="1.2"/>
+    <text x="240" y="160" fill="#5aad4e" font-size="11" text-anchor="middle">Shared prefix</text>
+
+    <line x1="32" y1="256" x2="1128" y2="256" stroke="#2e2c20" stroke-width="1"/>
+
+    <text x="366" y="292" fill="#e0445a" font-size="12.5" font-weight="700" text-anchor="end">Current · record the written position</text>
+    <text x="366" y="312" fill="#8a8675" font-size="11" text-anchor="end">Cursor: ordinal=9; accept larger values</text>
+    <g font-size="12" text-anchor="middle">
+      <text x="420" y="296" fill="#8a8675">4</text><text x="510" y="296" fill="#8a8675">5</text>
+      <text x="600" y="296" fill="#8a8675">6</text><text x="690" y="296" fill="#8a8675">7</text>
+      <text x="780" y="296" fill="#8a8675">8</text><text x="870" y="296" fill="#8a8675">9</text>
+    </g>
+    <g stroke="#e0445a" stroke-width="2">
+      <line x1="414" y1="306" x2="426" y2="318"/><line x1="426" y1="306" x2="414" y2="318"/>
+      <line x1="504" y1="306" x2="516" y2="318"/><line x1="516" y1="306" x2="504" y2="318"/>
+      <line x1="594" y1="306" x2="606" y2="318"/><line x1="606" y1="306" x2="594" y2="318"/>
+      <line x1="684" y1="306" x2="696" y2="318"/><line x1="696" y1="306" x2="684" y2="318"/>
+      <line x1="774" y1="306" x2="786" y2="318"/><line x1="786" y1="306" x2="774" y2="318"/>
+      <line x1="864" y1="306" x2="876" y2="318"/><line x1="876" y1="306" x2="864" y2="318"/>
+    </g>
+    <text x="920" y="300" fill="#e0445a" font-size="11.5" font-weight="700">All six are ≤ 9</text>
+    <text x="920" y="318" fill="#bdb9a6" font-size="11">Write none</text>
+
+    <text x="366" y="376" fill="#5aad4e" font-size="12.5" font-weight="700" text-anchor="end">Planned · mark nodes as written</text>
+    <text x="366" y="396" fill="#8a8675" font-size="11" text-anchor="end">Walk from head to first marked node</text>
+    <g font-size="11" text-anchor="middle" fill="#8a8675">
+      <text x="420" y="380">Unmarked</text><text x="510" y="380">Unmarked</text><text x="600" y="380">Unmarked</text>
+      <text x="690" y="380">Unmarked</text><text x="780" y="380">Unmarked</text><text x="870" y="380">Unmarked</text>
+    </g>
+    <g stroke="#5aad4e" stroke-width="2.2" fill="none">
+      <path d="M413 392 L419 400 L429 386"/><path d="M503 392 L509 400 L519 386"/>
+      <path d="M593 392 L599 400 L609 386"/><path d="M683 392 L689 400 L699 386"/>
+      <path d="M773 392 L779 400 L789 386"/><path d="M863 392 L869 400 L879 386"/>
+    </g>
+    <path d="M392 368 L360 368" stroke="#5aad4e" stroke-width="1.4" marker-end="url(#c-gr)" transform="translate(0,0)"/>
+    <text x="920" y="380" fill="#5aad4e" font-size="11.5" font-weight="700">All six remain unwritten</text>
+    <text x="920" y="398" fill="#bdb9a6" font-size="11">Stop at marked m3</text>
+
+    <text x="366" y="440" fill="#9d6fe0" font-size="12.5" font-weight="700" text-anchor="end">Alternative · memory stores an ID set</text>
+    <text x="366" y="460" fill="#8a8675" font-size="11" text-anchor="end">Traverse branch; subtract stored IDs</text>
+    <g font-size="11" text-anchor="middle" fill="#8a8675">
+      <text x="420" y="444">New IDs</text><text x="510" y="444">New IDs</text><text x="600" y="444">New IDs</text>
+      <text x="690" y="444">New IDs</text><text x="780" y="444">New IDs</text><text x="870" y="444">New IDs</text>
+    </g>
+    <g stroke="#9d6fe0" stroke-width="2.2" fill="none">
+      <path d="M413 456 L419 464 L429 450"/><path d="M503 456 L509 464 L519 450"/>
+      <path d="M593 456 L599 464 L609 450"/><path d="M683 456 L689 464 L699 450"/>
+      <path d="M773 456 L779 464 L789 450"/><path d="M863 456 L869 464 L879 450"/>
+    </g>
+    <text x="920" y="444" fill="#9d6fe0" font-size="11.5" font-weight="700">All six remain unwritten</text>
+    <text x="920" y="462" fill="#bdb9a6" font-size="11">Same result, different cost</text>
+
+    <rect x="32" y="490" width="1096" height="52" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.2"/>
+    <text x="50" y="514" fill="#5aad4e" font-size="12" font-weight="700">Why the prefix is not duplicated:</text>
+    <text x="270" y="514" fill="#bdb9a6" font-size="12">Walking backward reaches the same m3 message with its marker, and traversal stops there.</text>
+    <text x="50" y="534" fill="#bdb9a6" font-size="12">The two branches need no ordering or knowledge of each other. The first writer marks shared messages; the next traversal stops at those markers.</text>
+
+    <rect x="32" y="558" width="354" height="122" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="50" y="582" fill="#d4843a" font-size="12" font-weight="700">Where the marker lives</text>
+    <text x="50" y="604" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">Node metadata, with a provider-qualified key</text>
+    <text x="50" y="626" fill="#bdb9a6" font-size="11">Value identifies the memory workspace;</text>
+    <text x="50" y="644" fill="#bdb9a6" font-size="11">exported markers retain workspace identity.</text>
+    <text x="50" y="666" fill="#8a8675" font-size="10.5">Rewind’s rewound marker uses the same mechanism</text>
+
+    <rect x="398" y="558" width="354" height="122" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="416" y="582" fill="#d4843a" font-size="12" font-weight="700">When to mark</text>
+    <text x="416" y="604" fill="#bdb9a6" font-size="11">Two conditions: successful transaction installation,</text>
+    <text x="416" y="622" fill="#bdb9a6" font-size="11">and actual file changes in this pass</text>
+    <text x="416" y="646" fill="#8a8675" font-size="10.5">Observed: twenty turns encountered the same rejected edit,</text>
+    <text x="416" y="664" fill="#8a8675" font-size="10.5">returned success, and left a one-byte topic file</text>
+
+    <rect x="764" y="558" width="364" height="122" rx="9" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+    <text x="782" y="582" fill="#d4843a" font-size="12" font-weight="700">Status of this section</text>
+    <text x="782" y="604" fill="#bdb9a6" font-size="11">Design settled; implementation still uses a positional</text>
+    <text x="782" y="622" fill="#bdb9a6" font-size="11">cursor. Red crosses show actual pre-change behavior</text>
+    <text x="782" y="646" fill="#8a8675" font-size="10.5">Observed: position 9 skips a five-turn branch;</text>
+    <text x="782" y="664" fill="#8a8675" font-size="10.5">only the last two of eleven turns are selected.</text>
+  </svg>
+  <p class="note">Diagram details: Cursor stores ordinal=9; accept only larger ordinals. Walk backward from head, collect unmarked nodes, stop at the first marker. Traverse the whole branch and subtract IDs in the set. Value identifies the memory workspace; exported sessions. retain markers without being mistaken for another workspace. Observed: stored position 9 treats a five-turn branch as empty,. and an eleven-turn branch as its last two turns.</p>
+  </div>
+  <div class="legend">
+    <b>Why position cannot represent identity</b>: ordinals are assigned when a linked structure is expanded into a list. They describe that expansion, not messages. Before expansion there is no ordinal; afterward it has no relationship to the message ID. The same message reached by two paths can receive different ordinals, and different messages at equal depths can share one. Furthermore, <code>get_branch</code> filters turns marked <code>rewind</code> , and compaction inserts summary nodes, so even one path changes between reads.<br>
+    <b>The representation also rejects correction</b>: <code>advance_cursor</code> raises
+    <code>cursor cannot move backwards</code> when a new ordinal is below the stored one, although moving backward is exactly what branching requires. A monotonic counter cannot be corrected into a representation of branching conversations.<br>
+    <b>The two failures differ in visibility</b>: before the branch exceeds the stored height, nothing is claimed and the whole branch is omitted. Afterward, only the excess is claimed: <b>a fragment beginning mid-conversation is written, then the entire branch is marked written</b>. This second case returns success without any indication of failure.
+  </div>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 560" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Four sections: current behavior, references, alternatives, choice">
+    <rect x="24" y="16" width="240" height="24" rx="6" fill="#211316"/>
+    <text x="38" y="33" fill="#e0445a" font-size="11.5" letter-spacing="1.4">First · current implementation</text>
+    <rect x="24" y="48" width="1112" height="66" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+    <text x="42" y="72" fill="#f0eee6" font-size="12">Positional cursor:<tspan font-family="Menlo,monospace" fill="#bdb9a6">runtime.json</tspan> stores one <tspan font-family="Menlo,monospace" fill="#bdb9a6">{message_id, ordinal}</tspan>per thread, claiming only larger ordinals</text>
+    <text x="42" y="94" fill="#8a8675" font-size="11">Ordinals come from <tspan font-family="Menlo,monospace">enumerate(get_branch(...))</tspan>, and <tspan font-family="Menlo,monospace">advance_cursor</tspan> explicitly forbids moving backward, preventing correction</text>
+
+    <rect x="24" y="128" width="240" height="24" rx="6" fill="#101722"/>
+    <text x="38" y="145" fill="#4f8ef7" font-size="11.5" letter-spacing="1.4">Second · other implementations</text>
+    <rect x="24" y="160" width="1112" height="118" rx="8" fill="#1d1c14" stroke="#2e2c20"/>
+    <text x="42" y="184" fill="#bdb9a6" font-size="11.5">Nine reference frameworks were read.<tspan fill="#f0eee6" font-weight="600">Three store branching conversations</tspan>(Claude-code, Openclaw, Pi-mono: append-only files with parent pointers); three are linear; one rewrites the entire session on retry and destroys the old branch; two do not store conversations.</text>
+    <text x="42" y="206" fill="#bdb9a6" font-size="11.5">Linear histories make positions sufficient for identity, so most never encounter this problem.<tspan fill="#f0eee6" font-weight="600">None marks conversation turns as already consumed by memory.</tspan></text>
+    <text x="42" y="230" fill="#8a8675" font-size="11">Codex-cli forks into a new file; extraction tracks thread-level watermarks and leases,<tspan fill="#bdb9a6">using a coarser unit where branching no longer matters</tspan></text>
+    <text x="42" y="248" fill="#8a8675" font-size="11">Pi-mono storage cannot modify a record. Annotations and cursor moves append references; branch summaries compute coverage from the tree at switching time,<tspan fill="#bdb9a6">deriving increments from topology</tspan></text>
+    <text x="42" y="266" fill="#8a8675" font-size="11">Claude-code keeps its cursor in process memory and reprocesses the whole session when the referenced message is missing. Openclaw writes <tspan font-family="Menlo,monospace">promotedAt</tspan>on derived records, while its memory hook reads the last fifteen conversation lines as a flat list</text>
+
+    <rect x="24" y="292" width="240" height="24" rx="6" fill="#141a12"/>
+    <text x="38" y="309" fill="#5aad4e" font-size="11.5" letter-spacing="1.4">Third · two approaches</text>
+
+    <rect x="24" y="324" width="548" height="160" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="42" y="348" fill="#5aad4e" font-size="12.5" font-weight="700">Mark nodes</text>
+    <text x="42" y="370" fill="#bdb9a6" font-size="11">Pending content: walk backward from head until the first marker</text>
+    <text x="42" y="390" fill="#bdb9a6" font-size="11">Storage: one additional field on an existing node</text>
+    <text x="42" y="410" fill="#bdb9a6" font-size="11">Growth: no separate growth; each read traverses a few nodes</text>
+    <text x="42" y="430" fill="#bdb9a6" font-size="11">Migration: mark nodes the old cursor covered</text>
+    <text x="42" y="450" fill="#e0445a" font-size="11">Missing marker: traversal stops too early and older content remains pending</text>
+    <text x="42" y="470" fill="#e0445a" font-size="11">Coupling: memory writes a field into session storage</text>
+
+    <rect x="588" y="324" width="548" height="160" rx="8" fill="#1a1622" stroke="#9d6fe0" stroke-width="1.3"/>
+    <text x="606" y="348" fill="#9d6fe0" font-size="12.5" font-weight="700">Memory stores its own ID set</text>
+    <text x="606" y="370" fill="#bdb9a6" font-size="11">Pending content: traverse the whole branch and subtract the set</text>
+    <text x="606" y="390" fill="#bdb9a6" font-size="11">Storage: one file per thread containing every written ID</text>
+    <text x="606" y="410" fill="#bdb9a6" font-size="11">Growth: one entry per message; reads load the complete list</text>
+    <text x="606" y="430" fill="#bdb9a6" font-size="11">Migration: seed the set from the same cursor</text>
+    <text x="606" y="450" fill="#5aad4e" font-size="11">Missing entry: precisely that turn becomes pending again</text>
+    <text x="606" y="470" fill="#bdb9a6" font-size="11">Coupling: memory owns bookkeeping, including files, migration, and append-only retention</text>
+
+    <rect x="24" y="498" width="240" height="24" rx="6" fill="#241f10"/>
+    <text x="38" y="515" fill="#d4843a" font-size="11.5" letter-spacing="1.4">Fourth · choice</text>
+    <text x="284" y="515" fill="#f0eee6" font-size="12" font-weight="600">Node markers.</text>
+    <text x="380" y="515" fill="#bdb9a6" font-size="11.5">External ID sets require storage, migration, permanent retention, and growing read cost.</text>
+    <text x="284" y="537" fill="#bdb9a6" font-size="11.5">The tradeoff is precise sets versus approximate traversal. Traversal assumes markers form a prefix, relying on every batch selecting the oldest turns; this is an assumption, not an invariant. Session storage already records provenance, display kind, branch roots, and rewind state; another field is the same kind of metadata.</text>
+  </svg>
+  <p class="note">Diagram details: Use node markers. External bookkeeping that remains correct after forks requires a set, introducing file placement, migration, permanent ID retention, and read cost that grows with the conversation.</p>
+  </div>
+  <div class="legend">
+    <b>Mark only after the write installs</b>: write topics, then mark nodes. Topics have block IDs and footnotes, so partial writes would corrupt them; transactions install all or nothing. If the writer dies between steps, it leaves no markers and the same pending batch for the next <b>retry</b>. Marking first would turn that crash into silent loss of those turns.<br>
+    <b>Completion needs verifiable output</b>: marking requires successful transaction installation<i>and</i>actual file changes. Nightly organization must report changed files, not merely inspected files. Absence of an error is not an output.<br>
+    <b>Verified cost to session storage</b>: sessions have no whole-tree hash. The sole byte-level tree hash is the memory-workspace revision rooted at <code>&lt;state&gt;/memory</code>, separate from <code>&lt;state&gt;/sessions</code> , so node markers are not mistaken for concurrent memory writes. The session-index cache is affected: history-directory mtime changes on rewrites just as on appends. Another process rebuilds the index; measured cost for 289 nodes and 4.2 MB is <b>14–50 ms</b> and is self-limiting. Git is what grows: the session directory runs <code>git add -A</code> per turn, and changed nodes become new blobs. Therefore, <b>mark only the current batch; never rescan and rewrite every node</b>, or each turn adds the entire session and total growth becomes quadratic. Two additional constraints: markers must not change <code>updated_at</code>(the idle watcher uses it to decide whether a session was handled; changing it would trigger another forced write), and must not use the “mark session synchronized” path.
+  </div>
+
+  <!-- ══════════ 05 Resident block ══════════ -->
+  <h2 id="core"><span class="num">05</span> Maintaining the resident block</h2>
+  <p class="lead">The core is the small block injected at each session’s start. It is now rendered from
+    <code>topics/core.md</code> into the core section of <code>MEMORY.md</code>, the one entry file each layer injects; 2000 tokens is a rendering budget, not a transaction gate. Previously it was the writable source of truth: once full, it stopped changing and rejected every later transaction.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 620" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Resident block: previous write path and current derived view">
+    <defs>
+      <marker id="k-no" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0445a"/></marker>
+      <marker id="k-gy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#8a8675"/></marker>
+      <marker id="k-vi" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#9d6fe0"/></marker>
+    </defs>
+
+    <text x="24" y="30" fill="#d4843a" font-size="15" font-weight="700">One file, two roles: edited source versus rendered output</text>
+    <text x="24" y="52" fill="#8a8675" font-size="12">Left is the old behavior; right is the running implementation. The distinction is where the source of truth lives.</text>
+
+    <!-- ─────────── Current ─────────── -->
+    <rect x="32" y="70" width="536" height="26" rx="6" fill="#241015"/>
+    <text x="48" y="88" fill="#e0445a" font-size="11.5" letter-spacing="1.4">Previously · core.md was authoritative</text>
+
+    <rect x="32" y="106" width="252" height="58" rx="8" fill="#12110b" stroke="#2e2c20" stroke-width="1.3"/>
+    <text x="48" y="128" fill="#bdb9a6" font-size="12">The writer agent edited it directly</text>
+    <text x="48" y="148" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">prompts/write.py · prompts/system.py</text>
+    <path d="M284 135 L316 135" stroke="#8a8675" stroke-width="1.4" marker-end="url(#k-gy)"/>
+
+    <rect x="320" y="106" width="248" height="58" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+    <text x="336" y="128" fill="#d4843a" font-size="12">A 2000-token limit raised</text>
+    <text x="336" y="148" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">_synchronize</text>
+
+    <path d="M444 164 L444 186" stroke="#e0445a" stroke-width="1.5" marker-end="url(#k-no)"/>
+    <rect x="32" y="188" width="536" height="58" rx="8" fill="#241015" stroke="#e0445a" stroke-width="1.4"/>
+    <text x="48" y="210" fill="#e0445a" font-size="12" font-weight="700">The entire transaction was rejected, including topic changes</text>
+    <text x="48" y="230" fill="#bdb9a6" font-size="11.5">Repair guidance only said: core.md is full; leave it unchanged and put this fact in a topic file.</text>
+
+    <path d="M300 246 L300 268" stroke="#e0445a" stroke-width="1.5" marker-end="url(#k-no)"/>
+    <rect x="32" y="270" width="536" height="52" rx="8" fill="#12110b" stroke="#e0445a" stroke-width="1.3"/>
+    <text x="48" y="292" fill="#e0445a" font-size="12" font-weight="700">Every later stable fact was redirected elsewhere</text>
+    <text x="48" y="312" fill="#bdb9a6" font-size="11.5">Nothing shortened it: nightly organization listed only topics/**.md.</text>
+
+    <!-- Wider layer -->
+    <rect x="32" y="336" width="536" height="106" rx="8" fill="#12110b" stroke="#e0445a" stroke-width="1.6"/>
+    <text x="48" y="358" fill="#e0445a" font-size="12" font-weight="700">The limit measured all staged core.md, not the current change</text>
+    <text x="48" y="378" fill="#bdb9a6" font-size="11.5">An already oversized core.md therefore rejected every later transaction, even topic-only edits</text>
+    <text x="48" y="396" fill="#bdb9a6" font-size="11.5">and no-op transactions. Yet it was ordinary Markdown that humans could edit.</text>
+    <text x="48" y="418" fill="#8a8675" font-size="11">Observed: after a manual enlargement, a no-op transaction reported</text>
+    <text x="48" y="435" fill="#8a8675" font-size="11" font-family="Menlo,monospace">Core Memory exceeds 2000 tokens: 4004</text>
+
+    <rect x="32" y="452" width="536" height="80" rx="8" fill="#241015" stroke="#e0445a" stroke-width="1.4"/>
+    <text x="48" y="474" fill="#e0445a" font-size="12" font-weight="700">After two rejections, neither this session nor the next enters memory</text>
+    <text x="48" y="494" fill="#bdb9a6" font-size="11.5">COMMIT_REJECTED is not retryable; the watcher marks the session handled.</text>
+    <text x="48" y="514" fill="#bdb9a6" font-size="11.5">Only manually shortening the file resolves this state.</text>
+
+    <!-- ─────────── Planned ─────────── -->
+    <rect x="596" y="70" width="532" height="26" rx="6" fill="#1a1622"/>
+    <text x="612" y="88" fill="#9d6fe0" font-size="11.5" letter-spacing="1.4">Now · topics/core.md is authoritative; core.md is rendered</text>
+
+    <rect x="596" y="106" width="240" height="140" rx="8" fill="#12110b" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="612" y="128" fill="#5aad4e" font-size="12" font-weight="700">Authoritative topics/core.md</text>
+    <text x="612" y="147" fill="#8a8675" font-size="11">Topic file; no size limit</text>
+    <rect x="612" y="158" width="208" height="20" rx="3" fill="#2a2a1c"/>
+    <text x="622" y="172" fill="#bdb9a6" font-size="10.5">Paragraph ^a1</text>
+    <rect x="612" y="182" width="208" height="20" rx="3" fill="#2a2a1c"/>
+    <text x="622" y="196" fill="#bdb9a6" font-size="10.5">Paragraph ^b2</text>
+    <rect x="612" y="206" width="208" height="20" rx="3" fill="#241f14"/>
+    <text x="622" y="220" fill="#8a8675" font-size="10.5">Paragraph ^c3 · omitted this time</text>
+    <text x="612" y="240" fill="#8a8675" font-size="10.5">Both writers organize this source</text>
+
+    <path d="M840 176 L876 176" stroke="#9d6fe0" stroke-width="1.6" marker-end="url(#k-vi)"/>
+    <text x="858" y="168" fill="#9d6fe0" font-size="10.5" text-anchor="middle">Render</text>
+
+    <rect x="888" y="106" width="240" height="140" rx="8" fill="#12110b" stroke="#9d6fe0" stroke-width="1.5"/>
+    <text x="904" y="128" fill="#9d6fe0" font-size="12" font-weight="700">Derived core section</text>
+    <text x="904" y="147" fill="#8a8675" font-size="11">Rebuilt after installation</text>
+    <rect x="904" y="158" width="208" height="20" rx="3" fill="#2a2a1c"/>
+    <text x="914" y="172" fill="#bdb9a6" font-size="10.5">Paragraph ^a1</text>
+    <rect x="904" y="182" width="208" height="20" rx="3" fill="#2a2a1c"/>
+    <text x="914" y="196" fill="#bdb9a6" font-size="10.5">Paragraph ^b2</text>
+    <text x="904" y="220" fill="#5aad4e" font-size="10.5">Include up to 2000 tokens</text>
+    <text x="904" y="238" fill="#5aad4e" font-size="10.5">Omitted blocks yield IDs</text>
+
+    <rect x="596" y="262" width="532" height="86" rx="8" fill="#12110b" stroke="#9d6fe0" stroke-width="1.3"/>
+    <text x="612" y="284" fill="#f0eee6" font-size="12" font-weight="700">The budget limits rendering, not writes</text>
+    <text x="612" y="304" fill="#bdb9a6" font-size="11.5">Omitted source paragraphs remain indexed for search and memory_get.</text>
+    <text x="612" y="323" fill="#bdb9a6" font-size="11.5">Omission loses visibility, not content, so clipping does not need to distinguish authorship.</text>
+    <text x="612" y="341" fill="#8a8675" font-size="11">To keep a paragraph visible, move it earlier in the source through ordinary editing.</text>
+
+    <rect x="596" y="356" width="532" height="86" rx="8" fill="#12110b" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="612" y="378" fill="#f0eee6" font-size="12" font-weight="700">Why clipping first requires a derived view</text>
+    <text x="612" y="398" fill="#bdb9a6" font-size="11.5">Transactions require every pre-existing block ID to remain discoverable.</text>
+    <text x="612" y="417" fill="#bdb9a6" font-size="11.5">Clipping unique core.md blocks could reject a transaction. Rendered IDs are a subset</text>
+    <text x="612" y="435" fill="#bdb9a6" font-size="11.5">of source IDs, so omitted blocks remain in the source.</text>
+
+    <rect x="596" y="452" width="532" height="80" rx="8" fill="#221a30" stroke="#9d6fe0" stroke-width="1.4"/>
+    <text x="612" y="474" fill="#9d6fe0" font-size="12" font-weight="700">Status of this section</text>
+    <text x="612" y="494" fill="#bdb9a6" font-size="11.5">Implemented. The left-hand behavior no longer occurs.</text>
+    <text x="612" y="514" fill="#bdb9a6" font-size="11.5">Observed: 11,883-token core.md allows unrelated writes; 1,983 tokens rendered.</text>
+
+    <line x1="32" y1="552" x2="1128" y2="552" stroke="#2e2c20" stroke-width="1"/>
+    <text x="32" y="578" fill="#8a8675" font-size="11.5">The older implementation already maintained this:<tspan font-family="Menlo,monospace">memory/core.py</tspan>refresh_from_wiki rebuilt core.md from a designated wiki page, clipping at heading boundaries to the budget, called by sleep’s deep stage.</text>
+    <text x="32" y="600" fill="#8a8675" font-size="11.5">That process was removed when switching to topics/. The right-hand design restores it with a topic file replacing the designated wiki page.</text>
+  </svg>
+  <p class="note">Diagram details: management/block_views.py _synchronize. Both writers and nightly organization use this file.</p>
+  <p class="note">Diagram details: It reports COMMIT_REJECTED, outside the retryable set, so the watcher still marks the session handled. Ordinary topic file without a size limit. Both writers and nightly organization use only this file. Rebuilt after each successful installation. Include content up to 2000 tokens. Omitted blocks produce IDs, not errors. Omitted paragraphs remain in the source, indexed and discoverable through search and memory_get. A unique block in core.md could make clipping reject the entire transaction. Rendered IDs are always a subset. Observed: an 11,883-token handwritten core.md no longer blocks an unrelated write; rendering produced 1,983 tokens.</p>
+  </div>
+  <div class="legend">
+    <b>Difference between the approaches</b>: the current description’s old path <b>rejects</b> on the write path, preventing content from entering; the planned replacement <b>omits</b> on the rendering path, making content invisible only for that injection.
+    <b>Why not add another gate</b>: another gate still blocks writes and stable facts. Other implementations must distinguish human and automatic content before clipping because their resident file is the only copy: deleting a line destroys it. Here the complete source remains, so authorship does not need classification.
+  </div>
+
+  <div class="grid2">
+    <div class="oc">
+      <h4>Web defaults to the actual injected block</h4>
+      <div class="d"><code>GET /api/memory/core</code> returns both <code>topics/core.md</code> the authoritative source, root-level <code>core.md</code> rendered output, and effective injected content after considering <code>memory.core.inject</code>. Core defaults to a read-only effective-injection view with actual tokens and the 2000-token budget. “Full records” opens the editable source. Existing <code>content/size/mtime</code> continues to mean authoritative source for compatibility.</div>
+    </div>
+    <div class="oc">
+      <h4>Writer and Organizer govern content purpose</h4>
+      <div class="d">Writer reads complete input but records only facts useful later, excluding repeated status checks, unchanged measurements, one-off tool processes, and details recoverable from project files. Project progress belongs in its project Topic. When Organizer handles <code>topics/core.md</code>, it moves project-specific, stale, or duplicate content to ordinary Topics or deletes it, retaining only rules, preferences, and identity facts needed by most future sessions.</div>
+    </div>
+  </div>
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Acceptance entry</th><th>Requirement</th></tr></thead>
+      <tbody>
+        <tr><td><code>GET /api/memory/core</code></td><td>reads a complete snapshot under the workspace lock; it retains authoritative <code>content/size/mtime</code> and additionally returns rendered content, effective injection, injection switch, token count, and budget.</td></tr>
+        <tr><td>Memory → Core</td><td>Defaults to actual injected content and token budget, explicitly showing empty injection when disabled. Users can switch to the full source and save through existing transactions. New drafts during save are not overwritten by refresh; all Markdown previews use shared sanitization.</td></tr>
+        <tr><td>Writer prompt</td><td>No longer requires every repeated process to become a Topic; Core excludes ordinary project progress.</td></tr>
+        <tr><td>Organizer prompt</td><td>Explicitly organizes project processes, duplicates, and stale states in Core; deleted content remains in Git history.</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <div class="legend"><b>Implementation status (2026-08-17): implemented; awaiting review after fixes.</b> Web defaults to effective Core after the injection switch. Full-record saves synchronize Runtime-normalized source through compare-and-set; Markdown is sanitized; GET reads only complete snapshots during transaction installation. Writer/Organizer include these content-purpose constraints. Structured Memory transactions reduced the production workspace from 186 records to 15 and nine Topic files to four; <code>topics/core.md</code> was reduced from 31 records/about 15,305 tokens to three/about 429 tokens, with about 425 injected tokens. Repeated probes, old tool lists, repeated project checks, and invalid states were removed from current views but remain in Memory Git history. Automatic writing now starts at 8000 tokens. Retrieval reads organized Topics only. Current fixes cover special-token counting and continued edits during save; review conclusions are recorded after validation.</div>
+
+  <!-- ══════════ 06Nine methods ══════════ -->
+  <h2 id="hooks"><span class="num">06</span> Nine interface methods</h2>
+  <p class="lead">This is the sole interface between memory and agent runtime. Every method except <code>name</code> has a default implementation, so replacement memory systems implement only methods they need. The diagram follows the session lifecycle and explicitly marks unconnected methods.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 540" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nine MemoryBackend methods">
+    <text x="24" y="32" fill="#d4843a" font-size="15" font-weight="700">Nine methods arranged by lifecycle</text>
+    <text x="24" y="54" fill="#8a8675" font-size="12">Above the line: actual runtime calls. Below: interface exists, but no runtime caller.</text>
+
+    <!-- Connected -->
+    <g>
+      <rect x="216" y="86" width="196" height="94" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="234" y="110" fill="#5aad4e" font-size="12.5" font-weight="700" font-family="Menlo,monospace">system_prompt()</text>
+      <text x="234" y="132" fill="#bdb9a6" font-size="11">Inject MEMORY.md at session start</text>
+      <text x="234" y="152" fill="#8a8675" font-size="11">Wrap in memory-context</text>
+      <text x="234" y="170" fill="#8a8675" font-size="11">distinct from current user input</text>
+
+      <rect x="428" y="86" width="196" height="94" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="446" y="110" fill="#5aad4e" font-size="12.5" font-weight="700" font-family="Menlo,monospace">search(query)</text>
+      <text x="446" y="132" fill="#bdb9a6" font-size="11">Search before each turn</text>
+      <text x="446" y="152" fill="#8a8675" font-size="11">Default BM25, top five results</text>
+      <text x="446" y="170" fill="#8a8675" font-size="11">Tight time budget; must be fast</text>
+
+      <rect x="640" y="86" width="196" height="94" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="658" y="110" fill="#5aad4e" font-size="12.5" font-weight="700" font-family="Menlo,monospace">write(…)</text>
+      <text x="658" y="132" fill="#bdb9a6" font-size="11">Once per turn, once on idleness</text>
+      <text x="658" y="152" fill="#8a8675" font-size="11">Only force differs,</text>
+      <text x="658" y="170" fill="#8a8675" font-size="11">so this is one method, not two</text>
+
+      <rect x="900" y="86" width="196" height="94" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+      <text x="918" y="110" fill="#5aad4e" font-size="12.5" font-weight="700" font-family="Menlo,monospace">reorganize()</text>
+      <text x="918" y="132" fill="#bdb9a6" font-size="11">Reorganize daily at 03:00</text>
+      <text x="918" y="152" fill="#8a8675" font-size="11">Also manually triggered:</text>
+      <text x="918" y="170" fill="#8a8675" font-size="11" font-family="Menlo,monospace">openprogram memory sleep</text>
+    </g>
+
+    <line x1="314" y1="180" x2="314" y2="242" stroke="#5aad4e" stroke-width="1.4"/>
+    <line x1="526" y1="180" x2="526" y2="242" stroke="#5aad4e" stroke-width="1.4"/>
+    <line x1="700" y1="180" x2="700" y2="242" stroke="#5aad4e" stroke-width="1.4"/>
+    <path d="M800 180 C 800 214, 880 208, 880 242" fill="none" stroke="#5aad4e" stroke-width="1.4"/>
+    <line x1="998" y1="180" x2="998" y2="242" stroke="#5aad4e" stroke-width="1.4"/>
+
+    <!-- Lifecycle -->
+    <line x1="60" y1="256" x2="1120" y2="256" stroke="#d4843a" stroke-width="2.4"/>
+    <g text-anchor="middle" font-size="11">
+      <circle cx="110" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="110" y="240" fill="#d4843a" font-size="11.5" font-weight="700">Selection</text>
+      <circle cx="314" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="314" y="278" fill="#8a8675">Session start</text>
+      <circle cx="526" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="526" y="278" fill="#8a8675">Before each turn</text>
+      <circle cx="614" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="614" y="240" fill="#8a8675">Context compaction</text>
+      <circle cx="700" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="700" y="278" fill="#8a8675">End of each turn</text>
+      <circle cx="880" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="880" y="278" fill="#8a8675">Session end</text>
+      <circle cx="998" cy="256" r="5" fill="#16150f" stroke="#d4843a" stroke-width="2"/>
+      <text x="998" y="278" fill="#8a8675">03:00 nightly</text>
+    </g>
+
+    <!-- Not connected -->
+    <line x1="110" y1="256" x2="110" y2="330" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="4 4"/>
+    <line x1="314" y1="288" x2="314" y2="330" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="4 4"/>
+    <line x1="614" y1="256" x2="614" y2="330" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="4 4"/>
+    <line x1="880" y1="288" x2="880" y2="330" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="4 4"/>
+
+    <rect x="32" y="332" width="196" height="104" rx="9" fill="#12110b" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="50" y="356" fill="#8a8675" font-size="12.5" font-weight="700" font-family="Menlo,monospace">name</text>
+    <text x="106" y="356" fill="#8a8675" font-size="12.5" font-weight="700" font-family="Menlo,monospace">is_available()</text>
+    <text x="50" y="378" fill="#bdb9a6" font-size="11">Two operations select</text>
+    <text x="50" y="398" fill="#bdb9a6" font-size="11">a memory backend. No current</text>
+    <text x="50" y="416" fill="#bdb9a6" font-size="11">selection: direct construction</text>
+
+    <rect x="240" y="332" width="196" height="104" rx="9" fill="#12110b" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="258" y="356" fill="#8a8675" font-size="12.5" font-weight="700" font-family="Menlo,monospace">initialize(…)</text>
+    <text x="258" y="378" fill="#bdb9a6" font-size="11">Once at session start</text>
+    <text x="258" y="398" fill="#8a8675" font-size="11">Built-in use: store</text>
+    <text x="258" y="416" fill="#8a8675" font-size="11">session ID; fallback unreachable</text>
+
+    <rect x="534" y="332" width="230" height="104" rx="9" fill="#12110b" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="552" y="356" fill="#8a8675" font-size="12.5" font-weight="700" font-family="Menlo,monospace">extract_before_discard()</text>
+    <text x="552" y="378" fill="#bdb9a6" font-size="11">Stores nothing; selects what to retain.</text>
+    <text x="552" y="398" fill="#bdb9a6" font-size="11">Compactor supplies discarded text</text>
+    <text x="552" y="416" fill="#bdb9a6" font-size="11">Memory selects summary content</text>
+
+    <rect x="782" y="332" width="196" height="104" rx="9" fill="#12110b" stroke="#4a4838" stroke-width="1.3" stroke-dasharray="5 4"/>
+    <text x="800" y="356" fill="#8a8675" font-size="12.5" font-weight="700" font-family="Menlo,monospace">shutdown()</text>
+    <text x="800" y="378" fill="#bdb9a6" font-size="11">Should run after the final turn</text>
+    <text x="800" y="398" fill="#8a8675" font-size="11">Idle watcher finalizes</text>
+    <text x="800" y="416" fill="#8a8675" font-size="11">through write(force=True)</text>
+
+    <rect x="32" y="456" width="1096" height="60" rx="8" fill="#241f10" stroke="#d4843a" stroke-width="1.2"/>
+    <text x="50" y="480" fill="#d4843a" font-size="12" font-weight="700">Five methods lack runtime call sites.</text>
+    <text x="380" y="480" fill="#bdb9a6" font-size="12">Third-party extensions: connections, final writes, and preservation before compaction.</text>
+    <text x="50" y="502" fill="#bdb9a6" font-size="12">The built-in implementation needs none of these, hiding the missing calls. Integrating a system such as mem0 first requires connecting them.</text>
+  </svg>
+  <p class="note">Diagram details: selection step: it is constructed directly. a session ID, so that fallback path is unreachable. Compactor supplies messages to discard. Memory selects what the summary retains.</p>
+  <p class="note">Diagram details: so it is not mistaken for current user input. Two operations for selecting. a memory backend. Currently there is no. Should run once at session start. Consequence: the built-in implementation uses it to store. Opposite direction from the others: it stores nothing. The compactor has messages about to be discarded. and asks memory which should remain in the summary. Currently the idle watcher handles finalization. These five methods are not redundant; the runtime call sites are missing. They are extension points for third-party memory systems, which often need connections, session-end flushing, and pre-compaction preservation.</p>
+  </div>
+  <div class="legend">
+    <b>Two other conventions</b>: recalled text is already wrapped in <code>&lt;memory-context&gt;</code> where it is produced; wrapping again at output would strip the inner layer and leave an empty wrapper. Also, the interface has no tool-registration method: memory systems with tools are plugins, already able to register commands, skills, MCP, hooks, and agents. A private route would bypass that mechanism.
+  </div>
+
+  <!-- ══════════ 07Failure ══════════ -->
+  <h2 id="fail"><span class="num">07</span> Failure behavior</h2>
+  <p class="lead">Writes have three return outcomes interpreted by the watcher. Silence means success; failures distinguish transient conditions from those that will not change on retry.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 470" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two write-failure classes">
+    <defs>
+      <marker id="e-gn" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+      <marker id="e-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+      <marker id="e-no" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0445a"/></marker>
+    </defs>
+
+    <text x="24" y="32" fill="#d4843a" font-size="15" font-weight="700">write() return values determine idle-watcher behavior</text>
+
+    <rect x="32" y="130" width="164" height="120" rx="10" fill="#241f10" stroke="#d4843a" stroke-width="1.8"/>
+    <text x="114" y="176" fill="#d4843a" font-size="14" font-weight="700" text-anchor="middle">write()</text>
+    <text x="114" y="200" fill="#8a8675" font-size="11" text-anchor="middle">One call</text>
+    <text x="114" y="220" fill="#8a8675" font-size="11" text-anchor="middle">Three answers</text>
+
+    <path d="M196 160 C 236 160, 236 106, 276 106" fill="none" stroke="#5aad4e" stroke-width="1.6" marker-end="url(#e-gn)"/>
+    <path d="M196 190 L276 190" fill="none" stroke="#d4843a" stroke-width="1.6" marker-end="url(#e-or)"/>
+    <path d="M196 220 C 236 220, 236 302, 276 302" fill="none" stroke="#e0445a" stroke-width="1.6" marker-end="url(#e-no)"/>
+
+    <!-- Success -->
+    <rect x="280" y="66" width="300" height="80" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="298" y="90" fill="#5aad4e" font-size="12.5" font-weight="700">Return nothing</text>
+    <text x="298" y="112" fill="#bdb9a6" font-size="11.5">Write complete, or below threshold</text>
+    <text x="298" y="132" fill="#8a8675" font-size="11">Both mean “no problem to report”</text>
+    <rect x="612" y="66" width="216" height="80" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="630" y="90" fill="#bdb9a6" font-size="12" font-weight="700">Watcher: mark handled</text>
+    <text x="630" y="112" fill="#8a8675" font-size="11">Do not revisit this session</text>
+    <text x="630" y="132" fill="#8a8675" font-size="11">Skip on the next poll</text>
+    <rect x="860" y="66" width="268" height="80" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="878" y="90" fill="#bdb9a6" font-size="12" font-weight="700">Why the convention cannot be reversed</text>
+    <text x="878" y="112" fill="#8a8675" font-size="11">Forgetting a return also returns nothing.</text>
+    <text x="878" y="132" fill="#8a8675" font-size="11">Reversing it causes endless retries</text>
+
+    <!-- Retryable -->
+    <rect x="280" y="160" width="300" height="96" rx="9" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+    <text x="298" y="184" fill="#d4843a" font-size="12.5" font-weight="700">Still pending · worth retrying</text>
+    <text x="298" y="206" fill="#bdb9a6" font-size="11.5">Another writer holds the lock</text>
+    <text x="298" y="224" fill="#bdb9a6" font-size="11.5">Git commit failed or vector backend unavailable</text>
+    <text x="298" y="242" fill="#bdb9a6" font-size="11.5">Model unreachable or writer process cannot start</text>
+    <rect x="612" y="160" width="216" height="96" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="630" y="184" fill="#bdb9a6" font-size="12" font-weight="700">Watcher: leave unmarked</text>
+    <text x="630" y="206" fill="#8a8675" font-size="11">Retry unchanged at the next poll</text>
+    <text x="630" y="226" fill="#8a8675" font-size="11">Conversation data remains safe</text>
+    <text x="630" y="244" fill="#8a8675" font-size="11">in session storage</text>
+    <rect x="860" y="160" width="268" height="96" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="878" y="184" fill="#bdb9a6" font-size="12" font-weight="700">What these failures share</text>
+    <text x="878" y="206" fill="#8a8675" font-size="11">The condition can disappear: the lock releases,</text>
+    <text x="878" y="226" fill="#8a8675" font-size="11">the model recovers, and the same content</text>
+    <text x="878" y="246" fill="#8a8675" font-size="11">may succeed next time</text>
+
+    <!-- Not retryable -->
+    <rect x="280" y="270" width="300" height="96" rx="9" fill="#241015" stroke="#e0445a" stroke-width="1.5"/>
+    <text x="298" y="294" fill="#e0445a" font-size="12.5" font-weight="700">Still pending · retry will not help</text>
+    <text x="298" y="316" fill="#bdb9a6" font-size="11.5">Both writer edits were rejected by the transaction</text>
+    <text x="298" y="334" fill="#bdb9a6" font-size="11.5">Unavailable source or invalid patch</text>
+    <text x="298" y="352" fill="#bdb9a6" font-size="11.5">No session ID was provided</text>
+    <rect x="612" y="270" width="216" height="96" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="630" y="294" fill="#bdb9a6" font-size="12" font-weight="700">Watcher: still mark handled</text>
+    <text x="630" y="316" fill="#bdb9a6" font-size="11">and publish the failure reason</text>
+    <text x="630" y="336" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">memory.ingest_ended</text>
+    <text x="630" y="354" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">ok: false</text>
+    <rect x="860" y="270" width="268" height="96" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="878" y="294" fill="#bdb9a6" font-size="12" font-weight="700">Why mark an incomplete write handled</text>
+    <text x="878" y="316" fill="#8a8675" font-size="11">Same content, same rejection;</text>
+    <text x="878" y="336" fill="#8a8675" font-size="11">retries waste quota. Invisible</text>
+    <text x="878" y="356" fill="#8a8675" font-size="11">failures are never corrected</text>
+
+    <line x1="32" y1="392" x2="1128" y2="392" stroke="#2e2c20" stroke-width="1"/>
+    <text x="32" y="418" fill="#bdb9a6" font-size="12">Per-turn writes use the same returns. Previously, lock contention was misreported as an unmet threshold, silently leaving a turn unwritten.</text>
+    <text x="32" y="442" fill="#8a8675" font-size="12">The per-turn path logs pending content at debug level; the next turn naturally retries. The idle watcher is responsible for session finalization and therefore decides whether to mark it handled.</text>
+    <text x="32" y="464" fill="#8a8675" font-size="12">Memory failures never fail the conversation: every hook catches and logs its own exceptions. Catching an exception does not mean pretending nothing happened.</text>
+  </svg>
+  <p class="note">Diagram details: Write complete, or below threshold with nothing due. Patch cites an unavailable source or has invalid formatting. and publish the reason on the event bus. endless retries only consume model quota. Invisible.</p>
+  <p class="note">Diagram details: Writing finished, or the threshold was not reached and nothing is due. The opposite interpretation would turn that omission into endless retries. Sending identical content again yields identical rejection; The per-turn path uses the same returns and can also encounter a held lock. Previously lock contention was swallowed as “not enough content,” indistinguishable from an unmet threshold, leaving an unwritten turn without any report.</p>
+  </div>
+
+  <!-- ══════════ 08Unresolved ══════════ -->
+  <h2 id="open"><span class="num">08</span> Branch-related implementation status</h2>
+  <p class="lead">Node write markers and live-branch enumeration at session boundaries are implemented. Remaining issues concern mutually exclusive branch semantics, cross-session spawn relationships, and compaction-summary deduplication, not positional bookkeeping.</p>
+
+  <div class="grid2">
+
+    <div class="oc">
+      <svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="A branch is revisited only at a session boundary">
+        <text x="16" y="26" fill="#d4843a" font-size="12.5" font-weight="700">A branch is revisited only at a session boundary</text>
+        <line x1="60" y1="70" x2="220" y2="70" stroke="#3a382c" stroke-width="1.3"/>
+        <g font-size="10.5" text-anchor="middle">
+          <circle cx="60" cy="70" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+          <circle cx="140" cy="70" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+          <circle cx="220" cy="70" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+        </g>
+        <path d="M220 78 C 220 100, 260 100, 268 112" fill="none" stroke="#3a382c" stroke-width="1.3"/>
+        <path d="M220 62 C 220 44, 260 44, 268 34" fill="none" stroke="#3a382c" stroke-width="1.3"/>
+        <line x1="276" y1="30" x2="420" y2="30" stroke="#3a382c" stroke-width="1.3"/>
+        <g>
+          <circle cx="276" cy="30" r="7" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+          <circle cx="348" cy="30" r="7" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+          <circle cx="420" cy="30" r="8" fill="#241f10" stroke="#d4843a" stroke-width="2.2"/>
+        </g>
+        <text x="440" y="34" fill="#d4843a" font-size="11">Head: will be written</text>
+        <line x1="276" y1="118" x2="420" y2="118" stroke="#2a2820" stroke-width="1.3"/>
+        <g>
+          <circle cx="276" cy="118" r="7" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+          <circle cx="348" cy="118" r="7" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+          <circle cx="420" cy="118" r="7" fill="#12110b" stroke="#3a382c" stroke-width="1.3"/>
+        </g>
+        <text x="440" y="122" fill="#8a8675" font-size="11">Wait for idle</text>
+        <text x="16" y="160" fill="#8a8675" font-size="11">Within a turn, both write paths request the branch ending at head.</text>
+        <text x="16" y="178" fill="#8a8675" font-size="11">Only session boundaries enumerate every branch.</text>
+      </svg>
+  <p class="note">Diagram details: Wait until the session is idle.</p>
+      <div class="d"><b>Implemented.</b> Forced boundary writes process current head first, then other unarchived branch tips; node markers deduplicate shared prefixes. The idle watcher still triggers this, not head-change events.</div>
+    </div>
+
+    <div class="oc">
+      <svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Two branches write the same topic files">
+        <text x="16" y="26" fill="#d4843a" font-size="12.5" font-weight="700">Mutually exclusive branches, one topic file</text>
+        <rect x="16" y="46" width="150" height="40" rx="7" fill="#241f10" stroke="#d4843a" stroke-width="1.3"/>
+        <text x="91" y="70" fill="#d4843a" font-size="11.5" text-anchor="middle">Branch A: use Flask</text>
+        <rect x="16" y="104" width="150" height="40" rx="7" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+        <text x="91" y="128" fill="#4f8ef7" font-size="11.5" text-anchor="middle">Branch B: FastAPI</text>
+        <path d="M166 66 C 210 66, 210 88, 250 92" fill="none" stroke="#d4843a" stroke-width="1.4"/>
+        <path d="M166 124 C 210 124, 210 102, 250 98" fill="none" stroke="#4f8ef7" stroke-width="1.4"/>
+        <rect x="256" y="52" width="200" height="86" rx="8" fill="#12110b" stroke="#2e2c20" stroke-width="1.3"/>
+        <text x="272" y="74" fill="#bdb9a6" font-size="11" font-family="Menlo,monospace">topics/projects/x.md</text>
+        <text x="272" y="98" fill="#d4843a" font-size="11">This project uses Flask</text>
+        <text x="272" y="120" fill="#4f8ef7" font-size="11">This project uses FastAPI</text>
+        <text x="466" y="90" fill="#e0445a" font-size="11">Adjacent text</text>
+        <text x="466" y="110" fill="#8a8675" font-size="11">Neither says</text>
+        <text x="466" y="128" fill="#8a8675" font-size="11">they conflict</text>
+        <text x="16" y="172" fill="#8a8675" font-size="11">Retrieval returns both; nightly organization may even merge them.</text>
+      </svg>
+  <p class="note">Diagram details: Branch B: switch to FastAPI. Two adjacent paragraphs. they are mutually exclusive.</p>
+      <div class="d">The topic format has <b>no expression for “these are mutually exclusive options”</b>, so records from different branches can only coexist side by side.</div>
+    </div>
+
+    <div class="oc">
+      <svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Cross-session spawn halves maintain separate bookkeeping">
+        <text x="16" y="26" fill="#d4843a" font-size="12.5" font-weight="700">Cross-session spawn: independent bookkeeping</text>
+        <rect x="16" y="46" width="230" height="60" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+        <text x="32" y="68" fill="#5aad4e" font-size="11.5">Session A · main conversation</text>
+        <text x="32" y="90" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">cursors/openprogram/A.json</text>
+        <rect x="314" y="46" width="230" height="60" rx="8" fill="#1d2738" stroke="#4f8ef7" stroke-width="1.3"/>
+        <text x="330" y="68" fill="#4f8ef7" font-size="11.5">Session B · subagent branch</text>
+        <text x="330" y="90" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">cursors/openprogram/B.json</text>
+        <path d="M246 76 L308 76" fill="none" stroke="#8a8675" stroke-width="1.3" stroke-dasharray="4 4"/>
+        <text x="277" y="66" fill="#8a8675" font-size="10.5" text-anchor="middle">spawn</text>
+        <text x="16" y="134" fill="#bdb9a6" font-size="11">Thread keys are session IDs, so the halves use separate cursor files;</text>
+        <text x="16" y="152" fill="#bdb9a6" font-size="11">neither traversal enters the other graph.</text>
+        <text x="16" y="176" fill="#5aad4e" font-size="11">No loss.</text>
+        <text x="96" y="176" fill="#e0445a" font-size="11">Missing: a link identifying the continued conversation.</text>
+      </svg>
+  <p class="note">Diagram details: No duplication or omission. What is missing is the link saying this branch continues that conversation.</p>
+      <div class="d">Spawn branches within one session share its node marks without extra machinery.<b>For cross-session spawn, memory cannot identify the two parts as related.</b></div>
+    </div>
+
+    <div class="oc">
+      <svg viewBox="0 0 560 190" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="When a compaction summary becomes head">
+        <text x="16" y="26" fill="#d4843a" font-size="12.5" font-weight="700">When a compaction summary becomes head</text>
+        <line x1="40" y1="66" x2="300" y2="66" stroke="#3a382c" stroke-width="1.3"/>
+        <g>
+          <circle cx="40" cy="66" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+          <circle cx="126" cy="66" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+          <circle cx="212" cy="66" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+          <circle cx="298" cy="66" r="7" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+        </g>
+        <text x="330" y="70" fill="#8a8675" font-size="11">Original turns, already written</text>
+        <path d="M40 74 C 40 100, 80 100, 100 108" fill="none" stroke="#9d6fe0" stroke-width="1.4"/>
+        <rect x="104" y="94" width="150" height="34" rx="7" fill="#221a30" stroke="#9d6fe0" stroke-width="1.4"/>
+        <text x="179" y="116" fill="#9d6fe0" font-size="11.5" text-anchor="middle">Compaction summary</text>
+        <text x="264" y="116" fill="#8a8675" font-size="11">Uses the predecessor of the first summarized turn,</text>
+        <text x="264" y="132" fill="#8a8675" font-size="11">so normally it is a side branch</text>
+        <text x="16" y="164" fill="#bdb9a6" font-size="11">If head moves to the summary branch, the summary becomes an unwritten assistant turn:</text>
+        <text x="16" y="182" fill="#bdb9a6" font-size="11">its content repeats existing memory, but the cursor has never seen its ID.</text>
+      </svg>
+      <div class="d">Consequently, <b>the same facts are written again in different wording</b>. Normally this does not happen because summaries are side branches rather than mainline nodes.</div>
+    </div>
+
+  </div>
+
+  <h2 id="web"><span class="num">09</span> Memory Web page</h2>
+  <p class="lead">The page uses OpenProgram’s existing top title bar, secondary sidebar, and content area. Clear hierarchy, consistent row heights, readable content width, and stable narrow-window behavior improve the UI without new data layers or decorative dashboards.</p>
+
+  <div class="grid3">
+    <div class="st" style="border-top-color:#e0445a">
+      <div class="k">Current problem</div>
+      <p>The four sections, context lists, and Topic rows have similar visual weight; before selection, the right side is nearly empty. Core explanation/view switching sits on the left while content/token status sits on the right, obscuring their relationship.</p>
+    </div>
+    <div class="st" style="border-top-color:#4f8ef7">
+      <div class="k">Structural principles</div>
+      <p>The top bar provides page identity and settings only. The secondary sidebar selects a section, then lists its items or filters. The content header consolidates name, metadata, and actions; body text has a controlled reading width.</p>
+    </div>
+    <div class="st" style="border-top-color:#5aad4e">
+      <div class="k">Unchanged</div>
+      <p>Retain Topics, Timeline, Recent, Core, and existing APIs. No writer status bar, Commitments, Scheduler status, statistics dashboard, new dependency, or new persisted UI state.</p>
+    </div>
+  </div>
+
+  <div class="m-review" aria-labelledby="memory-target-title">
+    <div class="m-review-head">
+      <div>
+        <h3 id="memory-target-title">Target page · wide layout</h3>
+        <p>Click the four left-hand sections to inspect their lists and content states.</p>
+      </div>
+      <p>Current data: 0 Topics / 3 Core records / 2 Timeline dates</p>
+    </div>
+
+    <div class="m-frame" id="memoryPrototype">
+      <header class="m-top">
+        <div class="m-title">Memory</div>
+        <div class="m-top-meta">
+          <a class="m-settings" href="settings-ui.html">Memory settings</a>
+        </div>
+      </header>
+
+      <div class="m-shell">
+        <aside class="m-rail" aria-label="Memory sections">
+          <nav class="m-nav" aria-label="Memory views">
+            <button class="m-nav-item active" type="button" aria-pressed="true" data-memory-proto="topics"><span class="m-glyph">▤</span><span>Topics</span><span class="m-count">0</span></button>
+            <button class="m-nav-item" type="button" aria-pressed="false" data-memory-proto="timeline"><span class="m-glyph">◷</span><span>Timeline</span></button>
+            <button class="m-nav-item" type="button" aria-pressed="false" data-memory-proto="recent"><span class="m-glyph">⌁</span><span>Recent</span><span class="m-count">3</span></button>
+            <button class="m-nav-item" type="button" aria-pressed="false" data-memory-proto="core"><span class="m-glyph">✦</span><span>Core</span><span class="m-count">3</span></button>
+          </nav>
+
+          <div class="m-context active" data-memory-context="topics">
+            <div class="m-search">⌕ <span>Search topics</span></div>
+            <div class="m-section-label">SAVED TOPICS</div>
+            <div class="m-list">
+              <div class="m-row"><span class="m-glyph">▧</span><div class="m-row-main"><span class="m-row-title">No topics yet</span><span class="m-row-sub">New durable topics appear here</span></div></div>
+            </div>
+          </div>
+
+          <div class="m-context" data-memory-context="timeline">
+            <div class="m-time-tree">
+              <details open>
+                <summary class="m-year-summary"><svg class="m-disclosure" viewBox="0 0 10 10" fill="none" stroke="currentColor" aria-hidden="true"><path d="M3 2l3 3-3 3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>2026 <span class="m-count">2</span></summary>
+                <details open>
+                  <summary class="m-month-summary"><svg class="m-disclosure" viewBox="0 0 10 10" fill="none" stroke="currentColor" aria-hidden="true"><path d="M3 2l3 3-3 3" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"></path></svg>August <span class="m-count">2</span></summary>
+                  <div class="m-time-days">
+                    <div class="m-time-day active"><span class="m-time-number">15</span><span class="m-time-name">Saturday</span><span class="m-time-size">734 B</span></div>
+                    <div class="m-time-day"><span class="m-time-number">10</span><span class="m-time-name">Monday</span><span class="m-time-size">316 B</span></div>
+                  </div>
+                </details>
+              </details>
+            </div>
+          </div>
+
+          <div class="m-context" data-memory-context="recent" aria-label="Recent has no secondary navigation"></div>
+
+          <div class="m-context" data-memory-context="core" aria-label="Core controls are shown in the content header"></div>
+        </aside>
+
+        <main class="m-main">
+          <section class="m-panel active" data-memory-panel="topics">
+            <header class="m-detail-head">
+              <div class="m-detail-copy">
+                <div class="m-detail-title">Topics</div>
+                <div class="m-detail-sub">Durable project, preference, and relationship memory</div>
+              </div>
+            </header>
+            <div class="m-doc-wrap">
+              <article class="m-empty-card">
+                <span class="m-glyph">▧</span>
+                <h4>No topics yet</h4>
+                <p>Durable memory created by conversations and the background writer will appear here. Core rules are managed separately.</p>
+                <a class="m-settings" href="settings-ui.html">Open Memory settings</a>
+              </article>
+            </div>
+          </section>
+
+          <section class="m-panel" data-memory-panel="timeline">
+            <header class="m-detail-head"><div class="m-detail-copy"><div class="m-detail-title">August 15, 2026</div><div class="m-detail-sub">2 memory records · derived from Topics</div></div></header>
+            <div class="m-doc-wrap"><article class="m-doc"><div class="m-doc-kicker">Timeline</div><h4>Saturday</h4><p class="m-lede">Timeline remains a derived chronological view. It presents the Markdown generated for the selected date without adding event times or change metadata.</p><div class="m-record"><div class="m-record-meta"><span>Core · 2026-08-15</span></div><p>Never fabricate tool calls or tool results. Report only observed results from available tools.</p></div><div class="m-record"><div class="m-record-meta"><span>Core · 2026-08-15</span></div><p>Use plain “you” with no invented honorific unless the owner explicitly chooses one.</p></div></article></div>
+          </section>
+
+          <section class="m-panel" data-memory-panel="recent">
+            <header class="m-detail-head"><div class="m-detail-copy"><div class="m-detail-title">Recent memory</div><div class="m-detail-sub">3 / 50 records · newest durable records first · derived from Topics</div></div></header>
+            <div class="m-doc-wrap"><article class="m-doc"><div class="m-recent-card"><div class="m-record-meta"><span class="m-badge">CORE</span><span>2026-08-15</span></div><p>Never fabricate tool calls or tool results. Report observed results and state when no available tool returns a result.</p></div><div class="m-recent-card"><div class="m-record-meta"><span class="m-badge">CORE</span><span>2026-08-15</span></div><p>Use plain “you” with no invented honorific unless the owner explicitly chooses one.</p></div><div class="m-recent-card"><div class="m-record-meta"><span class="m-badge">CORE</span><span>2026-08-10</span></div><p>Use Chinese by default when discussing Memory and other operational work.</p></div></article></div>
+          </section>
+
+          <section class="m-panel" data-memory-panel="core">
+            <header class="m-detail-head">
+              <div class="m-detail-copy"><div class="m-detail-title">Core memory</div><div class="m-detail-sub"><span class="m-core-status">Injection enabled</span> · 425 / 2,000 tokens</div></div>
+              <div class="m-actions"><div class="m-segment"><span class="active">Prompt preview</span><span>Source records</span></div></div>
+            </header>
+            <div class="m-doc-wrap"><article class="m-doc"><div class="m-doc-kicker">Read-only prompt preview</div><h4>Core memory</h4><p class="m-lede">Generated from Source records and inserted into new system prompts. Edit the source records to change this preview.</p><div class="m-record"><div class="m-record-meta"><span>Language</span><span>·</span><span>Aug 10</span></div><p>Use Chinese by default when discussing Memory and other operational work.</p></div><div class="m-record"><div class="m-record-meta"><span>Address</span><span>·</span><span>Aug 15</span></div><p>Use plain “you” with no invented honorific unless the owner explicitly chooses one.</p></div><div class="m-record"><div class="m-record-meta"><span>Tool reporting</span><span>·</span><span>Aug 15</span></div><p>Never fabricate tool calls or tool results. Report observed results and state when no available tool returns a result.</p></div></article></div>
+          </section>
+        </main>
+      </div>
+    </div>
+  </div>
+
+  <div class="m-state-grid">
+    <div class="m-state">
+      <h4>Narrow width · interactive prototype</h4>
+      <p>Below 720px, do not stack section navigation, list, and detail vertically. Click a Topic for details; Back returns to the list.</p>
+      <div class="m-mobile" id="memoryMobilePrototype">
+        <div class="m-mobile-view" data-mobile-view="list">
+          <div class="m-mobile-head">Memory</div>
+          <nav class="m-mobile-tabs" aria-label="Memory views">
+            <button class="m-mobile-tab active" type="button" aria-label="Topics" aria-pressed="true" data-mobile-section="topics">▤</button>
+            <button class="m-mobile-tab" type="button" aria-label="Timeline" aria-pressed="false" data-mobile-section="timeline">◷</button>
+            <button class="m-mobile-tab" type="button" aria-label="Recent" aria-pressed="false" data-mobile-section="recent">⌁</button>
+            <button class="m-mobile-tab" type="button" aria-label="Core" aria-pressed="false" data-mobile-section="core">✦</button>
+          </nav>
+          <div class="m-mobile-body m-mobile-context" data-mobile-context="topics">
+            <div class="m-search" style="margin:0 0 12px">⌕ <span>Search topics</span></div>
+            <div class="m-empty-card" style="margin:24px 0;padding:20px"><span class="m-glyph">▧</span><h4>No topics yet</h4><p>New durable topics appear here.</p></div>
+          </div>
+          <div class="m-mobile-body m-mobile-context" data-mobile-context="timeline" hidden>
+            <div class="m-doc-kicker">2026 / August</div>
+            <button class="m-mobile-row" type="button" data-mobile-open data-mobile-title="August 15, 2026" data-mobile-label="Core" data-mobile-content="Two memory records are present for this date."><strong>August 15 · Saturday</strong><span>2 memory records</span></button>
+            <button class="m-mobile-row" type="button" data-mobile-open data-mobile-title="August 10, 2026" data-mobile-label="Core" data-mobile-content="One memory record is present for this date."><strong>August 10 · Monday</strong><span>1 memory record</span></button>
+          </div>
+          <div class="m-mobile-body m-mobile-context" data-mobile-context="recent" hidden>
+            <div class="m-doc-kicker">Recent memory</div>
+            <div class="m-recent-card"><div class="m-record-meta"><span class="m-badge">CORE</span><span>2026-08-10</span></div><p>Use Chinese by default when discussing Memory and other operational work.</p></div>
+          </div>
+          <div class="m-mobile-body m-mobile-context" data-mobile-context="core" hidden>
+            <div class="m-doc-kicker">Core memory</div>
+            <div class="m-segment"><span class="active">Prompt preview</span><span>Source records</span></div>
+            <div class="m-record"><div class="m-record-meta"><span class="m-core-status">Injection enabled</span><span>425 / 2,000 tokens</span></div><p>Read-only prompt text generated from editable Core records.</p></div>
+          </div>
+        </div>
+        <div class="m-mobile-view" data-mobile-view="detail" hidden>
+          <div class="m-mobile-head"><button class="m-back" type="button" aria-label="Back to memory list" data-mobile-back>‹</button><span data-mobile-detail-title>Memory detail</span></div>
+          <div class="m-mobile-body"><div class="m-doc-kicker">Memory detail</div><h4 data-mobile-detail-heading>Memory detail</h4><p>Durable decisions and current context.</p><div class="m-mobile-row"><strong data-mobile-detail-label>Record</strong><span data-mobile-detail-content>Select a Memory item to view its content.</span></div></div>
+        </div>
+      </div>
+    </div>
+    <div class="m-state">
+      <h4>Narrow-width rules</h4>
+      <p>Section navigation appears only in list mode. Detail mode uses the full content width and an explicit Back button. Core, Timeline, and Recent enter content mode directly when there is no file list. Window width never rewrites desktop-sidebar expansion state.</p>
+      <div class="m-rail-note" style="margin:14px 0 0;background:#171610;border-color:#343226">
+        <strong style="color:#f0eee6">Width priority</strong>
+        <span>Content detail > context list > section labels. Hide section text first, retaining icons; do not compress body text below readable width.</span>
+      </div>
+    </div>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Area</th><th>Target structure</th><th>Problem avoided</th></tr></thead>
+      <tbody>
+        <tr><td><b>Top title bar</b></td><td>Page title and Memory settings</td><td>No totals that existing APIs cannot accurately calculate; no writer/refresh status or duplicate explanations</td></tr>
+        <tr><td><b>Secondary sidebar</b></td><td>Folder, Topic, Timeline year/month/day, Recent, and Core entries all share 36px row height, 10px horizontal padding, 8px radius, 13px text, and selection background. Folder and Timeline year/month reuse the same 14×14 linear ChevronRight SVG/path/rotation and numeric badges. Timeline expresses hierarchy through indentation only. Topics does not duplicate <code>topics/core.md</code></td><td>managed by Core. Expansion controls avoid tiny filled triangles, and Timeline uses the same count presentation as Topics</td></tr>
+        <tr><td><b>Content header</b></td><td>Name, type, path, modification time, view, and editing actions in one 76px area</td><td>Remove a separate metadata strip and scattered Core status</td></tr>
+        <tr><td><b>Body</b></td><td>Preview/Timeline/Recent/Core use a maximum 780px reading area; Edit remains a full-width monospace editor</td><td>Avoid excessively wide text and large unstructured empty regions</td></tr>
+        <tr><td><b>Markdown preview</b></td><td>Topics, Timeline, and Core interpret Memory’s Obsidian Flavored Markdown through existing <code>marked</code> and HTML sanitization. Named <code>[^id]</code> become sequential <code>[1]</code> superscripts; definitions form a separated ordered list at the end, supporting two-space continuation and <code>^[inline footnote]</code>. Paragraph-end or standalone <code>^block-id</code> becomes an invisible anchor only, accepting Latin letters, digits, and hyphens in IDs. Fenced code, four-space-indented code, and backslash-escaped footnote syntax remain literal</td><td>Do not expose internal evidence/block IDs in prose; do not change editable disk source</td></tr>
+        <tr><td><b>Narrow width</b></td><td>Section icons plus single-page list/detail switching</td><td>Do not auto-collapse desktop sidebars, stack three panes vertically, or allow overlap</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note"><b>Upstream basis:</b><a href="https://obsidian.md/help/obsidian-flavored-markdown">Obsidian Flavored Markdown</a> defines the combination of CommonMark, GFM, LaTeX, and Obsidian extensions; <a href="https://obsidian.md/help/syntax#Footnotes">Footnotes</a> defines numbered named footnotes, two-space continuation, and inline footnotes; <a href="https://obsidian.md/help/links#Link%20to%20a%20block%20in%20a%20note">Internal links</a> defines block-ID placement and character set. Obsidian’s main application is closed source, and public API/help repositories do not expose its core renderer. This implementation follows official syntax and observable Reading/Publish output rather than copying unpublished code.</div>
+
+  <div class="grid2">
+    <div class="oc">
+      <h4>Implementation scope</h4>
+      <div class="d">Page layout is mainly maintained in <code>apps/web/components/memory/index.tsx</code>, <code>parts.tsx</code> and <code>memory-page.module.css</code> . Memory-specific reading transformations live in a dedicated Markdown helper, reusing existing <code>marked</code> and HTML sanitization without changing editable content, APIs, writer, or disk format.</div>
+    </div>
+    <div class="oc">
+      <h4>Explicit exclusions</h4>
+      <div class="d">No home dashboard, charts, Topic-creation wizard, drag sorting, bulk editing, writer status, automatic sidebar collapse, new APIs, or dependencies. Footnote sources retain existing URLs; no new source-browsing API or Memory syntax in Chat Markdown. Without selected content, show only a concise selection prompt and existing settings entry.</div>
+    </div>
+  </div>
+
+  <div class="note"><b>Acceptance boundaries:</b> Public entry <code>/memory</code> shows a fixed secondary sidebar and complete content area at desktop width. Recent/Core do not repeat title, count, view switch, or injection status in the middle sidebar; Core controls/status appear once in the right content header. Recent’s header shows current records and live <code>memory.recent.limit</code>, for example <code>7 / 50 records</code>, never confusing record count with token budget. The top bar does not call truncated Recent counts total Memory. Preview, Timeline, Recent, and Core use centered document areas; empty Topics has its own empty-state card. Defined named and inline footnotes render in occurrence order as <code>[1]</code> superscripts and an end-of-document list. Two-space continuations belong to the preceding footnote; body text hides evidence IDs and valid paragraph-end block IDs. Links, repeated refs, and undefined refs behave predictably. Inline/fenced/list-fenced/four-space-indented code stays literal, as do escaped references. Arbitrary input cannot collide with internal placeholders. Timeline collapses by year/month/day and never uses derived-file rebuild times as record times. Core distinguishes read-only Prompt preview from editable Source records; Topics excludes <code>core.md</code>. Below 720px, no horizontal overlap; editor actions occupy a separate wrappable row. The page neither requests nor renders writer status, pending counts, Commitments, or Scheduler state.</div>
+  <div class="legend"><b>Implementation status for this iteration:</b> Recent and Core no longer duplicate context blocks in the middle sidebar. Recent title/capacity appear only in the right content header, reading current <code>memory.recent.limit</code> from Recent API response headers and showing “current records / configured limit.” Core Prompt preview / Source records, injection status, and tokens also appear once on the right. Timeline year/month/day collapse remains. Structured transactions removed survey-test project records from production Memory; normal background writers may create new Topics. Centered documents, card empty states, a single 76px header, 780px reading width, and wrapping narrow-window edit actions are in production code. Topic rows and Timeline date entries share 36px height, 10px horizontal padding, 8px radius, and 13px text; Folder and Timeline year/month share 14×14 linear ChevronRight and numeric badges, with indentation-only hierarchy. Memory Preview converts named/inline footnotes to Obsidian Reading/Publish-style numbered superscripts and ordered end lists, hiding valid trailing block IDs while preserving editor/disk source. Complete mutually exclusive list/detail modes below 720px remain outside this iteration’s production scope.</div>
+
+  <div class="grid2">
+    <div class="oc">
+      <h4>Implementation evidence</h4>
+      <div class="d">Commit <code>5f1f06c4</code> implements document areas, empty states, and compact context sidebars; <code>1c770a4e</code> merges path metadata into the 76px header and standardizes 36px/780px dimensions; <code>b583833d</code> removes inaccurate top totals and adds narrow-window action wrapping; <code>7ef440c6</code> unifies secondary-sidebar rows for Topics, Timeline, Recent, and Core.<code>check-memory-status</code> changed from RED on the parent commit to GREEN. Memory settings, Markdown sanitization, TypeScript, production build, HTML, links, and diff checks pass. Memory Markdown tests cover named/repeated/inline footnotes, two-space continuations, literal inline/fenced/list-fenced/four-space code, escapes, placeholder collisions, hidden block IDs, and sanitization. A real Topic in the default port-18100 App displays <code>[1]</code>–<code>[4]</code> and an end footnote list with <code>1.</code>–<code>4.</code> markers, without internal IDs in the body.</div>
+    </div>
+    <div class="oc">
+      <h4>Compatibility requirements</h4>
+      <div class="d">Preserve four sections, existing requests, Core compare-and-set saves, Markdown sanitization, partial Timeline dates, keyboard focus, Core exclusion from Topics, and settings navigation. Footnote transformation occurs before sanitization; generated links/anchors pass through the same sanitizer. No new component library, API, database fields, automatic sidebar state, or test Memory.</div>
+    </div>
+  </div>
+
+  <h2 id="changes"><span class="num">10</span> Unified modification interface</h2>
+  <p class="lead">Memory supports both direct Topic-file edits and structured calls by models or other programs. Neither replaces the other; they differ only in how callers express changes. All modifications use the same Runtime staging, validation, derived views, atomic installation, and Git process.</p>
+
+  <div class="grid2">
+    <div class="oc">
+      <h4>Method one · edit files directly</h4>
+      <div class="d">Background writers or organizing models create, rewrite, move, or delete <code>topics/**/*.md</code> inside Runtime-provided staging. Each citation in new footnotes is written as <code>[short keyword](/s/&lt;session&gt;#&lt;message&gt;)</code>, copied from the ref printed beside each message. After editing it must not overwrite production Memory directly; it calls <code>commit_edits</code> so Runtime allocates/preserves IDs, checks new chat citations and block links, rebuilds Timeline/Recent/Relations/Core, and installs everything. Web/CLI file edits use the same <code>staged_edit</code> entry.</div>
+    </div>
+    <div class="oc">
+      <h4>Method two · structured interface</h4>
+      <div class="d">Model tools and owner REST accept <code>memory_changes[]</code>. Content operations are <code>create_record</code>, <code>update_record</code>, <code>delete_record</code>; structural operations are <code>move_records</code>. Runtime renders them into Topic Markdown and uses the same installation path as direct edits.</div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="oc">
+      <h4>Citation identity</h4>
+      <div class="d"><code>source</code> names one chat message, <code>/s/&lt;session&gt;#&lt;message&gt;</code>. Runtime checks a new one against the session store and uses it to restore derived views. Display text cannot change the target.</div>
+    </div>
+    <div class="oc">
+      <h4>Reference keyword</h4>
+      <div class="d"><code>label</code> is local display text for this citation, generated in the same Memory write call, not a permanent message title. Memory-agent prompts and tool schemas require short context-relevant keywords and discourage Markdown, URLs, message IDs, speaker names, or time templates. Apart from a nonempty-string Markdown requirement, Runtime does not assess keyword quality, truncate/rewrite labels, or add a model call for them.</div>
+    </div>
+  </div>
+
+  <div class="note"><b>Canonical output:</b><code>{"content":"...","sources":[{"source":"/s/session#message","label":"research scope"}]}</code>. Topic files retain standard Markdown: <code>[research scope](/s/session#message)</code>. The parser recovers the cited message from the link target, never from bracketed display text.</div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Reference interface</th><th>Reusable convention</th><th>Project choice</th></tr></thead>
+      <tbody>
+        <tr><td><a href="https://www.rfc-editor.org/rfc/rfc6902.html">RFC 6902 JSON Patch</a></td><td><code>add/remove/replace/move</code> are separate; no semantic merge/split.</td><td>Preserve content CRUD versus structural move, targeting stable <code>memory_id</code> rather than exposing Markdown path pointers.</td></tr>
+        <tr><td><a href="https://developers.notion.com/reference/patch-block-children">Notion block children</a></td><td>Content creation also specifies insertion position, owned by the parent structure.</td><td><code>create_record.destination</code> describes Topic, heading chain, and position together.</td></tr>
+        <tr><td><a href="https://prosemirror.net/docs/ref/#transform">ProseMirror Transform</a></td><td>High-level join/split intentions decompose into verifiable transaction steps.</td><td>Models plan merges/splits as update/create/delete/move; do not add ambiguous Runtime primitives.</td></tr>
+        <tr><td><a href="https://docs.mem0.ai/platform/api-reference/memory/update-memory">Mem0</a> / <a href="https://docs.letta.com/api-reference/memory/modify-block">Letta</a></td><td>Public Memory write APIs primarily create/update/delete records or blocks.</td><td>Retain record-level CRUD and add batch moves required by multi-file Topics.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Structured operation</th><th>Required data</th><th>Runtime behavior</th></tr></thead>
+      <tbody>
+        <tr><td><code>create_record</code></td><td>Final <code>content</code>, <code>time</code>, nonempty <code>sources[{source,label}]</code>, and <code>destination</code>: <code>topic_path</code>, <code>headings</code>, <code>position</code>; before/after additionally requires <code>anchor_memory_id</code>. Model schema uses <code>undated</code> to represent no date; owner REST also accepts <code>null</code>.</td><td>Validate Topic, position, and every new citation; retain label verbatim as display text, write canonical Markdown, and allocate block/evidence IDs.</td></tr>
+        <tr><td><code>update_record</code></td><td>Existing <code>memory_id</code> plus complete final <code>content/time/sources</code>.</td><td>Update only record content, preserving block ID and position; replace the paragraph and evidence definition with final values.</td></tr>
+        <tr><td><code>delete_record</code></td><td>Existing <code>memory_id</code>.</td><td>Delete the record and unused evidence definition; reject the whole transaction if block links would dangle.</td></tr>
+        <tr><td><code>move_records</code></td><td>Ordered, nonempty <code>memory_ids</code>, and the same <code>destination</code>.</td><td>as creation. Move records in the specified order, preserving IDs, content, time, citations, and creation order. Reorder within a section or move across sections/Topics.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note"><b>Shared transaction:</b> Both methods edit staging, normalize Topics, validate citations/relations, rebuild Timeline/Recent/Relations/Core, atomically install, and then record Git. Pre-installation errors cannot change production Memory. Post-installation Git failures must not pretend rollback occurred; results distinguish <code>memory_committed</code> and <code>git_committed</code>.</div>
+  <div class="note"><b>Compatible entry points:</b><code>memory_update</code> and <code>POST /api/memory/changes</code> Add <code>memory_changes</code>. Existing whole-Topic <code>changes[path/action/content]</code> and legacy unified diff <code>patch</code> remain supported. Each request selects exactly one of the three formats; all eventually call <code>MemoryWorkspace.update</code>.</div>
+  <div class="note"><b>Source input:</b><code>memory_changes[].sources[].source</code> is a chat link <code>/s/&lt;session&gt;#&lt;message&gt;</code>, its ref <code>openprogram/&lt;session&gt;/&lt;message&gt;</code>, or <code>current</code> for the user message of this turn; a record with no sources cites that message. Callers cannot submit provenance or owner identity. <code>source_refs: [string]</code> accepts the same chat links.</div>
+  <div class="note"><b>Compatibility and migration:</b> Existing display labels remain parseable. Runtime does not guess keywords without a semantic model. New writes and explicit updates use labels supplied by the Memory agent; labels survive moves, derived-view rebuilds, and body updates unchanged. Cited messages, evidence IDs, and block IDs remain unchanged.</div>
+  <div class="note"><b>Position contract:</b><code>destination.position</code> Accept only <code>start</code>, <code>end</code>, <code>before</code>, <code>after</code>. before/after anchors must belong to the destination Topic/heading chain and cannot belong to the move set. Final order exactly matches <code>memory_ids</code>. Each ID accepts at most one content operation and one move; delete and move cannot target the same ID.</div>
+  <div class="note"><b>Combined operations:</b> A semantic merge consists of one <code>update_record</code>, several <code>delete_record</code> , and any required <code>move_records</code>; a semantic split consists of one update, several creates, and required moves. Section/file merges and splits require only batch move. Runtime provides neither <code>merge_records</code>, <code>split_record</code>, <code>place_records</code> nor <code>reorder_records</code>.</div>
+  <div class="note"><b>Structural cleanup:</b> After moves/deletes, Runtime removes heading chains without Memory records and deletes Topic files that contain no records. Derived Timeline, Recent, Relations, and Core rebuild in the same transaction; callers do not edit them.</div>
+  <div class="note"><b>Legacy-format boundary:</b><code>mem_*</code> records retain their IDs. Structural operations cannot split multiple old IDs or canonical aliases sharing one physical paragraph. Moves must include all IDs of that paragraph contiguously in original paragraph order in one <code>move_records</code>.</div>
+  <div class="note"><b>Evidence conflicts:</b> When moving across Topics, if the destination or another source Topic in the batch has the same evidence label with different time/citation semantics, Runtime atomically rejects everything with <code>INVALID_ARGUMENT</code> . Identical semantics with different relative link paths are not conflicts.</div>
+  <div class="note"><b>Prerelease compatibility:</b> Earlier structured-interface <code>create/update/delete</code> inputs are converted to new names by Runtime. Model schemas and this document expose only four official operations; legacy aliases are not extended.</div>
+  <div class="note"><b>Scheduler boundary:</b> Local-owner prompt tasks may explicitly call <code>memory_search</code>, <code>memory_get</code> and <code>memory_update</code> to maintain long-term records linked by MemoryRef; Scheduler service does not implicitly dual-write. Deleted records leave no placeholder or ID forwarding; querying an old <code>memory_id</code> returns <code>NOT_FOUND</code>. External token capabilities and non-owner mutation scope remain deferred.</div>
+  <div class="note"><b>Model mutation scope:</b> Interactive models, background writers, and organizers can rewrite, merge, split, or delete current Topics. Deleting a block requires removing/updating Topic links to it in the same transaction; committed citations are never re-checked. Incremental writes and organization both attempt Git commits.</div>
+
+  <div class="tbl">
+    <table>
+      <thead><tr><th>Acceptance entry</th><th>Observable results</th></tr></thead>
+      <tbody>
+        <tr><td>After direct file editing, <code>commit_edits</code></td><td><code>[research scope](/s/session#message)</code> keeps its keyword and target. Production Topic, Timeline, Recent, Relations, and Core reflect the edits together; the parser recovers the cited messages. Validation failure leaves production files unchanged.</td></tr>
+        <tr><td><code>MemoryWorkspace.update(memory_changes=...)</code></td><td>create_record/update_record accept <code>sources[{source,label}]</code> and preserve caller labels; legacy <code>source_refs</code> still works. The four operations work independently or together; any failure leaves revision and all Memory bytes unchanged.</td></tr>
+        <tr><td><code>memory_update</code></td><td><code>memory_changes</code>, whole-file <code>changes</code> , and legacy unified diff share transaction behavior and return fields.</td></tr>
+        <tr><td><code>POST /api/memory/changes</code></td><td>accepts the same <code>memory_changes</code> and returns revision, changed_files, block/evidence IDs, and Git commit information.</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="note"><b>Implementation brief:</b> Scope is Writer Prompt, Topic footnote normalization/parser, structured <code>memory_changes</code>, Topic moves, and Timeline derived display. Retrieval identity, Preview renderer, database, and model-call count stay unchanged. Public-entry RED covers direct file editing and <code>MemoryWorkspace.update(memory_changes=...)</code>; affected validation covers Topic parsing, structured modifications, Writer prompt, derived views, owner REST, HTML, and documentation links.</div>
+  <div class="legend"><b>Source-label implementation status: implemented.</b> Writer generates short keywords in the same call following prompts/schemas. Runtime preserves the cited chat message, renders agent labels verbatim, and retains it during moves, Timeline rebuilds, and retrieval indexing. Structured interfaces expose <code>sources[{source,label}]</code>; <code>source_refs</code> accepts the same chat links. Runtime does not classify, truncate, or substitute labels semantically.</div>
+  <div class="note"><b>Retrieval performance:</b> Production BM25 uses a versioned disk cache and reuses in-process indexes by Topic file signatures; embedding also reuses parsed events and document vectors. Changes to time, size, or inode invalidate caches. Unpaired messages never become turns, so no Topic can cite them and recall needs no trust filter.</div>
+
+  <div class="legend"><b>Implementation status (2026-08-15):</b> Model tools and owner REST expose the four official operations. Whole-file <code>changes</code> and legacy unified diff remain compatible. Direct edits and structured operations share staging, validation, empty-structure cleanup, Timeline/Recent/Core derivation, atomic installation, and Git history. Public-entry regression tests cover batch moves, position/shared-paragraph checks, Recent creation-order preservation on first structural change, and cross-Topic evidence conflict rejection. Scheduler’s internal Agent lifecycle writes follow its design document; deleted records leave old <code>memory_id</code> returns <code>NOT_FOUND</code>, without retained records or old-ID mappings. External token capability remains deferred as specified here.</div>
+
+  <div class="legend">
+    <b>Implementation status (2026-08-11)</b>: per-turn and idle writes share one transaction; nodes store workspace write markers; session boundaries enumerate live branches; the resident block is rendered from <code>topics/core.md</code>; background writers use the default chat agent with live <code>memory.writer.model</code> updates. Unclassified exceptions are non-retryable by default.<code>memory.backend=none</code> disables prompts, recall, automatic writing, organization, and memory threads, and rejects all CLI memory verbs and <code>/api/memory/*</code> routes before workspace creation. Tools, CLI, and Web expose recent writer success, failure category, retryability, and pending counts. Component tests cover SessionDB, default-model resolution, managed tools, staging installation, Topics, markers, and watcher state. Still unimplemented: unauthorized-request hold queue, requester-level filtering, mutually exclusive branch semantics, cross-session spawn relationships, and direct head-change-triggered writing. Failure reason codes are a closed enum. Footnotes cite chat messages directly; a workspace with an old <code>sources/</code> copy is converted once by <code>store.cite_chats_directly</code>.
+  </div>
+
+</div>
+<script>
+  (function () {
+    var root = document.getElementById("memoryPrototype");
+    if (!root) return;
+    var tabs = Array.prototype.slice.call(root.querySelectorAll("[data-memory-proto]"));
+    tabs.forEach(function (tab) {
+      tab.addEventListener("click", function () {
+        var view = tab.getAttribute("data-memory-proto");
+        tabs.forEach(function (item) {
+          var selected = item === tab;
+          item.classList.toggle("active", selected);
+          item.setAttribute("aria-pressed", selected ? "true" : "false");
+        });
+        root.querySelectorAll("[data-memory-context]").forEach(function (context) {
+          context.classList.toggle("active", context.getAttribute("data-memory-context") === view);
+        });
+        root.querySelectorAll("[data-memory-panel]").forEach(function (panel) {
+          panel.classList.toggle("active", panel.getAttribute("data-memory-panel") === view);
+        });
+      });
+    });
+
+    var mobile = document.getElementById("memoryMobilePrototype");
+    if (!mobile) return;
+    var mobileList = mobile.querySelector('[data-mobile-view="list"]');
+    var mobileDetail = mobile.querySelector('[data-mobile-view="detail"]');
+    var mobileOpener = null;
+    mobile.querySelectorAll("[data-mobile-section]").forEach(function (sectionButton) {
+      sectionButton.addEventListener("click", function () {
+        var section = sectionButton.getAttribute("data-mobile-section");
+        mobile.querySelectorAll("[data-mobile-section]").forEach(function (item) {
+          var selected = item === sectionButton;
+          item.classList.toggle("active", selected);
+          item.setAttribute("aria-pressed", selected ? "true" : "false");
+        });
+        mobile.querySelectorAll("[data-mobile-context]").forEach(function (context) {
+          context.hidden = context.getAttribute("data-mobile-context") !== section;
+        });
+        mobileDetail.hidden = true;
+        mobileList.hidden = false;
+      });
+    });
+    mobile.querySelectorAll("[data-mobile-open]").forEach(function (item) {
+      item.addEventListener("click", function () {
+        mobileOpener = item;
+        mobile.querySelector("[data-mobile-detail-title]").textContent = item.getAttribute("data-mobile-title");
+        mobile.querySelector("[data-mobile-detail-heading]").textContent = item.getAttribute("data-mobile-title");
+        mobile.querySelector("[data-mobile-detail-label]").textContent = item.getAttribute("data-mobile-label");
+        mobile.querySelector("[data-mobile-detail-content]").textContent = item.getAttribute("data-mobile-content");
+        mobileList.hidden = true;
+        mobileDetail.hidden = false;
+        mobile.querySelector("[data-mobile-back]").focus();
+      });
+    });
+    mobile.querySelector("[data-mobile-back]").addEventListener("click", function () {
+      mobileDetail.hidden = true;
+      mobileList.hidden = false;
+      if (mobileOpener) mobileOpener.focus();
+    });
+  }());
+</script>
+</body>
+</html>

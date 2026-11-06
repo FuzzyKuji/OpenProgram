@@ -1,0 +1,1217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Goals and Restart Recovery</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg:#0d0f12; --panel:#15181d; --panel2:#1b1f25; --panel3:#111419;
+    --line:#2d333c; --line2:#424a56; --text:#edf0f4; --muted:#a8afb9; --faint:#747d89;
+    --blue:#6cb6ff; --cyan:#54d2cf; --green:#73d69a; --amber:#e6ba68; --red:#f07b72;
+    --violet:#b49cff; --sidebar:252px;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; font-size:15px; line-height:1.68; }
+  a { color:var(--blue); text-decoration-thickness:1px; text-underline-offset:3px; }
+  a:focus-visible,summary:focus-visible { outline:2px solid var(--cyan); outline-offset:3px; border-radius:4px; }
+  code,.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; }
+  code { color:#f1b69f; }
+  .sidebar { position:fixed; inset:0 auto 0 0; width:var(--sidebar); padding:24px 17px 32px; border-right:1px solid var(--line); background:#101318; overflow:auto; }
+  .brand { color:var(--faint); font-size:11px; font-weight:750; letter-spacing:.13em; text-transform:uppercase; }
+  .doc-title { margin:8px 0 22px; font-size:18px; font-weight:700; line-height:1.35; }
+  .nav-label { margin:20px 9px 7px; color:var(--faint); font-size:10px; font-weight:750; letter-spacing:.11em; text-transform:uppercase; }
+  nav a { display:block; padding:6px 9px; border-radius:7px; color:var(--muted); text-decoration:none; font-size:12.5px; }
+  nav a:hover { color:var(--text); background:var(--panel2); }
+  .mobile-nav { display:none; }
+  main { min-width:0; margin-left:var(--sidebar); }
+  .hero { padding:64px clamp(28px,6vw,88px) 48px; border-bottom:1px solid var(--line); background:radial-gradient(circle at 77% 18%,rgba(84,210,207,.11),transparent 31%),radial-gradient(circle at 58% -5%,rgba(180,156,255,.09),transparent 30%); }
+  .eyebrow { color:var(--cyan); font-size:12px; font-weight:750; letter-spacing:.12em; text-transform:uppercase; }
+  h1 { max-width:1000px; margin:12px 0 18px; font-size:clamp(34px,5vw,58px); line-height:1.08; letter-spacing:-.04em; }
+  .lead { max-width:980px; margin:0; color:var(--muted); font-size:18px; }
+  .meta { display:flex; flex-wrap:wrap; gap:8px; margin-top:26px; }
+  .pill,.badge { display:inline-flex; align-items:center; gap:5px; border:1px solid var(--line); border-radius:999px; background:rgba(13,15,18,.55); color:var(--muted); font-size:11px; padding:4px 9px; }
+  .pill.native,.badge.native { color:var(--green); border-color:rgba(115,214,154,.38); background:rgba(115,214,154,.08); }
+  .pill.near,.badge.near { color:var(--amber); border-color:rgba(230,186,104,.38); background:rgba(230,186,104,.08); }
+  .badge.source { color:var(--cyan); }
+  .content { max-width:1320px; min-width:0; padding:28px clamp(28px,6vw,88px) 100px; overflow-x:hidden; }
+  section { padding-top:36px; scroll-margin-top:20px; }
+  h2 { margin:0 0 10px; font-size:26px; letter-spacing:-.025em; }
+  h3 { margin:0 0 8px; font-size:17px; }
+  h4 { margin:19px 0 7px; font-size:14px; }
+  p { margin:8px 0 14px; color:var(--muted); }
+  ul,ol { color:var(--muted); padding-left:19px; }
+  li { margin:5px 0; }
+  .callout { margin:17px 0; padding:15px 17px; border-left:3px solid var(--cyan); background:rgba(84,210,207,.075); color:var(--muted); }
+  .callout.warn { border-left-color:var(--amber); background:rgba(230,186,104,.07); }
+  .reading-line { display:grid; grid-template-columns:1.05fr 1.45fr 1fr; margin-top:30px; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:rgba(13,15,18,.58); }
+  .reading-line > div { min-height:112px; padding:16px 18px; border-right:1px solid var(--line); }
+  .reading-line > div:last-child { border-right:0; }
+  .reading-line small { display:block; margin-bottom:7px; color:var(--faint); font-size:10px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+  .reading-line strong { display:block; color:var(--text); font-size:15px; line-height:1.35; }
+  .reading-line span { display:block; margin-top:6px; color:var(--muted); font-size:12px; line-height:1.45; }
+  .reading-line .current { box-shadow:inset 0 3px 0 var(--cyan); }
+  .reading-line .gap { box-shadow:inset 0 3px 0 var(--amber); }
+  .reading-line .target { box-shadow:inset 0 3px 0 var(--violet); }
+  .card { border:1px solid var(--line); border-radius:13px; background:var(--panel); padding:18px 20px; }
+  .card p:last-child,.card ul:last-child { margin-bottom:0; }
+  .scope-grid,.model-grid,.take-grid,.framework-grid { display:grid; min-width:0; gap:12px; margin-top:16px; }
+  .scope-grid > *,.model-grid > *,.take-grid > *,.framework-grid > * { min-width:0; }
+  .scope-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .model-grid { grid-template-columns:repeat(5,minmax(0,1fr)); }
+  .framework-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+  .take-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+  .model-card { min-height:172px; position:relative; overflow:hidden; }
+  .model-card::before { content:""; position:absolute; inset:0 auto 0 0; width:3px; background:var(--line2); }
+  .model-card:nth-child(1)::before { background:var(--faint); }
+  .model-card:nth-child(2)::before { background:var(--blue); }
+  .model-card:nth-child(3)::before { background:var(--cyan); }
+  .model-card:nth-child(4)::before { background:var(--violet); }
+  .model-card:nth-child(5)::before { background:var(--green); }
+  .model-card .letter { color:var(--faint); font:750 11px ui-monospace,monospace; }
+  .model-card strong { display:block; margin:7px 0 5px; }
+  .model-card p { margin:0; font-size:12.5px; }
+  .matrix-wrap { margin-top:17px; border:1px solid var(--line); border-radius:13px; overflow:auto; }
+  table { width:100%; border-collapse:collapse; min-width:1080px; font-size:12.5px; }
+  th,td { padding:11px 12px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+  th:last-child,td:last-child { border-right:0; }
+  tr:last-child td { border-bottom:0; }
+  th { position:sticky; top:0; z-index:1; color:var(--text); background:var(--panel2); font-weight:700; }
+  td { color:var(--muted); background:var(--panel); }
+  td:first-child { color:var(--text); font-weight:700; min-width:138px; }
+  .yes { color:var(--green); } .partial { color:var(--amber); } .no { color:var(--faint); }
+  .flow { display:grid; width:100%; max-width:100%; min-width:0; grid-template-columns:repeat(7,minmax(105px,1fr)); gap:8px; align-items:stretch; margin:18px 0; overflow:auto; }
+  .step { position:relative; min-height:95px; padding:13px 12px; border:1px solid var(--line); border-radius:11px; background:var(--panel3); }
+  .step:not(:last-child)::after { content:"→"; position:absolute; right:-16px; top:34px; z-index:2; color:var(--faint); font-size:17px; }
+  .step b { display:block; margin-bottom:5px; color:var(--text); font-size:12.5px; }
+  .step span { display:block; color:var(--muted); font-size:11.5px; line-height:1.45; }
+  .framework { scroll-margin-top:20px; margin-top:18px; padding:22px; border:1px solid var(--line); border-radius:15px; background:linear-gradient(145deg,rgba(27,31,37,.96),rgba(19,22,27,.96)); }
+  .framework-head { display:flex; justify-content:space-between; align-items:flex-start; gap:14px; }
+  .framework-head h3 { font-size:22px; }
+  .framework-head p { margin:2px 0 0; font-size:13px; }
+  .facts { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:17px 0; }
+  .fact { padding:12px 13px; border:1px solid var(--line); border-radius:10px; background:rgba(13,15,18,.45); }
+  .fact small { display:block; color:var(--faint); font-size:10px; text-transform:uppercase; letter-spacing:.08em; }
+  .fact strong { display:block; margin-top:4px; color:var(--text); font-size:13px; }
+  .cols { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+  .mini { border-top:1px solid var(--line); padding-top:13px; }
+  .mini h4 { margin-top:0; }
+  .source-box { margin-top:14px; border:1px solid var(--line); border-radius:10px; background:rgba(13,15,18,.45); }
+  details summary { cursor:pointer; padding:11px 13px; color:var(--muted); font-size:12.5px; }
+  details[open] summary { border-bottom:1px solid var(--line); }
+  .source-list { margin:0; padding:10px 30px 13px; font-size:12px; }
+  .evidence-note { color:var(--faint); font-size:11.5px; }
+  .diagram-shell { margin:18px 0 22px; border:1px solid var(--line); border-radius:16px; background:#101318; overflow:hidden; }
+  .diagram-head { display:flex; justify-content:space-between; gap:20px; align-items:flex-start; padding:16px 18px; border-bottom:1px solid var(--line); }
+  .diagram-head strong { display:block; font-size:14px; }
+  .diagram-head span { display:block; max-width:700px; margin-top:3px; color:var(--muted); font-size:12px; }
+  .legend { display:flex; flex-wrap:wrap; gap:12px; color:var(--muted); font-size:11px; white-space:nowrap; }
+  .legend i { width:10px; height:10px; margin-right:5px; display:inline-block; border-radius:3px; vertical-align:-1px; }
+  .legend .work { background:var(--blue); } .legend .judge { background:var(--cyan); }
+  .legend .wait { background:var(--amber); } .legend .stop { background:var(--red); }
+  .diagram-canvas { padding:20px; overflow:auto; }
+  svg.archify-inline { display:block; width:100%; min-width:760px; height:auto; font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"PingFang SC","Microsoft YaHei",monospace; }
+  .archify-figure svg.archify-inline { min-width:760px; }
+  .archify-figure .archify-surface { padding:18px; overflow:auto; }
+  .archify-inline .c-grid { stroke:#1e293b; fill:none; }
+  .archify-inline .c-mask { fill:#0f172a; stroke:none; }
+  .archify-inline .c-lane { fill:rgba(15,23,42,.22); stroke:#334155; }
+  .archify-inline .c-frontend { fill:rgba(8,51,68,.4); stroke:#22d3ee; }
+  .archify-inline .c-backend { fill:rgba(6,78,59,.4); stroke:#34d399; }
+  .archify-inline .c-database { fill:rgba(76,29,149,.4); stroke:#a78bfa; }
+  .archify-inline .c-cloud { fill:rgba(120,53,15,.3); stroke:#fbbf24; }
+  .archify-inline .c-security { fill:rgba(136,19,55,.4); stroke:#fb7185; }
+  .archify-inline .c-messagebus { fill:rgba(251,146,60,.3); stroke:#fb923c; }
+  .archify-inline .c-external { fill:rgba(30,41,59,.5); stroke:#94a3b8; }
+  .archify-inline .t-primary { fill:#fff; }
+  .archify-inline .t-muted { fill:#94a3b8; }
+  .archify-inline .t-dim { fill:#64748b; }
+  .archify-inline .t-frontend { fill:#22d3ee; }
+  .archify-inline .t-backend { fill:#34d399; }
+  .archify-inline .t-database { fill:#a78bfa; }
+  .archify-inline .t-cloud { fill:#fbbf24; }
+  .archify-inline .t-security { fill:#fb7185; }
+  .archify-inline .t-messagebus { fill:#fb923c; }
+  .archify-inline .t-external { fill:#94a3b8; }
+  .archify-inline .m-default { fill:#64748b; }
+  .archify-inline .m-emphasis { fill:#34d399; }
+  .archify-inline .m-security { fill:#fb7185; }
+  .archify-inline .m-dashed { fill:#94a3b8; }
+  .archify-inline .semantic-sigil { fill:none; stroke:currentColor; stroke-width:1.35; stroke-linecap:round; stroke-linejoin:round; opacity:.76; pointer-events:none; }
+  .archify-inline .semantic-sigil > * { vector-effect:non-scaling-stroke; }
+  .archify-inline .semantic-sigil .sigil-fill { fill:currentColor; stroke:none; }
+  .archify-inline .s-frontend { color:#22d3ee; }
+  .archify-inline .s-backend { color:#34d399; }
+  .archify-inline .s-database { color:#a78bfa; }
+  .archify-inline .s-cloud { color:#fbbf24; }
+  .archify-inline .s-security { color:#fb7185; }
+  .archify-inline .s-messagebus { color:#fb923c; }
+  .archify-inline .s-external { color:#94a3b8; }
+  .archify-figure { margin:18px 0 22px; border:1px solid var(--line); border-radius:16px; background:#050916; overflow:hidden; }
+  .archify-figure figcaption { padding:12px 16px; border-top:1px solid var(--line); color:var(--muted); font-size:12px; }
+  .surface-grid { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(280px,.75fr); gap:18px; margin:18px 0; }
+  .surface-preview { border:1px solid var(--line); border-radius:16px; background:#101318; overflow:hidden; }
+  .surface-preview header { display:flex; justify-content:space-between; align-items:center; padding:13px 16px; border-bottom:1px solid var(--line); }
+  .surface-preview header strong { font-size:13px; }
+  .goal-demo-body { padding:18px; }
+  .goal-demo-chip { display:inline-flex; align-items:center; gap:8px; border:1px solid rgba(84,210,207,.38); border-radius:9px; padding:7px 10px; color:var(--text); background:rgba(84,210,207,.08); font-size:12px; }
+  .goal-demo-panel { margin-top:12px; border:1px solid var(--line2); border-radius:12px; background:var(--panel); overflow:hidden; }
+  .goal-demo-panel .panel-title { padding:14px 15px; border-bottom:1px solid var(--line); }
+  .goal-demo-panel .panel-title small { display:block; color:var(--faint); margin-top:4px; }
+  .goal-demo-row { display:grid; grid-template-columns:110px 1fr; gap:12px; padding:10px 15px; border-bottom:1px solid var(--line); font-size:12px; }
+  .goal-demo-row:last-child { border-bottom:0; }
+  .goal-demo-row span:first-child { color:var(--faint); }
+  .goal-demo-actions { display:flex; flex-wrap:wrap; gap:8px; padding:13px 15px; border-top:1px solid var(--line); }
+  .demo-button { border:1px solid var(--line2); border-radius:7px; padding:6px 10px; color:var(--text); background:var(--panel2); font-size:11px; }
+  .demo-button.primary { border-color:rgba(84,210,207,.5); color:var(--cyan); }
+  .terminal-demo { margin:0; padding:18px; min-height:330px; color:#d7dde5; background:#090b0e; font:12px/1.75 ui-monospace,SFMono-Regular,Menlo,monospace; white-space:pre-wrap; }
+  .model-stack { display:grid; width:100%; max-width:100%; grid-template-columns:150px repeat(5,minmax(120px,1fr)); margin-top:18px; border:1px solid var(--line); border-radius:14px; overflow:auto; min-width:0; }
+  .model-stack > div { min-height:82px; padding:13px 14px; border-right:1px solid var(--line); border-bottom:1px solid var(--line); background:var(--panel); }
+  .model-stack > div:nth-child(6n) { border-right:0; }
+  .model-stack > div:nth-last-child(-n+6) { border-bottom:0; }
+  .model-stack .row-name { background:var(--panel2); color:var(--text); font-weight:700; }
+  .model-stack .stack-head { min-height:48px; background:#101318; color:var(--faint); font-size:10px; font-weight:750; letter-spacing:.07em; text-transform:uppercase; }
+  .model-stack b { display:block; color:var(--text); font-size:12px; }
+  .model-stack span { display:block; margin-top:4px; color:var(--muted); font-size:11px; line-height:1.35; }
+  .model-stack .present { box-shadow:inset 0 3px 0 var(--cyan); }
+  .model-stack .partial-cell { box-shadow:inset 0 3px 0 var(--amber); }
+  details.data-details { margin-top:16px; border:1px solid var(--line); border-radius:13px; background:var(--panel3); overflow:hidden; }
+  details.data-details > summary { padding:13px 16px; color:var(--text); font-weight:700; list-style:none; }
+  details.data-details > summary::before { content:"＋"; display:inline-block; width:22px; color:var(--cyan); }
+  details.data-details[open] > summary::before { content:"−"; }
+  details.data-details > .matrix-wrap { margin:0; border:0; border-top:1px solid var(--line); border-radius:0; }
+  .baseline { min-height:210px; }
+  .baseline .kind { color:var(--violet); font-size:11px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
+  .decision-list { counter-reset:d; list-style:none; padding:0; }
+  .decision-list li { counter-increment:d; position:relative; margin:10px 0; padding:13px 15px 13px 48px; border:1px solid var(--line); border-radius:10px; background:var(--panel); }
+  .decision-list li::before { content:counter(d,decimal-leading-zero); position:absolute; left:14px; top:13px; color:var(--cyan); font:750 12px ui-monospace,monospace; }
+  .decision-list strong { color:var(--text); }
+  .do { border-color:rgba(115,214,154,.35); }
+  .adapt { border-color:rgba(230,186,104,.35); }
+  .avoid { border-color:rgba(240,123,114,.35); }
+  .take-label { font-size:10px; font-weight:800; letter-spacing:.09em; text-transform:uppercase; }
+  .do .take-label { color:var(--green); } .adapt .take-label { color:var(--amber); } .avoid .take-label { color:var(--red); }
+  .footer { margin-top:48px; padding-top:20px; border-top:1px solid var(--line); color:var(--faint); font-size:12px; }
+  @media (max-width:1100px) { .model-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.facts{grid-template-columns:repeat(2,minmax(0,1fr))}.scope-grid,.take-grid{grid-template-columns:1fr}.flow{grid-template-columns:repeat(7,150px)}.reading-line{grid-template-columns:1fr}.reading-line>div{border-right:0;border-bottom:1px solid var(--line)}.reading-line>div:last-child{border-bottom:0}.model-stack{grid-template-columns:130px repeat(5,150px)} }
+  @media (max-width:820px) { :root{--sidebar:0px}.sidebar{display:none}main{margin-left:0}.mobile-nav{display:block;position:sticky;top:0;z-index:10;border-bottom:1px solid var(--line);background:rgba(16,19,24,.96);backdrop-filter:blur(10px)}.mobile-nav summary{padding:11px 19px;color:var(--text);font-size:12px;list-style:none}.mobile-nav summary::before{content:"目录 ＋"}.mobile-nav[open] summary::before{content:"目录 −"}.mobile-nav .mobile-links{display:flex;gap:7px;padding:0 19px 12px;overflow:auto}.mobile-nav a{flex:0 0 auto;padding:6px 9px;border:1px solid var(--line);border-radius:7px;color:var(--muted);font-size:11px;text-decoration:none}.hero{padding-top:36px}.framework-grid,.cols,.model-grid,.surface-grid{grid-template-columns:1fr}.content{padding-bottom:70px}.framework{padding:17px}.framework-head{display:block}.facts{grid-template-columns:1fr 1fr}.diagram-canvas{padding:0}.goal-demo-row{grid-template-columns:88px 1fr} }
+  @media (max-width:520px) { .facts{grid-template-columns:1fr}.hero,.content{padding-left:19px;padding-right:19px}h1{font-size:34px} }
+  @media (prefers-reduced-motion:reduce) { html{scroll-behavior:auto} }
+  .chat-design { max-width:1280px; padding:38px clamp(19px,5vw,72px); }
+  .chat-design table { min-width:620px; }
+  .chat-design .matrix-wrap { max-width:100%; }
+  .chat-design h2 { margin-top:30px; }
+  .chat-design h1 { font-size:clamp(28px,4vw,44px); }
+  .chat-design code { overflow-wrap:anywhere; }
+  .design-nav { display:flex; flex-wrap:wrap; gap:4px; margin:18px 0; }
+  .design-path { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; padding:0; list-style:none; }
+  .design-path li { border:1px solid var(--line); border-radius:9px; padding:14px; background:var(--panel); }
+  .design-path strong { display:block; color:var(--text); }
+  #workflow-reference { padding:20px; border-top:1px solid var(--line); }
+  #workflow-reference > summary { cursor:pointer; color:var(--muted); }
+  @media(max-width:720px) { .design-path { grid-template-columns:1fr; } }
+</style>
+</head>
+<body>
+<aside class="sidebar">
+  <div class="brand">OpenProgram Research</div>
+  <div class="doc-title">Goal and session recovery design</div>
+  <nav aria-label="Document contents">
+    <a href="#chat-goal-contract">Design and boundaries</a>
+    <a href="#harness-decisions">Tradeoffs across five harnesses</a>
+    <a href="#restart-inventory">Recovery in the code</a>
+    <a href="#restart-contract">Automatic restart recovery</a>
+    <a href="#recovery-matrix">Complete recovery-state matrix</a>
+    <a href="#ownership-design">State ownership</a>
+    <a href="#recovery-design">Interruption recovery</a>
+    <a href="#completion-design">Todo and acceptance</a>
+    <a href="#usage-design">Usage and cost</a>
+    <a href="#controls-design">Controls and interfaces</a>
+    <a href="#acceptance-design">Implementation and acceptance</a>
+    <a href="#status">Implementation status</a>
+    <details><summary>Comparison with other Goal implementations</summary>
+    <div class="nav-label">Framing</div>
+    <a href="#scope">Scope and definitions</a>
+    <a href="#taxonomy">Five implementation models</a>
+    <a href="#native-map">Four native architectures</a>
+    <a href="#matrix">Comparison matrix</a>
+    <a href="#hard-tasks">Difficult tasks and stopping mechanisms</a>
+    <div class="nav-label">Native Goal</div>
+    <a href="#codex">Codex</a>
+    <a href="#claude">Claude Code</a>
+    <a href="#hermes">Hermes Agent</a>
+    <div class="nav-label">Adjacent</div>
+    <a href="#opencode">OpenCode</a>
+    <a href="#openclaw">OpenClaw</a>
+    </details>
+  </nav>
+</aside>
+
+<main>
+  <div class="chat-design">
+  <section id="chat-goal-contract">
+    <div class="eyebrow">OpenProgram · Harness design</div>
+    <span id="goal-workflow-design"></span><span id="goal-workflow-设计"></span><h1>Restart recovery and Goal design for the complete session runtime</h1>
+    <p class="lead">Design question: after an App or worker restart, how do previously running sessions and Goals automatically continue, restoring subtasks, approvals, context, and usage without repeating unknown writes or resuming work the user explicitly stopped?</p>
+    <nav class="design-nav" aria-label="Design sections"><a href="#harness-decisions">References</a><a href="#ownership-design">State</a><a href="#recovery-design">Recovery</a><a href="#completion-design">Acceptance</a><a href="#usage-design">Cost</a><a href="#controls-design">Interface</a><a href="#acceptance-design">Implementation</a><a href="#status">Implementation status</a></nav>
+    <p>When the App or worker restarts, OpenProgram continues the conversations and Goals that were running. It restores their history, subtasks, approvals and usage, but it never blindly reruns a tool whose outcome is unknown, and it never resumes work the user stopped. A Goal is an objective kept across ordinary chat turns: after each turn the session decides whether to continue, wait, pause or verify completion, and an independent read-only turn confirms the objective before it counts as achieved. This works across Web, TUI, ACP, background Jobs and authorized subtasks on the same chat execution layer, with no second execution engine, no general scheduler and no exactly-once promise for arbitrary external operations. The second half of the page compares how Codex, Claude Code, Hermes Agent, OpenCode and OpenClaw implement Goals; implementation status is collected at the end.</p>
+    <p><a href="#restart-inventory">Recovery in the code</a> · <a href="#restart-contract">Automatic recovery contract</a> · <a href="#recovery-matrix">Complete recovery-state matrix</a> · <a href="#restart-tests">Failure acceptance matrix</a></p>
+    <div class="callout">Core contract:<strong>Resuming a session does not mean retrying its tools</strong>. An old turn may end as interrupted while its operations remain outcome_unknown; a new turn first checks actual state. Goal, Todo, chat history, and incurred usage remain preserved.</div>
+    <ol class="design-path" aria-label="Ordinary Goal execution sequence">
+      <li><strong>1. Save the objective</strong>Original objective, completion conditions, permission scope, and explicit budget.</li>
+      <li><strong>2. Work through ordinary chat</strong>The agent maintains Todo and uses existing tools and approvals.</li>
+      <li><strong>3. Check at turn completion</strong>Settle usage and decide whether to continue, wait, pause, or verify acceptance.</li>
+      <li><strong>4. Accept completion</strong>Submit achieved once evidence supports every condition; otherwise continue working.</li>
+    </ol>
+    <p>There is no default round cap. Round count is diagnostic information, not a substitute for progress or stopping conditions. Retain the short state tools create_goal/get_goal/update_goal; they only read and write objectives, rather than executing the entire task within one function call.</p>
+  </section>
+  <section id="harness-decisions">
+    <h2>Five harnesses: what to adopt and what not to duplicate</h2>
+    <div class="matrix-wrap"><table><thead><tr><th>Reference and evidence</th><th>Verified behavior</th><th>OpenProgram choice</th></tr></thead><tbody>
+      <tr><td><a href="https://github.com/openai/codex/blob/4d160ea71dddc8e3b7e780b1aa159e79baaa535f/codex-rs/core/src/context_manager/normalize.rs#L21">Codex: history repair</a> · <a href="https://github.com/openai/codex/blob/4d160ea71dddc8e3b7e780b1aa159e79baaa535f/codex-rs/ext/goal/src/runtime.rs#L425">Idle continuation</a></td><td>Missing tool outputs become aborted; Goals continue through ordinary thread-idle admission.</td><td>Adopt ordinary chat continuation, pairing repair, and current-state verification; do not interpret aborted as reversal of external effects.</td></tr>
+      <tr><td><a href="https://code.claude.com/docs/en/sessions#what-a-resumed-session-restores">Claude Code: recovery</a> · <a href="https://code.claude.com/docs/en/goal#how-evaluation-works">Goal evaluation</a></td><td>Tools interrupted by a crash are not automatically rerun; an independent small model evaluates the Goal from conversational evidence. Only official contracts were verified, not internal source.</td><td>Adopt recovery without blind reruns and independent completion review; do not add evaluation after every work turn, avoiding unnecessary latency and cost.</td></tr>
+      <tr><td><a href="https://github.com/anomalyco/opencode/blob/70a24697ea0028e19f22712fd63059538cb4bee7/packages/opencode/src/session/message-v2.ts#L353">OpenCode: history conversion</a> · <a href="https://github.com/anomalyco/opencode/blob/70a24697ea0028e19f22712fd63059538cb4bee7/packages/opencode/src/session/processor.ts#L452">Step usage</a></td><td>Convert pending/running calls into interruption errors; record tokens and cost at model-step completion.</td><td>Adopt continuable interrupted history and per-request usage; Todo is a work plan and does not independently determine completion.</td></tr>
+      <tr><td><a href="https://github.com/openclaw/openclaw/blob/bc0b24713dc8814a598e0a588c967837c18f6660/src/agents/session-transcript-repair.ts#L368">OpenClaw: pairing repair</a></td><td>Match existing results, synthesize errors for missing ones, and handle duplicate or misplaced results.</td><td>Adopt provider-request projection repair without overwriting original factual records or equating heartbeat with Goal.</td></tr>
+      <tr><td><a href="https://github.com/deepseek-ai/deepseek-harness/blob/ddefc45fbc7f8e46dd73185e68295696d1297887/packages/core/session/src/repair.ts#L14">DeepSeek harness: interruption closure</a> · <a href="https://github.com/deepseek-ai/deepseek-harness/blob/ddefc45fbc7f8e46dd73185e68295696d1297887/packages/goal/goal-round-driver/README.md">Continuation contract</a></td><td>Append repairs after exclusive write access; distinguish not-started from unknown outcomes; close old turns and require explicit authorization to continue recovered Goals.</td><td>Adopt layered state and idempotent repair; do not copy its default round cap or the product policy requiring manual reactivation after restart.</td></tr>
+    </tbody></table></div>
+    <p>The following are OpenProgram design choices based on these implementations, not claims that the five projects provide identical safety, acceptance, or cost guarantees. Reference source is pinned to inspected versions; external project tests were not run.</p>
+    <p>Verifiable Codex boundaries:<a href="https://developers.openai.com/zh-Hans/docs/app-server">Official App Server documentation</a>distinguishes thread/resume, turn/start, and persistent Goals;<a href="https://github.com/openai/codex/blob/4d160ea71dddc8e3b7e780b1aa159e79baaa535f/codex-rs/ext/goal/src/extension.rs#L164">public extension source</a>loads active Goals when resuming threads and attempts continuation while idle. This does not establish that arbitrary desktop exits, system restarts, or tool-process deaths can restore original memory or continue original tools. OpenProgram defines automatic continuation while prior run intent remains valid as its own explicit product contract, without relying on that unverified stronger assumption.</p>
+  </section>
+  <section id="restart-inventory">
+    <h2>Where recovery lives in the code</h2>
+    <div class="matrix-wrap"><table><thead><tr><th>Inspected code</th><th>Current behavior</th><th>Boundary to preserve</th></tr></thead><tbody>
+      <tr><td><code>execution/startup.py</code>, <code>execution/control/recovery.py</code></td><td>Owner checks, canonical recovery, wait-receipt recovery, and projection redelivery already exist; this is not a blank implementation.</td><td>Unconfirmed effects can place an entire execution in reconciliation_required; separate operation reconciliation from whether the session can continue.</td></tr>
+      <tr><td><code>execution/restart.py</code></td><td>Restart pause intent, deduplicated continuation commands, and resource admission exist. Recovery has no default expiry; explicit disabling and finite deadlines remain, and unresolved effects are disallowed. Only a live turn of the same conversation (queued, running, pausing, cancelling) holds the continuation back; one stuck in reconciliation_required does not. A turn the user started after the interruption supersedes it: the intent settles as superseded and the execution stays paused for an explicit Continue.</td><td>Complete state recovery still needs acceptance. Existing finite deadlines in old records are not automatically extended, and removing the default expiry does not authorize replay of unresolved effects.</td></tr>
+      <tr><td><code>programs/tools/planning/goal/chat.py</code>, <code>runtime/execution/dag.py</code></td><td>Chat Goals do not pause because of downtime or display-projection repair. Persist completion notifications before execution finishes, then continue under the original policy after restart. Old records without recovery provenance retain explicit Resume.</td><td>Completion notifications and checkpoint recovery have focused tests; unknown effects, new-turn recovery, and complete subtask paths still require implementation and acceptance.</td></tr>
+      <tr><td><code>jobs/runner/recovery.py</code>, <code>execution/control/waits.py</code></td><td>Job recovery, deferred inbox, durable answers, and deduplicated continue exist; some ordinary-chat restart paths exclude spawn/merge.</td><td>Unify parent/child recovery decisions and result delivery. A saved Job does not imply a fully recovered child agent.</td></tr>
+      <tr><td><code>execution/waits.py</code></td><td>Durable waits differ from live producer waits; live waits are cancelled when their producer disappears.</td><td>Recoverable approvals and questions cannot depend solely on process callbacks. Preserve expired question records and reconfirm rather than assuming approval.</td></tr>
+      <tr><td><code>usage/context.py</code>, <code>usage/event.py</code></td><td>Session, agent, and Job attribution and a ledger exist; context does not directly retain Goal/revision/request-attempt identity.</td><td>Fix attribution and unique keys before requests to support late receipts after restart; missing usage must not become zero.</td></tr>
+      <tr><td><code>applications/browser/pages.py</code>, <code>resources/terminal.py</code>, Web session store</td><td>Resource identity, recovery state, and session projections exist; this does not mean every process, page state, or environment can be reconstructed.</td><td>Accept real reconnection, invalidation reporting, and new identity separately for each resource; frontend reconnection must not trigger duplicate execution.</td></tr>
+    </tbody></table></div>
+    <p>Inspection covers the shared entry points above, not individual failure tests for every adapter. A paused UI does not prove history was deleted, and existing records do not prove automatic continuation is possible.</p>
+  </section>
+  <section id="restart-contract">
+    <h2>Automatic recovery contract: run intent survives the process</h2>
+    <p>Complete durable run_intent on top of existing admission / command / restart intent rather than adding a parallel scheduler. It records work_id, original input and unconsumed messages, desired_state (run / paused / cancelled / done), latest valid control version, permission scope, objective revision, execution host identity, parent/child relationships, last committed progress, and recovery policy. Acknowledge acceptance to the client only after reliably saving the original user request.</p>
+    <p>By default, automatically recover previously authorized work whose state remains run, consistently for ordinary sessions and Goals and without requiring the user to reopen the session. Preserve pauses, stops, completion, outstanding approval, and exhausted budgets. Ordinary requests without a Goal continue only until that request finishes, not as indefinite Goals. Background work retains its prior authorization and concurrency quota; restart does not authorize additional subtasks.</p>
+    <p>Closing a window or reloading the frontend only disconnects the client; “quit and stop all tasks” must persist user stop intent. Ordinary App exit, upgrades, worker crashes, and machine restarts do not implicitly mean user Pause. Graceful shutdown first stops new admission and saves accepted controls and checkpoints, then exits the worker; forced shutdown recovers from the last committed records. Client-only drafts without server acknowledgment must not be represented as submitted requests.</p>
+    <p>Remove the hidden two-hour recovery expiry. Long downtime preserves run intent, but continuation rechecks directory, host, model/tool availability, credentials, current permissions, and budget. Missing resources or revoked permissions show precise waiting reasons, without switching project, account, or model or expanding permissions automatically. Explicit automatic-recovery disabling remains effective; old paused records with unknown reasons stay paused with an explanation rather than being guessed to have been running.</p>
+    <ol aria-label="Unified restart recovery sequence">
+      <li><strong>Load facts:</strong>Read run intent, user controls, messages, checkpoints, effects, waits, resources, usage, and projection cursors. Read/migration failures show recovery failure without clearing old state.</li>
+      <li><strong>Confirm ownership:</strong>Reconnect live executors; exclude dead executors through generation fencing. Only one host recovers each work item. Single-host recovery must not silently become cross-host takeover.</li>
+      <li><strong>Repair context:</strong>Merge real results, supply missing tool outputs, and record interruption. Resume from a complete safe checkpoint when available; otherwise start a new turn with the same work_id without re-appending user input.</li>
+      <li><strong>Decide:</strong>User stops take priority, followed by approval, permissions, budget, resources, and unknown effects. Runnable work becomes queued; dependency waits become waiting; faults expose retryable reasons. Persist all decisions in the same control service.</li>
+      <li><strong>Admit and continue:</strong>Use existing fair scheduling and resource quotas; derive a stable continuation key from work_id + control version + predecessor commit point. Admission persistence and recovery-intent consumption must leave no duplication window; converge cross-database steps through a retryable outbox.</li>
+      <li><strong>Restore the interface:</strong>App/Web/TUI reconstruct from canonical snapshots and monotonic event sequences, showing recovery, queueing, working, waiting, or failure; display is not a second control implementation.</li>
+    </ol>
+    <p>Recovery coordination belongs to existing execution control. The server and JobRunner may call the same idempotent entry point but cannot make independent recovery decisions. UI orphan cleanup repairs only derived projections; Goal.after_terminal submits continuation requests only for the current version. A user message waiting in the client's send queue goes first: the client reports the waiting message, and the continuation yields for at most a short grace period, during which the user turn's admission supersedes it under the Goal lock. Temporary faults use durable retry times and bounded backoff instead of idle model calls. Persistent faults retain pending-recovery records and show the error plus Retry / Pause / End without deleting tasks.</p>
+  </section>
+  <section id="recovery-matrix">
+    <h2>Complete recovery-state matrix</h2>
+    <div class="matrix-wrap"><table><thead><tr><th>Before restart</th><th>Default behavior after restart</th><th>Restrictions that must persist</th></tr></thead><tbody>
+      <tr><td>Accepted ordinary request not yet scheduled</td><td>Requeue with original input order and admit once.</td><td>Deduplicate by client request ID; late retries must not override Stop.</td></tr>
+      <tr><td>Interrupted model stream</td><td>Preserve committed text and tool results; label incomplete output and request the remaining work again.</td><td>Do not fabricate a complete response by concatenation; a new provider attempt can incur additional cost.</td></tr>
+      <tr><td>An active Goal working or between turns</td><td>Load objective, Todo, evidence, budget, and original run intent; automatically continue work or acceptance.</td><td>Do not omit idle active Goals because no execution currently exists; 5/5 only triggers acceptance.</td></tr>
+      <tr><td>User Pause / End / Stop</td><td>Remain paused or terminated; completion notifications and automatic recovery cannot release it.</td><td>Persist stop commands when accepted; separate visible execution-stopping progress from business intent.</td></tr>
+      <tr><td>Pending approval or user answer</td><td>Restore the question, request summary, and scope; consume a committed durable answer only once.</td><td>Restart is not approval; old approval does not authorize a new action after changes to implementation, arguments, or permissions.</td></tr>
+      <tr><td>Parent agent waiting for subtasks</td><td>Restore existing subtask identities, outputs, inbox cursors, and wait relationships; after receiving terminal state, the parent continues under its original intent.</td><td>Reconnect live subtasks and do not recreate finished ones. Propagate user pause policy to child executions within the same task scope without stopping independent tasks.</td></tr>
+      <tr><td>External process, terminal, or remote job running</td><td>Query using host, process-start identity, or job handle; keep observing if alive.</td><td>PID alone is insufficient; preserve unknown when completion is uncertain and do not resubmit.</td></tr>
+      <tr><td>Browser / MCP / temporary resource</td><td>Preserve stable resource references and verify identity on reconnection; report actual invalidation and create new resources only as authorized.</td><td>Page forms, login state, JS memory, and REPL variables are not guaranteed to recover; a new tab or session must not impersonate the original object.</td></tr>
+      <tr><td>Context compaction or message persistence in progress</td><td>Use the last committed history and summary; an uncommitted summary cannot replace original history.</td><td>Partial tool arguments are not executable. Use currently effective permissions and display durable work configuration and unavailable dependencies explicitly.</td></tr>
+      <tr><td>Result written but completion notification undelivered</td><td>Replay terminal projections and inbox delivery without rerunning the task.</td><td>Canonical terminal state and projection versions prevent UI rollback; parent aggregation must not double-charge.</td></tr>
+      <tr><td>Usage receipt absent or seen only in a stream</td><td>Reconcile obtainable receipts by provider attempt and deduplicate existing records.</td><td>Unobtainable consumption remains unknown; downtime does not count as active time.</td></tr>
+    </tbody></table></div>
+    <p>Recovery promises confirmed saved work state, run intent, and reconstructable execution, not arbitrary process-memory snapshots. Unpersisted stream fragments, interactive memory in a dead shell, and receipts lost by external services must be reported accurately, not hidden by clearing tasks or fabricated success.</p>
+  </section>
+  <section id="projection-claim-identity"><h2>Projection delivery ownership</h2><p>The canonical execution store owns execution state. DAG, job, workflow and UI consumers receive derived events through the durable outbox. A batch reservation does not authorize a later callback after its lease expires or another claim replaces it.</p><p>Before invoking each consumer, the dispatcher validates the persisted owner, lease and claim attempt. Acknowledgement and failure reporting use the same attempt identity. Reusing an owner id does not let an old callback settle a newer claim. Expired work stays recoverable; canonical execution state is unchanged. This does not provide exactly-once external effects or stop a callback already running when its lease expires; consumers must remain idempotent and version-aware.</p><p>Acceptance uses real SQLite storage and the public dispatcher: expiry during an earlier batch callback suppresses later stale callbacks; reclaim by the same owner rejects old acknowledgement and failure reporting; normal delivery, retries and shutdown release remain compatible.</p><p data-status="verified">Implementation status: backend claim validation is implemented. Specification and quality reviews pass, as do all 234 execution-component and 119 Web execution-interface tests. Merge, installation, and installed-App acceptance are recorded separately in release evidence.</p></section>
+  <section id="ownership-design">
+    <h2>One chat execution layer, five durable data categories</h2>
+    <div class="matrix-wrap"><table><thead><tr><th>Data and sole owner</th><th>Preserved content</th><th>Responsibilities it must not assume</th></tr></thead><tbody>
+      <tr><td>Goal / objective state service</td><td>goal_id, revision, original objective, acceptance conditions, status, explicit budget, and blocking reasons.</td><td>Does not hold provider streams or restore function-call stacks.</td></tr>
+      <tr><td>Todo / existing plan store</td><td>Stable item_id, goal_id, revision, status, and evidence references; UI reads the same source.</td><td>Deleting unfinished items must not reduce the objective; plan edits alone are insufficient evidence of progress.</td></tr>
+      <tr><td>Turn / canonical execution</td><td>Input origin, permissions, objective attribution, owner generation, turn state, and subtasks.</td><td>interrupted does not mean Goal failure or that all external processes stopped.</td></tr>
+      <tr><td>Tool attempt / effect store</td><td>Call and actual tool-implementation identity, input summary, start record, real/synthetic result provenance, and effect certainty.</td><td>Unknown results must not masquerade as success or never executed; a tool name does not establish read-only behavior.</td></tr>
+      <tr><td>Usage receipt / usage ledger</td><td>Unique request/attempt identity, turn/goal/revision attribution, model, tokens, price snapshot, amount, and trust status.</td><td>Do not infer Goal costs from session totals or present estimates as actual settlement.</td></tr>
+    </tbody></table></div>
+    <p>Continue using existing session, execution, effect, todo, and usage stores without building a second event platform. Cross-database updates use existing retryable notifications and unique operation keys; do not assume cross-database atomic transactions. Derived UI and statistics can be reconstructed and must not overwrite original records.</p>
+    <p>Goal states remain active / paused / blocked / achieved / cancelled / budget_exhausted. Execution, waiting, and acceptance belong in phase or existing wait records instead of a redundant combined state machine. Retain compatibility reads for paused_recoverable. Revision or permission changes invalidate old acceptance and automatic-continuation reservations; old usage retains its original objective attribution.</p>
+  </section>
+  <section id="recovery-design">
+    <h2>Interruption recovery: confirm execution ownership before restoring context</h2>
+    <ol>
+      <li><strong>Confirm the old executor:</strong>Use the existing owner lease / generation; do not write repairs when the lease is uncertain or storage unreadable. A disconnected connection alone does not prove process death. Reject subsequent writes from the old generation.</li>
+      <li><strong>Verify child processes:</strong>Reconnect trackable live processes and wait or explicitly cancel; do not treat a running shell as stopped. Preserve unknown-effect records for unreachable remote operations.</li>
+      <li><strong>Choose exactly one recovery mode:</strong>Only reconnect a live owner. If death is confirmed and a verifiable safe checkpoint exists, create a new attempt under the same execution. Only when no reliable checkpoint exists, acquire exclusive recovery ownership, fill missing outputs using a stable repair key, end the old turn as interrupted, and admit a new turn. These choices are mutually exclusive and bind to the same durable recovery decision, control version, and continuation key; never resume a checkpoint and start a new turn together. Checkpoints must cover committed effects and satisfy current permission, wait, and safe-point contracts, without replaying unknown writes. Repeating repairs has no side effects; real results take priority and no usage is fabricated. Append late verifiable receipts as reconciliation events that replace synthetic placeholders in subsequent context.</li>
+      <li><strong>Restore run intent:</strong>Previously running ordinary requests and active Goals automatically enter unified admission; user-paused work does not resume automatically. Only specific permission, budget, resource, or unknown-operation issues need human intervention; restart itself is not a reason to require manual Resume.</li>
+      <li><strong>Decide tool behavior:</strong>New turns know which calls never started and which outcomes are unknown. Old unknown results do not globally block investigation or independent work; related writes retain original approval and recovery restrictions.</li>
+    </ol>
+    <div class="matrix-wrap"><table><thead><tr><th>State before interruption</th><th>Facts after recovery</th><th>Permitted next action</th></tr></thead><tbody>
+      <tr><td>Intent saved, dispatch not yet recorded</td><td>not_started; every dispatch must be recorded durably first, otherwise this conclusion is invalid.</td><td>Invoke again under current permissions if still needed.</td></tr>
+      <tr><td>Dispatch recorded, result missing</td><td>outcome_unknown; includes a crash between recording the start and making the actual call.</td><td>Trusted read-only tools may reread; use the original idempotency key when the service supports deduplication; reconcile other writes first.</td></tr>
+      <tr><td>Result persisted</td><td>completed / error with the actual return value preserved.</td><td>Reuse the result; do not rerun because of restart.</td></tr>
+      <tr><td>External task still alive</td><td>running_external + verifiable handle.</td><td>Reconnect, wait, or cancel; do not resubmit.</td></tr>
+      <tr><td>Non-idempotent write outcome cannot be queried</td><td>outcome_unknown + pending-operation details.</td><td>Allow reads and investigation; retry or explicitly abandon the operation only after the user confirms the risk.</td></tr>
+    </tbody></table></div>
+    <p>Safety boundary: read_only / idempotent / state_probe capabilities come from trusted tool registration and implementation identity saved at execution. Do not accept model claims of read-only behavior or infer them from a name containing read. General shell, third-party MCP, and custom tools default to unknown. Recovery turns related to unknown writes initially allow only trusted reads and state queries. Without reliable relevance determination, do not automatically allow writes; reconcile first or obtain explicit user authorization.</p>
+    <p>Request-history repair first matches the nearest call by original call ID, then converts provider IDs. Existing real outputs take priority; duplicate outputs use the last saved real record. Missing results get deterministic unknown placeholders. Calls and results are adjacent in the request projection while user-message order remains intact; original history is unchanged. Results without corresponding calls are not sent as valid tool-protocol items. Interrupted responses retain partial text and an interruption marker without reusing incomplete reasoning signatures. Ambiguous duplicate call IDs within one response produce an explicit error rather than guessed execution facts. This conversion grants no execution permission and cannot replace recovery decisions.</p>
+    <p>Recovery permission checks use the same conversation provenance to scope old executions and invoked Jobs, without expanding to all executions in the invoked session. Only actual built-in read, grep, glob, and list execution functions qualify for read-only investigation; names, acceptEdits flags, and plugin declarations cannot replace implementation identity. For uncertain effects within the applicable execution scope described below, all other operations require one-time approval; bypass, automatic classification, and existing allow rules cannot waive it. Durable approval binds to the new tool call and unknown-effect set; changes to that set require fresh approval and do not erase old effects. Reject execution if recovery state cannot be read. This check is a prerequisite for restricted new-turn recovery; it does not independently change old execution state or enable Resume.</p>
+    <p>This is neither an exception for one session nor a repair restricted to allowlisted files. Ordinary chat and Goals share the recovery entry point. Old effect audits may remain unresolved while their chat turns end as interrupted; adjust the old constraint that any unresolved effect prevents turn termination accordingly.</p>
+  </section>
+  <section id="completion-design">
+    <p id="verification-presentation">Only an explicitly activated Goal produces Goal UI. Starting, running, pausing and verifying do not add transcript cards. At termination, one compact record remains at the ending transcript position. It uses the existing attachment-card styling and opens the existing Goal details dialog in read-only historical mode. Each record carries its own Goal snapshot and transcript anchor; a later Goal cannot replace its contents. The composer continues to show the current Goal only. Canonically identified verifier messages are internal records, not assistant chat prose; ordinary agent replies remain unchanged. No assessment text, evidence identifiers or raw report is appended to chat. Terminal history is saved with the Goal state under optimistic concurrency. The implementation passes independent specification and quality review. Coverage includes terminal snapshot persistence, stable historical anchors, read-only reuse of the Goal dialog, keyboard focus restoration and preservation of ordinary JSON replies. Full verification and installed-App acceptance remain separate release gates.</p>
+    <h2>Todo manages the plan; acceptance manages the objective</h2>
+    <p>At creation, preserve the original objective and extract verifiable requirements; ask the user only when ambiguity would change scope. The working agent maintains Todo for multi-step tasks; simple tasks may omit it. Every necessary requirement has an evidence checkpoint; adding or removing Todo must not implicitly remove original requirements.</p>
+    <p>Ordinary work turns do not run a second judge. Enter verifying when the worker submits a complete candidate or all required Todo items finish without verification. First check current revision, required Todo, unfinished subtasks, and relevant unknown effects, then run one independent read-only acceptance review. The worker's completion text is not an acceptance fact.</p>
+    <p>Acceptance returns met / unmet / unknown and evidence references for each requirement. Deterministic requirements inspect actual test receipts, file versions, and runtime state; semantic requirements use independent model review. Tests retain ordinary tool approval and budget rules: calling shell verification does not make it read-only. Missing evidence returns to another work turn rather than fabricated acceptance.</p>
+    <p>Only the current goal_id + revision + verified result version may submit achieved. Recheck evidence versions and compare the Goal control version before committing. Controlled artifacts use version numbers or content digests; external facts retain verification time and query receipts without claiming atomic verification across all external systems. Completion means conditions held at that verification; it does not automatically monitor files or reopen the Goal afterward. Later edits, new requests, or explicit monitoring require separate acceptance. Human waivers must be explicit objective revisions with reasons; the agent cannot reduce scope itself. Independent acceptance can also err and does not guarantee absolute correctness.</p>
+    <p>Judge lack of progress by changes in results and evidence, not tool invocation count. The one mechanical exception is an automatic turn that calls no tool at all: it cannot change results, so the next continuation prompt carries a warning and a second such turn in a row stops the Goal as stalled; a tool call, a user turn or Resume resets the count. Enter blocked only when the same real blocker recurs consecutively and no independent work is available. Waiting with a live handle enters waiting without idle model turns. A fixed total round count is not evidence of blocking or completion.</p>
+    <p>Waiting uses existing durable waits and execution-terminal notifications, saving work_id / Goal revision, handle, observed version, and unique consumption key. Completion, failure, or timeout notifications admit exactly once only if intent remains run, versions match, and no other current execution exists. Existing reconciliation polls for missing notifications with backoff. Save results arriving during restart, then automatically continue under the same rules. Pause, cancel, or revision invalidates old wakeups without discarding results; query timeout does not imply the external operation stopped.</p>
+  </section>
+  <section id="usage-design">
+    <h2>Cost: attribute per request, settle per receipt</h2>
+    <p>Fix goal_id / revision / turn_id / request_id before dispatch. Ordinary chat after pausing has no old Goal attribution. Subagent and acceptance requests explicitly inherit attribution; count each receipt once rather than adding both parent totals and child details. Retries are new provider attempts and count separately when they incur actual consumption.</p>
+    <p>Streaming cumulative usage updates a watermark for the same attempt; do not sum cumulative snapshots. Update Goal projections only after durable receipt writes succeed. Temporary failures retry with the same idempotency key, and restart can reconstruct statistics. Late receipts remain attributed to the original Goal even if paused, ended, or edited.</p>
+    <p>Store known tokens and known prices separately. Pricing-table changes do not rewrite historical quotes. Display estimates, known values, and partial unknowns separately, such as “Known $0.42; usage unknown for 1 additional request.” Preserve historical cursor data without inventing attribution. Accumulate active time from durable start/stop records, excluding pauses and downtime and without resetting on recovery. When an executor disappears, preserve its last heartbeat; crash-discovery time is not stop time. Show the known duration lower bound and unknown interruption interval. Late usage does not restart paused timers. If an explicit time limit cannot be verified, stop new admission without adding a default limit.</p>
+    <p>Budgets are unlimited by default. With a user-set hard cost budget, unknown prices or unverifiable consumption cannot be treated as available balance; pause new paid admission and explain why. Reserve a maximum request amount when calculable; otherwise do not promise absolute prevention of overspend. Recheck explicit budgets after ledger reload and before execution recovery or acceptance.</p>
+    <p>Background Jobs save Goal identity at the real active caller's admission boundary, restore it at startup, and clear unrelated temporary attribution. Cross-session calls preserve original caller provenance without creating a cross-session canonical parent. Goal and Job share start/settlement transactions in usage.db; receipts save Job reservation identity so metering can be reconstructed without an in-memory governor after restart. Unknown tokens and unknown costs retain separate reservations; partial cumulative data records only lower bounds. Expired unstarted reservations cannot dispatch; started requests are not automatically released. Hard budgets accept only audited input/output limits, explicit prices, and service tiers and add no default restriction to Goals without budgets.</p>
+  </section>
+  <section id="controls-design">
+    <h2>Controls and interface: show state, reason, and action together</h2>
+    <div class="matrix-wrap"><table><thead><tr><th>State before → action → state after</th><th>What the user sees</th><th>Execution constraint</th></tr></thead><tbody>
+      <tr><td>Running → restart → recovering / queued → investigation / execution</td><td>No Resume click required; specific obstacles show reasons, relevant actions, and Retry. Resume appears only for user-paused work.</td><td>Restore intent without blindly resending old tools; admit only one turn per work item.</td></tr>
+      <tr><td>Todo 5/5 → begin acceptance → verifying</td><td>“5/5 · Verifying,” not “Complete.”</td><td>Missing evidence returns to work; show “Goal completed” only after acceptance.</td></tr>
+      <tr><td>active → Pause → paused</td><td>Stop automatic continuation immediately; separately show whether current execution is still stopping.</td><td>Block new admission and cancel current execution without pretending to undo existing effects.</td></tr>
+      <tr><td>Any unfinished Goal → End → cancelled</td><td>“Goal ended”; still show unfinished processes or unknown operations.</td><td>Ending objective intent does not depend on reconciling every effect; old executions no longer trigger automatic continuation.</td></tr>
+      <tr><td>Pending operation → inspect / query / human confirmation → reconciled or still unknown</td><td>Identify the exact call, input summary, original time, and available checks, rather than only linking to the entire Activity list.</td><td>Risk-bearing retries require the current user's explicit authorization; models or page content cannot answer for them.</td></tr>
+    </tbody></table></div>
+    <p>An empty Todo shows no progress placeholder or separator. Backend can_resume / can_verify / can_end and reason_code determine button permissions; the frontend must not infer them from status strings. UI read failures show “State temporarily unavailable” with refresh, not permanently disabled unexplained controls.</p>
+    <p>User input takes priority over automatic continuation using existing steer/queue semantics. Continuation keys bind goal_id, revision, and the previous committed turn; state checking and admission share version comparisons. Durable state and generation checks block stale actions when pause, edit, explicit cancellation, and admission race.</p>
+  </section>
+  <section id="acceptance-design">
+    <h2>Implementation sequence and required acceptance</h2>
+    <div class="matrix-wrap"><table><thead><tr><th>Stage and locations</th><th>Behavior that must be demonstrated</th></tr></thead><tbody>
+      <tr><td>1. Unified recovery decisions: execution/startup, restart, control/recovery, JobRunner, _exec_dag projections</td><td>Ordinary requests, active Goals, and existing subtasks recover automatically after restart; user-paused work does not. Remove the hidden time window and projection-layer business-state rewrites while preserving unique admission and current permissions.</td></tr>
+      <tr><td>2. Shared execution recovery: conversation/production_driver, context construction, effects, waits, resource adapters</td><td>Terminate real child processes before dispatch, after start, and after result persistence. Restart appends repair once, preserves real results, and allows ordinary chat to continue. Late old-owner writes, live shells, and unknown non-idempotent writes must not be retried incorrectly.</td></tr>
+      <tr><td>3. Goal continuation and control: workflow/goal, HTTP/WS/TUI/ACP entry points</td><td>Resume does not replay tools. Double clicks, repeated completion events, and edit/pause races do not produce duplicate executions. Old revisions cannot complete new objectives. No Todo means no placeholder; 5/5 does not directly show achieved.</td></tr>
+      <tr><td>4. Evidence acceptance: Goal completion candidates and existing agent inspection capabilities</td><td>Reject completion separately for unfinished required items, missing evidence, failing tests, stale results, and relevant unknown effects; commit achieved once when actual evidence satisfies requirements. Verification cannot elevate tool permissions.</td></tr>
+      <tr><td>5. Request attribution and statistics: usage/recorder, ledger, Goal projections</td><td>Handle duplicate/out-of-order usage, concurrent subtasks, streaming cumulative values, retries, ledger faults, and late post-pause receipts correctly. Unknown is not zero; exceeded budgets stop further paid requests.</td></tr>
+      <tr><td>6. Compatibility and local acceptance</td><td>Old Goals remain readable; unknown effects migrate without guessing. After full regression and independent specification/quality reviews, update the single default App and verify actual controls, restart continuation, and cost display.</td></tr>
+    </tbody></table></div>
+    <p>Each stage begins with a public-entry failure reproduction, followed by minimal implementation and regression. Recovery tests cover ordinary chat, not just one specific session. Acceptance distinguishes source, automated tests, local App, and remote release; designs without test or deployment evidence are not marked implemented.</p>
+    <h3 id="restart-tests">Restart failure acceptance: more than testing Resume once</h3>
+    <p>Create work through public chat, Goal, Job, approval, and control entry points; perform real termination using isolated test storage and non-user-visible process tests. Do not terminate the user's current work to demonstrate recovery. Final visible App acceptance uses only the default instance and first confirms that updating will not overwrite unrelated work.</p>
+    <ul>
+      <li>Cover frontend reload, normal App exit, graceful worker restart, forced worker termination, downtime beyond the old two-hour window, and another crash during recovery. Test host-restart semantics through process-identity changes; list actual OS reboot separately as unverified and do not reboot the user's machine yourself.</li>
+      <li>Interruption points include before/after input acceptance, provider requests, before/after tool dispatch, before/after result commit, parent/child delivery, all Todo complete before acceptance, after completion commit before projection delivery, and before/after usage persistence.</li>
+      <li>Recover multiple sessions together to prove fair queueing, shared quotas, one owner per work item, and no duplicate execution from repeated notifications. User Pause / End, permission changes, and new input take priority during recovery; old versions cannot continue.</li>
+      <li>Live child processes only reconnect; unknown non-idempotent writes only undergo investigation. Consume accepted approvals once and never approve unaccepted requests automatically. Late results and usage retain their original identity.</li>
+      <li>Unavailable databases, broken migrations, missing credentials/directories, changed tool versions, and lost projection events all need explicit states and recoverable actions, without clearing history or leaving unexplained disabled controls.</li>
+    </ul>
+  </section>
+  </div>
+  <details id="workflow-reference"><summary>Comparison with other Goal implementations (research reference; does not define the chat Goal contract above)</summary>
+  <details class="mobile-nav">
+    <summary aria-label="Open document contents"></summary>
+    <nav class="mobile-links" aria-label="Mobile document contents"><a href="#native-map">Native architectures</a><a href="#hard-tasks">Difficult tasks</a><a href="#status">Evidence boundaries</a>
+    </nav>
+  </details>
+  <header class="hero">
+    <div class="eyebrow">Implementation Survey · Design Reference</div>
+    <h1>Agent Goal capability: implementation comparison</h1>
+    <p class="lead">This document compares actual Goal runtime responsibilities: where objectives reside, who triggers the next turn, who determines completion, how resources are limited, how waiting and human intervention work, and whether recovery survives process restart. The focus is control flow and state ownership, not feature names.</p>
+    <div class="meta">
+      <span class="pill native">3 external native Goal implementations</span>
+      <span class="pill near">2 adjacent mechanisms</span>
+      <span class="pill">5 Archify SVGs embedded in the document</span>
+    </div>
+  </header>
+
+  <div class="content">
+    <section id="scope">
+      <h2>1. Scope and comparison criteria</h2>
+      <p>A system counts as a native Goal here only if it stores objective state and uses that state after ordinary agent turns to decide whether to automatically start another turn. Todo, Plan, Task, and Cron may participate in Goals but are not Goals on their own.</p>
+      <div class="scope-grid">
+        <div class="card"><h3>Compared systems</h3><p>OpenProgram, Codex, Claude Code, and Hermes Agent; OpenCode and OpenClaw as adjacent implementations; OpenAI Agents SDK, LangGraph, AutoGen, and CrewAI as general-framework baselines.</p></div>
+        <div class="card"><h3>Fixed dimensions</h3><p>Entry points, state structure, loop triggers, completion decisions, budgets, waiting, human intervention, persistence, recovery, concurrency control, events, and UI.</p></div>
+        <div class="card"><h3>Evidence priority</h3><p>Public and repository source take priority; official runtime documentation covers closed-source implementations. Product behavior illustrates interfaces, not inferred internal data structures.</p></div>
+      </div>
+      <div class="callout warn">Claude Code implementation source is not public. This document records only control contracts explicitly stated in official documentation:<code>/goal</code> is a session-scoped prompt Stop hook, including evaluator input, three verdicts, recovery, and background-task wait rules, without inferring tables or internal class names.</div>
+    </section>
+
+
+    <section id="taxonomy">
+      <h2>Five implementation models</h2>
+      <div class="model-stack" role="table" aria-label="Five Goal-related implementation models">
+        <div class="stack-head">Level</div><div class="stack-head">Input</div><div class="stack-head">Progress</div><div class="stack-head">Termination</div><div class="stack-head">Across turns</div><div class="stack-head">Representative systems</div>
+        <div class="row-name">Task input</div><div class="present"><b>User message</b><span>As this turn's task</span></div><div><b>No requirement</b></div><div><b>Model stops</b></div><div><b>No</b></div><div><b>Ordinary agent turn</b></div>
+        <div class="row-name">Progress ledger</div><div><b>Task + items</b></div><div class="present"><b>Todo / Task</b><span>For prompting and UI</span></div><div><b>Does not determine overall termination</b></div><div><b>No automatic continuation</b></div><div><b>OpenCode Todo</b></div>
+        <div class="row-name">Graph termination</div><div><b>graph state</b></div><div><b>Application-defined</b></div><div class="present"><b>edge / condition</b></div><div class="partial-cell"><b>Implemented by the application</b></div><div><b>LangGraph · AutoGen</b></div>
+        <div class="row-name">Persisted controller</div><div><b>objective</b></div><div><b>usage / status</b></div><div><b>Agent declaration</b></div><div class="present"><b>Automatic continuation when idle</b></div><div><b>Codex</b></div>
+        <div class="row-name">Evaluator loop</div><div><b>Goal spec</b></div><div><b>evidence</b></div><div class="present"><b>Independent evaluator</b></div><div class="present"><b>Continue if incomplete</b></div><div><b>OpenProgram · Claude · Hermes</b></div>
+      </div>
+      <p class="evidence-note">D and E can combine. Codex lets the working agent declare completion while its control plane manages lifecycle and budget; the other three implementations delegate completion to an independent evaluator.</p>
+    </section>
+
+    <section id="native-map">
+      <h2>Four native Goal architectures in one diagram</h2>
+      <p>Each row is a complete implementation. Read horizontally to see where each places state, work, judgment, and continuation.</p>
+      <div class="diagram-shell">
+        <div class="diagram-head"><div><strong>State ownership and judgment paths of native Goals</strong><span>Cyan denotes independent evaluators, blue working agents, and yellow waiting or restricted states.</span></div></div>
+        <div class="diagram-canvas">
+          <svg class="archify-inline" viewBox="0 0 865 652" role="img" lang="zh-CN" aria-labelledby="goal-frameworks-archify-diagram-title archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="goal-frameworks-archify-diagram-title">Control structures of four native Goal implementations</title>
+        <desc id="goal-frameworks-archify-diagram-description">Workflow diagram generated by Archify.</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="goal-frameworks-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="goal-frameworks-arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="goal-frameworks-arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="goal-frameworks-arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="goal-frameworks-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#goal-frameworks-grid)" />
+
+        <!-- Swimlanes -->
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="goal-frameworks-lane-0" x="40" y="52" width="809" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="74" class="t-dim" font-size="10" font-weight="600">01 / OpenProgram</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="goal-frameworks-lane-1" x="40" y="176" width="809" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="198" class="t-dim" font-size="10" font-weight="600">02 / Codex</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="goal-frameworks-lane-2" x="40" y="300" width="809" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="322" class="t-dim" font-size="10" font-weight="600">03 / Claude Code</text>
+
+        <rect data-graph-role="structural-frame" data-composition-frame-kind="lane" data-composition-frame-id="goal-frameworks-lane-3" x="40" y="424" width="809" height="104" rx="10" class="c-lane" stroke-width="1"/>
+        <text x="54" y="446" class="t-dim" font-size="10" font-weight="600">04 / Hermes Agent</text>
+
+        <!-- Phase headers -->
+        <line x1="84" y1="35" x2="296" y2="35" class="a-default" stroke-width="1.1"/>
+        <rect x="84" y="27" width="212" height="16" rx="4" class="c-mask"/>
+        <text x="190" y="39" class="t-muted" font-size="8" font-weight="600" text-anchor="middle">State ownership</text>
+        <line x1="341" y1="35" x2="553" y2="35" class="a-emphasis" stroke-width="1.1"/>
+        <rect x="341" y="27" width="212" height="16" rx="4" class="c-mask"/>
+        <text x="447" y="39" class="t-backend" font-size="8" font-weight="600" text-anchor="middle">Work and judgment</text>
+        <line x1="624.8" y1="35" x2="836.8" y2="35" class="a-dashed" stroke-width="1.1"/>
+        <rect x="624.8" y="27" width="212" height="16" rx="4" class="c-mask"/>
+        <text x="730.8" y="39" class="t-messagebus" font-size="8" font-weight="600" text-anchor="middle">Continuation and waiting</text>
+
+        <!-- Workflow groups -->
+
+
+        <!-- Edge paths -->
+        <path data-edge-from="goal-frameworks-claude_judge" data-edge-to="goal-frameworks-claude_next" data-edge-label="three verdicts" data-edge-key="0" data-edge-id="goal-frameworks-claude_continue" data-composition-points="472,367;590.8,367" d="M 472 367 L 590.8 367" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-claude_state" data-edge-to="goal-frameworks-claude_judge" data-edge-label="on Stop" data-edge-key="1" data-edge-id="goal-frameworks-claude_decide" data-composition-points="212,367;302,367" d="M 212 367 L 302 367" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-codex_judge" data-edge-to="goal-frameworks-codex_next" data-edge-label="self-report" data-edge-key="2" data-edge-id="goal-frameworks-codex_continue" data-composition-points="472,243;590.8,243" d="M 472 243 L 590.8 243" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-codex_state" data-edge-to="goal-frameworks-codex_judge" data-edge-label="run turn" data-edge-key="3" data-edge-id="goal-frameworks-codex_decide" data-composition-points="212,243;302,243" d="M 212 243 L 302 243" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-hermes_judge" data-edge-to="goal-frameworks-hermes_next" data-edge-label="done / blocked / wait" data-edge-key="4" data-edge-id="goal-frameworks-hermes_continue" data-composition-points="472,491;590.8,491" d="M 472 491 L 590.8 491" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-hermes_state" data-edge-to="goal-frameworks-hermes_judge" data-edge-label="turn result" data-edge-key="5" data-edge-id="goal-frameworks-hermes_decide" data-composition-points="212,491;302,491" d="M 212 491 L 302 491" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-op_judge" data-edge-to="goal-frameworks-op_next" data-edge-label="verdict" data-edge-key="6" data-edge-id="goal-frameworks-op_continue" data-composition-points="472,119;590.8,119" d="M 472 119 L 590.8 119" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+        <path data-edge-from="goal-frameworks-op_state" data-edge-to="goal-frameworks-op_judge" data-edge-label="work + evidence" data-edge-key="7" data-edge-id="goal-frameworks-op_decide" data-composition-points="212,119;302,119" d="M 212 119 L 302 119" class="a-default" stroke-width="1.4" marker-end="url(#goal-frameworks-arrowhead)"/>
+
+        <!-- Nodes -->
+        <g id="goal-frameworks-node-op_state" data-node-id="goal-frameworks-op_state" data-node-label="Versioned Goal snapshot" aria-label="Focus Versioned Goal snapshot, goal/run ID · CAS, OpenProgram › State ownership" data-node-kind="database" data-node-sublabel="goal/run ID · CAS" data-node-context="OpenProgram › 状态所有权">
+          <title>Versioned Goal snapshot · goal/run ID · CAS · OpenProgram › State ownership</title>
+          <rect x="48" y="93" width="164" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="93" width="164" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(54 99) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="130" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Versioned Goal snapshot</text>
+          <text data-detail="context" x="130" y="131" class="t-muted" font-size="8" text-anchor="middle">goal/run ID · CAS</text>
+        </g>
+
+        <g id="goal-frameworks-node-op_judge" data-node-id="goal-frameworks-op_judge" data-node-label="Working Agent → Judge" aria-label="Focus Working Agent → Judge, independent with read-only inspection, OpenProgram › Work and judgment" data-node-kind="security" data-node-sublabel="独立且可只读检查" data-node-context="OpenProgram › 工作与判定">
+          <title>Working Agent → Judge · Independent with read-only inspection · OpenProgram › Work and judgment</title>
+          <rect x="302" y="93" width="170" height="52" rx="6" class="c-mask"/>
+          <rect x="302" y="93" width="170" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(308 99) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="387" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Working Agent → Judge</text>
+          <text data-detail="context" x="387" y="131" class="t-muted" font-size="8" text-anchor="middle">Independent with read-only inspection</text>
+        </g>
+
+        <g id="goal-frameworks-node-op_next" data-node-id="goal-frameworks-op_next" data-node-label="Controller / Wait" aria-label="Focus Controller / Wait, asynchronous questions · restart recovery, OpenProgram › Continuation and waiting" data-node-kind="messagebus" data-node-sublabel="异步问题 · 重启恢复" data-node-context="OpenProgram › 续轮与等待">
+          <title>Controller / Wait · Asynchronous questions · restart recovery · OpenProgram › Continuation and waiting</title>
+          <rect x="590.8" y="93" width="160" height="52" rx="6" class="c-mask"/>
+          <rect x="590.8" y="93" width="160" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(596.8 99) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="670.8" y="114" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Controller / Wait</text>
+          <text data-detail="context" x="670.8" y="131" class="t-muted" font-size="8" text-anchor="middle">Asynchronous questions · restart recovery</text>
+        </g>
+
+        <g id="goal-frameworks-node-codex_state" data-node-id="goal-frameworks-codex_state" data-node-label="SQLite ThreadGoal" aria-label="Focus SQLite ThreadGoal, typed status · usage, Codex › State ownership" data-node-kind="database" data-node-sublabel="typed status · usage" data-node-context="Codex › 状态所有权">
+          <title>SQLite ThreadGoal · typed status · usage · Codex › State ownership</title>
+          <rect x="48" y="217" width="164" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="217" width="164" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(54 223) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="130" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">SQLite ThreadGoal</text>
+          <text data-detail="context" x="130" y="255" class="t-muted" font-size="8" text-anchor="middle">typed status · usage</text>
+        </g>
+
+        <g id="goal-frameworks-node-codex_judge" data-node-id="goal-frameworks-codex_judge" data-node-label="Working Agent 自报" aria-label="Focus Working Agent self-report, update_goal, Codex › Work and judgment" data-node-kind="backend" data-node-sublabel="update_goal" data-node-context="Codex › 工作与判定">
+          <title>Working Agent self-report · update_goal · Codex › Work and judgment</title>
+          <rect x="302" y="217" width="170" height="52" rx="6" class="c-mask"/>
+          <rect x="302" y="217" width="170" height="52" rx="6" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="backend" class="semantic-sigil s-backend" transform="translate(308 223) scale(0.6875)">
+            <path d="M6 3 3 8l3 5M10 3l3 5-3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="387" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Working Agent self-report</text>
+          <text data-detail="context" x="387" y="255" class="t-muted" font-size="8" text-anchor="middle">update_goal</text>
+        </g>
+
+        <g id="goal-frameworks-node-codex_next" data-node-id="goal-frameworks-codex_next" data-node-label="Idle Controller" aria-label="Focus Idle Controller, pause · resume · limits, Codex › Continuation and waiting" data-node-kind="messagebus" data-node-sublabel="pause · resume · limits" data-node-context="Codex › 续轮与等待">
+          <title>Idle Controller · pause · resume · limits · Codex › Continuation and waiting</title>
+          <rect x="590.8" y="217" width="160" height="52" rx="6" class="c-mask"/>
+          <rect x="590.8" y="217" width="160" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(596.8 223) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="670.8" y="238" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Idle Controller</text>
+          <text data-detail="context" x="670.8" y="255" class="t-muted" font-size="8" text-anchor="middle">pause · resume · limits</text>
+        </g>
+
+        <g id="goal-frameworks-node-claude_state" data-node-id="goal-frameworks-claude_state" data-node-label="Session Goal Prompt" aria-label="Focus Session Goal Prompt, retained on resume, Claude Code › State ownership" data-node-kind="database" data-node-sublabel="resume 保留" data-node-context="Claude Code › 状态所有权">
+          <title>Session Goal Prompt · Retained on resume · Claude Code › State ownership</title>
+          <rect x="48" y="341" width="164" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="341" width="164" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(54 347) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="130" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Session Goal Prompt</text>
+          <text data-detail="context" x="130" y="379" class="t-muted" font-size="8" text-anchor="middle">Retained on resume</text>
+        </g>
+
+        <g id="goal-frameworks-node-claude_judge" data-node-id="goal-frameworks-claude_judge" data-node-label="Stop Hook Evaluator" aria-label="Focus Stop Hook Evaluator, small model · no tools, Claude Code › Work and judgment" data-node-kind="security" data-node-sublabel="小模型 · 无工具" data-node-context="Claude Code › 工作与判定">
+          <title>Stop Hook Evaluator · Small model · no tools · Claude Code › Work and judgment</title>
+          <rect x="302" y="341" width="170" height="52" rx="6" class="c-mask"/>
+          <rect x="302" y="341" width="170" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(308 347) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="387" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Stop Hook Evaluator</text>
+          <text data-detail="context" x="387" y="379" class="t-muted" font-size="8" text-anchor="middle">Small model · no tools</text>
+        </g>
+
+        <g id="goal-frameworks-node-claude_next" data-node-id="goal-frameworks-claude_next" data-node-label="阻止停止或清除" aria-label="Focus prevent stop or clear, defer for background tasks, Claude Code › Continuation and waiting" data-node-kind="messagebus" data-node-sublabel="后台任务 defer" data-node-context="Claude Code › 续轮与等待">
+          <title>Prevent stop or clear · Defer for background tasks · Claude Code › Continuation and waiting</title>
+          <rect x="590.8" y="341" width="160" height="52" rx="6" class="c-mask"/>
+          <rect x="590.8" y="341" width="160" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(596.8 347) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="670.8" y="362" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Prevent stop or clear</text>
+          <text data-detail="context" x="670.8" y="379" class="t-muted" font-size="8" text-anchor="middle">Defer for background tasks</text>
+        </g>
+
+        <g id="goal-frameworks-node-hermes_state" data-node-id="goal-frameworks-hermes_state" data-node-label="GoalState + Contract" aria-label="Focus GoalState + Contract, gates · waits, Hermes Agent › State ownership" data-node-kind="database" data-node-sublabel="gates · waits" data-node-context="Hermes Agent › 状态所有权">
+          <title>GoalState + Contract · gates · waits · Hermes Agent › State ownership</title>
+          <rect x="48" y="465" width="164" height="52" rx="6" class="c-mask"/>
+          <rect x="48" y="465" width="164" height="52" rx="6" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="database" class="semantic-sigil s-database" transform="translate(54 471) scale(0.6875)">
+            <ellipse cx="8" cy="4" rx="5" ry="2"/>
+            <path d="M3 4v8c0 1.1 2.2 2 5 2s5-.9 5-2V4M3 8c0 1.1 2.2 2 5 2s5-.9 5-2"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="130" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">GoalState + Contract</text>
+          <text data-detail="context" x="130" y="503" class="t-muted" font-size="8" text-anchor="middle">gates · waits</text>
+        </g>
+
+        <g id="goal-frameworks-node-hermes_judge" data-node-id="goal-frameworks-hermes_judge" data-node-label="Gate → Judge" aria-label="Focus Gate → Judge, mechanical checks first, Hermes Agent › Work and judgment" data-node-kind="security" data-node-sublabel="机械检查优先" data-node-context="Hermes Agent › 工作与判定">
+          <title>Gate → Judge · Mechanical checks first · Hermes Agent › Work and judgment</title>
+          <rect x="302" y="465" width="170" height="52" rx="6" class="c-mask"/>
+          <rect x="302" y="465" width="170" height="52" rx="6" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="security" class="semantic-sigil s-security" transform="translate(308 471) scale(0.6875)">
+            <path d="M8 2.2 13 4v3.5c0 3.1-1.8 5.4-5 6.5-3.2-1.1-5-3.4-5-6.5V4Z"/>
+            <path d="m5.8 8 1.5 1.5 3-3"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="387" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Gate → Judge</text>
+          <text data-detail="context" x="387" y="503" class="t-muted" font-size="8" text-anchor="middle">Mechanical checks first</text>
+        </g>
+
+        <g id="goal-frameworks-node-hermes_next" data-node-id="goal-frameworks-hermes_next" data-node-label="Queue / Wait Barrier" aria-label="Focus Queue / Wait Barrier, event wakeup, Hermes Agent › Continuation and waiting" data-node-kind="messagebus" data-node-sublabel="事件唤醒" data-node-context="Hermes Agent › 续轮与等待">
+          <title>Queue / Wait Barrier · Event wakeup · Hermes Agent › Continuation and waiting</title>
+          <rect x="590.8" y="465" width="160" height="52" rx="6" class="c-mask"/>
+          <rect x="590.8" y="465" width="160" height="52" rx="6" class="c-messagebus" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="messagebus" class="semantic-sigil s-messagebus" transform="translate(596.8 471) scale(0.6875)">
+            <path d="M2.5 4.5h11M2.5 8h11M2.5 11.5h11"/>
+            <circle cx="5" cy="4.5" r="1" class="sigil-fill"/>
+            <circle cx="10.5" cy="8" r="1" class="sigil-fill"/>
+            <circle cx="7" cy="11.5" r="1" class="sigil-fill"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="670.8" y="486" class="t-primary" font-size="11" font-weight="600" text-anchor="middle">Queue / Wait Barrier</text>
+          <text data-detail="context" x="670.8" y="503" class="t-muted" font-size="8" text-anchor="middle">Event wakeup</text>
+        </g>
+
+        <!-- Edge labels -->
+        <g data-detail="context" data-edge-from="goal-frameworks-claude_judge" data-edge-to="goal-frameworks-claude_next" data-edge-label="three verdicts" data-edge-key="0" data-edge-id="goal-frameworks-claude_continue">
+          <rect x="492.79999999999995" y="347" width="77.2" height="14" rx="3" class="c-mask"/>
+          <text x="531.4" y="357" class="t-muted" font-size="8" text-anchor="middle">three verdicts</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-claude_state" data-edge-to="goal-frameworks-claude_judge" data-edge-label="on Stop" data-edge-key="1" data-edge-id="goal-frameworks-claude_decide">
+          <rect x="235.2" y="347" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="257" y="357" class="t-muted" font-size="8" text-anchor="middle">on Stop</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-codex_judge" data-edge-to="goal-frameworks-codex_next" data-edge-label="self-report" data-edge-key="2" data-edge-id="goal-frameworks-codex_continue">
+          <rect x="500" y="223" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="531.4" y="233" class="t-muted" font-size="8" text-anchor="middle">self-report</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-codex_state" data-edge-to="goal-frameworks-codex_judge" data-edge-label="run turn" data-edge-key="3" data-edge-id="goal-frameworks-codex_decide">
+          <rect x="232.8" y="223" width="48.4" height="14" rx="3" class="c-mask"/>
+          <text x="257" y="233" class="t-muted" font-size="8" text-anchor="middle">run turn</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-hermes_judge" data-edge-to="goal-frameworks-hermes_next" data-edge-label="done / blocked / wait" data-edge-key="4" data-edge-id="goal-frameworks-hermes_continue">
+          <rect x="476" y="471" width="110.8" height="14" rx="3" class="c-mask"/>
+          <text x="531.4" y="481" class="t-muted" font-size="8" text-anchor="middle">done / blocked / wait</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-hermes_state" data-edge-to="goal-frameworks-hermes_judge" data-edge-label="turn result" data-edge-key="5" data-edge-id="goal-frameworks-hermes_decide">
+          <rect x="225.6" y="471" width="62.8" height="14" rx="3" class="c-mask"/>
+          <text x="257" y="481" class="t-muted" font-size="8" text-anchor="middle">turn result</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-op_judge" data-edge-to="goal-frameworks-op_next" data-edge-label="verdict" data-edge-key="6" data-edge-id="goal-frameworks-op_continue">
+          <rect x="509.59999999999997" y="99" width="43.6" height="14" rx="3" class="c-mask"/>
+          <text x="531.4" y="109" class="t-muted" font-size="8" text-anchor="middle">verdict</text>
+        </g>
+        <g data-detail="context" data-edge-from="goal-frameworks-op_state" data-edge-to="goal-frameworks-op_judge" data-edge-label="work + evidence" data-edge-key="7" data-edge-id="goal-frameworks-op_decide">
+          <rect x="216" y="99" width="82" height="14" rx="3" class="c-mask"/>
+          <text x="257" y="109" class="t-muted" font-size="8" text-anchor="middle">work + evidence</text>
+        </g>
+
+        <!-- Legend -->
+        <g data-legend="" data-legend-bridge="">
+          <text x="20" y="552" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="backend" data-legend-kind="backend" data-legend-label="Agent 逻辑" data-legend-x="20" data-legend-baseline="572" data-legend-width="87">
+            <rect x="20" y="564" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="42" y="572" class="t-muted" font-size="7.5" font-weight="500">Agent logic</text>
+          </g>
+          <g data-legend-semantic-kind="security" data-legend-kind="security" data-legend-label="策略" data-legend-x="114" data-legend-baseline="572" data-legend-width="61">
+            <rect x="114" y="564" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="136" y="572" class="t-muted" font-size="7.5" font-weight="500">Policy</text>
+          </g>
+          <g data-legend-semantic-kind="messagebus" data-legend-kind="messagebus" data-legend-label="工具操作" data-legend-x="182" data-legend-baseline="572" data-legend-width="78">
+            <rect x="182" y="564" width="14" height="9" rx="2" class="c-messagebus" stroke-width="1"/>
+            <text x="204" y="572" class="t-muted" font-size="7.5" font-weight="500">Tool operations</text>
+          </g>
+          <g data-legend-semantic-kind="database" data-legend-kind="database" data-legend-label="上下文 / 追踪" data-legend-x="267" data-legend-baseline="572" data-legend-width="100">
+            <rect x="267" y="564" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="289" y="572" class="t-muted" font-size="7.5" font-weight="500">Context / tracing</text>
+          </g>
+        </g>
+      </svg>
+        </div>
+      </div>
+    </section>
+
+    <section id="matrix">
+      <h2>Implementation comparison matrix</h2>
+      <p>The diagram explains control structure; the table preserves exact fields and boundaries for design review.</p>
+      <details class="data-details">
+        <summary>View the complete comparison matrix</summary>
+        <div class="matrix-wrap">
+        <table>
+          <thead><tr><th>System</th><th>Goal representation</th><th>Next-turn trigger</th><th>Completion decision</th><th>Budget</th><th>Waiting / human intervention</th><th>Persistence and recovery</th><th>Key property</th></tr></thead>
+          <tbody>
+            <tr><td>Codex</td><td>SQLite <code>ThreadGoal</code>; includes <code>goal_id</code> and typed status</td><td>Thread-idle lifecycle reads the active Goal and starts a turn</td><td>The working agent calls <code>update_goal(complete|blocked)</code> for self-reporting; no independent judge</td><td>Optional token budget; cumulative tokens and elapsed time</td><td>User/system controls pause/resume/usage-limit; blocked requires a three-turn audit</td><td>SQLite persistence; resume restores the active controller</td><td>Most complete control plane and data model</td></tr>
+            <tr><td>Claude Code</td><td>One completion condition per session</td><td>Prompt-based Stop hook prevents stopping and supplies its reason as next-turn guidance</td><td>Small fast model: not met / met / impossible; no tools</td><td>No structured Goal budget; conditions may include stop clauses; outer limits separately support max turns / USD</td><td>Defer judgment while background tasks run; idle check-ins use backoff and a finite count</td><td>Resume restores the active condition but resets round, time, and token baselines</td><td>Reuses the general Hook protocol with the smallest surface</td></tr>
+            <tr><td>Hermes Agent</td><td><code>GoalState</code> + contract + subgoals + gates + wait barrier</td><td>CLI/gateway queues an ordinary user-role continuation after a turn</td><td>Run deterministic gates first, then an auxiliary judge returns done/blocked/continue/wait</td><td>20 Goal turns by default; per-gate timeout/retry</td><td>Can wait for PID, process session, or duration; user messages take priority</td><td><code>SessionDB.state_meta</code>; resume and compression-session migration</td><td>Most complete combination of completion contracts, deterministic gates, and asynchronous waits</td></tr>
+            <tr><td>OpenCode</td><td>User task + SQLite Todo rows</td><td>Continue within the same turn based on tool-call finish reason</td><td>Ends when the model stops calling tools; Todo completion does not control the overall loop</td><td>agent <code>steps</code> limit; unlimited by default</td><td>Question/permission belongs to the turn; no Goal pause/resume</td><td>Sessions, messages, and todos persist; no active Goal controller</td><td>Reliable progress ledger, not a Goal</td></tr>
+            <tr><td>OpenClaw</td><td>Automation jobs, heartbeat scratch, commitments, and background tasks are modeled separately</td><td>Scheduler, events, or task completion wake the session</td><td>Run success/failure, script exit code, or model stopping for this turn; no open-ended Goal evaluator</td><td>Timeout/tool budget per automation run, not a total Goal budget</td><td>Naturally supports scheduled waiting, event wakeup, delivery, and backoff</td><td>Schedule definitions, run state, and history persist across gateway restarts</td><td>Suited to long-term scheduling, not open-ended objective convergence</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </details>
+    </section>
+
+    <section id="hard-tasks">
+      <h2>How controllers stop when tasks cannot be completed</h2>
+      <p>Native Goals automatically decide whether to continue after ordinary agent turns, so they must distinguish incomplete work, missing external conditions, impossible objectives, and persistent lack of meaningful progress. Round limits alone cannot distinguish these causes; they only bound worst-case execution length.</p>
+      <div class="diagram-shell">
+        <div class="diagram-head"><div><strong>State machine for difficult tasks</strong><span>Green denotes success. Yellow states must stop automatic work until an explicit event. Red states require changes to the objective, budget, or environment before continuation.</span></div><div class="legend"><span><i class="judge"></i>Decision</span><span><i class="wait"></i>Pause</span><span><i class="stop"></i>Termination</span></div></div>
+        <div class="diagram-canvas">
+          <svg class="archify-inline" viewBox="0 0 1040 760" role="img" lang="zh-CN" aria-labelledby="goal-lifecycle-archify-diagram-title goal-lifecycle-archify-diagram-description" data-preset="classic" data-quality-profile="showcase">
+        <title id="goal-lifecycle-archify-diagram-title">OpenProgram Goal lifecycle</title>
+        <desc id="goal-lifecycle-archify-diagram-description">Lifecycle diagram generated by Archify.</desc>
+        <!-- Definitions -->
+        <defs>
+          <marker id="goal-lifecycle-arrowhead" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-default" />
+          </marker>
+          <marker id="goal-lifecycle-arrowhead-emphasis" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-emphasis" />
+          </marker>
+          <marker id="goal-lifecycle-arrowhead-security" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-security" />
+          </marker>
+          <marker id="goal-lifecycle-arrowhead-dashed" markerWidth="10" markerHeight="7" refX="9" refY="3.5" orient="auto">
+            <polygon points="0 0, 10 3.5, 0 7" class="m-dashed" />
+          </marker>
+          <pattern id="goal-lifecycle-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+            <path d="M 40 0 L 0 0 0 40" class="c-grid" stroke-width="0.5"/>
+          </pattern>
+        </defs>
+
+        <!-- Background Grid -->
+        <rect width="100%" height="100%" fill="url(#goal-lifecycle-grid)" />
+
+        <!-- Lifecycle bands -->
+        <path d="M 72 112 L 968 112" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
+        <text x="72" y="100" class="t-dim" font-size="10" font-weight="600">01 / Main lifecycle</text>
+        <path d="M 72 264 L 968 264" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
+        <text x="72" y="252" class="t-dim" font-size="10" font-weight="600">02 / Recoverable waiting + difficult-task categories</text>
+        <path d="M 72 436 L 968 436" class="a-default" stroke-width="0.8" stroke-dasharray="3,8"/>
+        <text x="72" y="424" class="t-dim" font-size="10" font-weight="600">03 / Terminal states</text>
+
+        <!-- Primary lifecycle rail -->
+        <path d="M 154 157 L 748 157" class="a-emphasis" stroke-width="2.2" marker-end="url(#goal-lifecycle-arrowhead-emphasis)"/>
+
+        <!-- Transition paths -->
+        <path data-edge-from="draft" data-edge-to="refining" data-edge-key="0" data-edge-id="draft_refine" data-composition-points="153,157;189,157" d="M 153 157 L 189 157" class="a-default" stroke-width="1.1" marker-end="url(#goal-lifecycle-arrowhead)"/>
+        <path data-edge-from="refining" data-edge-to="running" data-edge-key="1" data-edge-id="refine_run" data-composition-points="307,157;343,157" d="M 307 157 L 343 157" class="a-default" stroke-width="1.1" marker-end="url(#goal-lifecycle-arrowhead)"/>
+        <path data-edge-from="running" data-edge-to="evaluating" data-edge-key="2" data-edge-id="run_eval" data-composition-points="461,157;497,157" d="M 461 157 L 497 157" class="a-default" stroke-width="1.1" marker-end="url(#goal-lifecycle-arrowhead)"/>
+        <path data-edge-from="evaluating" data-edge-to="achieved" data-edge-key="3" data-edge-id="eval_done" data-composition-points="615,157;651,157" d="M 615 157 L 651 157" class="a-emphasis" stroke-width="2" marker-end="url(#goal-lifecycle-arrowhead-emphasis)"/>
+
+        <!-- States -->
+        <g id="goal-lifecycle-node-draft" data-node-id="draft" data-node-label="Draft" aria-label="Focus Draft, objective saved, Main lifecycle" data-node-kind="start" data-node-sublabel="目标已保存" data-node-context="主生命周期">
+          <title>Draft · Objective saved · Main lifecycle</title>
+          <rect x="35" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="35" y="126" width="118" height="62" rx="7" class="c-frontend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="start" class="semantic-sigil s-frontend" transform="translate(136 132) scale(0.6875)">
+            <circle cx="8" cy="8" r="5"/>
+            <path d="m7 5.4 3.6 2.6L7 10.6Z" class="sigil-fill"/>
+          </g>
+        <text data-detail="fine" x="45" y="140" class="t-frontend" font-size="7" font-weight="700">01</text>
+          <text data-node-label="" data-detail-anchor="" x="94" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Draft</text>
+          <text data-detail="context" x="94" y="163" class="t-muted" font-size="7" text-anchor="middle">Objective saved</text>
+        </g>
+
+        <g id="goal-lifecycle-node-refining" data-node-id="refining" data-node-label="Refining" aria-label="Focus Refining, form spec and checklist, Main lifecycle" data-node-kind="active" data-node-sublabel="形成 spec 与 checklist" data-node-context="主生命周期">
+          <title>Refining · Form spec and checklist · Main lifecycle</title>
+          <rect x="189" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="189" y="126" width="118" height="62" rx="7" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(290 132) scale(0.6875)">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
+          </g>
+        <text data-detail="fine" x="199" y="140" class="t-backend" font-size="7" font-weight="700">02</text>
+          <text data-node-label="" data-detail-anchor="" x="248" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Refining</text>
+          <text data-detail="context" x="248" y="163" class="t-muted" font-size="7" text-anchor="middle">Form spec and checklist</text>
+        </g>
+
+        <g id="goal-lifecycle-node-running" data-node-id="running" data-node-label="Running" aria-label="Focus Running, independent work continues and questions accumulate, Main lifecycle" data-node-kind="active" data-node-sublabel="独立工作继续，问题可累计" data-node-context="主生命周期">
+          <title>Running · Independent work continues and questions accumulate · Main lifecycle</title>
+          <rect x="343" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="343" y="126" width="118" height="62" rx="7" class="c-backend" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="active" class="semantic-sigil s-backend" transform="translate(444 132) scale(0.6875)">
+            <path d="M2 8h3l1.5-3.5L9 12l1.6-4H14"/>
+          </g>
+        <text data-detail="fine" x="353" y="140" class="t-backend" font-size="7" font-weight="700">03</text>
+          <text data-node-label="" data-detail-anchor="" x="402" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Running</text>
+          <text data-detail="context" x="402" y="163" class="t-muted" font-size="7" text-anchor="middle">Independent work continues and questions accumulate</text>
+        </g>
+
+        <g id="goal-lifecycle-node-evaluating" data-node-id="evaluating" data-node-label="Evaluating" aria-label="Focus Evaluating, Gate + Judge, Main lifecycle" data-node-kind="decision" data-node-sublabel="Gate + Judge" data-node-context="主生命周期">
+          <title>Evaluating · Gate + Judge · Main lifecycle</title>
+          <rect x="497" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="497" y="126" width="118" height="62" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="neutral" class="semantic-sigil s-external" transform="translate(598 132) scale(0.6875)">
+            <rect x="3" y="3" width="10" height="10" rx="2"/>
+            <circle cx="8" cy="8" r="1.2" class="sigil-fill"/>
+          </g>
+        <text data-detail="fine" x="507" y="140" class="t-security" font-size="7" font-weight="700">04</text>
+          <text data-node-label="" data-detail-anchor="" x="556" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Evaluating</text>
+          <text data-detail="context" x="556" y="163" class="t-muted" font-size="7" text-anchor="middle">Gate + Judge</text>
+        </g>
+
+        <g id="goal-lifecycle-node-achieved" data-node-id="achieved" data-node-label="Achieved" aria-label="Focus Achieved, evidence meets completion contract, Main lifecycle" data-node-kind="success" data-node-sublabel="证据满足完成合同" data-node-context="主生命周期">
+          <title>Achieved · Evidence meets completion contract · Main lifecycle</title>
+          <rect x="651" y="126" width="118" height="62" rx="7" class="c-mask"/>
+          <rect x="651" y="126" width="118" height="62" rx="7" class="c-database" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="success" class="semantic-sigil s-database" transform="translate(752 132) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.2 8 1.8 1.8 3.8-4"/>
+          </g>
+        <text data-detail="fine" x="661" y="140" class="t-database" font-size="7" font-weight="700">05</text>
+          <text data-node-label="" data-detail-anchor="" x="710" y="147" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Achieved</text>
+          <text data-detail="context" x="710" y="163" class="t-muted" font-size="7" text-anchor="middle">Evidence meets completion contract</text>
+        </g>
+
+        <g id="goal-lifecycle-node-paused" data-node-id="paused" data-node-label="Paused" aria-label="Focus Paused, user pause or restart recovery, Recoverable waiting" data-node-kind="waiting" data-node-sublabel="用户暂停或重启恢复" data-node-tag="recoverable" data-node-context="可恢复等待">
+          <title>Paused · User pause or restart recovery · Recoverable waiting · recoverable</title>
+          <rect x="339" y="236" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="339" y="236" width="126" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="waiting" class="semantic-sigil s-cloud" transform="translate(448 242) scale(0.6875)">
+            <path d="M4 2.5h8M4 13.5h8M5 3c0 2.8 2 3.2 3 5-1 1.8-3 2.2-3 5M11 3c0 2.8-2 3.2-3 5 1 1.8 3 2.2 3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="402" y="257" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Paused</text>
+          <text data-detail="context" x="402" y="273" class="t-muted" font-size="7" text-anchor="middle">User pause or restart recovery</text>
+        <text data-detail="fine" x="402" y="283" class="t-cloud" font-size="7" text-anchor="middle">recoverable</text>
+        </g>
+
+        <g id="goal-lifecycle-node-waiting_user" data-node-id="waiting_user" data-node-label="Waiting User" aria-label="Focus Waiting User, remaining work requires answers, Recoverable waiting" data-node-kind="waiting" data-node-sublabel="仅剩依赖回答的工作" data-node-tag="event" data-node-context="可恢复等待">
+          <title>Waiting User · Remaining work requires answers · Recoverable waiting · event</title>
+          <rect x="493" y="236" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="493" y="236" width="126" height="58" rx="7" class="c-cloud" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="waiting" class="semantic-sigil s-cloud" transform="translate(602 242) scale(0.6875)">
+            <path d="M4 2.5h8M4 13.5h8M5 3c0 2.8 2 3.2 3 5-1 1.8-3 2.2-3 5M11 3c0 2.8-2 3.2-3 5 1 1.8 3 2.2 3 5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="556" y="257" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Waiting User</text>
+          <text data-detail="context" x="556" y="273" class="t-muted" font-size="7" text-anchor="middle">Remaining work requires answers</text>
+        <text data-detail="fine" x="556" y="283" class="t-cloud" font-size="7" text-anchor="middle">event</text>
+        </g>
+
+        <g id="goal-lifecycle-node-waiting_external" data-node-id="waiting_external" data-node-label="Waiting External" aria-label="Focus Waiting External, waiting for jobs or external state, Recoverable waiting" data-node-kind="external" data-node-sublabel="等待作业或外部状态" data-node-tag="event" data-node-context="可恢复等待">
+          <title>Waiting External · Waiting for jobs or external state · Recoverable waiting · event</title>
+          <rect x="647" y="236" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="647" y="236" width="126" height="58" rx="7" class="c-external" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="external" class="semantic-sigil s-external" transform="translate(756 242) scale(0.6875)">
+            <rect x="2.5" y="5" width="8.5" height="8" rx="1.5"/>
+            <path d="M8 2.5h5.5V8M13.5 2.5 7.5 8.5"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="710" y="257" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Waiting External</text>
+          <text data-detail="context" x="710" y="273" class="t-muted" font-size="7" text-anchor="middle">Waiting for jobs or external state</text>
+        <text data-detail="fine" x="710" y="283" class="t-muted" font-size="7" text-anchor="middle">event</text>
+        </g>
+
+        <g id="goal-lifecycle-node-blocked" data-node-id="blocked" data-node-label="Blocked" aria-label="Focus Blocked, missing permissions, dependencies, or input, Difficult-task categories" data-node-kind="failure" data-node-sublabel="缺少权限、依赖或输入" data-node-tag="recoverable" data-node-context="困难任务分类">
+          <title>Blocked · Missing permissions, dependencies, or input · Difficult-task categories · recoverable</title>
+          <rect x="339" y="354" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="339" y="354" width="126" height="58" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(448 360) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="402" y="375" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Blocked</text>
+          <text data-detail="context" x="402" y="391" class="t-muted" font-size="7" text-anchor="middle">Missing permissions, dependencies, or input</text>
+        <text data-detail="fine" x="402" y="401" class="t-security" font-size="7" text-anchor="middle">recoverable</text>
+        </g>
+
+        <g id="goal-lifecycle-node-stalled" data-node-id="stalled" data-node-label="Stalled" aria-label="Focus Stalled, consecutive lack of meaningful progress, Difficult-task categories" data-node-kind="failure" data-node-sublabel="连续无有效进展" data-node-tag="recoverable" data-node-context="困难任务分类">
+          <title>Stalled · Consecutive lack of meaningful progress · Difficult-task categories · recoverable</title>
+          <rect x="493" y="354" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="493" y="354" width="126" height="58" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(602 360) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="556" y="375" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Stalled</text>
+          <text data-detail="context" x="556" y="391" class="t-muted" font-size="7" text-anchor="middle">Consecutive lack of meaningful progress</text>
+        <text data-detail="fine" x="556" y="401" class="t-security" font-size="7" text-anchor="middle">recoverable</text>
+        </g>
+
+        <g id="goal-lifecycle-node-budget" data-node-id="budget" data-node-label="Budget Exhausted" aria-label="Focus Budget Exhausted, turn · token · time · cost, Difficult-task categories" data-node-kind="failure" data-node-sublabel="turn · token · time · cost" data-node-tag="recoverable" data-node-context="困难任务分类">
+          <title>Budget Exhausted · turn · token · time · cost · Difficult-task categories · recoverable</title>
+          <rect x="647" y="354" width="126" height="58" rx="7" class="c-mask"/>
+          <rect x="647" y="354" width="126" height="58" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(756 360) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="710" y="375" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Budget Exhausted</text>
+          <text data-detail="context" x="710" y="391" class="t-muted" font-size="7" text-anchor="middle">turn · token · time · cost</text>
+        <text data-detail="fine" x="710" y="401" class="t-security" font-size="7" text-anchor="middle">recoverable</text>
+        </g>
+
+        <g id="goal-lifecycle-node-impossible" data-node-id="impossible" data-node-label="Impossible" aria-label="Focus Impossible, cannot satisfy current contract, Terminal states" data-node-kind="failure" data-node-sublabel="当前合同内无法满足" data-node-tag="terminal" data-node-context="终态">
+          <title>Impossible · Cannot satisfy current contract · Terminal states · terminal</title>
+          <rect x="343" y="450" width="118" height="58" rx="7" class="c-mask"/>
+          <rect x="343" y="450" width="118" height="58" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(444 456) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="402" y="471" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Impossible</text>
+          <text data-detail="context" x="402" y="487" class="t-muted" font-size="7" text-anchor="middle">Cannot satisfy current contract</text>
+        <text data-detail="fine" x="402" y="497" class="t-security" font-size="7" text-anchor="middle">terminal</text>
+        </g>
+
+        <g id="goal-lifecycle-node-failed" data-node-id="failed" data-node-label="Failed" aria-label="Focus Failed, unrecoverable execution error, Terminal states" data-node-kind="failure" data-node-sublabel="不可恢复执行错误" data-node-tag="terminal" data-node-context="终态">
+          <title>Failed · Unrecoverable execution error · Terminal states · terminal</title>
+          <rect x="497" y="450" width="118" height="58" rx="7" class="c-mask"/>
+          <rect x="497" y="450" width="118" height="58" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(598 456) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="556" y="471" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Failed</text>
+          <text data-detail="context" x="556" y="487" class="t-muted" font-size="7" text-anchor="middle">Unrecoverable execution error</text>
+        <text data-detail="fine" x="556" y="497" class="t-security" font-size="7" text-anchor="middle">terminal</text>
+        </g>
+
+        <g id="goal-lifecycle-node-cancelled" data-node-id="cancelled" data-node-label="Cancelled" aria-label="Focus Cancelled, user explicitly terminates, Terminal states" data-node-kind="failure" data-node-sublabel="用户明确终止" data-node-tag="terminal" data-node-context="终态">
+          <title>Cancelled · User explicitly terminates · Terminal states · terminal</title>
+          <rect x="651" y="450" width="118" height="58" rx="7" class="c-mask"/>
+          <rect x="651" y="450" width="118" height="58" rx="7" class="c-security" stroke-width="1.5"/>
+          <g aria-hidden="true" data-semantic-sigil="failure" class="semantic-sigil s-security" transform="translate(752 456) scale(0.6875)">
+            <circle cx="8" cy="8" r="5.3"/>
+            <path d="m5.7 5.7 4.6 4.6m0-4.6-4.6 4.6"/>
+          </g>
+          <text data-node-label="" data-detail-anchor="" x="710" y="471" class="t-primary" font-size="10" font-weight="600" text-anchor="middle">Cancelled</text>
+          <text data-detail="context" x="710" y="487" class="t-muted" font-size="7" text-anchor="middle">User explicitly terminates</text>
+        <text data-detail="fine" x="710" y="497" class="t-security" font-size="7" text-anchor="middle">terminal</text>
+        </g>
+
+        <!-- Transition labels -->
+
+
+
+
+
+        <!-- Legend -->
+        <g data-legend="" data-legend-bridge="">
+          <text x="40" y="704" class="t-primary" font-size="12" font-weight="650">Legend</text>
+          <g data-legend-semantic-kind="start" data-legend-kind="start" data-legend-label="开始" data-legend-x="40" data-legend-baseline="724" data-legend-width="63">
+            <rect x="40" y="716" width="14" height="9" rx="2" class="c-frontend" stroke-width="1"/>
+            <text x="62" y="724" class="t-muted" font-size="10" font-weight="500">Start</text>
+          </g>
+          <g data-legend-semantic-kind="active" data-legend-kind="active" data-legend-label="活动状态" data-legend-x="125" data-legend-baseline="724" data-legend-width="83">
+            <rect x="125" y="716" width="14" height="9" rx="2" class="c-backend" stroke-width="1"/>
+            <text x="147" y="724" class="t-muted" font-size="10" font-weight="500">Active state</text>
+          </g>
+          <g data-legend-semantic-kind="waiting" data-legend-kind="waiting" data-legend-label="等待" data-legend-x="230" data-legend-baseline="724" data-legend-width="63">
+            <rect x="230" y="716" width="14" height="9" rx="2" class="c-cloud" stroke-width="1"/>
+            <text x="252" y="724" class="t-muted" font-size="10" font-weight="500">Wait</text>
+          </g>
+          <g data-legend-semantic-kind="decision" data-legend-kind="decision" data-legend-label="决策" data-legend-x="315" data-legend-baseline="724" data-legend-width="63">
+            <rect x="315" y="716" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="337" y="724" class="t-muted" font-size="10" font-weight="500">Decision</text>
+          </g>
+          <g data-legend-semantic-kind="success" data-legend-kind="success" data-legend-label="成功终态" data-legend-x="400" data-legend-baseline="724" data-legend-width="83">
+            <rect x="400" y="716" width="14" height="9" rx="2" class="c-database" stroke-width="1"/>
+            <text x="422" y="724" class="t-muted" font-size="10" font-weight="500">Success</text>
+          </g>
+          <g data-legend-semantic-kind="failure" data-legend-kind="failure" data-legend-label="失败 / 退出" data-legend-x="505" data-legend-baseline="724" data-legend-width="98">
+            <rect x="505" y="716" width="14" height="9" rx="2" class="c-security" stroke-width="1"/>
+            <text x="527" y="724" class="t-muted" font-size="10" font-weight="500">Failure / exit</text>
+          </g>
+          <g data-legend-semantic-kind="external" data-legend-kind="external" data-legend-label="外部状态" data-legend-x="625" data-legend-baseline="724" data-legend-width="83">
+            <rect x="625" y="716" width="14" height="9" rx="2" class="c-external" stroke-width="1"/>
+            <text x="647" y="724" class="t-muted" font-size="10" font-weight="500">External state</text>
+          </g>
+        </g>
+      </svg>
+        </div>
+      </div>
+      <details class="data-details">
+        <summary>View difficult-task stopping mechanisms by framework</summary>
+        <div class="matrix-wrap">
+        <table>
+          <thead><tr><th>System</th><th>Outcome when completion is impossible</th><th>Deterministic stopping mechanism</th><th>Can it still loop for a long time?</th><th>Main gap</th></tr></thead>
+          <tbody>
+            <tr><td>Codex</td><td>Working agent can declare <code>blocked</code>; the control plane can enter <code>paused</code>, <code>usage_limited</code>, <code>budget_limited</code> or <code>complete</code></td><td>Optional token budget; blocked requires three consecutive audits of the same blocker; user/system can pause</td><td class="partial">Yes. Without a token budget and without an agent declaration of blocked/complete, the Goal controller continues turns</td><td>Completion and blocking rely on worker self-report, without an independent evaluator verifying actual lack of progress</td></tr>
+            <tr><td>Claude Code</td><td>When the evaluator returns <code>impossible</code> , clear the Goal; consecutive absence of tool progress stops continuation but retains the Goal</td><td>The general Stop hook forces termination after 8 consecutive stop prevention events; background idle check-ins cap at 3; outer max-turn and USD budgets are configurable</td><td class="partial">Yes. Goals have no structured hard budget; if tool actions continue and the evaluator keeps returning <code>not met</code> , stopping depends on outer limits</td><td>The evaluator has no tools and cannot directly inspect files, tests, or external state; Goal and runner budgets are separate</td></tr>
+            <tr><td>Hermes Agent</td><td>The judge may return <code>blocked</code> or <code>wait</code>; continuation stops at the Goal-turn limit</td><td>20 Goal turns by default; gates have timeout/retry; the same failed gate is not rerun under the same workspace fingerprint; waiting consumes no work turns</td><td class="no">No infinite continuation, but low-value work may repeat within 20 turns</td><td>No confirmed Goal-level total token/cost budget; the semantic judge can keep returning continue</td></tr>
+            <tr><td>OpenCode</td><td>The current turn ends when the model stops invoking tools; unfinished Todo does not start another turn automatically</td><td>Configurable agent <code>steps</code> limit</td><td class="partial">A single turn may be long because steps can default to unlimited, but Todo does not form a cross-turn Goal loop</td><td>No cross-turn stalled, blocked, budget, or recovery contract</td></tr>
+            <tr><td>OpenClaw</td><td>An automation run succeeds, fails, or times out; explicit schedules determine subsequent runs</td><td>Per-run timeout/tool budget, schedule backoff, and durable run state</td><td class="no">No indefinite automatic continuation merely because an objective is unfinished; Cron can repeat forever as configured by the user</td><td>No open-ended Goal evaluator to determine whether a long-term objective is achieved or impossible</td></tr>
+          </tbody>
+        </table>
+        </div>
+      </details>
+      <div class="framework-grid">
+        <div class="card">
+          <h3>Why invoking a tool is not progress</h3>
+          <p>Tool calls prove actions, not movement toward acceptance conditions. Stall detection should compare newly added evidence refs, passed deterministic gates, unfinished checklist items, and external-state changes across consecutive turns. Repeated identical evidence should enter <code>stalled</code>rather than reset the stall counter.</p>
+        </div>
+        <div class="card">
+          <h3>Waiting must not consume work turns</h3>
+          <p>Questions first enter a durable asynchronous queue; the controller continues while safe independent work remains. Enter the following state only when all remaining work requires answers: <code>waiting_user</code>. CI, background processes, time, or external events enter <code>waiting_external</code>; explicit resume is currently required.</p>
+        </div>
+      </div>
+      <div class="callout warn"><strong>Conclusion:</strong>Semantic evaluators alone cannot guarantee convergence in any of these implementations. Reliable controllers need hard budgets, evidence-based stall detection, explicit blocked/impossible/waiting categories, and waiting states released only by external events.</div>
+    </section>
+
+    <section id="native-goals">
+      <h2>Native Goal implementation details</h2>
+
+
+      <article class="framework" id="codex">
+        <div class="framework-head"><div><h3>Codex</h3><p>Goal is a durable thread-level control entity; the working agent declares completion or blocking through tools.</p></div><span class="badge native">Native Goal · Open source</span></div>
+        <div class="facts">
+          <div class="fact"><small>Entry</small><strong>UI/API + <code>create_goal</code></strong></div>
+          <div class="fact"><small>State owner</small><strong>SQLite <code>ThreadGoal</code></strong></div>
+          <div class="fact"><small>Completion</small><strong>agent self-report tool</strong></div>
+          <div class="fact"><small>Resume</small><strong>Idle-lifecycle recovery</strong></div>
+        </div>
+        <div class="flow" aria-label="Codex Goal control flow">
+          <div class="step"><b>create/set</b><span>Validate objective and optional token budget; only one unfinished Goal per thread</span></div>
+          <div class="step"><b>persist</b><span>writes <code>goal_id</code>, status, usage, and time fields</span></div>
+          <div class="step"><b>start turn</b><span>Inject continuation steering when the Goal is active and the thread idle</span></div>
+          <div class="step"><b>work</b><span>An ordinary Codex turn uses existing tools, plans, and context</span></div>
+          <div class="step"><b>account</b><span>At turn completion, accumulate tokens and elapsed seconds relative to the baseline</span></div>
+          <div class="step"><b>declare</b><span>The agent may only call <code>update_goal(complete|blocked)</code></span></div>
+          <div class="step"><b>idle again</b><span>Continue while active; external controls may pause/resume/clear</span></div>
+        </div>
+        <div class="cols">
+          <div class="mini"><h4>Separate data and permissions</h4><ul><li><code>ThreadGoal</code> is a typed record:<code>thread_id</code>, <code>goal_id</code>, objective, status, token budget, tokens used, time used, created/updated.</li><li>Status is active, paused, blocked, usage_limited, budget_limited, or complete.</li><li>Model tools may only create, read, or set complete/blocked; user/system controls pause, resume, and budget/usage limited.</li><li>External app-server provides <code>thread/goal/set|get|clear</code> and updated/cleared notifications.</li></ul></div>
+          <div class="mini"><h4>Concurrency and completion semantics</h4><ul><li>Goal mutation and idle continuation share a semaphore; writes use <code>expected_goal_id</code> to prevent an old turn from updating a new Goal.</li><li>Resume reads the durable Goal and registers idle continuation again only when active.</li><li>The continuation prompt contains the completion audit; the same worker uses actual evidence to decide whether to call <code>update_goal</code>, without independent model review.</li><li>Blocked requires the same blocker in at least 3 consecutive Goal turns; token exhaustion moves to budget_limited through system control.</li></ul></div>
+        </div>
+        <div class="callout">Implementation assessment: Codex has first-class state, permission boundaries, CAS-style updates, resource accounting, and resume. Its risk is that the executor also judges completion, largely relying on prompt constraints and disciplined tool use. It accumulates elapsed time but currently has neither a time budget nor a dedicated external-process wait state.</div>
+        <div class="source-box"><details><summary>Source and protocol evidence</summary><ul class="source-list">
+          <li><a href="https://github.com/openai/codex/blob/main/codex-rs/state/src/model/thread_goal.rs">ThreadGoal and status: thread_goal.rs</a></li>
+          <li><a href="https://github.com/openai/codex/blob/main/codex-rs/ext/goal/src/spec.rs">get/create/update_goal tool contracts: spec.rs</a></li>
+          <li><a href="https://github.com/openai/codex/blob/main/codex-rs/ext/goal/src/runtime.rs">usage accounting, resume, idle continuation: runtime.rs</a></li>
+          <li><a href="https://github.com/openai/codex/blob/main/codex-rs/ext/goal/templates/goals/continuation.md">Continuation, completion, and blocked audits: continuation.md</a></li>
+          <li><a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md">thread/goal API and events: app-server README</a></li>
+        </ul></details></div>
+      </article>
+
+      <article class="framework" id="claude">
+        <div class="framework-head"><div><h3>Claude Code</h3><p><code>/goal</code> is a session-scoped prompt-evaluator configuration on the general Stop-hook mechanism.</p></div><span class="badge native">Native Goal · Official runtime contract</span></div>
+        <div class="facts">
+          <div class="fact"><small>Entry</small><strong><code>/goal &lt;condition&gt;</code></strong></div>
+          <div class="fact"><small>State owner</small><strong>session-scoped condition</strong></div>
+          <div class="fact"><small>Completion</small><strong>small fast model</strong></div>
+          <div class="fact"><small>Resume</small><strong>Restore condition; reset metering baselines</strong></div>
+        </div>
+        <div class="flow" aria-label="Claude Code Goal control flow">
+          <div class="step"><b>set</b><span>One condition per session; a new value replaces the old one and immediately starts a turn</span></div>
+          <div class="step"><b>work</b><span>Ordinary Claude Code turn; Goal does not change permission mode</span></div>
+          <div class="step"><b>Stop event</b><span>The session-scoped prompt hook triggers when the main agent is about to finish</span></div>
+          <div class="step"><b>defer</b><span>Skip the evaluator this turn if a background task is still running</span></div>
+          <div class="step"><b>evaluate</b><span>Send condition + conversation to a small fast model without tool access</span></div>
+          <div class="step"><b>verdict</b><span>not met / met / impossible, each with a reason</span></div>
+          <div class="step"><b>continue/clear</b><span>not met supplies its reason to the next turn; the other two clear the active Goal</span></div>
+        </div>
+        <div class="cols">
+          <div class="mini"><h4>Reuses the Hook protocol</h4><ul><li>An ordinary Stop hook may return <code>decision:"block"</code> and <code>reason</code>; the reason enters Claude's next-turn context.</li><li>A prompt hook may return model-generated <code>ok</code>, <code>reason</code>, <code>impossible</code>.<code>/goal</code> adds condition, status display, and recovery to this general mechanism.</li><li><code>stop_hook_active</code> prevents unconditional recursion by extension scripts; the runtime forces termination after 8 consecutive Stop-hook stop prevention events.</li><li>The Goal evaluator only sees evidence already in the conversation; it does not read files or run tests.</li></ul></div>
+          <div class="mini"><h4>Waiting, errors, and budgets</h4><ul><li>Do not evaluate while background shells/subagents run; completion results trigger new turns. Long waits use backoff check-ins, with at most 3 automatic idle check-ins between user inputs in interactive sessions.</li><li>Several consecutive turns without tool progress stop automatic looping but retain the Goal for evaluation after the next user prompt.</li><li>Unrecoverable auth, balance, uncompactable context overflow, or model-unavailability errors clear the Goal; transient errors retain it.</li><li>Goal has no independent typed budget; turn/time termination conditions can be included in the condition. Outer print mode separately provides <code>--max-turns</code> and <code>--max-budget-usd</code>.</li></ul></div>
+        </div>
+        <div class="callout">Implementation assessment: Claude Code demonstrates that Goal can specialize a general stop interceptor without a separate executor. Its background-work defer/check-in handling is complete, but the tool-free evaluator relies on the worker placing verification evidence in the transcript.</div>
+        <div class="source-box"><details><summary>Official documentation evidence</summary><ul class="source-list">
+          <li><a href="https://code.claude.com/docs/en/goal">Complete /goal runtime contract</a></li>
+          <li><a href="https://code.claude.com/docs/en/hooks#stop">Stop-hook input, return values, and loop protection</a></li>
+          <li><a href="https://code.claude.com/docs/en/cli-reference">Session resume, max turns, and USD budget</a></li>
+          <li><a href="https://code.claude.com/docs/en/tools-reference">Task-ledger tools such as TaskCreate / TaskUpdate</a></li>
+        </ul></details></div>
+      </article>
+
+      <article class="framework" id="hermes">
+        <div class="framework-head"><div><h3>Hermes Agent</h3><p><code>GoalManager</code> Unifies free-text objectives, structured completion contracts, deterministic gates, and asynchronous waits at turn boundaries.</p></div><span class="badge native">Native Goal · Open source</span></div>
+        <div class="facts">
+          <div class="fact"><small>Entry</small><strong><code>/goal</code> / <code>/subgoal</code></strong></div>
+          <div class="fact"><small>State owner</small><strong><code>GoalState</code> in SessionDB</strong></div>
+          <div class="fact"><small>Completion</small><strong>gate → auxiliary judge</strong></div>
+          <div class="fact"><small>Resume</small><strong>session resume + wait release</strong></div>
+        </div>
+        <div class="flow" aria-label="Hermes Goal control flow">
+          <div class="step"><b>set/draft</b><span>Free text or completion contract; subgoals may be appended</span></div>
+          <div class="step"><b>work</b><span>Use ordinary <code>run_conversation</code> to complete a turn</span></div>
+          <div class="step"><b>gate</b><span>Run shell quality gates with timeout/retry first</span></div>
+          <div class="step"><b>judge</b><span>An auxiliary model returns done/blocked/continue/wait</span></div>
+          <div class="step"><b>wait</b><span>May bind PID, process session, or deadline; waiting consumes no Goal turns</span></div>
+          <div class="step"><b>enqueue</b><span>Queue continue as an ordinary user-role message in CLI/gateway</span></div>
+          <div class="step"><b>persist</b><span>Write on every transition: <code>state_meta[goal:session]</code></span></div>
+        </div>
+        <div class="cols">
+          <div class="mini"><h4>Completion contract and gates</h4><ul><li><code>GoalContract</code> stores outcome, verification, constraints, boundaries, and stop_when separately and injects them into both worker and judge prompts.</li><li><code>GoalGate</code> runs before the LLM judge; failures skip judgment, bound the output tail, and provide failure evidence as continuation.</li><li>Gates record attempts, exit code, output tail, and workspace fingerprint; reuse failed results when the workspace is unchanged to avoid repeating identical checks.</li><li>A subgoal is an additional user-specified acceptance condition; it neither restarts the main Goal nor resets the original objective.</li></ul></div>
+          <div class="mini"><h4>State, waiting, and adapters</h4><ul><li><code>GoalState</code> stores status, turn budget, judge-failure counters, subgoals, wait barrier, contract, and gates.</li><li>The judge returns done, blocked, continue, or wait; wait may specify PID, process session, or seconds.</li><li>CLI and gateway share <code>GoalManager</code>but separately queue continuation in their existing message queues, without changing system prompts or toolsets.</li><li>Goal state restores on session resume; when context compression rotates session ids, migrate the Goal and remove its old record.</li></ul></div>
+        </div>
+        <div class="callout">Implementation assessment: Hermes separates verifiable completion from unfinished external work. Deterministic gates handle verification results, the judge handles open-ended semantics, and wait barriers handle asynchronous dependencies. The default remains one Goal per session with a turn budget; total token/cost budgets are not part of the confirmed GoalState contract.</div>
+        <div class="source-box"><details><summary>Source and documentation evidence</summary><ul class="source-list">
+          <li><a href="https://github.com/NousResearch/Hermes-Agent/blob/main/hermes_cli/goals.py">GoalState, GoalManager, contract, gate, judge, wait: goals.py</a></li>
+          <li><a href="https://github.com/NousResearch/Hermes-Agent/blob/main/website/docs/user-guide/features/goals.md">Persistent Goals user and recovery contract</a></li>
+          <li><a href="https://github.com/NousResearch/Hermes-Agent/blob/main/agent/conversation_loop.py">Ordinary work-turn tool loop: conversation_loop.py</a></li>
+          <li><a href="https://github.com/NousResearch/Hermes-Agent/blob/main/tools/todo_tool.py">Independent Todo ledger: todo_tool.py</a></li>
+        </ul></details></div>
+      </article>
+    </section>
+
+    <section id="adjacent">
+      <h2>Adjacent implementations without native Goals</h2>
+      <p>These systems provide some Goal components but lack the complete contract in which one open-ended completion condition controls multiple turns until independently judged complete.</p>
+
+      <article class="framework" id="opencode">
+        <div class="framework-head"><div><h3>OpenCode</h3><p>Durable Todo + single-turn agent loop; Todo records progress rather than terminating the loop.</p></div><span class="badge near">Adjacent mechanism · Open source</span></div>
+        <div class="facts">
+          <div class="fact"><small>Task source</small><strong>latest user message</strong></div>
+          <div class="fact"><small>Progress state</small><strong>SQLite Todo rows</strong></div>
+          <div class="fact"><small>Loop stop</small><strong>provider finish reason</strong></div>
+          <div class="fact"><small>Bound</small><strong><code>agent.steps</code></strong></div>
+        </div>
+        <div class="cols">
+          <div class="mini"><h4>Implementation</h4><ul><li><code>SessionPrompt.run</code> The loop reads latest messages and exits when the assistant has a non-tool-call finish reason with no unhandled tool calls.</li><li>Each round resolves the agent profile and tools, handles compaction/subtasks, then invokes the provider.<code>agent.steps</code> Unlimited by default; the last step injects a max-steps hint into model messages.</li><li>Plan is a primary agent profile that mainly prohibits edits through permissions while allowing specific plan files; it is not Goal state.</li></ul></div>
+          <div class="mini"><h4>Todo boundaries</h4><ul><li>Todo items contain only content, status, and priority; stored in SQLite by session ID, with publication of <code>todo.updated</code>.</li><li><code>todowrite</code> replaces the entire list each time; UI shows completed/total; disabled for subagents by default.</li><li>Whether all Todo items are completed does not affect <code>SessionPrompt.run</code> the exit decision or automatically start a new turn after session idle.</li><li>It can therefore serve as a Goal progress projection, but not independently as its controller.</li></ul></div>
+        </div>
+        <div class="source-box"><details><summary>Source and official documentation evidence</summary><ul class="source-list">
+          <li><a href="https://github.com/sst/opencode/blob/dev/packages/opencode/src/session/prompt.ts">session agent loop: prompt.ts</a></li>
+          <li><a href="https://github.com/sst/opencode/blob/dev/packages/opencode/src/session/todo.ts">Todo schema, SQLite, and events: todo.ts</a></li>
+          <li><a href="https://github.com/sst/opencode/blob/dev/packages/opencode/src/agent/agent.ts">Build / Plan / subagent profiles: agent.ts</a></li>
+          <li><a href="https://opencode.ai/docs/tools/#todowrite">Official todowrite contract</a></li>
+          <li><a href="https://opencode.ai/docs/agents/">Agents, permissions, and max steps</a></li>
+        </ul></details></div>
+      </article>
+
+      <article class="framework" id="openclaw">
+        <div class="framework-head"><div><h3>OpenClaw</h3><p>Models durable work as schedulers, background tasks, heartbeats, standing instructions, and commitments rather than providing a general Goal evaluator.</p></div><span class="badge near">Adjacent mechanism · Open source</span></div>
+        <div class="facts">
+          <div class="fact"><small>Persistent intent</small><strong>automation / standing order</strong></div>
+          <div class="fact"><small>Wake owner</small><strong>Gateway scheduler</strong></div>
+          <div class="fact"><small>Execution</small><strong>agent turn / command / script</strong></div>
+          <div class="fact"><small>Completion</small><strong>per-run outcome</strong></div>
+        </div>
+        <div class="cols">
+          <div class="mini"><h4>Scheduling and state</h4><ul><li>Automation jobs store id, name, enabled, schedule, session target, wake mode, typed payload, delivery, failure alert, and run state.</li><li>Payloads include system event, agent turn, command, and script; session targets may be main, current, isolated, or named sessions.</li><li>Run results distinguish execution from delivery; jobs, run state, and history persist, and scheduling continues after gateway restart.</li><li>Scripts and commands can use exit codes for deterministic success, but that judges one run rather than an open-ended objective.</li></ul></div>
+          <div class="mini"><h4>Heartbeat and commitment</h4><ul><li>Heartbeat is a system-owned monitor automation; it reads scratch or <code>HEARTBEAT.md</code>and skips model calls when nothing is due.</li><li>Structured heartbeat tasks contain only name, interval, and prompt and enter subsequent monitor turns on their own schedules.</li><li>Commitments record agent promises or follow-ups inferred from user context, with due window, confidence, status, attempts, and delivery scope.</li><li>These mechanisms determine when to run or notify again but provide no met/unmet evaluator and do not constrain multiple runs to one completion condition.</li></ul></div>
+        </div>
+        <div class="callout">Implementation assessment: OpenClaw is most useful as a reference for external Goal waiting and scheduling. Calling it Goal directly loses completion semantics. A better combination is for a Goal controller to create/bind automation when future time or an external event is needed, then resume the Goal on the event.</div>
+        <div class="source-box"><details><summary>Source and official documentation evidence</summary><ul class="source-list">
+          <li><a href="https://github.com/openclaw/openclaw/blob/main/src/cron/types.ts">Automation/Cron jobs, payloads, and run state: types.ts</a></li>
+          <li><a href="https://github.com/openclaw/openclaw/blob/main/src/infra/heartbeat-runner.ts">Heartbeat scheduling and delivery: heartbeat-runner.ts</a></li>
+          <li><a href="https://github.com/openclaw/openclaw/blob/main/src/commitments/types.ts">Commitment typed record: commitments/types.ts</a></li>
+          <li><a href="https://docs.openclaw.ai/cron-jobs">Automation persistence, payloads, sessions, and budgets</a></li>
+          <li><a href="https://docs.openclaw.ai/gateway/heartbeat">Heartbeat runtime contract</a></li>
+          <li><a href="https://docs.openclaw.ai/automation/tasks">Background task ledger</a></li>
+        </ul></details></div>
+      </article>
+    </section>
+
+
+
+
+
+
+  </div>
+  </details>
+  <div class="content">
+    <section id="status">
+      <h2>Implementation status and evidence boundaries</h2>
+      <p data-implementation-state="source-reviewed">Chat Goals use existing ordinary chat execution and durable completion notifications for continuation; display projections do not rewrite run intent. There are no default round or recovery-expiry limits, while explicit user limits remain. Shared history pairing, unknown-effect approval, durable deduplicated new turns, restricted Resume, incompatible-checkpoint handling, background Job continuation with original resource authorization, independent read-only completion acceptance, durable request attribution, late/partially unknown usage, concurrent hard-budget reservations, and joint settlement passed independent specification and quality reviews. Unified backend action conditions, explicit Verify, exact execution checks, crash-time lower bounds, and related-background-work completion restrictions also passed review. Complete Python, Web, CLI, Desktop, documentation checks and browser regressions after an independent build passed; skipped tests do not prove capabilities. Isolated-process interruption matrices for ordinary chat and Goals and macOS live-background-process reconnection have actual process evidence. This does not extend to Windows process survival, OS restart, cross-host takeover, or general external-event scheduling.</p>
+      <div class="callout warn">Evidence boundaries: unknown outcomes always remain in effect records; new side effects require one-time approval for the current operation, and ordinary chat recovery never reruns old tool calls. All Todo complete produces only an acceptance candidate. Independent ordinary chat checks actual reads or session evidence against the original objective and fixed requirements; before commit, recheck control version, evidence digest, related background processes, and execution state. The same inspected plan is not automatically accepted repeatedly. Request statistics retain Goal/revision/execution identity and prices; the durable ledger restores cumulative usage watermarks, child attribution, reservations, and joint settlement. Missing receipts remain unknown; old session statistics are not inferred into new attribution. Sudden executor loss counts only verifiable duration lower bounds and excludes downtime. Completion acceptance remains evidence-constrained model judgment, not a guarantee of absolute correctness.</div>
+      <div class="framework-grid">
+        <div class="card"><h3>Extensions outside this design</h3><ul><li>Cross-host distributed execution leases, a general workflow engine, and an independent audit repository.</li><li>Automatic bulk rewriting of historical Goal costs or tool effects.</li><li>Exactly-once execution guarantees for arbitrary non-idempotent external operations.</li><li>Running an independent judge on every ordinary chat turn.</li></ul></div>
+      </div>
+      <div class="callout warn"><strong>Version boundaries:</strong>Local reference repositories provide reproducible code paths; official online documentation and public main branches establish later contracts. The local Hermes snapshot's basic GoalManager lacks upstream completion contracts, quality gates, and wait barriers, so those sections rely on public upstream source. Claude Code relies on official documentation.</div>
+      <p class="footer">Authoritative engineering design and implementation comparison for OpenProgram Goals. Product instructions are in <a href="../../../../capabilities/goal.html">Goal Workflow</a>; unaccepted items here are not evidence of release or deployment.</p>
+    </section>
+  </div>
+<section id="conversation-file-preview" class="card"><h2>Goal completion presentation</h2><p>A terminal historical Goal stays at its existing conversation anchor as a compact, clickable status row. A successful Goal shows an animated Lucide check icon and Goal achieved in 9m 42s using that Goal's active elapsed time. Missing time does not become zero; interrupted time retains its lower-bound label. Other terminal states keep their actual status and never appear successful. The row opens the existing read-only historical Goal details. Canonical completion, acceptance and accounting remain authoritative; presentation does not infer completion from the assistant text or Todo counts.</p><h3>Implementation status</h3><p data-completion-implementation="source-verified">The compact completion row uses recorded Goal status and active duration and opens the original read-only details. Component and browser checks cover this presentation; installed-App acceptance is part of the release verification record.</p></section></main>
+<p id="nested-recovery-scope">A new interactive owner turn in Auto or bypass evaluates uncertain effects only in its current execution subtree. A nested Runtime uses this same boundary only when immutable admission proves a chat from that owner: the stored actor is interactive owner, the integrity-checked chat payload has the same source, and current execution, session and principal match. Executor-thread submission carries the existing ContextVars so scope capture checks the same current execution before spawning. Runtime stays non-interactive and cannot grant approval. Missing or mismatched evidence retains the existing restriction; unreadable or corrupt recovery state fails closed. Unknown effects in the current subtree still require exact one-time approval. Old receipts are never resolved or replayed by this filter. Explicit ask/deny, source constraints, plan mode and exact Page binding continue to apply.</p><p>Acceptance: reproduce an old interrupted effect followed by a new owner activation through permission_decision and real nested Runtime gates; check Auto classification and bypass, exact current/descendant uncertainty, mismatched provenance, rules, and real subprocess Page access. The nested-scope correction is implemented. Independent specification and quality reviews, actual subprocess Page access, browser components, and the final combined verification pass. Skipped environment-dependent cases do not establish those capabilities. Installed-App acceptance is recorded separately in release evidence.</p></body>
+</html>

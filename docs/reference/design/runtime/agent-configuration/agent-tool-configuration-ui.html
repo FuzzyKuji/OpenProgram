@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Programs access selector — OpenProgram</title>
+<style>
+.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
+</style>
+</head>
+<body>
+<main class="ad">
+<header>
+<div class="eyebrow">OpenProgram · Agents</div>
+<h1>Programs access selector</h1>
+<p class="lead">Reusable configuration, optional long-term memory, consistent execution semantics.</p>
+<a href="agent-tool-configuration-ui.zh.html">中文</a>
+<div class="status">Partly implemented · The Agents page, saved configurations with revisions and the memory policy are in place; the closing Implementation status lists what is still target design. The linked prototype uses illustrative data and never changes live configuration.</div>
+<nav aria-label="Design documents">
+<a href="agent-configuration-ui.html">Configuration contract</a>
+<a href="agent-core-configuration-ui.html">Editor and core fields</a>
+<a href="agent-capability-configuration-ui.html">Capabilities</a>
+<a href="agent-tool-configuration-ui.html">Programs selector</a>
+<a href="agent-configuration-plan.html">Implementation plan</a>
+</nav>
+<nav class="toc" aria-label="On this page">
+<a href="#purpose">Select callable Programs without duplicating their catalog</a>
+<a href="#layout">Selector and structure preview</a>
+<a href="#semantics">Selection semantics and failures</a>
+<a href="#status">Implementation status and acceptance</a>
+</nav>
+</header>
+<section id="purpose">
+<h2>Select callable Programs without duplicating their catalog</h2>
+<p>Agents configures access; Programs manages the actual callable entities. The selected Agent’s main panel displays policy and counts, with an optional effective-entry view. A collapsed list is cheap; opening Browse Programs loads the detailed catalog. Preserve the existing target of one-level Workflow composition preview and explicit access editing as separate actions.</p>
+</section>
+<section id="layout">
+<h2>Selector and structure preview</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Surface</th>
+<th>Content</th>
+<th>Interaction</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent panel</td>
+<td>Functions / Workflows / Applications counts and collapsible effective entries</td>
+<td>Expansion reads structure; it does not enable/disable anything</td>
+</tr>
+<tr>
+<td>Selector left</td>
+<td>Type and category navigation</td>
+<td>Search, Selected only, Issues only</td>
+</tr>
+<tr>
+<td>Selector center</td>
+<td>Names, descriptions, selected and availability states</td>
+<td>Checkboxes edit the Agent draft, not global enablement</td>
+</tr>
+<tr>
+<td>Inspector</td>
+<td>Entry signature, input/output, direct dependencies and validation evidence</td>
+<td>Open Programs for source/full graph; expand at most two levels</td>
+</tr>
+<tr>
+<td>Workflow tree</td>
+<td>Stable circular expansion controls and continuous hierarchy lines</td>
+<td>Keyboard-expandable; honor reduced motion</td>
+</tr>
+<tr>
+<td>MCP entries</td>
+<td>Not duplicated in Program authorization choices</td>
+<td>Managed through the MCP section; runtime tools still use shared invocation</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="semantics">
+<h2>Selection semantics and failures</h2>
+<ul>
+<li>All, Selected, None and Inherit follow the shared capability contract. A preset is a reference; preview expanded names and version. Switching to explicit selection copies only names into the draft, not Program definitions.</li>
+<li>Selected=[] remains None in effect. Missing entries appear in Issues with their stored names, remain removable, and cannot be invoked. Catalog failure is displayed separately from an empty search result.</li>
+<li>Closing Done retains local draft changes; Cancel restores the selector-open draft snapshot. Neither saves the Agent. Global Save commits every section under the same expected_revision.</li>
+<li>Do not mark a workflow validated from a title, source status or stale test count. Show available evidence separately from capability readiness. Production catalog APIs must provide the required metadata before the inspector is marked complete.</li>
+<li>The first-turn model context contains resident schemas and scoped search guidance, not the full deferred inventory. Nested workflow execution must enforce the existing program/trust boundary; selecting a workflow does not authorize arbitrary hidden tool calls.</li>
+</ul>
+</section>
+<section id="status">
+<h2>Implementation status and acceptance</h2>
+<p>Current AgentsPage has a mode summary and lazy catalog dialog with search and checkboxes. The two-level Workflow structure inspector and richer metadata are target UI, not verified production behavior. Acceptance uses actual expand/search/select/close/reopen actions, checks preserved scroll and drafts, rejects denied calls through the public executor, and checks narrow-screen and keyboard behavior. No additional workflow execution engine is introduced.</p>
+</section>
+</main>
+</body>
+</html>

@@ -1,0 +1,54 @@
+<svg viewBox="0 0 920 660" xmlns="http://www.w3.org/2000/svg" font-family="'PingFang SC','Hiragino Sans GB','Microsoft YaHei',sans-serif">
+<style>
+.mono{font-family:'JetBrains Mono','SF Mono',Menlo,Consolas,monospace}
+.box{fill:#101d31;stroke:rgba(154,178,204,.45);stroke-width:1.2}
+.bt{fill:#d9e5f1;font-size:15px;font-weight:600}
+.bs{fill:#8aa0b8;font-size:12.5px}
+.faint{fill:#5f7a90}
+.cy{fill:#56d9e9}.am{fill:#f2b544}
+.no{fill:#0d1828;font-size:14px;font-weight:700}
+.ncirc{fill:#56d9e9}
+.rail{stroke:rgba(86,217,233,.4);stroke-width:1.6;stroke-dasharray:5 7;animation:f 1.4s linear infinite}
+@keyframes f{to{stroke-dashoffset:-12}}
+</style>
+<rect x="0" y="0" width="920" height="660" rx="16" fill="#0d1828"/>
+<g stroke="rgba(154,178,204,.05)"><path d="M0 66H920M0 132H920M0 198H920M0 264H920M0 330H920M0 396H920M0 462H920M0 528H920M0 594H920"/><path d="M66 0V660M132 0V660M198 0V660M264 0V660M330 0V660M396 0V660M462 0V660M528 0V660M594 0V660M660 0V660M726 0V660M792 0V660M858 0V660"/></g>
+
+<text class="bs mono" x="48" y="44" style="letter-spacing:.18em; fill:#5f7a90">Scenario · intercept rm -rf build</text>
+
+<!-- 时间轴 -->
+<line class="rail" x1="76" y1="96" x2="76" y2="588"/>
+
+<!-- ① -->
+<circle class="ncirc" cx="76" cy="96" r="15"/><text class="no" x="76" y="101" text-anchor="middle">1</text>
+<rect class="box" x="118" y="68" width="700" height="56" rx="9"/>
+<text class="bt" x="140" y="92">Model: “Call bash with rm -rf build”</text>
+<text class="bs faint" x="140" y="112">The agent decides to execute a shell command</text>
+
+<!-- ② -->
+<circle class="ncirc" cx="76" cy="208" r="15"/><text class="no" x="76" y="213" text-anchor="middle">2</text>
+<rect class="box" x="118" y="156" width="700" height="104" rx="9" stroke="rgba(86,217,233,.55)"/>
+<text class="bt" x="140" y="182">The framework emits an event <tspan class="cy">before</tspan> the tool runs</text>
+<rect x="140" y="196" width="380" height="48" rx="6" fill="rgba(86,217,233,.06)" stroke="rgba(86,217,233,.35)"/>
+<text class="bs mono cy" x="156" y="216">type: tool.before</text>
+<text class="bs mono" x="156" y="234">payload: { tool: bash, command: "rm -rf build" }</text>
+
+<!-- ③ -->
+<circle class="ncirc" cx="76" cy="320" r="15"/><text class="no" x="76" y="325" text-anchor="middle">3</text>
+<rect class="box" x="118" y="292" width="700" height="56" rx="9"/>
+<text class="bt" x="140" y="316">The event reaches every subscribed policy</text>
+<text class="bs faint" x="140" y="336">The subscription index selects policies interested in tool.before</text>
+
+<!-- ④ -->
+<circle class="ncirc" cx="76" cy="432" r="15"/><text class="no" x="76" y="437" text-anchor="middle">4</text>
+<rect class="box" x="118" y="396" width="700" height="72" rx="9"/>
+<text class="bt" x="140" y="422">Policy <tspan class="mono cy">DangerousCommandGuard</tspan> evaluates the command</text>
+<text class="bs" x="140" y="446">“rm -rf … is destructive deletion” → decision:<tspan class="am">Block and ask the user</tspan></text>
+
+<!-- ⑤ -->
+<circle cx="76" cy="560" r="15" fill="#f2b544"/><text class="no" x="76" y="565" text-anchor="middle">5</text>
+<rect class="box" x="118" y="516" width="700" height="88" rx="9" stroke="rgba(242,181,68,.6)"/>
+<text class="bt" x="140" y="544">The framework follows the decision: <tspan class="am">do not execute</tspan></text>
+<rect x="140" y="558" width="300" height="32" rx="16" fill="rgba(242,181,68,.08)" stroke="rgba(242,181,68,.45)"/>
+<text class="bs am" x="290" y="579" text-anchor="middle">“Delete build?” [Confirm] [Cancel]</text>
+</svg>

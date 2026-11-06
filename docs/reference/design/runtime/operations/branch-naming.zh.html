@@ -1,0 +1,65 @@
+<style>
+.runtime-doc { max-width: 100%; }
+.runtime-doc .lead, .runtime-doc .toc { background: var(--bg-code); border: 1px solid var(--bd); border-radius: 8px; padding: 14px 18px; margin: 18px 0; }
+.runtime-doc .doc-intro { border-left: 3px solid var(--acc); padding: 4px 0 4px 18px; margin: 18px 0 28px; }
+.runtime-doc .doc-scroll { max-width: 100%; overflow-x: auto; margin: 16px 0; }
+.runtime-doc .doc-scroll:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+.runtime-doc table { min-width: 720px; }
+.runtime-doc code { overflow-wrap: anywhere; word-break: break-word; }
+.runtime-doc h2 { scroll-margin-top: 16px; }
+.runtime-doc blockquote { border-left: 3px solid var(--bd); padding: 8px 16px; margin: 16px 0; }
+@media (max-width: 680px) {
+  .runtime-doc table { min-width: 640px; font-size: 13px; }
+  .runtime-doc h1 { font-size: 26px; }
+}
+</style>
+<div class="runtime-doc">
+<h1>分支命名</h1>
+<p>状态： <strong>当前设计与实现参考</strong></p>
+<blockquote>分支有名称时显示自身名称，否则显示短标识符。自动命名逐步完善，不得覆盖用户控制的名称。</blockquote>
+<blockquote>规范实现位于 <code>openprogram/state/store/session/session_store.py</code>, <code>openprogram/runtime/conversation/turn_runtime/titles.py</code>, <code>openprogram/runtime/conversation/turn_runtime/finalize.py</code>，以及 <code>openprogram/interfaces/server/ws_actions/branch.py</code>.</blockquote>
+
+<h2 id="branch-contract">1. 当前合同</h2>
+<ul>
+<li>主干没有自动合成的 <code>main</code> 特殊名称。未命名分支使用短十六进制标识符；已命名分支使用自身名称。</li>
+<li>手动分支命名由分支 WebSocket 动作处理。未存储名称时回退到短标识符。</li>
+<li>自动命名是后台操作，在轮次结束时按配置阈值触发。它读取分支上下文，并在写入前重新检查锁。</li>
+<li>自动命名不得替换用户锁定的名称。存储的分支元数据不再符合操作前置条件时，丢弃过期后台结果。</li>
+</ul>
+
+<h2 id="branch-paths">2. 已实现路径</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="分支命名证据表"><table><thead><tr><th>关注点</th><th>当前源码</th><th>证据</th></tr></thead><tbody>
+<tr><td>存储的分支名与回退</td><td><code>openprogram/state/store/session/session_store.py</code></td><td>读取分支元数据时不合成 main 名称；未命名条目回退到短 id。</td></tr>
+<tr><td>渐进式 LLM 命名</td><td><code>openprogram/runtime/conversation/turn_runtime/titles.py</code></td><td><code>maybe_auto_name_branch</code> 执行阈值检查、后台生成和写回保护。</td></tr>
+<tr><td>轮次结束触发</td><td><code>openprogram/runtime/conversation/turn_runtime/finalize.py</code></td><td>轮次结束收尾调用自动分支命名。</td></tr>
+<tr><td>手动与 WebSocket 动作</td><td><code>openprogram/interfaces/server/ws_actions/branch.py</code></td><td>当前分支动作提供重命名、短 id 回退、锁处理和按需命名。</td></tr>
+<tr><td>Composer 命令</td><td><code>apps/web/components/chat/composer/slash/slash-commands.ts</code></td><td><code>/branch</code> 和 <code>auto_name_branch</code> 已注册为当前命令。</td></tr>
+</tbody></table></div>
+
+<h2 id="branch-policy">3. 命名策略</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="分支命名证据表"><table><thead><tr><th>来源</th><th>优先级</th><th>自动命名可以覆盖吗？</th></tr></thead><tbody>
+<tr><td>用户重命名</td><td>最高</td><td>不可以；它会设置持久锁。</td></tr>
+<tr><td>已有持久分支名</td><td>存储值</td><td>仅当本次自动操作通过锁检查和过期写入检查时可以。</td></tr>
+<tr><td>LLM 自动结果</td><td>后台完善</td><td>分支被锁定或前置条件变化时不可以。</td></tr>
+<tr><td>短标识符</td><td>回退</td><td>仅在有效名称保存后替换。</td></tr>
+</tbody></table></div>
+
+<h2 id="branch-lifecycle">4. 状态与生命周期</h2>
+<ol>
+<li>创建分支时同时建立元数据；不存在名称时可以立即使用短 id 展示。</li>
+<li>轮次收尾时，按渐进命名阈值检查该分支自身上下文和轮次数量。</li>
+<li>LLM 在后台生成。写入前重新读取分支/会话状态；发现手动锁或过期前置条件时放弃结果。</li>
+<li>WebSocket 消费者通过当前分支/会话更新路径收到分支变更；生成期间 UI 必须保留短 id 回退。</li>
+</ol>
+
+<h2 id="branch-boundaries">5. 边界</h2>
+<ul>
+<li>本设计不增加第二套分支实体、命名存储或主干特殊名称。</li>
+<li>分支命名不改变会话标题合同或 DAG 父子关系。</li>
+<li>具体提示词和未来阈值变化属于实现细节；任何变化都必须同步更新规范 Markdown 与本可视化。</li>
+<li>本页不宣称实现跨函数命名协调、跨会话命名策略或旧分支元数据历史迁移。</li>
+</ul>
+
+<h2 id="branch-verification">6. 验证说明</h2>
+<p>上述实现证据说明源码路径合同，不代表每种浏览器状态或竞态均已穷尽测试。验证应覆盖手动重命名与并发自动结果、未命名主干回退、分叉分支的渐进命名，以及后台命名后的 WebSocket 更新。</p>
+</div>

@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenProgram · Avatar settings</title>
+  <style>
+    :root{color-scheme:dark;--bg:#111216;--panel:#191b20;--line:#30343d;--text:#eceef2;--muted:#a3a8b2;--accent:#72cad3;--ok:#7bd39c;--warn:#e7a36f;--mono:ui-monospace,SFMono-Regular,Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 var(--sans)}main{width:min(980px,calc(100% - 32px));margin:auto;padding:34px 0 70px}header,section{padding:24px 0;border-bottom:1px solid var(--line)}h1{margin:6px 0 8px;font-size:clamp(28px,5vw,42px);line-height:1.15}h2{margin:0 0 12px;font-size:22px}p{margin:8px 0;color:#c9cdd4}.eyebrow{color:var(--accent);font:11px var(--mono);letter-spacing:.08em;text-transform:uppercase}.cards{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}.card{padding:14px;border:1px solid var(--line);border-radius:10px;background:var(--panel)}.card strong{display:block;margin-bottom:5px}.card p{margin:0;color:var(--muted);font-size:13px}code{padding:2px 5px;border-radius:4px;background:#24272d;color:#dfe4ea;font:12px var(--mono)}ol,ul{padding-left:21px;color:#c9cdd4}.flow{display:grid;grid-template-columns:repeat(4,1fr);gap:8px}.step{padding:12px;border:1px solid var(--line);border-radius:8px;background:var(--panel)}.step span{display:block;color:var(--accent);font:10px var(--mono)}.step b{font-size:13px}.status{color:var(--ok)}.out{color:var(--warn)}table{width:100%;border-collapse:collapse;font-size:13px}th,td{padding:9px 10px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:#202329}@media(max-width:720px){.cards,.flow{grid-template-columns:1fr}table{display:block;overflow:auto}}
+  </style>
+</head>
+<body><main>
+  <header>
+    <div class="eyebrow">Settings · User identity</div>
+    <h1>Avatar settings</h1>
+    <p>The user avatar is set with <code>AvatarPicker</code>, shown at the bottom of the sidebar. Select one of three types, then use that type's controls. Generated variants belong only to the current DiceBear style.</p>
+  </header>
+  <section>
+    <h2>Problem and boundaries</h2>
+    <div class="cards">
+      <article class="card"><strong>Current defect</strong><p>Every DiceBear style appears alongside Letter / Upload in one source-selection row; the variant grid then covers all styles, so choosing a variant changes the style just selected.</p></article>
+      <article class="card"><strong>Objective</strong><p>Type (Generated / Letter / Upload) is the sole entry point. For Generated, select a style, then choose a seed from that style's variants. Edit Letter characters and colors inside the picker.</p></article>
+      <article class="card"><strong>Unchanged scope</strong><p><code>AvatarConfig</code>  kind names (<code>dicebear</code> / <code>letter</code> / <code>upload</code>), persistence fields,<code>Avatar</code>  rendering, Agent/User profile stores and the DiceBear dependency remain unchanged.</p></article>
+    </div>
+  </section>
+  <section>
+    <h2>Unified data flow</h2>
+    <div class="flow" aria-label="Avatar settings flow">
+      <div class="step"><span>1 · TYPE</span><b>Generated / Letter / Upload</b><p>Left-aligned segmented control, rather than a row of 16 style tiles</p></div>
+      <div class="step"><span>2 · STYLE</span><b>Current DiceBear style</b><p>Retain the current seed when changing style if possible; otherwise use the display name</p></div>
+      <div class="step"><span>3 · VARIANTS</span><b>Current style only</b><p>Fixed 48px tracks wrap within the right-hand cluster without stretching</p></div>
+      <div class="step"><span>4 · SAVE</span><b><code>AvatarConfig</code></b><p>Generated writes <code>kind: dicebear</code>, the current style and seed</p></div>
+    </div>
+  </section>
+  <section>
+    <h2>Layout</h2>
+    <p>Each settings-card row has two parts: a non-stretching label on the left and content-sized controls on the right. Avatar follows Preview and Display name: the label stays left, and the picker groups naturally sized tiles on the right without filling the card. Letter characters and colors remain inside the picker instead of becoming separate card rows.</p>
+  </section>
+  <section>
+    <h2>Decisions</h2>
+    <table>
+      <thead><tr><th>Option</th><th>Decision</th><th>Reason</th></tr></thead>
+      <tbody>
+        <tr><td>Source selection = every style + Letter + Upload</td><td class="out">Rejected</td><td>This mixes type and style at one level and requires editing Letter characters outside the card.</td></tr>
+        <tr><td>Variant grid spans all published styles</td><td class="out">Rejected</td><td>Selecting a variant changes the current style, conflicting with selecting the style first.</td></tr>
+        <tr><td>Type → (style + same-style variants | letter fields | upload)</td><td class="status">Adopted</td><td>The three paths are independent; Regenerate changes only the seed for the current style.</td></tr>
+        <tr><td>Variant grid <code>1fr</code>  fills the card</td><td class="out">Rejected</td><td>Tiles remain fixed at 48px and wrap in the right-hand cluster without stretching.</td></tr>
+      </tbody>
+    </table>
+  </section>
+  <section>
+    <h2>Acceptance contract</h2>
+    <ol>
+      <li>All variants belong to the current style; Regenerate does not change style.</li>
+      <li>Selecting a variant writes <code>kind: "dicebear"</code>, the current style and that seed.</li>
+      <li>Letter characters and colors are edited in the picker and remain stored in the profile's <code>initial</code> / <code>color</code>.</li>
+      <li>The variant grid uses fixed 48px tracks in the row's right-hand cluster, instead of <code>1fr</code>  filling the row.</li>
+      <li>Saved <code>AvatarConfig</code>  continues to render using the original kind / style / seed.</li>
+    </ol>
+  </section>
+  <section>
+    <h2>Implementation status</h2>
+    <p><span class="status">Implemented.</span> <code>AvatarPicker</code>  offers three types; Generated uses <code>AVATAR_STYLES</code>  to select a style, and<code>variants.ts</code>  generates seeds only for the current style. Letter controls move from <code>ProfileEditor</code>  into the picker. The settings card gives Avatar the same two-part layout as other rows: left label and naturally sized right picker.<code>apps/web/tests/settings/avatar-randomization.test.mjs</code>  and <code>theme-appearance.test.mjs</code>  verify same-style variants, unchanged style on Regenerate, Letter control placement and the fixed-track grid.</p>
+  </section>
+</main></body>
+</html>

@@ -1,0 +1,629 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MCP server: current state, nine-framework comparison, and minimum capability set</title>
+<style>
+  :root{
+    --bg:#16150f; --pan:#1d1c14; --bd:#2e2c20; --tx:#bdb9a6; --acc:#d4843a;
+    --cb:#12110b; --dim:#8a8675;
+    --c0:#4f8ef7; --c1:#5aad4e; --c2:#d4843a; --c3:#9d6fe0; --c4:#2db3d5;
+    --no:#e0445a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:40px 24px 96px;
+    overflow-x:hidden}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:23px;color:#f0eee6;margin:0 0 6px}
+  .sub{color:var(--tx);margin:0 0 20px;max-width:80ch}
+  h2{font-size:16px;color:var(--acc);margin:34px 0 8px;scroll-margin-top:20px}
+  h2 .num{color:var(--dim);font-size:12px;margin-right:8px;letter-spacing:.16em}
+  .lead{color:var(--dim);font-size:13px;margin:0 0 12px;max-width:82ch}
+  .card{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:8px;margin-bottom:16px}
+  svg{display:block;width:100%;height:auto;background:var(--cb);border-radius:8px}
+  .legend{font-size:12.5px;color:var(--dim);padding:8px 10px;line-height:1.8}
+  .legend b{color:#f0eee6}
+  code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
+  text{font-family:-apple-system,"Segoe UI",sans-serif}
+  a{color:var(--c4)}
+
+  .band{margin:46px 0 6px;padding:12px 16px;border-radius:11px;border:1px solid var(--bd);
+    background:var(--pan);border-left-width:4px;scroll-margin-top:20px}
+  .band .lv{display:inline-block;font:10px Menlo,monospace;letter-spacing:.22em;
+    color:var(--cb);padding:3px 10px;border-radius:99px;margin-bottom:7px}
+  .band h2{margin:0 0 3px;font-size:18px;color:#f0eee6}
+  .band .w{color:var(--dim);font-size:12.5px;line-height:1.7;max-width:86ch}
+  .band.L1{border-left-color:var(--c0)} .band.L1 .lv{background:var(--c0)}
+  .band.L2{border-left-color:var(--c3)} .band.L2 .lv{background:var(--c3)}
+  .band.L3{border-left-color:var(--c1)} .band.L3 .lv{background:var(--c1)}
+  .band.L4{border-left-color:var(--c4)} .band.L4 .lv{background:var(--c4)}
+
+  .tocg{margin:0 0 12px}
+  .tocg .gl{font:10px Menlo,monospace;letter-spacing:.2em;color:var(--dim);margin-bottom:6px}
+  .toc{display:flex;flex-wrap:wrap;gap:7px;margin:0}
+  .toc a{font-size:12px;color:var(--tx);text-decoration:none;border:1px solid var(--bd);
+    background:var(--pan);border-radius:99px;padding:4px 12px}
+  .toc a:hover{border-color:var(--acc);color:#f0eee6}
+
+  .grid2{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px}
+  .plat{background:var(--pan);border:1px solid var(--bd);border-top-width:3px;border-radius:12px;padding:14px 16px}
+  .plat .k{font-size:10.5px;letter-spacing:.2em;color:var(--dim);margin-bottom:3px}
+  .plat h3{margin:0 0 3px;font-size:17px;font-weight:700}
+  .plat .noun{font:11.5px Menlo,monospace;color:var(--dim);margin-bottom:10px;word-break:break-all;line-height:1.7}
+  .plat .row{display:flex;gap:10px;padding:7px 0;border-top:1px solid #26241a;font-size:12.5px;line-height:1.65}
+  .plat .row .t{flex:0 0 78px;color:var(--dim);font-size:11.5px;padding-top:1px}
+  .plat .row .v{color:#a5a190}
+  .plat .row .v b{color:#f0eee6;font-weight:600}
+  .plat .row.bad .v b{color:var(--no)}
+  @media(max-width:900px){.grid2{grid-template-columns:1fr}}
+
+  .tbl{overflow-x:auto;background:var(--pan);border:1px solid var(--bd);border-radius:12px;margin-bottom:16px}
+  table{width:100%;border-collapse:collapse;font-size:13px;min-width:700px}
+  table.wide{min-width:1100px}
+  th{text-align:left;padding:10px 14px;color:var(--dim);font-weight:600;font-size:11px;
+    letter-spacing:.14em;border-bottom:1px solid var(--bd);white-space:nowrap}
+  td{padding:10px 14px;border-bottom:1px solid #26241a;vertical-align:top;line-height:1.65}
+  tr:last-child td{border-bottom:none}
+  td.y{color:var(--c1)} td.n{color:var(--no)} td.m{color:var(--c2)} td.g{color:#6f6b5c}
+  td b{color:#f0eee6;font-weight:600}
+  td.us{color:var(--no)}
+  th.us{color:var(--acc)}
+
+  .note{border-left:3px solid var(--bd);padding:2px 0 2px 13px;color:var(--dim);
+    font-size:12.5px;margin:0 0 16px;max-width:86ch;line-height:1.8}
+  .note b{color:#f0eee6}
+  .note.warn{border-left-color:var(--no)}
+  .note.warn b{color:var(--no)}
+
+  .steps{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin-bottom:16px}
+  .step{min-width:0;background:var(--pan);
+    border:1px solid var(--bd);border-radius:11px;padding:12px 14px;display:flex;flex-direction:column}
+  .step .n{font:10px Menlo,monospace;letter-spacing:.18em;color:var(--dim)}
+  .step h4{margin:5px 0 6px;font-size:14.5px;color:#f0eee6}
+  .step .d{font-size:12.5px;color:#a5a190;line-height:1.65;flex:1}
+  .step .x{margin-top:10px;padding-top:9px;border-top:1px dashed #34311f;font-size:12px;color:var(--dim);line-height:1.6}
+  .step .x b{color:var(--no);font-weight:600}
+  .step.s1{border-top:3px solid var(--c3)}
+  .step.s2{border-top:3px solid var(--c4)}
+  .step.s3{border-top:3px solid var(--c2)}
+  @media(max-width:900px){.steps{grid-template-columns:1fr}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <h1>MCP server: current state, nine-framework comparison, and minimum capability set</h1>
+  <p class="sub">This page has four layers:<b>How we work today</b>(MCP client and authenticated stdio server coexist; the internal Web surface retains independent owner authentication), <b>How others work</b> (<code>references/</code> , examining nine frameworks, including two explicit non-implementations and two negative examples), <b>What we implemented</b>(six tools, an empty allowlist by default, a low-authority external tier, stdio startup authentication, and specification-aligned cancellation and progress), <b>Ideal state</b>(the boundaries of existing ACP, gaps in inbound webhooks and SDKs, and why this iteration does not expand them). This page is the authoritative design and implementation evidence for this capability.</p>
+
+  <div class="tocg">
+    <div class="gl">Layer one · How we work today</div>
+    <div class="toc">
+      <a href="#dir">01 Direction: both directions implemented</a>
+      <a href="#surf">02 Three external surfaces and authentication gaps</a>
+      <a href="#ladder">03 Nine approval stages</a>
+      <a href="#sem">04 Cancellation and error semantics</a>
+    </div>
+  </div>
+  <div class="tocg">
+    <div class="gl">Layer two · How others work</div>
+    <div class="toc"><a href="#nine">05 Nine-framework comparison</a><a href="#pat">06 Four protocol approaches</a></div>
+  </div>
+  <div class="tocg">
+    <div class="gl">Layer three · Implemented minimum capabilities</div>
+    <div class="toc">
+      <a href="#tools">07 Six tools</a>
+      <a href="#scope">08 Allowlist and low-authority tier</a>
+      <a href="#auth">09 stdio startup authentication</a>
+      <a href="#proto">10 Cancellation, progress, errors</a>
+    </div>
+  </div>
+  <div class="tocg">
+    <div class="gl">Layer four · Ideal state</div>
+    <div class="toc"><a href="#ideal">11 Three gaps</a><a href="#status">12 Implementation status</a></div>
+  </div>
+
+  <!-- ══════════════════ Layer one ══════════════════ -->
+  <div class="band L1" id="L1">
+    <span class="lv">LAYER 1</span>
+    <h2>How we work today</h2>
+    <p class="w">The MCP client and authenticated stdio server now coexist. The internal control surface still has 198 FastAPI routes and approximately 100 WebSocket actions. <code>OwnerAuthMiddleware</code> uniformly enforces process tokens, cookie/Bearer credentials, Host/Origin checks, and WebSocket authentication before accept. The MCP server instead uses an independent 0600 token, credential-fingerprint client identity, fixed paired scope, an empty allowlist by default, and a non-interactive gate; it does not reuse the Web owner token.</p>
+  </div>
+
+  <h2 id="dir"><span class="num">01</span>Direction: MCP client and server coexist</h2>
+  <p class="lead">Consuming external tools and exposing fixed tools are independent entry points. Both are implemented and share controlled capabilities through the Runtime registry.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 260" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Both MCP client and server directions are implemented">
+    <defs>
+      <marker id="d-gn" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+      <marker id="d-rd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0445a"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="16" font-weight="700">The two MCP directions</text>
+    <text x="24" y="53" fill="#8a8675" font-size="12.5">The two solid lines represent the outbound MCP client and inbound MCP stdio server.</text>
+
+    <rect x="430" y="86" width="300" height="128" rx="12" fill="#131b2a" stroke="#4f8ef7" stroke-width="1.7"/>
+    <text x="580" y="118" fill="#4f8ef7" font-size="15.5" font-weight="700" text-anchor="middle">OpenProgram</text>
+    <text x="580" y="145" fill="#bdb9a6" font-size="11.5" font-family="Menlo,monospace" text-anchor="middle">openprogram/extensions/mcp/ ← client, eight modules</text>
+    <text x="580" y="170" fill="#5aad4e" font-size="11.5" font-family="Menlo,monospace" text-anchor="middle">openprogram/extensions/mcp/server/ ← server, implemented</text>
+    <text x="580" y="194" fill="#8a8675" font-size="11.5" text-anchor="middle">Both directions share the _registry tool registry</text>
+
+    <!-- Implemented: consume external tools -->
+    <rect x="826" y="86" width="310" height="60" rx="10" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="846" y="112" fill="#5aad4e" font-size="13.5" font-weight="700">External MCP server</text>
+    <text x="846" y="133" fill="#a5a190" font-size="11.5">drawio, filesystem… supports stdio / HTTP / SSE</text>
+    <line x1="822" y1="116" x2="734" y2="116" stroke="#5aad4e" stroke-width="1.8" marker-end="url(#d-gn)"/>
+    <text x="778" y="106" fill="#5aad4e" font-size="11" text-anchor="middle" font-weight="700">Implemented</text>
+
+    <!-- Implemented: expose fixed tools -->
+    <rect x="24" y="86" width="310" height="60" rx="10" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="44" y="112" fill="#5aad4e" font-size="13.5" font-weight="700">External MCP client</text>
+    <text x="44" y="133" fill="#a5a190" font-size="11.5">Claude Desktop, another agent, IDE</text>
+    <line x1="426" y1="116" x2="338" y2="116" stroke="#5aad4e" stroke-width="1.8" marker-end="url(#d-gn)"/>
+    <text x="382" y="106" fill="#5aad4e" font-size="11" text-anchor="middle" font-weight="700">Implemented</text>
+
+    <rect x="24" y="230" width="1112" height="0" fill="none"/>
+    <rect x="24" y="228" width="1112" height="0" fill="none"/>
+  </svg>
+  <div class="legend"><b>Existing reuse points</b>: <code>AgentTool.execute</code> has the signature <code>(call_id, args, cancel: asyncio.Event | None, on_update)</code>. Its argument dictionary, cancellation event, and incremental callback provide all three mechanisms required by the protocol server. The server uses an explicit <code>CallToolRequest</code> handler to connect these parameters to the MCP 1.30.0 stdio transport.</div>
+  </div>
+
+  <h2 id="surf"><span class="num">02</span>Three internal surfaces, authenticated Web boundary</h2>
+  <p class="lead">FastAPI and WebSocket surfaces still have no versioning commitment, but are protected by <code>OwnerAuthMiddleware</code> and mapped to full owner authority after successful authentication. This authentication is neither an MCP client identity nor a low-authority external protocol contract.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 330" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three internal surfaces and the OwnerAuthMiddleware authentication boundary">
+    <defs>
+      <marker id="g-or" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#d4843a"/></marker>
+      <marker id="g-rd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0445a"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="16" font-weight="700">Caller → OwnerAuthMiddleware → internal routes</text>
+    <text x="24" y="53" fill="#8a8675" font-size="12.5">Every path validates Host first; protected paths then validate a cookie or Bearer credential.</text>
+
+    <!-- Three caller types -->
+    <rect x="24" y="82" width="228" height="52" rx="9" fill="#12110b" stroke="#4f8ef7" stroke-width="1.4"/>
+    <text x="44" y="104" fill="#4f8ef7" font-size="12.5" font-weight="700">Browser</text>
+    <text x="44" y="124" fill="#8a8675" font-size="11">HttpOnly cookie + Origin / CSRF</text>
+
+    <rect x="24" y="146" width="228" height="52" rx="9" fill="#12110b" stroke="#d4843a" stroke-width="1.4"/>
+    <text x="44" y="168" fill="#d4843a" font-size="12.5" font-weight="700">native HTTP / SSE / WS</text>
+    <text x="44" y="188" fill="#a5a190" font-size="11">Bearer required; Origin optional</text>
+
+    <rect x="24" y="210" width="228" height="52" rx="9" fill="#12110b" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="44" y="232" fill="#5aad4e" font-size="12.5" font-weight="700">Non-loopback bind</text>
+    <text x="44" y="252" fill="#a5a190" font-size="11">Explicit effective Origin + token</text>
+
+    <!-- guard -->
+    <rect x="322" y="112" width="176" height="120" rx="10" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+    <text x="410" y="140" fill="#d4843a" font-size="13" font-weight="700" text-anchor="middle">OwnerAuthMiddleware</text>
+    <text x="410" y="164" fill="#a5a190" font-size="11" text-anchor="middle">canonical Host / Origin</text>
+    <text x="410" y="184" fill="#a5a190" font-size="11" text-anchor="middle">cookie / Bearer</text>
+    <text x="410" y="204" fill="#a5a190" font-size="11" text-anchor="middle">CSRF / no-store</text>
+    <text x="410" y="224" fill="#5aad4e" font-size="11" text-anchor="middle" font-weight="700">Attach owner authority after authentication</text>
+
+    <line x1="256" y1="108" x2="318" y2="140" stroke="#d4843a" stroke-width="1.6" marker-end="url(#g-or)"/>
+    <line x1="256" y1="172" x2="318" y2="172" stroke="#d4843a" stroke-width="1.6" marker-end="url(#g-or)"/>
+    <line x1="256" y1="236" x2="318" y2="206" stroke="#d4843a" stroke-width="1.6" marker-end="url(#g-or)"/>
+
+    <!-- Backend surfaces -->
+    <line x1="502" y1="172" x2="562" y2="172" stroke="#d4843a" stroke-width="1.6" marker-end="url(#g-or)"/>
+
+    <rect x="566" y="82" width="570" height="54" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="586" y="106" fill="#f0eee6" font-size="13" font-weight="700">198 FastAPI routes</text>
+    <text x="586" y="126" fill="#8a8675" font-size="11.5">Protected by default; internal shapes are not external protocol commitments</text>
+
+    <rect x="566" y="146" width="570" height="54" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="586" y="170" fill="#f0eee6" font-size="13" font-weight="700">WebSocket /ws · approximately 100 actions</text>
+    <text x="586" y="190" fill="#8a8675" font-size="11.5">Middleware authenticates before accept(); approximately 120 server-to-client event types</text>
+
+    <rect x="566" y="210" width="570" height="54" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="586" y="234" fill="#5aad4e" font-size="13" font-weight="700">Tool registry _registry</text>
+    <text x="586" y="254" fill="#a5a190" font-size="11.5">register / get / filter_for; three switches: toolset, expose, defer</text>
+
+    <rect x="24" y="282" width="1112" height="34" rx="8" fill="#2a1418" stroke="#e0445a" stroke-width="1.4"/>
+    <text x="580" y="304" fill="#e0445a" font-size="12.5" font-weight="700" text-anchor="middle">MCP cannot reuse the full-owner Web token: it requires independent client identity, an empty allowlist by default, and low-authority scope</text>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Surface</th><th>Location</th><th>Size</th><th>Contract</th></tr>
+    <tr><td><b>FastAPI routes</b></td><td><code>openprogram/interfaces/server/server.py</code> in <code>create_app()</code>; routes in <code>openprogram/interfaces/server/routes/</code></td><td>198 routes / approximately 25 modules</td><td class="m">Two routes have exact-equality assertions</td></tr>
+    <tr><td><b>WebSocket <code>/ws</code></b></td><td><code>_websocket_handler</code>; actions from <code>openprogram/interfaces/server/ws_actions/</code></td><td>Approximately 100 actions and 120 event types</td><td class="n">None</td></tr>
+    <tr><td><b>Tool registry</b></td><td><code>openprogram/programs/_host/runtime.py</code> in <code>_registry</code></td><td>Indexed by tool name</td><td class="n">No external contract</td></tr>
+  </table>
+  </div>
+
+  <div class="note warn"><b>The authentication boundaries are independent</b>: <code>OwnerAuthMiddleware</code> already protects Web HTTP, SSE, and WebSocket, but authentication grants the singleton owner’s full authority. The MCP server must authenticate external clients separately, enforce an empty allowlist by default, and assign low-authority scope. It must not provide or reuse the Web owner token for clients.</div>
+
+  <h2 id="ladder"><span class="num">03</span>Approval stages: nine, in fixed order</h2>
+  <p class="lead"><code>wrap_with_approval</code> returns a <code>execute</code> is replaced with a <code>_gated_execute</code> in <code>AgentTool</code> copy. External callers must use these stages rather than bypass them.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Nine approval decisions in order">
+    <text x="24" y="30" fill="#d4843a" font-size="16" font-weight="700">Nine decisions in _gated_execute</text>
+    <text x="24" y="53" fill="#8a8675" font-size="12.5">Evaluate left to right and return at the first match. Red boxes precede bypass; green boxes permit execution.</text>
+
+    <rect x="24" y="78" width="126" height="86" rx="9" fill="#2a1215" stroke="#e0445a" stroke-width="1.8"/>
+    <text x="87" y="102" fill="#e0445a" font-size="11" text-anchor="middle" font-weight="700">01</text>
+    <text x="87" y="124" fill="#f0eee6" font-size="12" text-anchor="middle" font-weight="700">hard</text>
+    <text x="87" y="142" fill="#f0eee6" font-size="12" text-anchor="middle" font-weight="700">constraints</text>
+    <text x="87" y="158" fill="#a5a190" font-size="10" text-anchor="middle">Before rules and bypass</text>
+
+    <rect x="158" y="78" width="126" height="86" rx="9" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+    <text x="221" y="102" fill="#d4843a" font-size="11" text-anchor="middle" font-weight="700">02</text>
+    <text x="221" y="126" fill="#f0eee6" font-size="12" text-anchor="middle">Rule deny / ask</text>
+    <text x="221" y="146" fill="#a5a190" font-size="10" text-anchor="middle">deny &gt; ask &gt; allow</text>
+
+    <rect x="292" y="78" width="126" height="86" rx="9" fill="#241f10" stroke="#d4843a" stroke-width="1.4"/>
+    <text x="355" y="102" fill="#d4843a" font-size="11" text-anchor="middle" font-weight="700">03</text>
+    <text x="355" y="126" fill="#f0eee6" font-size="12" text-anchor="middle">Mandatory-approval tools</text>
+    <text x="355" y="146" fill="#a5a190" font-size="10" text-anchor="middle">Ask even under bypass</text>
+
+    <rect x="426" y="78" width="126" height="86" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="489" y="102" fill="#5aad4e" font-size="11" text-anchor="middle" font-weight="700">04</text>
+    <text x="489" y="126" fill="#f0eee6" font-size="12" text-anchor="middle">Bypass short circuit</text>
+    <text x="489" y="146" fill="#a5a190" font-size="10" text-anchor="middle">Default for Web chat</text>
+
+    <rect x="560" y="78" width="126" height="86" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="623" y="102" fill="#5aad4e" font-size="11" text-anchor="middle" font-weight="700">05 · 06</text>
+    <text x="623" y="126" fill="#f0eee6" font-size="12" text-anchor="middle">Rule allow</text>
+    <text x="623" y="146" fill="#f0eee6" font-size="12" text-anchor="middle">Read-only allowlist</text>
+
+    <rect x="694" y="78" width="126" height="86" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="757" y="102" fill="#5aad4e" font-size="11" text-anchor="middle" font-weight="700">07</text>
+    <text x="757" y="126" fill="#f0eee6" font-size="12" text-anchor="middle">acceptEdits</text>
+    <text x="757" y="146" fill="#a5a190" font-size="10" text-anchor="middle">Plus path safety checks</text>
+
+    <rect x="828" y="78" width="126" height="86" rx="9" fill="#1b1428" stroke="#9d6fe0" stroke-width="1.4"/>
+    <text x="891" y="102" fill="#9d6fe0" font-size="11" text-anchor="middle" font-weight="700">08</text>
+    <text x="891" y="126" fill="#f0eee6" font-size="12" text-anchor="middle">Auto classification</text>
+    <text x="891" y="146" fill="#a5a190" font-size="10" text-anchor="middle">LLM risk assessment</text>
+
+    <rect x="962" y="78" width="174" height="86" rx="9" fill="#131b2a" stroke="#4f8ef7" stroke-width="1.6"/>
+    <text x="1049" y="102" fill="#4f8ef7" font-size="11" text-anchor="middle" font-weight="700">09</text>
+    <text x="1049" y="126" fill="#f0eee6" font-size="12" text-anchor="middle" font-weight="700">Blocking approval card</text>
+    <text x="1049" y="146" fill="#a5a190" font-size="10" text-anchor="middle">question.asked · once / always</text>
+
+    <rect x="24" y="188" width="1112" height="42" rx="8" fill="#12110b" stroke="#2e2c20"/>
+    <text x="44" y="205" fill="#f0eee6" font-size="12" font-weight="700">Current default mismatch:</text>
+    <text x="44" y="223" fill="#a5a190" font-size="11.5">PermissionMode defaults to ask, while Web chat defaults to bypass and spawned sub-agents use hardcoded bypass in sub_agent_run.py.</text>
+
+    <rect x="24" y="242" width="1112" height="42" rx="8" fill="#101a10" stroke="#5aad4e" stroke-width="1.3"/>
+    <text x="44" y="259" fill="#5aad4e" font-size="12" font-weight="700">Authority uses a two-value authority_tier enum:</text>
+    <text x="44" y="277" fill="#a5a190" font-size="11.5">TIER_CAPABILITIES defines access, not request lists. Missing/unknown tiers deny all. External callers use the lowest tier.</text>
+  </svg>
+  </div>
+
+  <h2 id="sem"><span class="num">04</span>Cancellation and errors: unified at the MCP boundary</h2>
+
+  <div class="grid2">
+    <div class="plat" style="border-top-color:#4f8ef7">
+      <div class="k">CANCELLATION</div>
+      <h3 style="color:#4f8ef7">Per-turn tokens; two entry points have different semantics</h3>
+      <div class="noun">openprogram/runtime/conversation/run_control/</div>
+      <div class="row"><div class="t">Model</div><div class="v">Per-turn <code>CancelToken</code>, <b>never per-session</b>: <code>threading.Event</code> plus the <code>retired</code> flag; a stop arriving after a turn ends cannot affect the next turn.</div></div>
+      <div class="row"><div class="t">Global hook</div><div class="v">Install at import: <code>add_pre_invocation_hook</code> and <code>set_cancellation_check</code>; each <code>Agent method</code> entry and each <code>Runtime.exec</code> aborts.</div></div>
+      <div class="row good"><div class="t">Unified entry point</div><div class="v">Cancellation accepts only the canonical <code>execution_id</code>, persists cancellation intent first, then wakes the corresponding owner and pending questions. ACP, MCP, Channels, and Web share one Control Service; session requests without an execution identity do not activate it.</div></div>
+    </div>
+
+    <div class="plat" style="border-top-color:#d4843a">
+      <div class="k">ERROR</div>
+      <h3 style="color:#d4843a">is_error is a first-class field in all three layers</h3>
+      <div class="noun">openprogram/programs/_host/runtime.py · agent/loop/types.py</div>
+      <div class="row"><div class="t">Tool layer</div><div class="v"><code>ToolResult</code> has a first-class <code>is_error: bool</code>.</div></div>
+      <div class="row"><div class="t">Framework layer</div><div class="v"><code>AgentToolResult</code> already has a first-class <code>is_error: bool</code>; Runtime, approval, the agent loop, and MCP conversion read this field, while<code>details</code> retains diagnostic information only.</div></div>
+      <div class="row"><div class="t">Event layer</div><div class="v"><code>AgentEventToolEnd</code> has a first-class <code>is_error</code>.</div></div>
+      <div class="row"><div class="t">Concrete payload</div><div class="v"><code>is_error</code> is a top-level typed bit;<code>details</code> retains only fixed diagnostic fields such as <code>reason_code</code>, <code>denied</code>, <code>timeout</code> .</div></div>
+    </div>
+  </div>
+
+  <div class="note"><b>Existing contract tests</b>: <code>tests/component/webui/runtime/test_diagnostic_mcp_route_contracts.py</code> locks down <code>/api/doctor</code> in <code>{"results", "all_ok"}</code>, <code>/api/mcp/servers</code> ’s 15-key status dictionary and the 404 shape for a missing server. All three tests create a bare <code>FastAPI()</code> and then <code>register(app)</code>, so <code>OwnerAuthMiddleware</code> is outside the path. Assertions use exact equality; adding a field fails them.</div>
+
+  <!-- ══════════════════ Layer two ══════════════════ -->
+  <div class="band L2" id="L2">
+    <span class="lv">LAYER 2</span>
+    <h2>How others work</h2>
+    <p class="w"><code>references/</code> were examined individually: four provide MCP servers and three provide ACP servers. Two explicitly do not (pi-mono states “No MCP.”; pi-ai is itself a provider library). Two negative examples: weclaw’s <code>/api/send</code> has no authentication and auto-approves ACP permissions; opencode’s <code>serve</code> only warns, without blocking, when no password is set.</p>
+  </div>
+
+  <h2 id="nine"><span class="num">05</span>Nine-framework comparison</h2>
+
+  <div class="tbl">
+  <table class="wide">
+    <tr><th>Framework</th><th>MCP server</th><th>ACP (agent side)</th><th>Inbound HTTP / webhook</th><th>Client SDK</th></tr>
+    <tr><td><b>claude-code</b></td><td class="g">None (snapshot contains only BashTool/)</td><td class="g">None</td><td class="g">None</td><td class="g">None</td></tr>
+    <tr><td><b>claude-code-leaked</b></td><td class="m"><code>claude mcp serve</code>, stdio, <b>All built-in tools</b>, empty permission context</td><td class="n">None</td><td class="y"><code>claude server</code>, automatically generates <code>sk-ant-cc-*</code> bearer</td><td class="y">Agent SDK uses the control protocol</td></tr>
+    <tr><td><b>codex-cli</b></td><td class="y"><code>codex mcp-server</code>, stdio, <b>Only codex / codex-reply</b></td><td class="n">None; uses its own app-server</td><td class="y">app-server: stdio / WS / unix, token file / SHA-256 / JWT</td><td class="y">TS <code>@openai/codex-sdk</code> + Python</td></tr>
+    <tr><td><b>openclaw</b></td><td class="y">Three stdio servers plus MCP-over-HTTP (bearer + loopback)</td><td class="y"><code>openclaw acp</code>, through Gateway</td><td class="y">Gateway HTTP API + HMAC webhook plugin</td><td class="y"><code>@openclaw/sdk</code> (private)</td></tr>
+    <tr><td><b>opencode</b></td><td class="n">None — client only</td><td class="y"><code>opencode acp</code></td><td class="m"><code>opencode serve</code>, HTTP Basic; <b>Only warns when no password is set</b></td><td class="y"><code>@opencode-ai/sdk</code>, generated from OpenAPI</td></tr>
+    <tr><td><b>hermes-agent</b></td><td class="y"><code>hermes mcp serve</code>, FastMCP stdio, <b>Ten tools</b></td><td class="y"><code>hermes acp</code> plus ACP registry entries</td><td class="y">HMAC webhook adapter + bearer OpenAI-compatible API</td><td class="n">None — integrators use MCP / ACP / HTTP directly</td></tr>
+    <tr><td><b>pi-ai</b></td><td class="g">None</td><td class="g">None</td><td class="g">None</td><td class="g">Not applicable; it is a provider client library</td></tr>
+    <tr><td><b>pi-mono</b></td><td class="n">None; README explicitly states <b>"No MCP."</b></td><td class="n">None</td><td class="n">None; only in-process <code>pi.send()</code></td><td class="g">Package for embedding only</td></tr>
+    <tr><td><b>weclaw</b></td><td class="n">None</td><td class="n">Only ACP <b>client</b>, automatically approves every permission request</td><td class="n"><code>POST /api/send</code>, <b>No authentication</b></td><td class="n">None</td></tr>
+    <tr><td class="us"><b>OpenProgram</b></td><td class="us"><code>openprogram mcp serve</code>, authenticated stdio, six fixed wrappers, empty allowlist by default</td><td class="us"><code>openprogram acp</code>, stdio; existing session, permission, and event mappings</td><td class="us">Internal Web routes, owner token/cookie authentication</td><td class="us">No dedicated SDK; uses the standard MCP SDK</td></tr>
+  </table>
+  </div>
+
+  <h2 id="pat"><span class="num">06</span>Four protocol approaches and their tradeoffs</h2>
+
+  <div class="grid2">
+    <div class="plat" style="border-top-color:#9d6fe0">
+      <div class="k">In-protocol approval · push</div>
+      <h3 style="color:#9d6fe0">codex: elicitation/create</h3>
+      <div class="noun">exec_approval.rs · patch_approval.rs</div>
+      <div class="row"><div class="t">Mechanism</div><div class="v">Push exec and patch approvals back to the MCP client with custom correlation field <code>threadId</code>, <code>codex_elicitation</code>, <code>codex_mcp_tool_call_id</code>, <code>codex_event_id</code>, receiving <code>ReviewDecision</code>.</div></div>
+      <div class="row"><div class="t">Tradeoff</div><div class="v">Low latency, but<b>requires client elicitation support</b>; the source itself notes that this payload does not yet conform to <code>ElicitResult</code> (missing action / content).</div></div>
+    </div>
+
+    <div class="plat" style="border-top-color:#2db3d5">
+      <div class="k">In-protocol approval · pull</div>
+      <h3 style="color:#2db3d5">openclaw / hermes: poll a pair of tools</h3>
+      <div class="noun">permissions_list_open · permissions_respond</div>
+      <div class="row"><div class="t">Mechanism</div><div class="v">Expose pending approvals as data through two tools, with decision <code>allow-once | allow-always | deny</code>. openclaw also supports push through the experimental capability bit <code>claude/channel/permission</code> .</div></div>
+      <div class="row"><div class="t">Tradeoff</div><div class="v"><b>Works with generic clients without elicitation support</b>, providing a compatible fallback at the cost of another round trip and the polling interval.</div></div>
+    </div>
+
+    <div class="plat" style="border-top-color:#5aad4e">
+      <div class="k">Cancellation</div>
+      <h3 style="color:#5aad4e">Only codex implements it fully</h3>
+      <div class="noun">notifications/cancelled · active_turn_registry.rs</div>
+      <div class="row"><div class="t">codex</div><div class="v">Look up the turn in the active-turn registry by request id and stop routing events to it;<code>tasks/cancel</code> explicitly reports unsupported.</div></div>
+      <div class="row"><div class="t">openclaw</div><div class="v">The plugin-tools server passes the SDK’s <code>extra.signal</code> into <code>callTool(params, signal)</code>.</div></div>
+      <div class="row bad"><div class="t">Others</div><div class="v">claude-code-leaked creates a new <code>AbortController</code> for every call but<b>never connects it to notifications</b>; hermes has no cancellation.</div></div>
+    </div>
+
+    <div class="plat" style="border-top-color:#d4843a">
+      <div class="k">Progress and errors</div>
+      <h3 style="color:#d4843a">No standard progress usage; error handling has converged</h3>
+      <div class="noun">notifications/progress · isError</div>
+      <div class="row"><div class="t">Progress</div><div class="v">codex only logs received <code>notifications/progress</code> ; its own streaming uses custom notification shapes.<b>None of the surveyed frameworks emits standard progress externally</b>.</div></div>
+      <div class="row"><div class="t">Errors</div><div class="v">All return <code>{isError: true, content:[text]}</code> when a tool executes but fails, reserving JSON-RPC errors for protocol failures (unknown tool name, malformed arguments).<b>We adopt this distinction.</b></div></div>
+    </div>
+  </div>
+
+  <div class="note warn"><b>Two negative examples</b>: weclaw’s <code>POST /api/send</code> has no authentication, and its ACP client unconditionally approves every <code>session/request_permission</code> ; opencode’s <code>serve</code> runs without authentication when <code>OPENCODE_SERVER_PASSWORD</code> is unset, merely printing a warning. claude-code-leaked’s <code>mcp serve</code> exposes all built-in tools with an empty permission context and <code>isNonInteractiveSession: true</code>, with no interactive question path at all. This iteration’s acceptance criteria exclude all three approaches.</div>
+
+  <!-- ══════════════════ Layer three ══════════════════ -->
+  <div class="band L3" id="L3">
+    <span class="lv">LAYER 3</span>
+    <h2>Implemented minimum capabilities</h2>
+    <p class="w"><code>openprogram mcp serve</code> uses stdio as its only transport and exposes six tools. <code>tool_call</code> filters using an allowlist that is empty by default. External callers receive the <code>paired</code> low-authority tier and are never interactive. Startup authentication uses an environment credential with no disable switch. Cancellation maps to existing per-turn tokens; progress is driven by <code>on_update</code> ; errors follow the distinction above. Everything below is tied to implementation commit <code>885d8f15</code>.</p>
+  </div>
+
+  <h2 id="tools"><span class="num">07</span>Six tools, each mapped to one capability</h2>
+  <p class="lead">codex uses two tools, hermes ten, and openclaw nine. Exposing every tool, as claude-code-leaked does, is deliberately excluded. We use six.</p>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Tool</th><th>Purpose</th><th>Capability</th><th>Host side effects</th></tr>
+    <tr><td><code>sessions_list</code></td><td>List session ids, titles, and update times</td><td><code>reply</code></td><td class="y">None</td></tr>
+    <tr><td><code>session_get</code></td><td>Retrieve one session’s messages</td><td><code>reply</code></td><td class="y">None</td></tr>
+    <tr><td><code>prompt_send</code></td><td>Start a turn in a session and return its result (session id optional)</td><td><code>reply</code></td><td class="m">Session append only</td></tr>
+    <tr><td><code>prompt_cancel</code></td><td>Cancel an in-flight turn started by this caller</td><td><code>reply</code></td><td class="y">None</td></tr>
+    <tr><td><code>tools_list</code></td><td>List tools and schemas allowed by the caller’s tier</td><td><code>reply</code></td><td class="y">None</td></tr>
+    <tr><td><code>tool_call</code></td><td>Invoke one tool by name</td><td class="m">Depends on the tool</td><td class="m">Uses the allowlist and approval stages</td></tr>
+  </table>
+  </div>
+
+  <div class="note"><b>Excluded capabilities</b>: no equivalent of <code>register</code> , no configuration rewriting, no credential access, and no directly exposed file tools. Callers wanting file reads invoke <code>tool_call</code> with the file-tool name, passing the same allowlist and approval stages. <code>prompt_send</code> combines codex’s <code>codex</code>/<code>codex-reply</code> into one call.</div>
+
+  <h2 id="scope"><span class="num">08</span>Allowlist first, tier second, approval stages last</h2>
+  <p class="lead">Three sequential gates; failure at any gate prevents execution. The allowlist filters exposure and does not replace approval.</p>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 300" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="Three gates for an external tool_call">
+    <defs>
+      <marker id="p-gy" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#6f6b5c"/></marker>
+      <marker id="p-rd" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#e0445a"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="16" font-weight="700">Each external tool_call must pass three gates in order</text>
+    <text x="24" y="53" fill="#8a8675" font-size="12.5">Downward red dashed lines indicate rejection exits; each rejection has its own protocol response.</text>
+
+    <rect x="24" y="80" width="196" height="80" rx="9" fill="#131b2a" stroke="#4f8ef7" stroke-width="1.5"/>
+    <text x="122" y="106" fill="#4f8ef7" font-size="12.5" font-weight="700" text-anchor="middle">External MCP client</text>
+    <text x="122" y="128" fill="#bdb9a6" font-size="11" text-anchor="middle" font-family="Menlo,monospace">tool_call(name, args)</text>
+    <text x="122" y="148" fill="#8a8675" font-size="10.5" text-anchor="middle">Startup token validated</text>
+
+    <line x1="224" y1="120" x2="256" y2="120" stroke="#6f6b5c" stroke-width="1.6" marker-end="url(#p-gy)"/>
+
+    <rect x="260" y="80" width="230" height="80" rx="9" fill="#241f10" stroke="#d4843a" stroke-width="1.5"/>
+    <text x="375" y="106" fill="#d4843a" font-size="12.5" font-weight="700" text-anchor="middle">Gate one · exposure allowlist</text>
+    <text x="375" y="128" fill="#bdb9a6" font-size="11" text-anchor="middle" font-family="Menlo,monospace">mcp_server.exposed_tools</text>
+    <text x="375" y="148" fill="#8a8675" font-size="10.5" text-anchor="middle">Empty unless owner-allowlisted</text>
+
+    <line x1="494" y1="120" x2="526" y2="120" stroke="#6f6b5c" stroke-width="1.6" marker-end="url(#p-gy)"/>
+
+    <rect x="530" y="80" width="230" height="80" rx="9" fill="#1b1428" stroke="#9d6fe0" stroke-width="1.5"/>
+    <text x="645" y="106" fill="#9d6fe0" font-size="12.5" font-weight="700" text-anchor="middle">Gate two · authority_tier</text>
+    <text x="645" y="128" fill="#bdb9a6" font-size="11" text-anchor="middle" font-family="Menlo,monospace">Paired tier ∩ exposure allowlist</text>
+    <text x="645" y="148" fill="#e0445a" font-size="10.5" text-anchor="middle">Interaction is never interactive</text>
+
+    <line x1="764" y1="120" x2="796" y2="120" stroke="#6f6b5c" stroke-width="1.6" marker-end="url(#p-gy)"/>
+
+    <rect x="800" y="80" width="336" height="80" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.5"/>
+    <text x="968" y="106" fill="#5aad4e" font-size="12.5" font-weight="700" text-anchor="middle">Gate three · existing approval stages</text>
+    <text x="968" y="128" fill="#bdb9a6" font-size="11" text-anchor="middle">permission_mode fixed to ask; not configurable per request</text>
+    <text x="968" y="148" fill="#8a8675" font-size="10.5" text-anchor="middle">Calls requiring approval are denied without a local owner present</text>
+
+    <!-- Rejection exits -->
+    <line x1="375" y1="164" x2="375" y2="204" stroke="#e0445a" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#p-rd)"/>
+    <rect x="260" y="208" width="230" height="46" rx="8" fill="#2a1215" stroke="#e0445a" stroke-width="1.3"/>
+    <text x="375" y="228" fill="#e0445a" font-size="11.5" text-anchor="middle" font-weight="700">JSON-RPC error, treated as unknown tool name</text>
+    <text x="375" y="246" fill="#a5a190" font-size="10.5" text-anchor="middle">Caller learns nothing about unauthorized tools</text>
+
+    <line x1="645" y1="164" x2="645" y2="204" stroke="#e0445a" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#p-rd)"/>
+    <rect x="530" y="208" width="230" height="46" rx="8" fill="#2a1215" stroke="#e0445a" stroke-width="1.3"/>
+    <text x="645" y="228" fill="#e0445a" font-size="11.5" text-anchor="middle" font-weight="700">isError: true</text>
+    <text x="645" y="246" fill="#a5a190" font-size="10.5" text-anchor="middle">Body identifies the missing capability</text>
+
+    <line x1="968" y1="164" x2="968" y2="204" stroke="#e0445a" stroke-width="1.5" stroke-dasharray="5 4" marker-end="url(#p-rd)"/>
+    <rect x="800" y="208" width="336" height="46" rx="8" fill="#2a1215" stroke="#e0445a" stroke-width="1.3"/>
+    <text x="968" y="228" fill="#e0445a" font-size="11.5" text-anchor="middle" font-weight="700">isError: true, with rejection reason</text>
+    <text x="968" y="246" fill="#a5a190" font-size="10.5" text-anchor="middle">Neither silent approval nor indefinite blocking</text>
+
+    <rect x="24" y="266" width="1112" height="26" rx="7" fill="#2a1418" stroke="#e0445a" stroke-width="1.3"/>
+    <text x="580" y="284" fill="#e0445a" font-size="12" font-weight="700" text-anchor="middle">source=mcp is non-interactive; hard constraints precede all three gates. Risky tools and out-of-root writes are always denied; no question may block awaiting an answer.</text>
+  </svg>
+  </div>
+
+  <p class="lead">External callers occupy the lowest-authority row in the <a href="../runtime/security/sandbox-architecture.html">sandbox design</a>request-source table:</p>
+
+  <div class="tbl">
+  <table class="wide">
+    <tr><th>Request source</th><th>principal</th><th><code>authority_tier</code></th><th>Missing-field handling</th></tr>
+    <tr><td>Authenticated local Web / CLI / TUI</td><td><code>principal_id=owner</code>, <code>interaction=interactive</code></td><td><code>owner</code>, holding <code>approval.request</code></td><td>The entry point must construct it explicitly; invalid authentication is rejected</td></tr>
+    <tr><td>Paired channel account</td><td>Instance owner; speaker stored separately</td><td><code>paired</code>, holding <code>reply</code> and <code>memory.source.append</code></td><td>Messages without a tier are rejected without downgrading</td></tr>
+    <tr><td class="us"><b>External MCP client</b></td><td class="us"><b>Instance owner; client id stored separately</b></td><td class="us"><b><code>paired</code> intersected with the exposed-tool allowlist</b></td><td class="us"><b>Reject connection if identity is missing or fails validation</b></td></tr>
+    <tr><td>continuation / subagent</td><td>Explicitly inherit owner</td><td>Inherit the caller’s tier unchanged; never increase authority</td><td>Missing fields are a state error: deny</td></tr>
+    <tr><td>Cron trigger</td><td>Owner approved at creation</td><td>Job capability fixed at approval</td><td>Do not recompute as interactive at trigger time</td></tr>
+  </table>
+  </div>
+
+  <h2 id="auth"><span class="num">09</span>Authentication: validate at stdio startup, with no in-protocol token</h2>
+
+  <div class="grid2">
+    <div class="plat" style="border-top-color:#5aad4e">
+      <div class="k">TOKEN</div>
+      <h3 style="color:#5aad4e">Generate once; constant-time comparison</h3>
+      <div class="noun">&lt;state_dir&gt;/mcp_server_token (0600)　↔　OPENPROGRAM_MCP_TOKEN</div>
+      <div class="row"><div class="t">Generation</div><div class="v"><code>openprogram mcp token create</code> atomically writes the token file and prints it once;<code>serve</code> never implicitly generates a token.</div></div>
+      <div class="row"><div class="t">Validation</div><div class="v"><code>openprogram mcp serve</code> compares the environment variable against the token file in constant time before reading any MCP message. Missing credentials, incorrect permissions, or mismatch cause a nonzero exit; stderr is fixed to <code>Error: MCP server authentication failed</code> and stdout is empty.</div></div>
+      <div class="row"><div class="t">Protocol boundary</div><div class="v"><code>initialize.clientInfo</code> is neither read nor recorded and does not participate in authentication, identity, authority, routing, or results. The token never enters JSON-RPC, logs, errors, or session content.</div></div>
+      <div class="row"><div class="t">Authority semantics</div><div class="v">The environment credential permits only a low-authority stdio connection. Every request maps to fixed <code>paired</code> and never receives owner authority.</div></div>
+    </div>
+
+    <div class="plat" style="border-top-color:#4f8ef7">
+      <div class="k">TRANSPORT</div>
+      <h3 style="color:#4f8ef7">stdio as the only transport</h3>
+      <div class="noun">openprogram mcp serve · module openprogram/extensions/mcp/server/</div>
+      <div class="row"><div class="t">Why</div><div class="v">Every surveyed implementation supports stdio first; it<b>inherits the trust boundary of the launching process</b> and does not expose the internal full-owner Web API as an integration surface.</div></div>
+      <div class="row"><div class="t">Specification baseline</div><div class="v">The first version pins the repository’s current <code>mcp 1.30.0</code> and protocol <code>2025-11-25</code>; the SDK negotiates compatible versions without custom handshake fields.</div></div>
+      <div class="row"><div class="t">HTTP</div><div class="v">After the stdio contract stabilizes, design Streamable HTTP, OAuth, Origin validation, and deployment lifecycle separately, without reusing the Web owner token.</div></div>
+      <div class="row"><div class="t">Module location</div><div class="v">A top-level module alongside <code>openprogram/extensions/mcp/</code> ;<b>does not reuse client modules</b> (translation runs in the opposite direction), but shares <code>_runtime.py</code> and approval stages — those are the intended reuse points.</div></div>
+    </div>
+  </div>
+
+  <h2 id="proto"><span class="num">10</span>Cancellation, progress, and errors follow the MCP specification</h2>
+
+  <div class="card">
+  <svg viewBox="0 0 1160 236" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="How cancellation and progress map to existing mechanisms">
+    <defs>
+      <marker id="m-gn" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#5aad4e"/></marker>
+      <marker id="m-c4" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#2db3d5"/></marker>
+    </defs>
+    <text x="24" y="30" fill="#d4843a" font-size="16" font-weight="700">Protocol messages map to existing mechanisms rather than introducing new ones</text>
+
+    <rect x="24" y="56" width="300" height="66" rx="9" fill="#12110b" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="44" y="80" fill="#5aad4e" font-size="12.5" font-weight="700">notifications/cancelled</text>
+    <text x="44" y="102" fill="#8a8675" font-size="11">Look up session_id and token by MCP request id</text>
+    <line x1="328" y1="88" x2="392" y2="88" stroke="#5aad4e" stroke-width="1.6" marker-end="url(#m-gn)"/>
+    <rect x="396" y="56" width="380" height="66" rx="9" fill="#101a10" stroke="#5aad4e" stroke-width="1.4"/>
+    <text x="416" y="80" fill="#f0eee6" font-size="12.5" font-weight="700">Existing per-turn CancelToken</text>
+    <text x="416" y="102" fill="#a5a190" font-size="11">Stop effects; clear request/questions; audit</text>
+    <line x1="780" y1="88" x2="844" y2="88" stroke="#5aad4e" stroke-width="1.6" marker-end="url(#m-gn)"/>
+    <rect x="848" y="56" width="288" height="66" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="868" y="80" fill="#f0eee6" font-size="12.5" font-weight="700">The cancel parameter of execute</text>
+    <text x="868" y="102" fill="#8a8675" font-size="11">Wire cancel sets the same request event</text>
+
+    <rect x="24" y="140" width="300" height="66" rx="9" fill="#12110b" stroke="#2db3d5" stroke-width="1.4"/>
+    <text x="44" y="164" fill="#2db3d5" font-size="12.5" font-weight="700">notifications/progress</text>
+    <text x="44" y="186" fill="#8a8675" font-size="11">Send only if the client supplied progressToken</text>
+    <line x1="328" y1="172" x2="392" y2="172" stroke="#2db3d5" stroke-width="1.6" marker-end="url(#m-c4)"/>
+    <rect x="396" y="140" width="380" height="66" rx="9" fill="#0f1c22" stroke="#2db3d5" stroke-width="1.4"/>
+    <text x="416" y="164" fill="#f0eee6" font-size="12.5" font-weight="700">The on_update callback of execute</text>
+    <text x="416" y="186" fill="#a5a190" font-size="11">Turn-level: tool start and tool finish; no token-level streaming</text>
+    <line x1="780" y1="172" x2="844" y2="172" stroke="#2db3d5" stroke-width="1.6" marker-end="url(#m-c4)"/>
+    <rect x="848" y="140" width="288" height="66" rx="9" fill="#12110b" stroke="#2e2c20"/>
+    <text x="868" y="164" fill="#f0eee6" font-size="12.5" font-weight="700">No token: discard callbacks</text>
+    <text x="868" y="186" fill="#8a8675" font-size="11">Progress is optional for correctness</text>
+  </svg>
+  </div>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Condition</th><th>Response</th><th>Reason</th></tr>
+    <tr><td>Unknown tool name</td><td class="n">JSON-RPC error, method level</td><td>Protocol failure</td></tr>
+    <tr><td>Arguments fail schema validation</td><td class="n">JSON-RPC error, invalid params</td><td>Protocol failure</td></tr>
+    <tr><td>Missing or incorrect startup environment token</td><td class="n">Nonzero process exit before the MCP lifecycle</td><td>Authentication precedes stdin reads; errors go only to stderr</td></tr>
+    <tr><td>Tool is not allowlisted</td><td class="n">JSON-RPC error, treated as unknown tool name</td><td>Do not reveal unauthorized tools’ existence</td></tr>
+    <tr><td>Tier lacks the capability</td><td class="m"><code>isError: true</code>, body identifies the missing capability</td><td>Tool exists but is unavailable for this call</td></tr>
+    <tr><td>Approval denied or unavailable</td><td class="m"><code>isError: true</code>, retaining only a fixed gate reason</td><td>Deny without an owner present; do not pass through arbitrary tool details</td></tr>
+    <tr><td>Tool executed and failed</td><td class="m"><code>isError: true</code>, fixed sanitized body and reason code</td><td>Preserve typed errors without leaking exceptions, traces, or tool-reported reasons across the boundary</td></tr>
+    <tr><td>External SDK cancels an in-flight request</td><td class="n"><code>ErrorData(code=0, message="Request cancelled", data=None)</code>; the application returns no tool result</td><td>SDK 1.30.0’s <code>notifications/cancelled</code> owns the response; OpenProgram only stops, cleans up, and audits</td></tr>
+    <tr><td>Ordinary <code>prompt_cancel</code></td><td class="m">Active turns on the same connection return <code>cancelled=true</code>; foreign/completed returns false</td><td>This is one of the six wrappers, not the SDK cancellation notification</td></tr>
+  </table>
+  </div>
+
+  <div class="note"><b>Completed shared-type revision</b>: <code>is_error</code> is now a first-class field of <code>AgentToolResult</code> . Runtime normalization, approval refusal, the agent loop, MCP client/server conversion, and cache eligibility all use this typed bit. Legacy <code>details["is_error"]</code> remains only an input-compatibility bridge, no longer canonical state for in-repository producers.</div>
+
+  <div class="note"><b>Acceptance-test structure</b>: <code>tests/integration/programs/test_mcp_server.py</code> launches <code>openprogram mcp serve</code>, <b>using the MCP SDK’s own client</b>, covering these protocol and security behaviors: missing or incorrect tokens fail before handshake; with the correct environment token, the SDK completes <code>initialize</code>; <code>clientInfo</code> ’s arbitrary self-reported values do not change authority. MCP <code>tools/list</code> returns exactly six fixed entry points; its <code>tools_list</code> result equals exactly the intersection of the configured allowlist, current registry, and paired scope. An intersection-allowed read-only <code>tool_call</code> returns content; unknown or unexposed tools are treated as nonexistent. Exposed tools outside scope and calls requiring approval return <code>isError</code> instead of hanging. <code>notifications/cancelled</code> causes the SDK to return a standard JSON-RPC cancellation error for the original <code>prompt_send</code> ; assertions verify no later tool result / <code>isError</code>. Tests also verify subsequent side effects stop, active requests and questions are cleared, and an audit event is recorded. Progress notifications arrive if and only if <code>progressToken</code> is supplied, preserving per-request ordering. Normal, error, and cancellation paths all terminate the progress consumer within bounds; teardown must not swallow external parent cancellation. Acceptance uses real MCP 1.30.0 <code>ClientSession</code> through a real <code>openprogram mcp serve</code> subprocess, covering six wrappers, typed errors, concurrency, progress, cancellation, and protocol-only stdout frames. Handwritten frames supplement raw stdout checks only.</div>
+
+  <!-- ══════════════════ Layer four ══════════════════ -->
+  <div class="band L4" id="L4">
+    <span class="lv">LAYER 4</span>
+    <h2>Ideal state</h2>
+    <p class="w">ACP already has a stdio server entry point. This iteration preserves it without expanding the protocol surface. Inbound webhooks lack fixed job capabilities, and an SDK lacks a surface stable enough to promise compatibility. The latter two enter design only once their security and compatibility prerequisites are satisfied.</p>
+  </div>
+
+  <h2 id="ideal"><span class="num">11</span>Three gaps and why they remain outside scope</h2>
+
+  <div class="steps">
+    <div class="step s1">
+      <div class="n">EXISTING · OUT OF SCOPE</div>
+      <h4>Existing ACP stdio server</h4>
+      <div class="d"><code>openprogram acp</code> already provides a stdio entry point through <code>openprogram/interfaces/acp/server.py</code> , with session, permission-request, and event mappings. It currently uses owner authority and interactive permission semantics. This is separate from the independent MCP client identity, fixed paired scope, and non-interactive gate in this design.</div>
+      <div class="x"><b>No expansion in this iteration</b>: do not change ACP transport, protocol capabilities, or authorization semantics, or merge MCP tokens, allowlists, or tools into ACP. Run existing ACP regression tests when revising shared Runtime types only.</div>
+    </div>
+
+    <div class="step s2">
+      <div class="n">DEFERRED · WEBHOOK</div>
+      <h4>Inbound webhook</h4>
+      <div class="d">hermes demonstrates the required controls: route-specific HMAC secrets validated at startup, per-route rate limits, an idempotency cache against replay, and body-size checks before reading. These are minimum requirements. The gap is that a webhook is a<b>push trigger with no owner present on arrival</b>, placing it in the same category as cron triggers: it requires a job capability approved and fixed at registration, not a tier calculated on delivery.</div>
+      <div class="x"><b>Not implemented now</b>: the prerequisite is the fixed job capability from sandbox batch I and step 05B, handled separately. MCP already covers pull-based integration, for which there is a concrete requirement.</div>
+    </div>
+
+    <div class="step s3">
+      <div class="n">DEFERRED · SDK</div>
+      <h4>Client SDK</h4>
+      <div class="d">codex provides TS and Python, opencode generates TS from OpenAPI, openclaw provides a private TS package, and claude-code-leaked provides an Agent SDK. hermes provides <b>no SDK</b>, letting integrators use MCP / ACP / HTTP directly. An SDK is a compatibility commitment, while 198 routes and approximately 100 actions remain an internal surface changing with the frontend; only two have fixed shape assertions.</div>
+      <div class="x"><b>Not implemented now</b>: the order is deliberate — implement MCP first, because for every language with an MCP SDK, that SDK <b>is</b>the client library. This is why hermes can be integrated without a dedicated SDK. A dedicated SDK is justified only when actual integrations prove MCP tools too coarse.</div>
+    </div>
+  </div>
+
+  <div class="note"><b>Where the stable surface is</b>: publish only the six MCP tools above in this iteration; ACP retains its existing contract, while webhooks and a dedicated SDK remain unpublished. FastAPI and WebSocket remain internal surfaces, do not become MCP transports, and gain no HTTP, OAuth, or Web routes.</div>
+
+  <h2 id="status"><span class="num">12</span>Implementation status</h2>
+  <p class="lead">Layer three is complete at implementation commit <code>885d8f15</code> , with independent specification and quality reviews resolving all remaining findings. The MCP server, existing MCP client, ACP stdio, and internal Web surface have independent entry points and authentication boundaries.</p>
+
+  <div class="tbl">
+  <table>
+    <tr><th>Item</th><th>Status</th><th>Implementation and evidence</th></tr>
+    <tr><td><b><code>openprogram mcp serve</code> stdio server</b></td><td class="y">Implemented</td><td class="g"><code>openprogram/extensions/mcp/server/server.py</code>; authentication completes before entering SDK stdio</td></tr>
+    <tr><td><b>Minimum set of six tools</b></td><td class="y">Implemented</td><td class="g"><code>sessions_list</code>, <code>session_get</code>, <code>prompt_send</code>, <code>prompt_cancel</code>, <code>tools_list</code>, <code>tool_call</code>; SDK <code>tools/list</code> returns exactly these six entries</td></tr>
+    <tr><td><b><code>mcp_server.exposed_tools</code> allowlist, empty by default</b></td><td class="y">Implemented</td><td class="g">Discovery and execution each compute configured allowlist ∩ live registry ∩ paired capability</td></tr>
+    <tr><td><b><code>mcp token create</code> + stdio startup environment authentication, with no disable switch</b></td><td class="y">Implemented</td><td class="g">Independent <code>0600</code> token; <code>OPENPROGRAM_MCP_TOKEN</code> constant-time comparison; identity is the first 16 lowercase hexadecimal characters of the credential’s SHA-256</td></tr>
+    <tr><td><b>External callers’ <code>authority_tier</code> row</b></td><td class="y">Implemented</td><td class="g">Fixed <code>paired</code>, <code>speaker_kind=client</code>, <code>interaction=non-interactive</code>; <code>clientInfo</code> does not participate in authentication or authorization</td></tr>
+    <tr><td><b><code>source=mcp</code> non-interactive + hard-constraint gate</b></td><td class="y">Implemented</td><td class="g">Dangerous process/worktree/out-of-root writes are hard-denied first; approval and ordinary questions never wait; rejection results are typed and sanitized</td></tr>
+    <tr><td><b>SDK cancellation → request cleanup and audit</b></td><td class="y">Implemented</td><td class="g">Exact request/session/connection ownership; set thread/tool events, clean up process, Runtime, questions, and run-control, then record <code>mcp.request.cancelled</code></td></tr>
+    <tr><td><b><code>notifications/progress</code> driven by <code>on_update</code> </b></td><td class="y">Implemented</td><td class="g">Only send when <code>progressToken</code> is present; monotonic per-request ordering; bounded consumer cleanup for normal/error/cancel paths, preserving parent cancellation</td></tr>
+    <tr><td><b><code>AgentToolResult</code> with first-class <code>is_error</code></b></td><td class="y">Implemented</td><td class="g">Runtime failure, refusal, and wire <code>CallToolResult.isError</code> use the typed bit end to end; sensitive bodies/details are sanitized at the MCP boundary</td></tr>
+    <tr><td><b>End-to-end protocol tests</b></td><td class="y">Implemented</td><td class="g">Real MCP 1.30.0 <code>ClientSession</code> + CLI stdio subprocess, protocol <code>2025-11-25</code>; covers all six tools, clientInfo invariance, typed errors, question decline, progress, concurrency, cancellation, audit, and stdout isolation</td></tr>
+    <tr><td><b>ACP stdio server</b></td><td class="g">Already exists; not expanded here</td><td class="m"><code>openprogram/interfaces/cli/commands/acp.py</code> and <code>openprogram/interfaces/acp/server.py</code>; shared-type regressions only</td></tr>
+    <tr><td><b>Inbound webhook</b></td><td class="g">Outside this iteration</td><td class="m">Depends on fixed job capabilities from sandbox batch I and step 05B</td></tr>
+    <tr><td><b>Client SDK</b></td><td class="g">Outside this iteration</td><td class="m">The standard MCP SDK already serves the client role. Consider a dedicated OpenProgram SDK only when real integrations prove the frozen six-tool surface too coarse.</td></tr>
+  </table>
+  </div>
+
+  <div class="note"><b>Reviewed implementation evidence</b>: implementation baseline <code>885d8f15</code>; Task 8 final specification review <b>PASS, 0 remaining findings</b>, quality review <b>PASS, 0 remaining findings</b>. Five release gates before Task 9 edits: MCP server focused <code>195 passed</code>; shared authority / permission / hard-constraint / questions / ACP / Runtime regressions <code>198 passed</code>; documentation build <code>453 pages</code>; link check <code>0 broken</code>; <code>git diff --check</code> PASS. After editing, repeated the same five commands: MCP server focused <code>195 passed</code>; shared regressions <code>198 passed</code>; documentation build <code>453 pages</code>; link check <code>0 broken</code>; <code>git diff --check</code> PASS.</div>
+
+  <div class="note"><b>Directory ownership cleanup</b>: <code>53f77d74</code> moved the server implementation from a separate top-level directory into <code>openprogram/extensions/mcp/server/</code>, without retaining a duplicate compatibility package. CLI, protocol, token files, and <code>mcp_servers.json</code> data paths are unchanged. Verification includes 174 server unit/component tests, 65 integration and Web Use regressions, 76 Runtime HTTP safety inventory and structural contracts, Ruff, documentation links, and wheel contents. Specification and quality reviews both passed.</div>
+
+  <div class="note"><b>Explicit exclusions</b>: this implementation adds no HTTP, SSE, Streamable HTTP, OAuth, Web route, Web owner-token reuse, ACP transport/contract expansion, dedicated client SDK, or expanded MCP SDK dependency range. The external protocol surface remains authenticated stdio and the six wrappers above.</div>
+
+  <div class="note warn"><b>The current Web boundary is not the MCP server entry point</b>: <code>OwnerAuthMiddleware</code> already protects the singleton owner’s HTTP, SSE, and WebSocket, but does not authenticate external MCP clients, enforce the tool allowlist, or assign the low-authority scope defined here. The independent MCP server implements these controls without reusing the Web owner token.</div>
+
+</div>
+</body>
+</html>

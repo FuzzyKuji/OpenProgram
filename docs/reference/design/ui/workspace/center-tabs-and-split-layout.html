@@ -1,0 +1,989 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Center Tabs and Split Panes</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      --bg: #141413;
+      --panel: #1f1f1e;
+      --lift: #252524;
+      --line: rgba(226, 225, 218, 0.18);
+      --line-strong: rgba(226, 225, 218, 0.32);
+      --text: #c3c2b7;
+      --bright: #f8f8f6;
+      --muted: #97958c;
+      --faint: #6b6a63;
+      --clay: #d97757;
+      --gold: #d19a66;
+      --ok: #4bd58a;
+      --ok-dim: rgba(75, 213, 138, 0.12);
+      --cyan: #3bc9db;
+      --bad: #e5534b;
+      --bad-dim: rgba(229, 83, 75, 0.12);
+      --warn: #e0b463;
+      --warn-dim: rgba(224, 180, 99, 0.12);
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    @media (prefers-reduced-motion: reduce) {
+      html { scroll-behavior: auto; }
+      * { transition: none !important; }
+    }
+    body {
+      margin: 0;
+      background: var(--bg);
+      color: var(--text);
+      font: 14.5px/1.65 var(--sans);
+    }
+    a { color: var(--cyan); }
+    a:focus-visible, button:focus-visible, [tabindex="0"]:focus-visible {
+      outline: 2px solid var(--gold);
+      outline-offset: 2px;
+    }
+    code {
+      font-family: var(--mono);
+      font-size: 12px;
+      color: #e6d7a8;
+      background: #111110;
+      padding: 1px 5px;
+      border-radius: 4px;
+    }
+    .skip {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0 0 0 0);
+    }
+    .skip:focus {
+      width: auto;
+      height: auto;
+      clip: auto;
+      left: 12px;
+      top: 8px;
+      padding: 8px 12px;
+      background: var(--clay);
+      color: #141413;
+      z-index: 9;
+    }
+    .shell {
+      display: grid;
+      grid-template-columns: 196px minmax(0, 1080px);
+      gap: 36px;
+      width: min(1320px, calc(100% - 40px));
+      margin: 0 auto;
+      padding: 40px 0 96px;
+    }
+    nav {
+      position: sticky;
+      top: 20px;
+      align-self: start;
+    }
+    nav .kicker {
+      color: var(--faint);
+      font: 600 10px/1.4 var(--mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+      margin-bottom: 12px;
+    }
+    nav a {
+      display: block;
+      padding: 6px 0 6px 12px;
+      border-left: 2px solid var(--line);
+      color: var(--muted);
+      text-decoration: none;
+      font-size: 13px;
+    }
+    nav a:hover { color: var(--bright); border-color: var(--gold); }
+    .mobile-toc-label {
+      display: none;
+      margin: 8px 0 6px;
+      color: var(--faint);
+      font: 600 10px/1.4 var(--mono);
+      letter-spacing: .12em;
+      text-transform: uppercase;
+    }
+    .mobile-toc {
+      display: none;
+      width: 100%;
+      margin: 0 0 16px;
+      padding: 9px 12px;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--panel);
+      color: var(--bright);
+      font: inherit;
+    }
+    main { min-width: 0; }
+    header { margin-bottom: 28px; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 14px;
+      color: var(--ok);
+      font: 11px var(--mono);
+    }
+    .status i {
+      width: 7px;
+      height: 7px;
+      border-radius: 50%;
+      background: var(--ok);
+    }
+    h1 {
+      margin: 0 0 12px;
+      color: var(--bright);
+      font-size: clamp(26px, 3.4vw, 36px);
+      letter-spacing: -.03em;
+      line-height: 1.15;
+      font-weight: 650;
+    }
+    h1 small {
+      display: block;
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 15px;
+      font-weight: 500;
+      letter-spacing: 0;
+    }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0 18px; }
+    .pill {
+      padding: 4px 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      color: var(--muted);
+      font-size: 12px;
+      background: var(--panel);
+    }
+    .lede { max-width: 72ch; color: var(--text); }
+    .lede strong { color: var(--bright); }
+    section { margin-top: 56px; scroll-margin-top: 18px; }
+    h2 {
+      margin: 0 0 8px;
+      color: var(--bright);
+      font-size: 22px;
+      letter-spacing: -.02em;
+    }
+    h3 {
+      margin: 28px 0 8px;
+      color: var(--gold);
+      font-size: 15px;
+    }
+    p { margin: 0 0 12px; max-width: 78ch; }
+    ul, ol { margin: 0 0 12px; padding-left: 22px; max-width: 78ch; }
+    li + li { margin-top: 5px; }
+    .invariant {
+      margin: 18px 0 22px;
+      padding: 18px 20px;
+      border: 1px solid rgba(217, 119, 87, 0.45);
+      border-radius: 12px;
+      background: linear-gradient(180deg, rgba(217, 119, 87, 0.12), rgba(217, 119, 87, 0.04));
+    }
+    .invariant p { color: var(--bright); margin: 0; font-size: 16px; line-height: 1.55; }
+    .invariant .why { margin-top: 10px; color: var(--text); font-size: 14px; }
+    .layers {
+      display: grid;
+      grid-template-columns: repeat(3, minmax(0, 1fr));
+      gap: 10px;
+      margin: 18px 0;
+    }
+    .layer {
+      padding: 14px 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+    .layer b { display: block; color: var(--bright); margin-bottom: 6px; }
+    .layer span { color: var(--muted); font-size: 13px; }
+    .layer em {
+      display: block;
+      margin-top: 10px;
+      color: var(--gold);
+      font: 11px var(--mono);
+      font-style: normal;
+    }
+    figure { margin: 16px 0 8px; }
+    figcaption { margin-top: 8px; color: var(--muted); font-size: 12.5px; max-width: 86ch; }
+    .canvas {
+      padding: 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+      overflow-x: auto;
+    }
+    svg { display: block; max-width: 100%; height: auto; }
+    .scene-board {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) 280px;
+      gap: 14px;
+      align-items: start;
+    }
+    .scene-tabs {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+      margin: 0 0 12px;
+    }
+    .scene-tabs button {
+      padding: 6px 10px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--lift);
+      color: var(--muted);
+      font: 12.5px var(--sans);
+      cursor: pointer;
+    }
+    .scene-tabs button[aria-selected="true"] {
+      color: var(--bright);
+      border-color: var(--clay);
+      background: rgba(217, 119, 87, 0.16);
+    }
+    .mock-stage {
+      border: 1px solid var(--line-strong);
+      border-radius: 12px;
+      background: #111110;
+      overflow: hidden;
+    }
+    .mock-chrome {
+      display: flex;
+      gap: 6px;
+      padding: 8px 10px;
+      border-bottom: 1px solid var(--line);
+      background: #1a1a18;
+    }
+    .mock-tab {
+      padding: 3px 10px;
+      border: 1px solid transparent;
+      border-radius: 6px 6px 0 0;
+      color: var(--faint);
+      font-size: 12px;
+    }
+    .mock-tab.on {
+      color: var(--bright);
+      background: #111110;
+      border-color: var(--line-strong);
+    }
+    .mock-frame {
+      position: relative;
+      height: 248px;
+      overflow: hidden;
+    }
+    .chat-line {
+      height: 8px;
+      margin: 14px 16px 0;
+      border-radius: 4px;
+      background: #2a2a27;
+    }
+    .chat-line.w70 { width: 70%; }
+    .chat-line.w50 { width: 50%; }
+    .chat-line.w40 { width: 40%; }
+    .file-block {
+      margin: 18px 16px;
+      height: 160px;
+      border: 1px dashed var(--line-strong);
+      border-radius: 8px;
+      color: var(--faint);
+      display: grid;
+      place-items: center;
+      font-size: 12px;
+    }
+    .split-body { position: absolute; inset: 0; display: flex; }
+    .split-body > div { flex: 1; }
+    .split-body > div + div { border-left: 1px solid var(--line); }
+    .pip {
+      position: absolute;
+      top: 36px;
+      right: 14px;
+      width: 46%;
+      height: 48%;
+      border: 1px solid rgba(75, 213, 138, 0.7);
+      border-radius: 8px;
+      background: #1c211d;
+      box-shadow: 0 10px 28px rgba(0, 0, 0, 0.45);
+    }
+    .pip-bar {
+      display: flex;
+      justify-content: space-between;
+      padding: 5px 8px;
+      border-bottom: 1px solid var(--line);
+      color: var(--ok);
+      font: 11px var(--mono);
+    }
+    .pip-page { padding: 10px; color: var(--muted); font-size: 12px; }
+    .fork-pip {
+      left: 14px;
+      right: auto;
+      border-color: rgba(60, 201, 219, 0.7);
+      background: #182024;
+    }
+    .fork-pip .pip-bar { color: var(--cyan); }
+    .mask {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
+      background: rgba(8, 8, 7, 0.82);
+      color: var(--bright);
+      text-align: center;
+    }
+    .mask-btns { display: flex; gap: 8px; }
+    .mask-btns span, .chip {
+      padding: 3px 9px;
+      border: 1px solid var(--gold);
+      border-radius: 6px;
+      color: var(--gold);
+      font-size: 12px;
+    }
+    .chip {
+      position: absolute;
+      left: 14px;
+      bottom: 14px;
+      border-radius: 999px;
+      background: var(--lift);
+      border-color: var(--line-strong);
+      color: var(--muted);
+    }
+    .ghost { display: none; }
+    aside.review {
+      padding: 14px 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: var(--panel);
+    }
+    aside.review .hint { color: var(--faint); font-size: 12px; margin-bottom: 10px; }
+    aside.review h3 { margin: 0 0 6px; color: var(--bright); font-size: 16px; }
+    aside.review p { font-size: 13px; color: var(--text); }
+    .checks { list-style: none; padding: 0; margin: 12px 0 0; }
+    .checks li {
+      display: grid;
+      grid-template-columns: 18px 1fr;
+      gap: 8px;
+      padding: 5px 0;
+      color: var(--muted);
+      font-size: 12.5px;
+    }
+    .dot {
+      width: 10px;
+      height: 10px;
+      margin-top: 4px;
+      border-radius: 50%;
+      background: var(--faint);
+    }
+    .checks li.pass { color: var(--ok); }
+    .checks li.pass .dot { background: var(--ok); }
+    .checks li.fail { color: var(--bad); }
+    .checks li.fail .dot { background: var(--bad); }
+    .kv {
+      margin-top: 12px;
+      padding-top: 12px;
+      border-top: 1px solid var(--line);
+      font-size: 12.5px;
+      color: var(--muted);
+    }
+    .kv b { color: var(--bright); font-weight: 600; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+      margin: 12px 0;
+    }
+    th, td {
+      padding: 8px 10px;
+      border: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { background: var(--lift); color: var(--bright); white-space: nowrap; }
+    td { color: var(--text); }
+    td code { white-space: nowrap; }
+    .rule {
+      display: inline-block;
+      min-width: 32px;
+      margin-right: 6px;
+      padding: 0 6px;
+      border: 1px solid var(--gold);
+      border-radius: 5px;
+      color: var(--gold);
+      font: 11px/1.7 var(--mono);
+      text-align: center;
+    }
+    .card {
+      margin: 10px 0;
+      padding: 14px 16px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: var(--panel);
+    }
+    .card.warn { border-color: rgba(224, 180, 99, 0.45); background: var(--warn-dim); }
+    .card.bad { border-color: rgba(229, 83, 75, 0.4); background: var(--bad-dim); }
+    .card.info { border-color: rgba(60, 201, 219, 0.35); }
+    .flag { color: var(--warn); font-weight: 650; }
+    .flag.bad { color: var(--bad); }
+    .flag.info { color: var(--cyan); }
+    @media (max-width: 920px) {
+      .shell { grid-template-columns: 1fr; width: calc(100% - 24px); padding-top: 20px; }
+      nav { display: none; }
+      .mobile-toc-label, .mobile-toc { display: block; }
+      .layers, .scene-board { grid-template-columns: 1fr; }
+      table { display: block; overflow-x: auto; }
+    }
+  </style>
+</head>
+<body>
+<a class="skip" href="#model">Skip to conceptual model</a>
+<div class="shell">
+  <nav aria-label="Sections">
+    <div class="kicker">Contents</div>
+    <a href="#model">1 Conceptual model</a>
+    <a href="#scenes">2 Scenarios</a>
+    <a href="#fsm">3 State and transitions</a>
+    <a href="#rules">4 Scenario behavior</a>
+    <a href="#agent">5 Agent interaction</a>
+    <a href="#impl">6 Implementation mapping</a>
+    <a href="#issues">7 Known inconsistencies</a>
+  </nav>
+
+  <main>
+    <label class="mobile-toc-label" for="jump">Jump to section</label>
+    <select class="mobile-toc" id="jump" aria-label="Jump to section">
+      <option value="#model">1 Conceptual model</option>
+      <option value="#scenes">2 Scenarios</option>
+      <option value="#fsm">3 State and transitions</option>
+      <option value="#rules">4 Scenario behavior</option>
+      <option value="#agent">5 Agent interaction</option>
+      <option value="#impl">6 Implementation mapping</option>
+      <option value="#issues">7 Known inconsistencies</option>
+    </select>
+
+    <header>
+      <p class="status"><i></i>Engineering record · Synchronized with current code · Implemented</p>
+      <h1>Center tabs, split panes and web-tab presentation
+        <small>Center tab · Compound split · Session picture-in-picture (PiP)</small>
+      </h1>
+      <div class="meta">
+        <span class="pill">Audience: developers maintaining the apps/web center area</span>
+        <span class="pill">Scope: presentation and binding within the renderer</span>
+        <span class="pill">Excludes: cross-window transfer and main-process View geometry</span>
+      </div>
+      <p class="lede">The center of the workspace is a strip of tabs. A tab holds a chat, a file or folder, a terminal, a web page, or an application page, and every tab keeps its own Back/Forward history. Two tabs can be grouped into one compound tab that shows them side by side — typically a chat on the left and the page, document or terminal it is working with on the right — and a group projects as a single entry in the strip. A web page the agent works with in a chat is paired with that chat: it shows as a live floating preview over the chat (picture-in-picture), or as the right half of a split, and opening the page as its own tab hides the preview. Tabs and groups can be dragged between desktop windows. This document specifies those rules: where a web leaf is displayed, who controls it, what the agent can do with it, and how tabs navigate.</p>
+    </header>
+
+    <!-- ============================================================ -->
+    <section id="model">
+      <h2>1 · Conceptual model</h2>
+      <div class="invariant">
+        <p>The<strong>pairing</strong> between session S and page W is the sole first-class relationship. Split and preview are two presentations of that pairing. A WebTab leaf has only one native <code>WebContentsView</code>  rectangle at a time; chat PiP directly presents that Page's interactive native view. When the same leaf is active as a normal top tab, hide the chat preview and its reserved space and let the native page fill the content area. The page tab and PiP must not appear simultaneously or replace the page with a mask or screenshot.</p>
+        <p class="why">Pairing is established when an Agent opens W in S, the user drags W into S's split/group, the user collapses it, or an Agent operates an unpaired page.<code>show()</code>  and <code>registerPipPair</code>  write to the pairing table; the coverage function only decides which host renders that pairing now. Standalone pages have no pairing before Agent interaction and therefore no collapse-to-preview action.</p>
+      </div>
+
+      <div class="layers">
+        <article class="layer">
+          <b>Leaf identity</b>
+          <span>An entry in the center-tabs store's <code>kind:"web"</code> . Its canonical id is <code>w:&lt;url&gt;</code>; a fork uses <code>nextPopupWebTabId</code>  to form <code>w:&lt;url&gt;:popup:…</code>. Floating does not remove the leaf.</span>
+          <em>tabs[] / groups[] / splitWebTabId / activeId</em>
+        </article>
+        <article class="layer">
+          <b>Pairing</b>
+          <span>A persistent session↔page relationship stored in <code>pairedOwnerByTabId</code>. A session may pair with multiple pages; closing either side clears it. Each session has one preview slot showing the Agent's current working page; other paired pages remain in the tab bar.</span>
+          <em>Module-level Map, registered through show() / registerPipPair</em>
+        </article>
+        <article class="layer">
+          <b>Binding</b>
+          <span>Globally at most one active <code>(tabId, ownerTabId)</code>: which paired page currently occupies the preview slot. Switching sessions does not change the binding;<code>hide()</code>  moves it into background memory. Rebinding another page does not erase the old pairing.</span>
+          <em>useWebTabPip singleton, not persisted</em>
+        </article>
+        <article class="layer">
+          <b>Host</b>
+          <span>The place that actually renders the page. Derived by <code>pipCoversCenter(tabId, ownerTabId, center)</code>  as a pure function of binding × active tab. Components do not store a separate visibility state.</span>
+          <em>pane · chat PiP · none</em>
+        </article>
+      </div>
+
+      <p>First-class state therefore consists of pairing, layout (tab-bar membership, groups and active tab), active binding and background memory. Split and floating views are two presentations of one pairing, not separate relationships.</p>
+      <p>Compound group <code>groups[]</code> At most two members, projected as one tab-bar entry. User-created groups use <code>groupTab</code>; PiP Expand to split uses <code>setSplitWebTab</code> to pair the current session and leaf.<code>splitWebTabId</code>  is a compatibility pointer, materialized into a group during normalization only when the leaf is ungrouped and the active tab is a session.</p>
+      <p>When an Agent repeatedly invokes <code>open</code> / <code>activate</code>  on pages in one session, the preview slot follows attention: the new working page <code>show</code>  enters the slot (or <code>revealAgentWebTab</code>  inserts an unpaired page or a page paired with the current session but not visible, recording pairing), and the previous page returns to the tab bar. Pages paired with other sessions are excluded and not taken over.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="scenes">
+      <h2>2 · Scenarios</h2>
+      <p>The same binding,<code>ex.dev</code>  owned by session A, under different <code>activeId</code>  values. Select a scenario to inspect which coverage condition excludes its host.</p>
+
+      <div class="scene-tabs" role="tablist" aria-label="Core scenarios">
+        <button type="button" role="tab" id="tab-owner" aria-controls="panel-scene" aria-selected="true" data-scene="owner">① Owner session</button>
+        <button type="button" role="tab" id="tab-other" aria-controls="panel-scene" aria-selected="false" data-scene="other">② Other session</button>
+        <button type="button" role="tab" id="tab-mask" aria-controls="panel-scene" aria-selected="false" data-scene="mask">③ View this tab directly</button>
+        <button type="button" role="tab" id="tab-file" aria-controls="panel-scene" aria-selected="false" data-scene="file">④ Non-session page</button>
+        <button type="button" role="tab" id="tab-hide" aria-controls="panel-scene" aria-selected="false" data-scene="hide">⑤ Close preview</button>
+        <button type="button" role="tab" id="tab-fork" aria-controls="panel-scene" aria-selected="false" data-scene="fork">⑥ Same-URL fork</button>
+      </div>
+
+      <div class="scene-board">
+        <div class="mock-stage" id="panel-scene" role="tabpanel" aria-labelledby="tab-owner">
+          <div class="mock-chrome" id="mock-tabs"></div>
+          <div class="mock-frame" id="mock-frame" role="img" aria-label="Scenario illustration"></div>
+        </div>
+        <aside class="review" aria-live="polite">
+          <div class="hint" id="scene-hint">Coverage function · pipCoversCenter</div>
+          <h3 id="scene-title">Preview over session A</h3>
+          <p id="scene-lead"></p>
+          <ul class="checks" id="scene-checks"></ul>
+          <div class="kv" id="scene-kv"></div>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="fsm">
+      <h2>3 · State and transitions</h2>
+
+      <h3>3.1 Position state machine for one leaf</h3>
+      <figure class="canvas">
+        <svg viewBox="0 0 1080 520" role="img" aria-labelledby="fsm-title fsm-desc">
+          <title id="fsm-title">WebTab presentation state machine</title>
+          <desc id="fsm-desc">Center, split, PiP binding, background memory and closed. Green edges enter PiP, gray leave it and red clear the binding.</desc>
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="#97958c"/>
+            </marker>
+            <marker id="arrg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="#4bd58a"/>
+            </marker>
+            <marker id="arrb" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="#e5534b"/>
+            </marker>
+          </defs>
+
+          <rect x="36" y="58" width="232" height="70" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="152" y="88" text-anchor="middle" fill="#f8f8f6" font-size="14" font-family="ui-monospace,Menlo,monospace">center</text>
+          <text x="152" y="108" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Standalone center tab; pane is host</text>
+
+          <rect x="36" y="350" width="232" height="70" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="152" y="380" text-anchor="middle" fill="#f8f8f6" font-size="14" font-family="ui-monospace,Menlo,monospace">split</text>
+          <text x="152" y="400" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Right pane of group / splitWebTabId</text>
+
+          <rect x="430" y="186" width="280" height="92" rx="10" fill="#16241c" stroke="#4bd58a" stroke-width="1.6"/>
+          <text x="570" y="218" text-anchor="middle" fill="#4bd58a" font-size="14" font-family="ui-monospace,Menlo,monospace">Bound PiP(owner = S)</text>
+          <text x="570" y="238" text-anchor="middle" fill="#c3c2b7" font-size="11" font-family="ui-monospace,Menlo,monospace">store: tabId + ownerTabId</text>
+          <text x="570" y="256" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Render decision = pipCoversCenter(activeId)</text>
+
+          <rect x="820" y="186" width="228" height="92" rx="10" fill="#1f1f1e" stroke="#d19a66" stroke-dasharray="5 4"/>
+          <text x="934" y="218" text-anchor="middle" fill="#d19a66" font-size="14" font-family="ui-monospace,Menlo,monospace">Background memory</text>
+          <text x="934" y="238" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">backgroundTabId</text>
+          <text x="934" y="256" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">backgroundOwnerTabId</text>
+
+          <rect x="820" y="410" width="228" height="52" rx="10" fill="#1f1f1e" stroke="#e5534b"/>
+          <text x="934" y="441" text-anchor="middle" fill="#e5534b" font-size="13" font-family="ui-monospace,Menlo,monospace">Leaf closed / binding cleared</text>
+
+          <rect x="430" y="48" width="280" height="52" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="570" y="70" text-anchor="middle" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">Agent op=open (session, non-split)</text>
+          <text x="570" y="88" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">ensure(Exclusive)WebTab + show(id, active.id)</text>
+
+          <path d="M268 80 C 360 80, 400 170, 428 200" fill="none" stroke="#4bd58a" marker-end="url(#arrg)"/>
+          <text x="278" y="118" fill="#4bd58a" font-size="11" font-family="ui-monospace,Menlo,monospace">collapseWebTabToPip</text>
+          <path d="M430 198 C 390 130, 350 62, 268 62" fill="none" stroke="#97958c" marker-end="url(#arr)"/>
+          <text x="286" y="46" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Fullscreen takeover: end + setActive</text>
+
+          <path d="M268 384 C 360 384, 400 300, 428 270" fill="none" stroke="#4bd58a" marker-end="url(#arrg)"/>
+          <text x="276" y="348" fill="#4bd58a" font-size="11" font-family="ui-monospace,Menlo,monospace">Collapse (ungroup first)</text>
+          <path d="M430 268 C 390 330, 350 410, 268 404" fill="none" stroke="#97958c" marker-end="url(#arr)"/>
+          <text x="276" y="436" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Expand to split: end + setSplitWebTab</text>
+
+          <path d="M152 130 L152 348" fill="none" stroke="#97958c" marker-end="url(#arr)"/>
+          <path d="M120 348 L120 130" fill="none" stroke="#97958c" marker-end="url(#arr)"/>
+          <text x="160" y="246" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">groupTab /</text>
+          <text x="160" y="262" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">setSplitWebTab</text>
+
+          <path d="M710 216 L818 216" fill="none" stroke="#d19a66" marker-end="url(#arr)"/>
+          <text x="718" y="206" fill="#d19a66" font-size="11" font-family="ui-monospace,Menlo,monospace">✕ hide()</text>
+          <path d="M818 248 L710 248" fill="none" stroke="#4bd58a" marker-end="url(#arrg)"/>
+          <text x="718" y="286" fill="#4bd58a" font-size="11" font-family="ui-monospace,Menlo,monospace">WebSurfaceChip → show</text>
+
+          <path d="M570 100 L570 184" fill="none" stroke="#4bd58a" marker-end="url(#arrg)"/>
+          <path d="M710 268 C 780 330, 820 390, 860 410" fill="none" stroke="#e5534b" marker-end="url(#arrb)"/>
+          <text x="628" y="340" fill="#e5534b" font-size="11" font-family="ui-monospace,Menlo,monospace">Owner / leaf closes → end()</text>
+          <text x="628" y="356" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">End floating on the overlay also calls end; leaf remains in store</text>
+        </svg>
+        <figcaption>Figure 1 — Position state machine.<code>end()</code>  clears only the binding; the leaf stays in center-tabs store unless <code>closeTab</code>. Switching sessions is not a transition; the coverage function returns a different value for the same binding.</figcaption>
+      </figure>
+
+      <h3>3.2 PiP store fields</h3>
+      <table>
+        <thead><tr><th>Field / action</th><th>Meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>tabId</code> · <code>ownerTabId</code></td><td>Active binding. Both values are present or both null;<code>pipBoundTabId()</code>  uses them to determine coverage.</td></tr>
+          <tr><td><code>backgroundTabId</code> · <code>backgroundOwnerTabId</code></td><td><code>hide()</code> Restoration record left by hide. Its sole reader is <code>WebSurfaceChip</code>.</td></tr>
+          <tr><td><code>rect</code></td><td>Preview geometry, memory only.<code>clampPipRect</code> Constrains it within <code>.center-pane-chat</code> , minimum 240×160.<code>hide</code>/<code>end</code>  do not clear rect. Before dragging, default placement is upper-right below the session header (<code>.chat-view-controls</code>: perspective switch + ⋯); after dragging, inline rect takes precedence.</td></tr>
+          <tr><td><code>show(tabId, ownerTabId)</code></td><td>Registers <code>pairedOwnerByTabId</code>, establishes the active binding and clears background. The global singleton slot replaces the old binding but preserves the old page's pairing.</td></tr>
+          <tr><td><code>hide()</code></td><td>Clears active binding and writes background. Meaning: the user temporarily hides the preview and can restore it in one action.</td></tr>
+          <tr><td><code>end()</code></td><td>Clears both binding and memory. Meaning: this page is no longer any session's preview.</td></tr>
+        </tbody>
+      </table>
+
+      <h3>3.3 Coverage function <code>pipCoversCenter</code></h3>
+      <p>The preview renders if and only if <code>pipCoversCenter</code>  holds:<code>pipCoverBase</code>  and owner checks are true, and <code>activeId</code>  is the owner session. Split retains exclusive native bounds (the preview does not render when<code>splitWebTabId === tabId</code> ). Opening the page tab makes coverage false and hides preview while retaining binding.</p>
+      <ol>
+        <li>The leaf still exists and <code>kind === "web"</code>; </li>
+        <li>The leaf is not in the active group's <code>visibleIds</code> : split already renders it, so no second view is overlaid;</li>
+        <li><code>splitWebTabId !== tabId</code>; </li>
+        <li>The active tab is a session;</li>
+        <li><code>activeId === ownerTabId</code>.</li>
+      </ol>
+      <p>PiP floats only over chat, inside <code>.center-pane-chat</code>. When the page tab is active, the component returns <code>null</code> without reserving native docking space. The store subscribes to center-tabs: owner or leaf deletion → <code>end()</code>; invalid background reference → clear memory.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="rules">
+      <h2>4 · Scenario behavior</h2>
+
+      <h3><span class="rule">R1</span>One preview slot per session: disappears when leaving, returns to the working page when coming back</h3>
+      <p>The pairing table records multiple pages but only one binding is active. Presentation is the output of <code>pipCoversCenter</code>  (condition 5). After switching to B, the store still holds <code>(ex.dev, A)</code>, but the component does not render because <code>live === false</code> ; returning to A makes the same function true again. These are not two events.</p>
+      <p>Reappearing on return applies only to an<strong>active binding</strong>. Clicking ✕ calls <code>hide()</code> and moves binding to background; returning to A makes the composer's web page chip clickable to bring the preview back, not an automatically reopened window.</p>
+      <p>The chip names the page <code>surfaceRefForChat</code> reports and acts only on that page: it offers Close page preview or Show page preview only when that page is this chat's preview page. In a split the chip names the page in the other pane, which is already on screen, so it is a plain label there and does not touch the preview. The preview folds into the on-screen chip whose <code>data-web-surface-chip</code> names its own page, the one in its own pane first; with no such chip it fades in place, and it reopens from Preview in conversation.</p>
+
+      <h3><span class="rule">R2</span>Open the bound page directly → Hide chat preview and fill the content area with the native page</h3>
+      <p><code>pipCoversCenter</code> Is false when <code>activeId === tabId</code> . Binding (<code>tabId</code> / <code>ownerTabId</code>) and follow preference remain.<code>WebTabPane</code>  retains the full toolbar, and<code>.webFrame</code>  fills the available content area without PiP docking space or rendering <code>PipBoundMask</code>. Returning to the owner makes coverage true unless the user invoked <code>hide()</code>.</p>
+      <ul>
+        <li>Desktop continues <code>ensureWebView</code>; native bounds come only from the measured <code>.webFrame</code>.</li>
+        <li>Chat PiP reuses the same native view for clicking, scrolling and typing. Dragging batches position updates through requestAnimationFrame while keeping the real page visible. Opening the top tab returns the view without creating a second Page.</li>
+      </ul>
+
+      <h3><span class="rule">R5</span>Toolbar Collapse to preview: target resolution</h3>
+      <figure class="canvas">
+        <svg viewBox="0 0 1040 220" role="img" aria-labelledby="col-title col-desc">
+          <title id="col-title">Owner resolution for the collapse button</title>
+          <desc id="col-desc">Use the original owner if bound; otherwise the session in the same group; otherwise the pairing table. Hide the button if none exists.</desc>
+          <defs>
+            <marker id="arr2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="#97958c"/>
+            </marker>
+          </defs>
+          <rect x="16" y="78" width="210" height="60" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="121" y="104" text-anchor="middle" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">collapseWebTabToPip</text>
+          <text x="121" y="122" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Toolbar / BrowserMenu</text>
+
+          <rect x="268" y="16" width="250" height="52" rx="10" fill="#16241c" stroke="#4bd58a"/>
+          <text x="393" y="38" text-anchor="middle" fill="#4bd58a" font-size="12" font-family="ui-monospace,Menlo,monospace">① Bound with owner still present</text>
+          <text x="393" y="55" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Return to original owner without rebinding</text>
+
+          <rect x="268" y="82" width="250" height="52" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="393" y="104" text-anchor="middle" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">② Same-group partner is a session</text>
+          <text x="393" y="121" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">pipCollapseTargetFor</text>
+
+          <rect x="268" y="148" width="250" height="52" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="393" y="170" text-anchor="middle" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">③ Owner from pairing table</text>
+          <text x="393" y="187" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">None → Do not render the button</text>
+
+          <path d="M228 98 L266 42" fill="none" stroke="#97958c" marker-end="url(#arr2)"/>
+          <path d="M228 108 L266 108" fill="none" stroke="#97958c" marker-end="url(#arr2)"/>
+          <path d="M228 118 L266 174" fill="none" stroke="#97958c" marker-end="url(#arr2)"/>
+
+          <rect x="560" y="62" width="460" height="96" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="580" y="88" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">After resolving owner, execute the shared sequence</text>
+          <text x="580" y="108" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">1. If splitWebTabId===tabId, setSplitWebTab(null); otherwise ungroupTab if grouped</text>
+          <text x="580" y="126" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">2. setActive(ownerTabId)    3. show(tabId, ownerTabId) — without reloading</text>
+          <text x="580" y="144" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Without a session, return false and retain binding</text>
+          <path d="M520 108 L558 108" fill="none" stroke="#97958c" marker-end="url(#arr2)"/>
+        </svg>
+        <figcaption>Figure 2 — <code>CollapseToPipButton</code>  and BrowserMenu's <code>collapseToPip</code>  use the same resolution: bound → Return to X's preview; unbound with target → Float to X; no target → no button or menu item. Standalone pages have no such action.</figcaption>
+      </figure>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="agent">
+      <h2>5 · Agent interaction</h2>
+
+      <h3><span class="rule">R3</span>op=open layout and forking</h3>
+      <figure class="canvas">
+        <svg viewBox="0 0 1080 360" role="img" aria-labelledby="open-title open-desc">
+          <title id="open-title">Agent op=open decision tree</title>
+          <desc id="open-desc">Desktop wide layouts with a web member use split; other session layouts use PiP, including forks; non-session contexts open in the foreground.</desc>
+          <defs>
+            <marker id="arr3" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto">
+              <path d="M0 0 L10 5 L0 10 z" fill="#97958c"/>
+            </marker>
+          </defs>
+          <rect x="16" y="148" width="228" height="60" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="130" y="174" text-anchor="middle" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">webtab.command op=open</text>
+          <text x="130" y="192" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">installDesktopMenuHandlers</text>
+
+          <rect x="286" y="136" width="250" height="84" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="411" y="164" text-anchor="middle" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">Is active a session?</text>
+          <text x="411" y="184" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Desktop + enough width for split</text>
+          <text x="411" y="202" text-anchor="middle" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">and an existing web group member?</text>
+          <path d="M244 178 L284 178" fill="none" stroke="#97958c" marker-end="url(#arr3)"/>
+
+          <rect x="590" y="20" width="470" height="64" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="610" y="46" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">→ split: openWebTabInSplit(url)</text>
+          <text x="610" y="66" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Then registerPipPair(id, active.id); replace this group's pane without showing preview</text>
+          <path d="M536 150 C 560 120, 570 70, 588 52" fill="none" stroke="#97958c" marker-end="url(#arr3)"/>
+
+          <rect x="590" y="108" width="470" height="140" rx="10" fill="#16241c" stroke="#4bd58a"/>
+          <text x="610" y="134" fill="#4bd58a" font-size="12" font-family="ui-monospace,Menlo,monospace">→ PiP: bind to the current session</text>
+          <text x="610" y="158" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">pipOpenMustFork(url, active.id)</text>
+          <text x="628" y="180" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">True = webTabId(url) is bound to another session</text>
+          <text x="628" y="198" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">→ ensureExclusiveWebTab (popup id), no takeover</text>
+          <text x="628" y="216" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">False → ensureWebTab reuses canonical leaf; then show(id, active.id)</text>
+          <text x="628" y="234" fill="#d19a66" font-size="11" font-family="ui-monospace,Menlo,monospace">Browser / narrow: sessions always use this path</text>
+          <path d="M536 178 L588 178" fill="none" stroke="#4bd58a" marker-end="url(#arr3)"/>
+
+          <rect x="590" y="274" width="470" height="64" rx="10" fill="#1f1f1e" stroke="rgba(226,225,218,.32)"/>
+          <text x="610" y="300" fill="#f8f8f6" font-size="12" font-family="ui-monospace,Menlo,monospace">→ Foreground: openWebTab(url)</text>
+          <text x="610" y="320" fill="#97958c" font-size="11" font-family="ui-monospace,Menlo,monospace">Active file / terminal / NTP etc.; no preview</text>
+          <path d="M536 206 C 560 240, 570 290, 588 300" fill="none" stroke="#97958c" marker-end="url(#arr3)"/>
+        </svg>
+        <figcaption> Diagram details: Browser or narrow window: isDesktopSplitLayoutAvailable is false, so sessions always use this path. Figure 3 — Reopening the same URL by the owner reuses the leaf. Fork only for a non-owner when the canonical leaf is already bound. Fork preserves leaf identity, not A's slot: the following <code>show(id, B)</code>  overwrites the global binding. After opening, wait for <code>waitForWebTabReady</code> (2s)→ <code>bridge.webTab.activate</code> → <code>webtab_result</code>. On non-split failure, <code>restorePriorActiveTabAfterFailedWebOpen</code>  restores focus.</figcaption>
+      </figure>
+
+      <h3><span class="rule">R4</span>op=close: structural permission, not creator tracking</h3>
+      <p><code>closeAgentWebTabResult(tabId, tabs, groups)</code> Is a pure function:</p>
+      <table>
+        <thead><tr><th>Condition</th><th>Result</th></tr></thead>
+        <tbody>
+          <tr><td>Leaf missing or not web</td><td><code>{ok:false, reason:"tab_not_found"}</code></td></tr>
+          <tr><td>Appears in any group's <code>memberIds</code></td><td><code>{ok:false, reason:"tab_in_user_layout"}</code></td></tr>
+          <tr><td>Others (standalone tab, PiP binding, background)</td><td><code>{ok:true}</code> → <code>closeTab</code>; if it is the PiP leaf, the subscription then invokes <code>end()</code></td></tr>
+        </tbody>
+      </table>
+      <p>A leaf entering a user layout (group) is treated as user-owned. An Agent-opened leaf loses close permission once dragged into a group. Conversely, an Agent can close a user-opened standalone page; implementation does not track the opener.</p>
+
+      <h3>Which page a session reads</h3>
+      <p><code>surfaceRefForChat(sessionId)</code> Priority agrees with the host model: visible web pane in the session group → <code>splitWebTabId</code>  when the session is active → PiP leaf when the active session is owner. If none exist or bounds are unreported, omit the surface.<code>visibleWebTab</code> / <code>visibleWebTabById</code> Uses <code>peekLiveWebTabPipId</code>; a binding on a non-owner session is excluded from Agent-visible inventory.<code>op=preview/activate</code> 's target is invisible,<code>revealAgentWebTab</code>  when the active center page is a session and the target is a web tab unpaired or paired with that session, invokes <code>show</code>  to place it in that session's preview slot, also establishing pairing if needed, and waits for webview readiness before execution. Reject pages paired to other sessions without takeover or operation. After split opening, <code>registerPipPair</code>  records ownership without passing through <code>show()</code>.</p>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="impl">
+      <h2>6 · Implementation mapping</h2>
+      <table>
+        <thead><tr><th>Rule / concept</th><th>Implementation location</th></tr></thead>
+        <tbody>
+          <tr><td>Pairing table, active binding, background,<code>show/hide/end</code></td><td><code>apps/web/lib/browser/web-tab/web-tab-pip-store.ts</code> · <code>pairedOwnerByTabId</code> / <code>pipPairedOwnerFor</code> / <code>useWebTabPip</code></td></tr>
+          <tr><td>R1 Disappear on leave / reappear on return</td><td>Same as above · <code>pipCoverBase</code> / <code>pipCoversCenter</code> / <code>peekLiveWebTabPipId</code></td></tr>
+          <tr><td>R3 fork</td><td>Same as above · <code>pipOpenMustFork</code>; leaf creation is in <code>center-tabs-store.ts</code> 's <code>ensureWebTab</code> / <code>ensureExclusiveWebTab</code>; ids in <code>center-tab-ids.ts</code> 's <code>webTabId</code> / <code>nextPopupWebTabId</code></td></tr>
+          <tr><td>R5 Collapse target</td><td><code>pipCollapseTargetFor</code>(same-group session → pairing table → null) / <code>collapseWebTabToPip</code>; without a target, <code>CollapseToPipButton</code>  returns null and BrowserMenu omits <code>collapseToPip</code></td></tr>
+          <tr><td>Agent-interaction reveal (unpaired or current-session pairing)</td><td>Same as above · <code>revealAgentWebTab</code>; <code>desktop-bridge.ts</code> 's <code>op=preview/activate</code> After successful reveal, <code>waitForWebTabReady</code>  executes. Split path: <code>registerPipPair</code></td></tr>
+          <tr><td>Clear binding and pairing when owner / leaf closes</td><td><code>web-tab-pip-store.ts</code> At the end of <code>useCenterTabs.subscribe</code></td></tr>
+          <tr><td>Preview: live view, dragging, bounds, screenshots, expand / fullscreen / ✕</td><td><code>apps/web/components/center-tabs/pip/web-tab-pip.tsx</code> · <code>WebTabPip</code>; mounted inside <code>app-shell.tsx</code> 's <code>.center-body</code> , default <code>.webPip</code>  upper-right,<code>top:78px</code>(below header buttons)</td></tr>
+          <tr><td>R2 Opening page hides preview</td><td><code>web-tab-pip-store.ts</code> 's <code>pipCoversCenter</code> True only in the owner session;<code>web-tab-pane.tsx</code> 's <code>.webFrame</code>  fills the content area without a docking portal</td></tr>
+          <tr><td>Screenshot cache</td><td><code>usePipSnapshots</code> / <code>getSnapshot</code> / <code>setSnapshot</code>; only legacy bridges without native-view support fall back to capture; modern desktop PiP does not poll screenshots</td></tr>
+          <tr><td>Agent open / close / receipts</td><td><code>apps/web/lib/desktop/desktop-bridge.ts</code> · <code>installDesktopMenuHandlers</code> Internal WS branch;<code>closeAgentWebTabResult</code>; <code>restorePriorActiveTabAfterFailedWebOpen</code></td></tr>
+          <tr><td>Session↔page pairing and visibility</td><td>Same as above · <code>surfaceRefForChat</code>(PiP fallback reads <code>peekWebTabPipId</code> / <code>peekWebTabPipOwnerId</code>)/ <code>visibleWebTab</code> / <code>visibleWebTabById</code>(uses <code>peekLiveWebTabPipId</code>)/ <code>browserPageInventory</code></td></tr>
+          <tr><td>Desktop split availability</td><td><code>app-shell.tsx</code> Calls <code>setDesktopSplitLayoutAvailable(isDesktop && activeKind==="session" && isSplitLayoutAvailable(width))</code>; threshold in <code>split-layout.ts</code> (360+480+6)</td></tr>
+          <tr><td>Restore entry after ✕</td><td><code>apps/web/components/chat/composer/environment-row/chips/web-surface-chip.tsx</code> · <code>WebSurfaceChip</code></td></tr>
+          <tr><td>Split / group model</td><td><code>center-tabs-store.ts</code> (<code>groupTab</code> / <code>ungroupTab</code> / <code>setSplitWebTab</code> / <code>openWebTabInSplit</code>); <code>center-tab-groups.ts</code> (<code>MAX_CENTER_TAB_GROUP_MEMBERS = 2</code>); <code>center-tabs-persistence.ts</code> Normalization</td></tr>
+          <tr><td>Behavior checks</td><td><code>apps/web/tests/tabs/web-split/</code>(coverage, collapse, fork, close and surface)</td></tr>
+        </tbody>
+      </table>
+    </section>
+
+    <!-- ============================================================ -->
+    <section id="issues">
+      <h2>7 · Known inconsistencies</h2>
+      <p>These are existing differences between code and product semantics, not newly proposed work.</p>
+
+      <div class="card warn">
+        <p><span class="flag">Fork ignores memory after hide.</span><code>pipOpenMustFork</code> Checks only active binding. After A clicks ✕ and B opens the same URL, <code>ensureWebTab</code>  reuses the leaf and <code>show(id, B)</code>——<code>show</code>  clears background, silently removing A's restore chip. No takeover precisely covers currently displayed previews, not a session's preview resources.</p>
+      </div>
+      <div class="card warn">
+        <p><span class="flag">Fork recognizes only canonical leaves.</span>The condition is <code>webTabId(url) === boundTabId</code>. When a third party opens an already-forked popup id, the condition is false and<code>ensureWebTab</code>  returns another canonical leaf. The outcome happens to be correct, but the check protects id shape rather than every bound same-URL leaf. Each fork leaves an orphan leaf, cleaned by <code>op=close</code>  or manual user closure.</p>
+      </div>
+      <div class="card warn">
+        <p><span class="flag">Close does not track the opener.</span>The product says an Agent can close tabs it opened but not tabs in user layouts. Implementation checks only group membership. User-opened standalone pages can be closed; Agent-opened pages dragged into groups cannot.</p>
+      </div>
+      <div class="card warn">
+        <p><span class="flag">Fork is absent from the split path.</span>On a wide desktop layout with an existing web member,<code>openWebTabInSplit</code>  changes that pane's URL without calling <code>pipOpenMustFork</code>. Same-URL conflicts apply only to the PiP branch.</p>
+      </div>
+      <div class="card warn">
+        <p><span class="flag">No takeover protects leaves, not slots.</span>R3's fork gives B a new instance, but the same <code>show(id, B)</code>  overwrites the sole global binding. A's canonical leaf remains but its binding disappears, so returning to A does not restore preview. Collapsing another page to preview similarly replaces the old binding silently. If no takeover means retaining A's preview resource, implementation does not satisfy it.</p>
+      </div>
+      <div class="card warn">
+        <p><span class="flag">Show does not ungroup.</span>When an Agent binds a canonical leaf already in another group's layout as its own PiP, it does not call <code>ungroupTab</code>. Returning to that group retains the member; if the leaf is <code>activeId</code>, coverage is false, preview hides and the native page fills the content area.</p>
+      </div>
+      <div class="card info">
+        <p><span class="flag info">Region definitions differ.</span><code>surfaceRefForChat</code> Marks ungrouped paired pages, including PiP, as <code>region:"right"</code>; <code>browserPageInventory</code> Marks ungrouped visible pages as <code>"center"</code>. Agent-visible left/right/center positions disagree with inventory.</p>
+      </div>
+      <div class="card info">
+        <p><span class="flag info">Condition 5 implies condition 4.</span>Every owner in <code>show</code>  is a session tab, and<code>activeId === ownerTabId</code>  already guarantees <code>kind === "session"</code>.<code>pipCoverBase</code> . The condition remains so <code>WebSurfaceChip</code>  can independently reuse <code>pipCoversCenter</code>  before restoring as a fallback.</p>
+      </div>
+      <div class="card info">
+        <p><span class="flag info">PiP is absent from version-2 payload.</span>Refresh loses binding, background and preview position; leaves return to normal center tabs. Reappearing on owner return applies only within the same renderer lifetime.</p>
+      </div>
+    </section>
+    <section id="session-navigation">
+      <h2>8 · Session-tab back and forward</h2>
+      <p>Back and Forward appear at the far left of the tab bar and use only the current tab's own history, including its default entry page. Web pages retain their own navigation controls.</p>
+      <div class="card"><p aria-label="Tab-bar layout">←    →    [Session B ×]    [Web page ×]    ＋</p><p>Current tab history: session A → session B. Back restores A; Forward restores B. Choosing C after going back removes B's forward entry.</p></div>
+      <table><thead><tr><th>Public entry</th><th>Observable result</th></tr></thead><tbody>
+      <tr><td>Open session from sidebar, history page or deep link</td><td>Navigate in place in the current session tab or new-tab page; other page types may select an existing session tab or create one.</td></tr>
+      <tr><td>Back / Forward</td><td>Each tab stores independent history and cursor. Even if a target appears in another tab, replace only the current tab and preserve others. Reopening the current session adds no history.</td></tr>
+      <tr><td>Drafts and ACK</td><td>History retains draft IDs; input remains keyed by session ID. Background acknowledgements update all matching history records without activating background sessions.</td></tr>
+      <tr><td>Reload / Delete session</td><td>History persists with version-2 tabs; legacy tabs become single-entry histories. Known deleted sessions are removed from every history and cannot be restored with Back.</td></tr>
+      </tbody></table>
+      <p>Implementation uses the existing Zustand tab store, layout normalization and route activation. Tab ID identifies a tab instance and sessionId identifies its current session; tab identity is no longer inferred from session ID. Page history stores page identity, session metadata, sidebar route and file location without copying input or messages. New tabs receive a unique suffix on ID collision. Source-window transfer removal checks prepared session history before and after asynchronous acknowledgement; navigation changes cancel stale transfers, and rollback does not overwrite newer navigation.</p>
+      <p>Route synchronization responds only to pathname changes; markSessionReady handles session acknowledgement. User tab navigation reacts to current-tab sessionId / draft changes, preventing intermediate old currentSessionId updates from overwriting new navigation. Deletion uses only IDs confirmed removed from loaded lists; unloaded records do not count as deleted.</p>
+      <p>Comparison scope retains this page's existing web, split and PiP references and boundaries. Session history is application state, not browser-global History used per tab, and does not change page navigation, server protocols or permissions. Independent tab instances may show the same session; restoration retains every tab's identity, content and history. Different sessionIds remain distinct even with equal titles.</p>
+      
+    </section>
+  <section id="page-navigation"><h2>Initial page navigation</h2><p>Replacing an explicit New tab page records it in that tab's page history. Back returns to that initial page and Forward restores the selected application or built-in page, without adding another visible tab. Selecting another destination after Back discards the old forward entries. Existing conversation history remains navigable before returning to the initial page. History is persisted with the tab.</p></section>
+<section id="new-tab-placement"><h2>Where a new tab goes</h2><p>A tab opened from another tab (a link, a popup, a conversation, a file or page preview) goes right of the tab it came from; several opened in a row from the same tab follow one another in the order they were opened. The plus button, New chat, and pages the agent opens in the background go at the end of the strip. <code>insertNextTo</code> in <code>lib/tabs/store/core.ts</code> places them.</p></section>
+<section id="tab-controls"><h2>Tab controls</h2><p>Back, Forward, and New tab each use a 28px-wide button with an 8px gap. An empty tab-list container takes no layout space. New tab has no left divider.</p></section>
+<section id="last-tab"><h2>Closing the last tab</h2><p>The final visible tab can close completely. Its window and empty tab strip remain open, and the center content area stays blank. The plus button explicitly opens a new tab. Session-owned hidden pages remain available in Resources and never become the close fallback. Close selects visible neighbors after normalizing split groups. The empty state persists across route changes and reloads; it does not automatically create a draft conversation. Moving tabs between windows retains its existing window lifecycle.</p><p>Acceptance: close the final tab through the close button or keyboard command; no visible tab or center content remains, and explicit open actions create the requested tab.</p></section>
+<section><h2>Interactive floating page</h2><p>Adopt continuous visible content, direct input and frame-coalesced dragging. Reuse the existing Electron WebContentsView and visible-bounds collection instead of creating another Page or forwarding image coordinates. The native view remains displayed during movement. Each animation frame updates the host transform and native bounds; only release persists geometry. Native input keeps the existing browser control and permission behavior.</p><p>The plain browser uses a sandboxed iframe for HTTP(S) pages. It is a separate embedded browser document, not a connection to the Desktop Page; login state and frame-ancestor restrictions follow browser policy. Restricted URLs display an unavailable message and retain Open page. Older Desktop bridges without visible-view support keep a labeled image fallback. Hidden, switched or unmounted previews release bounds and observers without closing their Page. Menus and dialogs occlude native content.</p><p>Acceptance: the public WebTabPip mounts the exact tab id, performs no capture on a current Desktop bridge, updates native bounds during drag without recreating or hiding the page, preserves pointer cleanup and session isolation, and exposes iframe interaction without a body click overlay. Native App acceptance verifies a changing counter, clicking, typing, scrolling and continued updates during drag.</p></section><section id="tab-release-resources"><h2>Tab press, release and resource attachment</h2><p>Pressing a tab uses the same background and backdrop blur as dragging, without an additional pressed outline or shadow, and does not change the active page, route or conversation. Keyboard focus retains its focus-visible indicator. A release without a drag activates it through the ordinary click path. A drag, Escape, cancellation or lost focus consumes the pending click. Inside and outside the tab strip, tab dragging and pane-label drag previews use the same background, backdrop-filter and shadow CSS variables. In-strip reorder and detach intent do not override these effects. Settings → General provides transparency (0–100%), backdrop blur (0–40px) and shadow strength (0–100%), a live preview and Restore defaults. Defaults are 20% transparency, 16px backdrop blur, 1.2 saturation and 25% of the original shadow alpha. Label text, icons and controls stay opaque; only the content behind the preview is blurred. Local storage persists the normalized numeric values, the pre-paint theme script applies them before hydration, and storage events synchronize same-origin windows. Theme changes preserve these preferences. Invalid or missing fields use defaults, finite numeric values are clamped, and zero blur or shadow disables that effect. Ordinary buttons and Resources outlines are unaffected. Dragging within the strip preserves reorder; releasing outside it preserves the existing transactional window transfer.</p><p>The New window cue stays inside the top tab strip, above the native webpage bounds. It does not follow the pointer into a WebContentsView. CSS stacking cannot place renderer content above an Electron child view; hiding the page or creating another native overlay is unnecessary for a strip-level cue. Existing pointer capture and desktop transfer transactions remain authoritative.</p><p>A single webpage tab dragged onto Resources in an existing visible conversation attaches that exact Page to the conversation on release. The Resources navigation entry works even while another sidebar view is selected; the open Resources body is also a target. When Resources is not selected, only its navigation row accepts and highlights a drop; the other sidebar view is not a Resources target. When Resources is expanded, its body also accepts drops and the preview highlights that body below the navigation row. The row and body are never combined into one rectangle. Feedback uses one border without blurring the contents. Its rectangle matches the target's outer bounds with no inset; the navigation-row outline uses the same corner radius as the button. Success opens Resources while preserving the active conversation, webpage identity, top tab and original associations. Attachment grants use through the existing resource governance; it does not interrupt or override another execution's active operation. Compound groups, unsent drafts and other tab kinds are not attachment sources or destinations.</p><p>The owner-authorized server verifies the session and exact live window/tab/native-target identity from the registered desktop connection before retaining the association. It reuses BrowserResourceStore rather than creating a URL copy. Failure reports an error and does not navigate, detach or fabricate a successful binding. Native connection changes reject stale results. Drag cancellation sends no attachment command. Keyboard activation and context menus retain their existing behavior.</p></section>
+<section id="conversation-file-preview" class="card"><h2>Conversation file previews</h2><p>The visible contract is chat on the left, a document on the right, an output file card, and an explicit refresh action after changes. Reuse existing CenterTab groups and DocumentWindow; preserve global widths, font tokens, resizing, navigation and user-owned layouts.</p><p>Completed live assistant replies expose local Markdown file links and send_file attachments as compact document rows. The first supported output opens automatically beside its own currently focused conversation. Historical hydration, failed or cancelled replies and background conversations never open a preview. An existing manual split or dirty preview is retained; output rows remain available for explicit opening. Preview tabs are session-attributed, and reopen the same authorized file instead of accumulating duplicate panes.</p><p>Project-contained output files use the existing project document owner. Other absolute output paths use the existing session-checked read-only attachment owner. File content is never executed, embedded as raw HTML, or authorized by a model-generated pathname. New preview controls use the installed animated Lucide icon set, keyboard focus and reduced-motion behavior.</p><p>A visible document checks lightweight, owner-authorized filesystem metadata. A changed version displays File changed with Refresh. Refresh also remains available at all times, reads current disk bytes without browser caching, and updates the preview only after success. Local edits, pending publications and rich-editor changes are never discarded by Refresh. The existing explicit discard and conflict flows retain their behavior. Hidden panes stop polling; failed metadata or content reads retain the old display and provide a retry.</p><p>Acceptance uses the public reply finalization, output rows, tab store and DocumentWindow: a newly completed file output creates chat-left/file-right; same-path output does not duplicate; changing files preserves old tabs and drafts; background/history/remount cannot take over; actual PDF/text preview changes only after Refresh. Metadata shares the existing root checks and disclosure bounds.</p><p>Logical file tabs that reference the same project document share one persistent physical editor. Switching conversations moves that existing pane into the active layout and retains its native engine and draft. Closing a tab closes the controller only when no retained file tab references that document. If duplicate aliases are visible together, the other pane offers Show here to move the existing editor without mounting a second one.</p></section><section id="native-window-controls" class="card"><h2>Native window control alignment</h2><p>The 40 CSS pixel desktop tab row, navigation arrows and tab controls share one vertical center. macOS uses native hiddenInset controls with a 16 DIP button frame. Electron positions those controls in device-independent pixels, while Chromium scales the tab row with renderer zoom. A fixed native inset therefore drifts from the row after zooming.</p><p>The main process reads the owning renderer's current zoom factor and sets the native top inset to round((40 × zoom − 16) / 2), clamped to zero. The horizontal inset is the top inset plus 1 DIP. The current macOS native red circle is inset one DIP farther vertically than horizontally within its control frame; this correction gives equal visible top and left margins. Both axes follow renderer zoom; tab horizontal spacing stays unchanged. Window creation, document load, renderer resize and exit from fullscreen refresh the position. The preload sends a payload-free resize notification; the main process accepts only the owning BrowserWindow's main document. Embedded websites, subframes and overlay views cannot move window controls. No polling, persisted geometry or zoom reset is added. Windows retains its existing Window Controls Overlay; Linux retains native decorations.</p><p>Adopt Electron's <a href="https://www.electronjs.org/docs/latest/api/base-window#winsetwindowbuttonpositionposition-macos">setWindowButtonPosition</a> and <a href="https://www.electronjs.org/docs/latest/api/web-contents#contentsgetzoomfactor">getZoomFactor</a>. Do not rely solely on zoom-changed, whose documented event concerns mouse-wheel zoom requests. Renderer resize covers menu and keyboard zoom without duplicating zoom state.</p><p>Acceptance: native control centers and navigation/tab centers differ by at most one DIP at ordinary supported zoom, and the visible red-circle top and left margins differ by at most one DIP; native rounding is expected. Initial load, resize, zoom and leaving fullscreen preserve this result in each window. At extreme zoom where the row is shorter than the native control frame, the native inset is zero. Existing controls, tabs, window lifecycle and non-macOS behavior retain their contracts.</p></section>
+<section id="window-navigation"><h2>Independent tab navigation</h2>
+<p>Opening application management pages uses the application router to load their components. These routes remain in the selected tab's page history. Selecting a tab restores its own content through the shell; session routes remain shallow. Management detail routes retain direct-link support.</p>
+<p>Each tab owns one ordered page history and cursor. Its default launcher is the first page. Navigation replaces content in that tab; Back and Forward change only that tab's content. Selecting another tab never records a visit. A destination already shown elsewhere does not redirect replay or modify that other tab. Sessions and applications may be displayed by distinct tab instances.</p>
+<p>Page snapshots contain page identity, session metadata, content route and file-view snapshot, never nested histories. The existing pageHistory persistence is the only history storage. Session legacy history is converted on first navigation. File-tree view data is derived from the active tab; switching tabs restores that tab's current route and file view. Background ACK/title changes update retained pages without appending history.</p>
+<p>Explicit new-tab actions still create tabs. Launcher choices and navigation within a session, Files or Browser home update the current tab. Sidebar management visits update the selected tab's current route and visible label. When a target identity already belongs to another tab, the current slot gets a unique instance identity. Native browser URL history remains in browser controls. No window-wide or cross-tab fallback history is retained.</p>
+<p>Acceptance: create A and B with different page histories; switch between them; traverse both directions and assert the other tab and its cursor remain byte-for-byte unchanged. Cover default launcher, files/folders, sessions and application tabs, including identical destinations in two tabs, draft ACK/title, delete, reload and grouped layout references.</p>
+<p>Code organization: center-tabs-store.ts is the public composition entry. store/ contains typed state, shared commit helpers and actions grouped by layout, navigation, sessions, pages, browser, split and transfer. navigation/ contains pure page-history and legacy-session helpers plus selectors. No action module owns a second history store.</p>
+</section><section id="global-settings"><h2>Page navigation and tab titles</h2><p>Every application route, including Settings, Agents, Abilities, Applications, conversation History and Scheduler, is a visit in the selected tab. The visible tab label follows the current page. Management routes use their page or settings-section label; conversation, file and webpage titles remain their existing content metadata.</p><p>Back and Forward restore the selected tab's own route and label. Switching tabs restores that tab's current page. Reload and transfer preserve management visits instead of removing them. Visiting a page does not rename the underlying conversation or change another tab.</p><p>A page has at most one tab. Visiting a page that another tab already shows focuses that tab, moved to the visited route, and leaves the current tab as it was. Routes that share a sidebar entry count as one page: Programs, Skills, MCP and Plugins are Abilities; Chats, Projects and Memory are History; every Settings section is Settings. The rule lives in <code>recordRouteNavigation</code>, so the sidebar, the command palette and in-page links all follow it.</p><p>A split holds only chat-area content. Visiting a page from a tab inside a split opens that page in a new top-level tab placed after the split, and the split keeps its members and layout. A restored split member that already carries a page route leaves its split.</p><p>Reuse navigationRoute and pageHistory. Route labels are derived for presentation, with no second title or history store. Unknown route labels use their route path rather than a stale content title.</p><p>Acceptance: navigate a single tab through a conversation, Agents, Abilities, Applications and Settings sections; check visible names, Back/Forward, switching to another tab, persistence and transfer. Background conversation-title updates must remain available when returning to the conversation.</p><p>Restoring a detail route from another page first loads its exported host route, then replaces the temporary host URL with the saved detail URL before recording the visit. Duplicate activation requests share one navigation. If a newer tab activation occurs before the host commits, the late commit restores the latest target and is not recorded as a visit. Provider detail routes, skill detail routes and plugin detail routes must never trigger a document reload when switching tabs.</p><p>Provider selection derives from the current route parameter. A late list response may choose a fallback only for the unqualified provider page; it cannot overwrite a URL-selected detail. Changing the detail does not reload the provider catalog.</p></section>
+<section id="implementation-status"><h2>Implementation status</h2>
+<p>The web-tab presentation in sections 1–7 is implemented as mapped in section 6; section 7 lists where the code and the product semantics still differ. The other parts:</p>
+<div class="tbl"><table><thead><tr><th>Part</th><th>Status</th></tr></thead><tbody><tr><td>8 · Session-tab back and forward</td><td>Independent per-tab navigation and default-entry restoration are implemented and passed independent specification and quality reviews. Public-entry tests cover navigation, routes, file renaming and historical-draft transfer.</td></tr><tr><td>Interactive floating page</td><td>Source implementation passes independent specification and quality review. Installed-App acceptance and verification results are recorded separately; a source review does not establish native rendering performance.</td></tr><tr><td>Tab press, release and resource attachment</td><td>Behavioral tests cover press versus release, drag/cancel click suppression, Resources targeting, same-Page attachment, unauthorized and stale identities, failure and duplicate attachment. Existing Web, desktop, resource and contract checks remain required, followed by installed-App acceptance. The source implements these paths; independent reviews and the listed acceptance gates are required before release.</td></tr><tr><td>Conversation file previews</td><td>Output cards, owner-bound splits and draft-safe refresh use the shared tab layout and document controller. Component and browser checks cover these behaviors; independent review, release gates and installed-App evidence are maintained in the task verification record.</td></tr><tr><td>Native window control alignment</td><td>The shared desktop chrome module implements native alignment. Production checks cover actual preload resize notifications, sender ownership, zoom geometry and lifecycle wiring. Independent review, final verification and installed-App visual acceptance are separate release gates.</td></tr><tr><td>Independent tab navigation</td><td>The shared tab history and application-page boundary pass independent specification and quality review. The frontend manifest covers public stores, actual React tab activation, persistence and transfer, Web and Desktop checks, TypeScript and clean documentation links. Production build and installed-App acceptance are recorded separately.</td></tr><tr><td>Page navigation and tab titles</td><td>Dynamic route labels and retained page visits pass independent specification and quality review. Store and React navigation checks cover current names, independent histories and persistence. Frontend builds, static checks and bilingual documentation checks pass; installed-App acceptance is recorded separately.</td></tr></tbody></table></div></section>
+</main>
+</div>
+
+<script>
+(function () {
+  var scenes = {
+    owner: {
+      title: "Floating preview in session A",
+      hint: "Coverage function · pipCoversCenter",
+      lead: "Binding remains (ex.dev, A). All five coverage conditions pass; host is PiP.",
+      tabs: [["Session A", true], ["Session B", false], ["ex.dev", false]],
+      frame: "chat-pip",
+      checks: [1, 1, 1, 1, 1],
+      kv: "<b>Binding</b> tabId=w:https://ex.dev · owner=session A<br><b>Host</b> pip(A) · <code>peekLiveWebTabPipId()</code> = this leaf"
+    },
+    other: {
+      title: "Switch to session B; preview disappears",
+      hint: "Coverage function · pipCoversCenter",
+      lead: "Binding is unchanged. Condition 5 fails and the component returns null. Switching back to A restores it.",
+      tabs: [["Session A", false], ["Session B", true], ["ex.dev", false]],
+      frame: "chat",
+      checks: [1, 1, 1, 1, 0],
+      kv: "<b>Binding</b> retained · <code>pipBoundTabId()</code> still identifies this leaf<br><b>Host</b> none · opening the same URL from B forks"
+    },
+    mask: {
+      title: "Open the bound page directly",
+      hint: "Coverage function · pipCoversCenter",
+      lead: "Coverage is false. Chat preview hides and the native page fills the content area. Binding remains; returning to session A restores the preview.",
+      tabs: [["Session A", false], ["Session B", false], ["ex.dev", true]],
+      frame: "mask",
+      checks: [1, 0, 1, 0, 0],
+      kv: "<b>Binding</b> retained<br><b>Host</b> none · native .webFrame fills the area, no PiP"
+    },
+    file: {
+      title: "Activate files / terminal / other content",
+      hint: "Coverage function · pipCoversCenter",
+      lead: "The preview accompanies chat without covering other center pages. Binding remains.",
+      tabs: [["Session A", false], ["main.py", true], ["ex.dev", false]],
+      frame: "file",
+      checks: [1, 1, 1, 0, 0],
+      kv: "<b>Binding</b> retained<br><b>Host</b> none · clicking ex.dev again hides the preview and opens that page"
+    },
+    hide: {
+      title: "After closing the preview with ✕",
+      hint: "Restore check · pipCoversCenter(background…)",
+      lead: "hide() clears the active binding. Live coverage has no input. The chip checks the same function with the background pair; all five conditions pass on the owner, so the web page chip becomes clickable to restore it.",
+      tabs: [["Session A", true], ["Session B", false], ["ex.dev", false]],
+      frame: "chip",
+      checks: [1, 1, 1, 1, 1],
+      kv: "<b>Active binding</b> empty<br><b>Restore check</b> pipCoversCenter(backgroundTabId, A) is true · only clicking the chip calls show"
+    },
+    fork: {
+      title: "Session B opens the same URL",
+      hint: "Coverage function · current binding is the leaf forked for B",
+      lead: "The leaf is not reassigned: B receives a popup id rather than reusing A's w:url. The global PiP slot is still a singleton; show(new leaf, B) replaces A's binding.",
+      tabs: [["Session A", false], ["Session B", true], ["ex.dev", false]],
+      frame: "fork",
+      checks: [1, 1, 1, 1, 1],
+      kv: "<b>Current binding</b> new leaf :popup: · owner=B<br><b>A canonical leaf</b> remains in store without a binding; returning to A does not automatically restore the preview"
+    }
+  };
+
+  var labels = [
+    "Leaf is still web",
+    "activeId ≠ tabId",
+    "Absent from current group visibleIds",
+    "active.kind === session",
+    "activeId === ownerTabId"
+  ];
+
+  function paintFrame(kind) {
+    var chat = '<div class="chat-line w70"></div><div class="chat-line w50"></div><div class="chat-line w40"></div>';
+    var pip = '<div class="pip"><div class="pip-bar"><span>ex.dev</span><span>⧉ ⤢ ✕</span></div><div class="pip-page">Live page content</div></div>';
+    if (kind === "chat-pip") return chat + pip;
+    if (kind === "chat") return chat;
+    if (kind === "file") return '<div class="file-block">Files / terminal pane · not covered by PiP</div>';
+    if (kind === "mask") return '<div class="split-body"><div>Native .webFrame · fills content area</div></div>';
+    if (kind === "chip") return chat + '<div class="chip" aria-hidden="true">Web page chip · click to restore preview</div>';
+    if (kind === "fork") return chat + '<div class="pip fork-pip"><div class="pip-bar"><span>ex.dev · fork</span><span>✕</span></div><div class="pip-page">Independent instance for B</div></div>';
+    return chat;
+  }
+
+  function selectScene(id, focusTab) {
+    var scene = scenes[id];
+    if (!scene) return;
+    var tabs = document.querySelectorAll('.scene-tabs [role="tab"]');
+    tabs.forEach(function (btn) {
+      var on = btn.getAttribute("data-scene") === id;
+      btn.setAttribute("aria-selected", on ? "true" : "false");
+      btn.tabIndex = on ? 0 : -1;
+      if (on && focusTab) btn.focus();
+    });
+    document.getElementById("panel-scene").setAttribute("aria-labelledby", "tab-" + id);
+    document.getElementById("scene-hint").textContent = scene.hint;
+    document.getElementById("scene-title").textContent = scene.title;
+    document.getElementById("scene-lead").textContent = scene.lead;
+    document.getElementById("mock-tabs").innerHTML = scene.tabs.map(function (t) {
+      return '<span class="mock-tab' + (t[1] ? " on" : "") + '">' + t[0] + "</span>";
+    }).join("");
+    document.getElementById("mock-frame").innerHTML = paintFrame(scene.frame);
+    document.getElementById("mock-frame").setAttribute("aria-label", scene.title);
+    document.getElementById("scene-checks").innerHTML = labels.map(function (label, i) {
+      var pass = scene.checks[i];
+      return '<li class="' + (pass ? "pass" : "fail") + '"><span class="dot"></span><span>' +
+        (pass ? "Pass · " : "Blocked · ") + label + "</span></li>";
+    }).join("");
+    document.getElementById("scene-kv").innerHTML = scene.kv;
+  }
+
+  var order = ["owner", "other", "mask", "file", "hide", "fork"];
+  document.querySelector(".scene-tabs").addEventListener("click", function (event) {
+    var btn = event.target.closest("[data-scene]");
+    if (btn) selectScene(btn.getAttribute("data-scene"));
+  });
+  document.querySelector(".scene-tabs").addEventListener("keydown", function (event) {
+    var btn = event.target.closest("[data-scene]");
+    if (!btn) return;
+    var i = order.indexOf(btn.getAttribute("data-scene"));
+    var next = i;
+    if (event.key === "ArrowRight" || event.key === "ArrowDown") next = (i + 1) % order.length;
+    else if (event.key === "ArrowLeft" || event.key === "ArrowUp") next = (i - 1 + order.length) % order.length;
+    else if (event.key === "Home") next = 0;
+    else if (event.key === "End") next = order.length - 1;
+    else return;
+    event.preventDefault();
+    selectScene(order[next], true);
+  });
+
+  document.getElementById("jump").addEventListener("change", function () {
+    var href = this.value;
+    if (href) location.hash = href;
+  });
+
+  selectScene("owner");
+})();
+</script>
+</body>
+</html>

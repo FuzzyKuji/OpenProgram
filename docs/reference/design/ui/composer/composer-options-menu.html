@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenProgram · Composer Options Menu</title>
+<style>
+  :root { color-scheme:dark; --bg:#11141a; --panel:#181d26; --line:#303a4a;
+    --text:#dce3ec; --muted:#96a1b1; --blue:#72a8ff; --green:#55d69c;
+    --amber:#f0c562; --mono:ui-monospace,SFMono-Regular,Menlo,monospace }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif }
+  main { max-width:1000px; margin:auto; padding:42px 28px 80px }
+  h1 { margin:0 0 8px; font-size:29px } h2 { margin:38px 0 12px; padding-top:15px;
+    border-top:1px solid var(--line); font-size:20px } p { margin:8px 0 }
+  code { padding:1px 5px; border:1px solid #2b3544; border-radius:5px;
+    background:#0d1015; font-family:var(--mono); font-size:.91em }
+  .sub { color:var(--muted) } .lead,.card,.table-wrap { border:1px solid var(--line);
+    border-radius:11px; background:var(--panel) } .lead { margin-top:20px; padding:15px 17px;
+    border-left:4px solid var(--blue) } .grid { display:grid;
+    grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px } .card { padding:14px 15px }
+  h3 { margin:0 0 6px; font-size:15px } ul { margin:6px 0; padding-left:20px }
+  .table-wrap { max-width:100%; overflow:auto; overscroll-behavior-x:contain }
+  table { width:100%; border-collapse:collapse }
+  th,td { padding:9px 11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
+  th { color:#cbd5e3 } tr:last-child td { border-bottom:0 }
+  .table-wrap:focus-visible { outline:2px solid var(--blue); outline-offset:3px }
+  .ok { color:var(--green) } .pending { color:var(--amber) }
+  @media(max-width:760px) { main { padding:28px 20px 60px } .grid { grid-template-columns:1fr } code { overflow-wrap:anywhere } }
+</style>
+</head>
+<body><main>
+  <h1>Composer Options Menu</h1>
+  <p class="sub">Scope: the options (<code>+</code>) menu in <code>ControlsCluster</code>. This page is its design and acceptance list.</p>
+  <div class="lead">The options menu is the same radix dropdown as every other menu in the app — <code>DropdownMenu</code> / <code>DropdownMenuContent</code> / <code>DropdownMenuItem</code> from <code>components/ui/dropdown-menu.tsx</code> — on the shared menu tokens in <code>components/chat/top-bar/menu-styles.ts</code>: the glass <code>MENU_PANEL</code> frame (10px radius, 6px padding), <code>itemCls</code> rows (24px tall, 13px text, 6px radius, hover is the only tint), full-bleed <code>MENU_SEPARATOR</code>, and the right-aligned check column (<code>CHECK_SLOT</code> / <code>CHECK_SLOT_PAD</code>). It has no module CSS of its own.</div>
+
+  <h2>Rows</h2>
+  <p>The rows, top to bottom: Add files or photos, Record a workflow (desktop App on macOS only), a separator, Web Search, Sandbox, a separator, Unattended. Every row is <code>PlusMenuRow</code> (<code>controls/menu-pieces.tsx</code>): a <code>DropdownMenuItem</code> wearing <code>itemCls(false)</code> plus <code>MENU_ITEM_STATES</code>, which maps radix's keyboard highlight and disabled attributes onto the same hover rule. Layout is the shared grammar — a 16px Solar icon column, the label, optional right-side metadata, then the check column. A checked row shows a 14px ink <code>check-circle</code> that pops in once when it becomes checked; every other row reserves the column with <code>CHECK_SLOT_PAD</code>, so labels and checks sit in the same columns as the top-bar menus. Toggles (Web Search, Sandbox, Unattended) keep the menu open by preventing radix's select; Add files lets it close. An unavailable Sandbox is a disabled row that keeps its native <code>title</code> with the reason.</p>
+
+  <h2>No tool switch</h2>
+  <p>The menu has no Tools switch and no Access preset. Which tools a chat can call is the Agent's configuration (Agents → Capabilities → Programs: all, a selected scope or an Access preset, or none). A chat that should not call tools uses an Agent whose Programs are set to none. The composer only overlays Web Search on top of the Agent's tool set (see <a href="../../runtime/agent-configuration/tool-toggle-management.md">tool-toggle-management</a>).</p>
+
+  <h2>Reference comparison</h2>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable reference comparison table" data-scroll-region tabindex="0"><table><thead><tr><th>Option</th><th>Capabilities</th><th>Decision</th></tr></thead><tbody>
+    <tr><td>Radix dropdown on the shared menu tokens</td><td>Controlled open state, portal, floating position with flip and collision handling, roving focus, typeahead, Escape, outside press; the same wrappers and tokens as the top-bar, Recents and tab menus</td><td class="ok">Adopted; one menu grammar for the whole app</td></tr>
+    <tr><td>Base UI <code>Menu</code> with CSS-module styling</td><td>The same behaviours, but a second menu library and a second, hand-maintained copy of the panel and row styles that drifted from the shared ones</td><td>Removed; the options menu was the only consumer</td></tr>
+    <tr><td>Manual fixed positioning and backdrop</td><td>Click state is possible, but portal ordering, automatic flip and complete keyboard/focus behaviour are missing</td><td>Rejected; duplicates existing infrastructure</td></tr>
+    <tr><td>Native Popover API</td><td>Top layer and light dismissal, but lacks the menu roving-focus and positioning contracts</td><td>Not adopted; would maintain two menu semantics</td></tr>
+  </tbody></table></div>
+
+  <h2>DOM and ordering</h2>
+  <p>The menu renders through a radix portal on body at <code>z-[200]</code>, above the composer's own layers; radix copies the content's z-index onto its popper wrapper and handles anchoring, flipping and collisions. It opens <code>side="top" align="start" sideOffset={9}</code>. No trust, privacy, concurrency or cancellation boundary is involved: this is local presentation only.</p>
+
+  <h2>Acceptance</h2>
+  <p>Production files: <code>apps/web/components/chat/composer/controls/controls-cluster.tsx</code>, <code>controls/menu-pieces.tsx</code>, <code>components/chat/top-bar/menu-styles.ts</code>. Regression entry: <code>npm run check:composer-options-menu</code>.</p>
+  <ul>
+    <li>The options panel, rows, separators and checks come from <code>menu-styles.ts</code>; <code>composer.module.css</code> has no <code>.plusMenu*</code> rules.</li>
+    <li>The menu has no Tools row, no Access preset submenu and no Tools chip beside it.</li>
+    <li>There is no <code>menuPosition</code> or manually computed fixed coordinates.</li>
+  </ul>
+
+  <h2>Verification</h2>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable verification table" data-scroll-region tabindex="0"><table><thead><tr><th>Item</th><th>How</th></tr></thead><tbody>
+    <tr><td>Menu grammar</td><td><code>npm run check:composer-options-menu</code>: radix wrappers, shared tokens, no module CSS, no tool switch, z-order</td></tr>
+    <tr><td>Type checking</td><td><code>npx tsc --noEmit -p .</code> in <code>apps/web</code></td></tr>
+    <tr><td>Complete frontend checks</td><td><code>npm run check</code> and <code>npm run test:unit</code> in <code>apps/web</code></td></tr>
+    <tr><td>Visible acceptance</td><td><code>/Applications/OpenProgram.app</code>, the default profile and port <code>18100</code>; a second instance is not acceptance evidence</td></tr>
+  </tbody></table></div>
+<script>
+document.querySelectorAll('[data-scroll-region]').forEach(region=>region.addEventListener('keydown',event=>{
+  const step=Math.max(80,Math.round(region.clientWidth*.75));
+  if(event.key==='ArrowRight'){event.preventDefault();region.scrollLeft+=step}
+  else if(event.key==='ArrowLeft'){event.preventDefault();region.scrollLeft-=step}
+  else if(event.key==='Home'){event.preventDefault();region.scrollLeft=0}
+  else if(event.key==='End'){event.preventDefault();region.scrollLeft=region.scrollWidth}
+}));
+</script>
+</main></body></html>

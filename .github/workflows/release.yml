@@ -1,0 +1,428 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Existing immutable release tag to rebuild
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+env:
+  RELEASE_TAG: ${{ inputs.tag || github.ref_name }}
+
+jobs:
+  platforms:
+    runs-on: ubuntu-24.04
+    outputs:
+      runtime: ${{ steps.select.outputs.runtime }}
+      desktop: ${{ steps.select.outputs.desktop }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - name: Select release platforms
+        id: select
+        env:
+          WINDOWS_ENABLED: ${{ vars.OPENPROGRAM_RELEASE_WINDOWS }}
+        run: |
+          flags=()
+          if [ "$WINDOWS_ENABLED" = true ]; then flags+=(--windows); fi
+          python3 scripts/release/release-matrix.py "${flags[@]}" >> "$GITHUB_OUTPUT"
+
+  python:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.11.16"
+      - name: Verify version
+        run: python scripts/release/verify-release-version.py --tag "${RELEASE_TAG}"
+      - name: Build developer Python distributions
+        run: |
+          scripts/release/stage-release-assets.sh
+          rm -rf build
+          uv build
+      - name: Verify wheel contents
+        run: |
+          python -m zipfile -l dist/openprogram-*.whl | grep 'openprogram/interfaces/server/_frontend/index.html'
+          python -m zipfile -l dist/openprogram-*.whl | grep 'openprogram/interfaces/server/server.py'
+          python -m zipfile -l dist/openprogram-*.whl | grep 'openprogram/interfaces/server/routes/files/tree.py'
+          python -m zipfile -l dist/openprogram-*.whl | grep 'openprogram/interfaces/server/ws_actions/webtab.py'
+          python -m zipfile -l dist/openprogram-*.whl | grep 'openprogram/interfaces/cli/application.py'
+          wheel_path="$(realpath "$(find dist -name 'openprogram-*.whl' -print -quit)")"
+          checkout_path="$GITHUB_WORKSPACE"
+          probe_dir="$(mktemp -d)"
+          (cd "$probe_dir" && OPENPROGRAM_CHECKOUT="$checkout_path" uv run --with "$wheel_path" --no-project -- python -P -c 'from pathlib import Path; import os, openprogram, openprogram.interfaces.cli, openprogram.interfaces.server.server as server; import openprogram.interfaces.server.frontend as frontend; checkout = Path(os.environ["OPENPROGRAM_CHECKOUT"]).resolve(); modules = (openprogram, openprogram.interfaces.cli, server, frontend); assert all(not Path(module.__file__).resolve().is_relative_to(checkout) for module in modules); assert (frontend.out_dir() / "index.html").is_file(); assert openprogram.interfaces.cli.build_parser().prog == "openprogram"')
+          (cd "$probe_dir" && uv run --with "$wheel_path" --no-project -- openprogram --version)
+          (cd "$probe_dir" && uv run --with "$wheel_path" --no-project -- python -P -m openprogram --version)
+          (cd "$probe_dir" && uv run --with "$wheel_path" --no-project -- python -P -m openprogram.interfaces.cli --version)
+      - uses: actions/upload-artifact@v7
+        with:
+          name: developer-python-distributions
+          path: dist/*
+
+  product-runtime:
+    needs: platforms
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platforms.outputs.runtime) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: astral-sh/setup-uv@v10.0.1
+        with:
+          version: "0.11.16"
+      - name: Verify version
+        if: matrix.platform != 'windows'
+        run: python3 scripts/release/verify-release-version.py --tag "${RELEASE_TAG}"
+      - name: Verify version on Windows
+        if: matrix.platform == 'windows'
+        run: python scripts/release/verify-release-version.py --tag "$env:RELEASE_TAG"
+      - name: Install Linux runtime test dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends --yes xvfb xauth libgl1 libglib2.0-0
+      - name: Build complete product runtime
+        if: matrix.platform != 'windows'
+        env:
+          OPENPROGRAM_RUNTIME_ROOT: ${{ runner.temp }}/openprogram-runtime/runtime
+        shell: bash
+        run: |
+          if [ "${{ matrix.platform }}" = linux ]; then
+            xvfb-run -a scripts/release/build-product-runtime.sh
+          else
+            scripts/release/build-product-runtime.sh
+          fi
+      - name: Prepare native Windows ARM64 OpenSSL
+        if: matrix.platform == 'windows' && matrix.arch == 'arm64'
+        shell: pwsh
+        run: scripts/release/prepare-windows-native-deps.ps1 -Architecture arm64
+      - name: Build complete Windows product runtime
+        if: matrix.platform == 'windows'
+        env:
+          OPENPROGRAM_RUNTIME_ROOT: ${{ runner.temp }}/openprogram-runtime/runtime
+        shell: pwsh
+        run: scripts/release/build-product-runtime.ps1
+      - name: Verify Linux runtime on the Ubuntu 22.04 glibc baseline
+        if: matrix.platform == 'linux'
+        env:
+          OPENPROGRAM_RUNTIME_ROOT: ${{ runner.temp }}/openprogram-runtime/runtime
+        shell: bash
+        run: >-
+          bash scripts/release/smoke-linux-runtime-baseline.sh
+          "$OPENPROGRAM_RUNTIME_ROOT" "${{ matrix.arch }}"
+      - name: Archive complete product runtime
+        if: matrix.platform != 'windows'
+        env:
+          OPENPROGRAM_RUNTIME_ROOT: ${{ runner.temp }}/openprogram-runtime/runtime
+          OPENPROGRAM_RUNTIME_OUTPUT_DIR: ${{ runner.temp }}/runtime-artifacts
+          OPENPROGRAM_RUNTIME_PLATFORM: ${{ matrix.platform }}
+          OPENPROGRAM_RUNTIME_ARCH: ${{ matrix.arch }}
+        run: scripts/release/archive-product-runtime.sh
+      - name: Archive complete Windows product runtime
+        if: matrix.platform == 'windows'
+        env:
+          OPENPROGRAM_RUNTIME_ROOT: ${{ runner.temp }}/openprogram-runtime/runtime
+          OPENPROGRAM_RUNTIME_OUTPUT_DIR: ${{ runner.temp }}/runtime-artifacts
+          OPENPROGRAM_RUNTIME_PLATFORM: ${{ matrix.platform }}
+          OPENPROGRAM_RUNTIME_ARCH: ${{ matrix.arch }}
+        shell: pwsh
+        run: scripts/release/archive-product-runtime.ps1
+      - uses: actions/upload-artifact@v7
+        with:
+          name: product-runtime-${{ matrix.platform }}-${{ matrix.arch }}
+          path: ${{ runner.temp }}/runtime-artifacts/*
+
+  desktop:
+    needs: [platforms, product-runtime]
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platforms.outputs.desktop) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - uses: actions/download-artifact@v8
+        with:
+          name: product-runtime-${{ matrix.runtime_platform }}-${{ matrix.arch }}
+          path: runtime-artifact
+      - name: Verify version
+        if: matrix.platform != 'win'
+        run: python3 scripts/release/verify-release-version.py --tag "${RELEASE_TAG}"
+      - name: Verify version on Windows
+        if: matrix.platform == 'win'
+        run: python scripts/release/verify-release-version.py --tag "$env:RELEASE_TAG"
+      - name: Install desktop dependencies
+        run: npm ci --workspace apps/desktop --include-workspace-root
+      - name: Prepare embedded runtime from release archive
+        if: matrix.platform != 'win'
+        shell: bash
+        run: |
+          archive="$(find "$GITHUB_WORKSPACE/runtime-artifact" -name '*.tar.gz' -print -quit)"
+          test -n "$archive"
+          OPENPROGRAM_RUNTIME_ARCHIVE="$archive" scripts/release/prepare-desktop-runtime.sh
+      - name: Prepare embedded Windows runtime from release archive
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $env:OPENPROGRAM_RUNTIME_ARCHIVE = (
+            Get-ChildItem -LiteralPath "$env:GITHUB_WORKSPACE\runtime-artifact" -Filter "*.zip" |
+            Select-Object -First 1
+          ).FullName
+          if (-not $env:OPENPROGRAM_RUNTIME_ARCHIVE) {
+            throw "Windows runtime ZIP was not downloaded"
+          }
+          scripts/release/prepare-desktop-runtime.ps1
+      - name: Build staged macOS application
+        if: matrix.platform != 'win'
+        working-directory: apps/desktop
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: "false"
+        run: |
+          npm run icon:check
+          npx electron-builder --mac --dir --${{ matrix.builder_arch }} --publish never
+      - name: Sign and notarize macOS artifacts
+        if: matrix.platform != 'win'
+        env:
+          MAC_CSC_LINK: ${{ secrets.MAC_CSC_LINK }}
+          MAC_CSC_KEY_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+          OPENPROGRAM_SIGNING_IDENTITY: ${{ vars.MAC_SIGNING_IDENTITY }}
+        run: |
+          app="$(find apps/desktop/dist -maxdepth 2 -name OpenProgram.app -type d -print -quit)"
+          test -n "$app"
+          python3 scripts/release/ci-sign-macos.py --app "$app" --output apps/desktop/dist --arch ${{ matrix.builder_arch }}
+      - name: Require Windows signing credentials
+        if: matrix.platform == 'win'
+        shell: pwsh
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: |
+          if (-not $env:CSC_LINK -or -not $env:CSC_KEY_PASSWORD) {
+            throw "Windows Desktop publication requires WINDOWS_CSC_LINK and WINDOWS_CSC_KEY_PASSWORD"
+          }
+      - name: Build signed Windows installer
+        if: matrix.platform == 'win'
+        working-directory: apps/desktop
+        env:
+          CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+          WIN_CSC_LINK: ${{ secrets.WINDOWS_CSC_LINK }}
+          WIN_CSC_KEY_PASSWORD: ${{ secrets.WINDOWS_CSC_KEY_PASSWORD }}
+        run: npx electron-builder --win nsis --${{ matrix.builder_arch }} --publish never
+      - name: Verify Windows Authenticode signatures
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $Unpacked = Get-ChildItem -LiteralPath apps/desktop/dist -Directory |
+            Where-Object { $_.Name -match '^win(?:-arm64)?-unpacked$' } |
+            Select-Object -First 1
+          if (-not $Unpacked) { throw "unpacked Windows application is missing" }
+          $Files = @(
+            Get-ChildItem -LiteralPath apps/desktop/dist -Filter "*.exe" -File
+            Get-ChildItem -LiteralPath $Unpacked.FullName -Filter "OpenProgram.exe" -File
+          )
+          if ($Files.Count -lt 2) { throw "signed installer or application executable is missing" }
+          foreach ($File in $Files) {
+            $Signature = Get-AuthenticodeSignature -LiteralPath $File.FullName
+            if ($Signature.Status -ne "Valid" -or -not $Signature.SignerCertificate) {
+              throw "invalid Authenticode signature: $($File.FullName) ($($Signature.Status))"
+            }
+          }
+      - name: Verify embedded complete runtime
+        if: matrix.platform != 'win'
+        run: scripts/release/smoke-packaged-runtime.sh mac apps/desktop/dist
+      - name: Verify embedded complete Windows runtime
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: scripts/release/smoke-packaged-runtime.ps1 apps/desktop/dist
+      - name: Create SHA-256 checksums
+        if: matrix.platform != 'win'
+        shell: bash
+        run: |
+          cd apps/desktop/dist
+          find . -maxdepth 1 -type f \( -name '*.dmg' -o -name '*.zip' \) -print0 | sort -z | xargs -0 shasum -a 256 > SHA256SUMS-${{ matrix.platform }}-${{ matrix.arch }}
+      - name: Create Windows SHA-256 checksums
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          $Lines = Get-ChildItem -LiteralPath apps/desktop/dist -Filter "*.exe" -File |
+            Sort-Object Name |
+            ForEach-Object {
+              $Algorithm = [Security.Cryptography.SHA256]::Create()
+              $Stream = [IO.File]::OpenRead($_.FullName)
+              try {
+                $Hash = ([BitConverter]::ToString($Algorithm.ComputeHash($Stream))).Replace("-", "").ToLowerInvariant()
+              } finally {
+                $Stream.Dispose()
+                $Algorithm.Dispose()
+              }
+              "$Hash  $($_.Name)"
+            }
+          [IO.File]::WriteAllLines(
+            "apps/desktop/dist/SHA256SUMS-${{ matrix.platform }}-${{ matrix.arch }}",
+            $Lines,
+            [Text.UTF8Encoding]::new($false)
+          )
+      - uses: actions/upload-artifact@v7
+        with:
+          name: desktop-${{ matrix.platform }}-${{ matrix.arch }}
+          path: |
+            apps/desktop/dist/*.dmg
+            apps/desktop/dist/*.zip
+            apps/desktop/dist/*.exe
+            apps/desktop/dist/SHA256SUMS-*
+
+  cli-installer:
+    needs: [platforms, product-runtime]
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.platforms.outputs.runtime) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v8
+        with:
+          name: product-runtime-${{ matrix.platform }}-${{ matrix.arch }}
+          path: runtime-artifact
+      - name: Install the same complete runtime archive
+        if: matrix.platform != 'windows'
+        shell: bash
+        run: |
+          version="${RELEASE_TAG#v}"
+          archive="$(find "$GITHUB_WORKSPACE/runtime-artifact" -name '*.tar.gz' -print -quit)"
+          OPENPROGRAM_VERSION="$version" \
+          OPENPROGRAM_RUNTIME_ARCHIVE="$archive" \
+          OPENPROGRAM_STATE_DIR="$RUNNER_TEMP/openprogram-state" \
+          OPENPROGRAM_BIN_DIR="$RUNNER_TEMP/openprogram-bin" \
+            scripts/install-release.sh
+          "$RUNNER_TEMP/openprogram-bin/openprogram" --version
+      - name: Install the same complete Windows runtime archive
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $env:OPENPROGRAM_VERSION = $env:RELEASE_TAG.Substring(1)
+          $env:OPENPROGRAM_RUNTIME_ARCHIVE = (
+            Get-ChildItem -LiteralPath "$env:GITHUB_WORKSPACE\runtime-artifact" -Filter "*.zip" |
+            Select-Object -First 1
+          ).FullName
+          $env:OPENPROGRAM_STATE_DIR = "$env:RUNNER_TEMP\openprogram-state"
+          $env:OPENPROGRAM_BIN_DIR = "$env:RUNNER_TEMP\openprogram-bin"
+          scripts/install-release.ps1
+          & "$env:RUNNER_TEMP\openprogram-bin\openprogram.cmd" --version
+
+  publish:
+    needs: [python, product-runtime, desktop, cli-installer]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ env.RELEASE_TAG }}
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+      - name: Create release manifest
+        run: |
+          python scripts/release/create-release-manifest.py release-artifacts \
+            --version "$RELEASE_TAG" \
+            --output release-artifacts/release-manifest.json
+      - name: Publish GitHub Release
+        run: |
+          notes_file=".github/release-notes/$RELEASE_TAG.md"
+          release_version="${RELEASE_TAG#v}"
+          test -s "$notes_file" || {
+            echo "missing release notes: $notes_file" >&2
+            exit 1
+          }
+          python - "$notes_file" "$release_version" <<'PY'
+          import re
+          import sys
+          from pathlib import Path
+
+          notes_path = Path(sys.argv[1])
+          version = sys.argv[2]
+          notes = notes_path.read_text(encoding="utf-8")
+          expected_heading = f"# OpenProgram {version} Release Notes\n"
+          if not notes.startswith(expected_heading):
+              raise SystemExit(f"invalid release notes heading: {notes_path}")
+          if re.search(r"[\u3040-\u30ff\u3400-\u9fff\uac00-\ud7af]", notes):
+              raise SystemExit(f"release notes must be English: {notes_path}")
+          PY
+          mapfile -d '' files < <(find release-artifacts -type f -print0)
+          if draft="$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null)"; then
+            test "$draft" = true || {
+              echo "refusing to overwrite a public release: $RELEASE_TAG" >&2
+              exit 1
+            }
+            gh release upload "$RELEASE_TAG" "${files[@]}" --clobber
+            gh release edit "$RELEASE_TAG" --draft=false --latest \
+              --title "OpenProgram $release_version Release" --notes-file "$notes_file"
+          else
+            gh release create "$RELEASE_TAG" "${files[@]}" \
+              --verify-tag \
+              --title "OpenProgram $release_version Release" \
+              --notes-file "$notes_file"
+          fi
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - name: Verify public latest Release entry
+        run: |
+          api="https://api.github.com/repos/${GITHUB_REPOSITORY}/releases/latest"
+          for attempt in $(seq 1 12); do
+            if curl --disable --proto '=https' --tlsv1.2 -fsS \
+              --connect-timeout 5 --max-time 15 --max-filesize 2097152 \
+              --header "Authorization: Bearer $GH_TOKEN" \
+              --header 'Accept: application/vnd.github+json' \
+              --header 'X-GitHub-Api-Version: 2022-11-28' \
+              --header 'User-Agent: OpenProgram-release-gate' \
+              "$api" > latest.json; then
+              tag="$(jq -r '.tag_name // empty' latest.json)"
+              draft="$(jq -r '.draft' latest.json)"
+              prerelease="$(jq -r '.prerelease' latest.json)"
+              manifest_count="$(jq '[.assets[] | select(.name == "release-manifest.json")] | length' latest.json)"
+              if [ "$tag" = "$RELEASE_TAG" ] && \
+                 [ "$draft" = false ] && [ "$prerelease" = false ] && \
+                 [ "$manifest_count" = 1 ]; then
+                exit 0
+              fi
+            fi
+            sleep 5
+          done
+          echo "public latest Release did not expose the complete $RELEASE_TAG release" >&2
+          exit 1
+        env:
+          GH_TOKEN: ${{ github.token }}

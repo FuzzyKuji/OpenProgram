@@ -1,0 +1,281 @@
+/**
+ * Shared file-browsing plumbing used by the right-sidebar FileTree,
+ * the center FileTabPane / FileViewer, and anything else that talks
+ * to the worker's project-file actions. (Was part of the v1
+ * files-panel store; the tab state moved to center-tabs-store.)
+ */
+import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react";
+
+import { wsRequest } from "@/lib/net/ws/ws-request";
+import { useSessionStore } from "@/lib/session-store";
+import {
+  fileScopeKey,
+  getDraftPersistenceError,
+  subscribeDraftPersistenceErrors,
+  type FileReadResult,
+  type Project,
+} from "./drafts/file-state-shared";
+
+export {
+  DRAFT_MAX_BYTES,
+  DRAFT_MAX_ENTRIES,
+  draftPersistenceErrors,
+  fileResponseMatchesOwner,
+  fileScopeKey,
+  getDraftPersistenceError,
+  notifyDraftErrorListeners,
+  reportDraftPersistenceError,
+  subscribeDraftPersistenceErrors,
+} from "./drafts/file-state-shared";
+export type { FileReadResult, Project } from "./drafts/file-state-shared";
+
+interface ProjectListResponse {
+  projects: Project[] | null;
+  current_project_id: string | null;
+  session_id: string | null;
+  status?: "ready" | "error";
+  error_code?: string | null;
+  error?: string | null;
+}
+
+export function useDraftPersistenceError(scope: string): string | null {
+  return useSyncExternalStore(
+    subscribeDraftPersistenceErrors,
+    () => getDraftPersistenceError(scope),
+    () => getDraftPersistenceError(scope),
+  );
+}
+
+/**
+ * Resolve the conversation's current project (id + path). Returns
+ * undefined while resolving, null when nothing browsable is bound.
+ *
+ * Mirrors the topbar ProjectBadge: one-shot ``list_projects`` over WS
+ * (retried until the socket answers), re-resolved on session change
+ * and on the ``project-changed`` event the project menu fires.
+ */
+export function useCurrentProject(scope?: { sessionId: string | null; chatKey: string | null }): Project | null | undefined {
+  const sessionId = useSessionStore((s) => scope ? scope.sessionId : s.currentSessionId);
+  const pendingProjectId = useSessionStore((s) =>
+    (scope ? scope.chatKey : s.activeChatKey)
+      ? s.pendingProjectsByChat[(scope ? scope.chatKey : s.activeChatKey)!] ?? null : null,
+  );
+  const [result, setResult] = useState<{ owner: string; project: Project | null } | null>(null);
+  const owner = `${sessionId ?? ""}:${pendingProjectId ?? ""}`;
+  const resolveGeneration = useRef(0);
+  const resolveController = useRef<AbortController | null>(null);
+
+  const resolve = useCallback(async (): Promise<boolean> => {
+    const generation = ++resolveGeneration.current;
+    resolveController.current?.abort();
+    const controller = new AbortController();
+    resolveController.current = controller;
+    setResult(null);
+    const data = await wsRequest<ProjectListResponse>(
+      "list_projects",
+      { session_id: sessionId ?? "" },
+      "projects_list",
+      // 为什么要认领回复：侧栏 Projects 分组、/projects 页也会并发发
+      // list_projects（session_id 为空），那些回复的 current_project_id
+      // 恒为 null。wsRequest 仅按帧类型匹配时会拿到别人的空回复，导致
+      // 这里误回落到默认项目——右栏文件树被钉死在默认根目录。后端会
+      // 回显请求的 session_id（空串回显 null），据此只认自己那条。
+      (d) => (d.session_id ?? null) === (sessionId || null),
+      4000,
+      { signal: controller.signal },
+    );
+    if (generation !== resolveGeneration.current || controller.signal.aborted) return false;
+    if (!data || data.status === "error" || !Array.isArray(data.projects)) return false;
+    const projects = data.projects;
+    const wantId =
+      (!sessionId ? pendingProjectId : data.current_project_id) ??
+      data.current_project_id ??
+      null;
+    const cur =
+      projects.find((p) => p.id === wantId) ??
+      projects.find((p) => p.is_default) ??
+      null;
+    // The default ad-hoc project may have no real folder — treat a
+    // pathless project as "nothing bound".
+    setResult({ owner, project: cur && cur.path ? cur : null });
+    return true;
+  }, [pendingProjectId, sessionId, owner]);
+
+  useEffect(() => {
+    let cancelled = false;
+    let tries = 0;
+    const attempt = () => {
+      if (cancelled) return;
+      resolve().then((ok) => {
+        if (!ok && !cancelled && tries++ < 20) setTimeout(attempt, 300);
+      });
+    };
+    attempt();
+    const onChanged = () => resolve();
+    window.addEventListener("project-changed", onChanged);
+    return () => {
+      cancelled = true;
+      resolveGeneration.current += 1;
+      resolveController.current?.abort();
+      resolveController.current = null;
+      window.removeEventListener("project-changed", onChanged);
+    };
+  }, [resolve]);
+
+  return result?.owner === owner ? result.project : undefined;
+}
+
+/** Last mtime seen per project-relative file path (fed by the tree
+ * listing) — lets the viewer cache invalidate on refetch. */
+export const latestFileMtime = new Map<string, number>();
+export const LATEST_MTIME_MAX_ENTRIES = 256;
+
+export const READ_CACHE_MAX_ENTRIES = 64;
+export const READ_CACHE_MAX_BYTES = 16 * 1024 * 1024;
+const utf8 = new TextEncoder();
+
+/** Read cache revisions use mtime as the worker's content identity. */
+export function fileReadCacheKey(projectId: string, path: string, mtime: number): string {
+  return `${fileScopeKey(projectId, path)}:${mtime}`;
+}
+
+/** Read-result cache. Production writes use cacheFileRead to enforce bounds. */
+export const readCache = new Map<string, FileReadResult>();
+const readCacheBytes = new Map<string, number>();
+
+function readResultBytes(result: FileReadResult): number {
+  return result.content === undefined ? 0 : utf8.encode(result.content).byteLength;
+}
+
+function touchReadCache(key: string, value: FileReadResult): void {
+  readCache.delete(key);
+  readCache.set(key, value);
+}
+
+function dropReadCacheScope(scope: string): void {
+  for (const key of [...readCache.keys()]) {
+    if (!key.startsWith(`${scope}:`)) continue;
+    readCache.delete(key);
+    readCacheBytes.delete(key);
+  }
+}
+
+export function getCachedFileRead(projectId: string, path: string, mtime?: number): FileReadResult | undefined {
+  const scope = fileScopeKey(projectId, path);
+  // Without a current tree mtime, a cached read has no verifiable identity.
+  // Never return it merely because it is the newest entry for this path.
+  const knownMtime = mtime ?? latestFileMtime.get(scope);
+  if (knownMtime === undefined) return undefined;
+  const key = fileReadCacheKey(projectId, path, knownMtime);
+  if (!key) return undefined;
+  const value = readCache.get(key);
+  if (!value) return undefined;
+  touchReadCache(key, value);
+  return value;
+}
+
+export function cacheFileRead(result: FileReadResult): void {
+  if (result.error || result.content === undefined || result.truncated) return;
+  const key = fileReadCacheKey(result.project_id, result.path, result.mtime);
+  const bytes = readResultBytes(result);
+  if (bytes > READ_CACHE_MAX_BYTES) return;
+  readCache.delete(key);
+  readCacheBytes.delete(key);
+  let total = [...readCacheBytes.values()].reduce((sum, value) => sum + value, 0);
+  while (
+    (readCache.size >= READ_CACHE_MAX_ENTRIES || total + bytes > READ_CACHE_MAX_BYTES) &&
+    readCache.size > 0
+  ) {
+    const oldest = readCache.keys().next().value as string | undefined;
+    if (!oldest) break;
+    total -= readCacheBytes.get(oldest) ?? 0;
+    readCacheBytes.delete(oldest);
+    readCache.delete(oldest);
+  }
+  if (readCache.size >= READ_CACHE_MAX_ENTRIES || total + bytes > READ_CACHE_MAX_BYTES) return;
+  readCache.set(key, result);
+  readCacheBytes.set(key, bytes);
+}
+
+export function noteFileMtime(projectId: string, path: string, mtime: number): void {
+  const scope = fileScopeKey(projectId, path);
+  const previous = latestFileMtime.get(scope);
+  latestFileMtime.delete(scope);
+  latestFileMtime.set(scope, mtime);
+  while (latestFileMtime.size > LATEST_MTIME_MAX_ENTRIES) {
+    const oldest = latestFileMtime.keys().next().value as string | undefined;
+    if (!oldest) break;
+    latestFileMtime.delete(oldest);
+    dropReadCacheScope(oldest);
+  }
+  if (previous === undefined || previous === mtime) return;
+  dropReadCacheScope(scope);
+}
+
+/** Drop the cached read (and known mtime) for one file so the next
+ * viewer mount refetches — called after a successful save. */
+export function invalidateFileRead(projectId: string, path: string): void {
+  const scope = fileScopeKey(projectId, path);
+  for (const key of [...readCache.keys()]) {
+    if (!key.startsWith(`${scope}:`) && !key.startsWith(`${scope}/`)) continue;
+    readCache.delete(key);
+    readCacheBytes.delete(key);
+  }
+  latestFileMtime.delete(scope);
+}
+
+/** URL of the worker's raw-bytes endpoint (same origin — single port). */
+export function rawFileUrl(projectId: string, path: string): string {
+  return `/files/raw?project_id=${encodeURIComponent(projectId)}&path=${encodeURIComponent(path)}`;
+}
+
+/** Raw bytes of an ABSOLUTE path — chat attachments, which live in the
+ *  session workdir or a channel's inbound directory rather than under a
+ *  project id. `/files/raw` refuses absolute paths on purpose; this is
+ *  the separate route (`/api/file-raw`) that accepts one and checks it
+ *  against the attachment roots. */
+export function absRawFileUrl(absPath: string, sessionId?: string): string {
+  const sid = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : "";
+  return `/api/file-raw?path=${encodeURIComponent(absPath)}${sid}`;
+}
+
+/** Text of an ABSOLUTE path, same root check as {@link absRawFileUrl}. */
+export function absFileReadUrl(absPath: string, sessionId?: string): string {
+  const sid = sessionId ? `&session_id=${encodeURIComponent(sessionId)}` : "";
+  return `/api/file-read?path=${encodeURIComponent(absPath)}${sid}`;
+}
+
+export {
+  canPersistFileDraft,
+  clearFileDraftsForPath,
+  clearProjectDrafts,
+  collectDirtyFileTabs,
+  dirtyDraftsForPath,
+  discardFileDraft,
+  discardFileDraftsBeforeClose,
+  fileDraftBytes,
+  fileDraftKey,
+  fileDrafts,
+  hasDirtyDraftsForPath,
+  loadFileDraft,
+  loadFileDraftsForPath,
+  moveFileDrafts,
+  persistFileDraft,
+  runServerRenameWithDrafts,
+  setDraftStoreAdapterForTests,
+  snapshotFileDrafts,
+  applyFileDraftSnapshot,
+} from "./drafts/file-drafts";
+export type {
+  DraftPersistenceErrorCode,
+  DraftPersistenceResult,
+  FileDraft,
+  FileDraftSnapshotEntry,
+  ServerRenameResult,
+} from "./drafts/file-drafts";
+
+/* ---- Unsaved editor drafts ---------------------------------------- */
+
+/** One file tab's unsaved editor buffer: the user's draft plus the
+ * content+mtime of the read it drifted from (the mtime is the
+ * optimistic-lock token a later save presents as expected_mtime). */

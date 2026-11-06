@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Agentic</title>
+<link rel="stylesheet" href="/css/style.css?v=113">
+</head>
+<body>
+<div class="app">
+  <!-- Left Sidebar -->
+  <!-- SIDEBAR -->
+
+  <div class="col-resize" id="sidebarResize"></div>
+
+  <!-- Main Area -->
+  <div class="main">
+    <!-- Chat area -->
+    <div id="chatView">
+      <div class="chat-area" id="chatArea">
+        <div class="chat-messages" id="chatMessages">
+          <!-- The React <WelcomeScreen /> portal mounts here. PageShell
+               drops in a #welcome-mount placeholder after innerHTML. -->
+        </div>
+      </div>
+
+      <div class="input-area">
+        <!-- Clip container: only the area ABOVE the input-wrapper's
+             top edge is visible. The slashMenu inside slides down
+             past the clip's bottom edge to "vanish into" the input
+             box — overflow:hidden does the masking automatically,
+             no matter how tall the menu is. -->
+        <div class="slash-clip">
+          <div id="slashMenu" class="slash-menu" style="display:none"></div>
+        </div>
+        <div class="input-wrapper">
+          <button class="send-btn" id="sendBtn" onclick="onSendBtnClick()" title="Send message"><svg viewBox="0 0 24 24"><path d="M2.01 21L23 12 2.01 3 2 10l15 2-15 2z"/></svg></button>
+          <button class="stop-btn" id="stopBtn" onclick="stopExecution()" title="Stop" style="display:none"><svg viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2"/></svg></button>
+          <div class="input-top-row">
+            <textarea id="chatInput" class="chat-input" placeholder="create / run / edit or ask anything... (type / for commands)" rows="1"></textarea>
+          </div>
+          <div class="input-bottom-row">
+            <div class="input-options">
+              <button class="plus-btn" id="plusBtn" onclick="togglePlusMenu(event)" title="Add files, web search, and more" aria-label="More options">
+                <svg width="16" height="16" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><line x1="10" y1="4" x2="10" y2="16"/><line x1="4" y1="10" x2="16" y2="10"/></svg>
+              </button>
+              <div class="active-tool-chips" id="activeToolChips"></div>
+              <div class="plus-menu" id="plusMenu" onclick="event.stopPropagation()">
+                <div class="plus-menu-item" id="plusMenuWebSearch" onclick="toggleWebSearchEnabled(event); renderPlusMenu();" title="Give the agent web search this turn">
+                  <div class="plus-menu-left">
+                    <span class="plus-menu-icon"><svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><line x1="2" y1="12" x2="22" y2="12"/><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"/></svg></span>
+                    <span class="plus-menu-label">Web Search<span class="plus-menu-sublabel" id="plusMenuWebSearchSub"></span></span>
+                  </div>
+                  <div class="plus-menu-right" id="plusMenuWebSearchCheck"></div>
+                </div>
+              </div>
+              <div class="thinking-selector" id="thinkingSelector" onclick="toggleThinkingMenu(event)">
+                <span id="thinkingLabel">effort: …</span>
+                <svg class="thinking-arrow" width="10" height="10" viewBox="0 0 10 10"><path d="M2 3.5L5 6.5L8 3.5" stroke="currentColor" stroke-width="1.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </div>
+              <div class="thinking-menu" id="thinkingMenu"></div>
+            </div>
+            <span id="tokenBadge" class="context-stats-label" style="display:none" title="Context token usage"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+</div>
+
+<!-- Application Scripts (order matters: state → helpers → tree → chat → sidebar → providers → settings → ui → init) -->
+<script src="/js/shared/state.js?v=6"></script>
+<script src="/js/shared/helpers.js?v=15"></script>
+<script src="/js/chat/tree.js?v=8"></script>
+<script src="/js/chat/chat.js?v=10"></script>
+<script src="/js/shared/sidebar.js?v=34"></script>
+<script src="/js/shared/providers.js?v=8"></script>
+<script src="/js/shared/settings.js?v=13"></script>
+<script src="/js/shared/ui.js?v=11"></script>
+<script src="/js/shared/scrollbar.js?v=2"></script>
+<script src="/js/chat/init.js?v=13"></script>
+</body>
+</html>

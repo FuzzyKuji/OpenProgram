@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh"><meta charset="utf-8"><title>Web 前端子进程创建</title>
+<style>body{font:16px/1.6 system-ui;max-width:850px;margin:48px auto;padding:0 24px;color:#172033}code{background:#eef2f6;padding:2px 4px}</style>
+<h1>Web 前端子进程创建</h1>
+<p>worker 通过 <code>start_web_frontend</code> 启动 Next.js，并在 <code>.next/BUILD_ID</code> 变化时重启它。两个子进程创建位置均使用 <code>openprogram.host._platform.process_ownership</code> 中的共享辅助函数 <code>no_window_creation_flags</code>。每个调用函数都像构建函数一样，在自己的作用域内导入该辅助函数。构建函数中的局部导入不能为另一个函数提供绑定。</p>
+<h2>兼容性与失败行为</h2>
+<p>现有平台辅助函数在 POSIX 上提供零标志，在 Windows 上提供后台窗口标志。命令构造、环境传递、端口回收及 manifest 修补保持当前行为。初次创建失败时，报告 OSError 后返回 None。重建后的创建失败时报告 OSError，监听器仍可观察下一次构建。关闭时选择最近一次成功创建的子进程句柄。</p>
+<h2>验收与边界</h2>
+<p>组件测试通过模拟子进程调用公开启动入口，捕获生产监听器回调而不启动无限运行的线程。临时 BUILD_ID 文件触发连续重建。测试验证初次与重复创建位置的辅助函数标志、最新子进程关闭，以及创建失败后的恢复。进程创建和端口回收被隔离，因此检查不影响运行中的 App。测试先在缺少导入的基线上失败，再在贡献者的修复后通过。</p>
+<p>本次改动恢复既有行为，不改变依赖、API、配置或安全边界。监听器调度、关闭取消及无关平台行为不在此次修复范围内。</p>
+<h2>实现状态</h2>
+<p>贡献者添加的两处局部导入实现了此修复。发布前需要行为检查和独立审查；具体命令与结果记录在审查记录中。</p>
+</html>

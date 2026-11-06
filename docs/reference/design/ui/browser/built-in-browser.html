@@ -1,0 +1,578 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>OpenProgram built-in browser design</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --paper: #f4f5f8;
+      --surface: #ffffff;
+      --ink: #171922;
+      --muted: #646977;
+      --faint: #8a909f;
+      --line: #d9dce5;
+      --line-strong: #b9bfcc;
+      --accent: #5d55d7;
+      --accent-soft: #eceafd;
+      --green: #367b5a;
+      --green-soft: #e6f1eb;
+      --blue: #3569a8;
+      --dark: #171715;
+      --dark-2: #242421;
+      --dark-line: #3b3a36;
+      --dark-text: #f4f2eb;
+      --dark-muted: #aaa79f;
+      --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      --mono: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 16px/1.7 var(--sans); }
+    a { color: var(--blue); text-underline-offset: 3px; }
+    code { padding: .12em .38em; border-radius: 4px; background: #e9ebf1; color: var(--ink); font: .88em/1.5 var(--mono); }
+    button { font: inherit; }
+    .shell { display: grid; grid-template-columns: minmax(0, 880px) 180px; gap: 72px; width: min(1180px, calc(100% - 48px)); margin: 0 auto; padding: 68px 0 96px; }
+    main { min-width: 0; }
+    .eyebrow, .label, .section-no, .metric-label, .rail-title { color: var(--faint); font: 600 11px/1.4 var(--mono); letter-spacing: .12em; text-transform: uppercase; }
+    h1, h2, h3 { font-family: var(--sans); font-weight: 650; }
+    h1 { max-width: 760px; margin: 12px 0 18px; font-size: clamp(36px, 4.6vw, 56px); line-height: 1.08; letter-spacing: -.035em; }
+    .lede { max-width: 720px; margin: 0; color: #484741; font-size: 18px; line-height: 1.75; }
+    .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 28px; }
+    .pill { display: inline-flex; align-items: center; gap: 7px; min-height: 30px; padding: 4px 11px; border: 1px solid var(--line); border-radius: 999px; background: rgba(255,255,255,.52); color: #55534e; font-size: 12px; }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--green); }
+    .metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin: 38px 0 64px; padding: 14px 0; border-block: 1px solid var(--line); }
+    .metric { padding: 0 18px; border-left: 1px solid var(--line); }
+    .metric:first-child { padding-left: 0; border-left: 0; }
+    .metric-value { display: block; margin-top: 5px; font-size: 14px; font-weight: 650; line-height: 1.4; }
+    .section { margin-top: 74px; scroll-margin-top: 22px; }
+    .section-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 12px; }
+    .section-no { min-width: 32px; padding: 4px 7px; border-radius: 6px; background: var(--accent-soft); color: var(--accent); text-align: center; letter-spacing: .04em; }
+    h2 { margin: 0; font-size: 31px; line-height: 1.2; letter-spacing: -.02em; }
+    h3 { margin: 30px 0 8px; font-size: 22px; line-height: 1.3; }
+    .section-intro { max-width: 700px; margin: 0 0 26px 46px; color: var(--muted); }
+    .decision { display: grid; grid-template-columns: 160px 1fr; gap: 28px; padding: 22px 0; border-top: 1px solid var(--line); }
+    .decision:last-child { border-bottom: 1px solid var(--line); }
+    .decision strong { font-size: 17px; font-weight: 650; }
+    .decision p { margin: 0; color: #55534e; }
+    .demo-wrap { overflow: hidden; margin-top: 28px; border: 1px solid var(--line-strong); border-radius: 16px; background: var(--dark); box-shadow: 0 18px 45px rgba(42,38,30,.08); }
+    .demo-tabs { display: flex; gap: 4px; overflow-x: auto; padding: 10px; border-bottom: 1px solid var(--dark-line); background: #11110f; }
+    .demo-tab { flex: 0 0 auto; padding: 8px 12px; border: 0; border-radius: 8px; background: transparent; color: var(--dark-muted); cursor: pointer; font-size: 13px; }
+    .demo-tab[aria-selected="true"] { background: var(--dark-2); color: var(--dark-text); }
+    .demo-tab:focus-visible, .rail a:focus-visible, .mobile-toc a:focus-visible { outline: 2px solid #9b95ff; outline-offset: 2px; }
+    .demo-panel { display: none; min-height: 470px; color: var(--dark-text); }
+    .demo-panel.active { display: block; }
+    .pane-head { display: flex; align-items: center; gap: 10px; height: 54px; padding: 0 18px; border-bottom: 1px solid var(--dark-line); color: var(--dark-muted); }
+    .pane-head strong { color: var(--dark-text); font-size: 14px; }
+    .window-dot { width: 10px; height: 10px; border-radius: 50%; background: #595853; }
+    .launcher { display: grid; grid-template-columns: repeat(2, minmax(0, 250px)); justify-content: center; gap: 10px; padding: 92px 28px; }
+    .launcher-item { display: grid; grid-template-columns: 34px 1fr auto; align-items: center; gap: 12px; min-height: 70px; padding: 12px 14px; border: 1px solid var(--dark-line); border-radius: 11px; background: var(--dark-2); }
+    .launcher-item .icon { display: grid; place-items: center; width: 32px; height: 32px; border-radius: 8px; background: #30302c; font: 16px var(--mono); }
+    .launcher-item strong { display: block; font-size: 14px; }
+    .launcher-item small { display: block; color: var(--dark-muted); font-size: 11px; }
+    .shortcut { color: #7f7d76; font: 11px var(--mono); }
+    .browser-toolbar { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 10px; min-height: 52px; padding: 9px 12px; border-bottom: 1px solid var(--dark-line); }
+    .browser-actions { display: flex; align-items: center; gap: 3px; color: var(--dark-muted); }
+    .tool-button { display: grid; place-items: center; width: 30px; height: 30px; border: 0; border-radius: 7px; background: transparent; color: inherit; font: 14px/1 var(--sans); }
+    .tool-button.emphasis { background: #2d2c28; color: var(--dark-text); }
+    .address { overflow: hidden; padding: 7px 12px; border: 1px solid var(--dark-line); border-radius: 9px; background: #11110f; color: #77756f; font-size: 13px; white-space: nowrap; text-overflow: ellipsis; }
+    .bookmarks-bar { display: flex; align-items: center; gap: 6px; min-height: 36px; padding: 4px 12px; border-bottom: 1px solid var(--dark-line); background: #1d1d1a; color: var(--dark-muted); }
+    .bookmark-chip { display: inline-flex; align-items: center; gap: 7px; min-width: 0; max-width: 150px; height: 27px; padding: 0 9px; border-radius: 6px; color: var(--dark-text); font-size: 11px; white-space: nowrap; }
+    .bookmark-chip i { flex: none; width: 14px; height: 14px; border-radius: 4px; background: #3c3b36; }
+    .bookmark-chip span { overflow: hidden; text-overflow: ellipsis; }
+    .bookmark-overflow { margin-left: auto; color: var(--dark-muted); font: 13px var(--mono); }
+    .toolbar-lab { overflow: hidden; margin-top: 26px; border: 1px solid var(--line-strong); border-radius: 15px; background: var(--surface); }
+    .toolbar-lab-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+    .toolbar-lab-head strong { font-size: 13px; }
+    .mode-switch { display: inline-flex; gap: 3px; padding: 3px; border: 1px solid var(--line); border-radius: 9px; background: var(--paper); }
+    .mode-switch button { padding: 5px 9px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; font-size: 11px; }
+    .mode-switch button[aria-pressed="true"] { background: var(--surface); color: var(--ink); box-shadow: 0 1px 3px rgba(23,25,34,.12); }
+    .toolbar-stage { padding: 24px; background: #e7e8ed; }
+    .toolbar-preview { width: 100%; overflow: hidden; margin: 0 auto; border: 1px solid #3d3c38; border-radius: 12px; background: var(--dark); box-shadow: 0 14px 36px rgba(23,25,34,.14); transition: max-width .18s ease; }
+    .preview-window-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 42px; padding: 0 12px; border-bottom: 1px solid var(--dark-line); background: #11110f; color: var(--dark-muted); font-size: 11px; }
+    .preview-window-bar strong { color: var(--dark-text); font-size: 12px; }
+    .toolbar-preview .bookmarks-bar { display: flex; }
+    .toolbar-preview.mode-hidden .bookmarks-bar { display: none; }
+    .toolbar-preview.mode-narrow { max-width: 430px; }
+    .toolbar-preview.mode-narrow .optional-medium,
+    .toolbar-preview.mode-narrow .optional-narrow { display: none; }
+    .toolbar-preview.mode-narrow .browser-toolbar { grid-template-columns: auto minmax(0,1fr) auto; gap: 6px; padding-inline: 8px; }
+    .toolbar-preview.mode-narrow .browser-actions { gap: 1px; }
+    .toolbar-preview.mode-narrow .bookmarks-bar { display: none; }
+    .toolbar-note { margin: 12px 16px 16px; color: var(--muted); font-size: 12px; }
+    .scope-grid { display: grid; grid-template-columns: repeat(3,minmax(0,1fr)); gap: 12px; margin-top: 24px; }
+    .scope-card { padding: 16px; border-top: 3px solid var(--line-strong); background: rgba(255,255,255,.55); }
+    .scope-card:nth-child(2) { border-color: var(--blue); }
+    .scope-card:nth-child(3) { border-color: var(--accent); }
+    .scope-card h3 { margin: 0 0 7px; font-size: 17px; }
+    .scope-card p { margin: 0; color: var(--muted); font-size: 12px; }
+    .scope-card code { font-size: 10px; }
+    .browser-home { padding: 26px; }
+    .import-banner { display: grid; grid-template-columns: 42px 1fr auto; align-items: center; gap: 14px; padding: 16px; border: 1px solid #494842; border-radius: 12px; background: #20201d; }
+    .browser-mark { display: grid; place-items: center; width: 42px; height: 42px; border-radius: 50%; background: conic-gradient(#5d55d7 0 33%,#3569a8 0 66%,#367b5a 0); color: white; font-weight: 700; }
+    .import-banner strong { display: block; font-size: 14px; }
+    .import-banner span { color: var(--dark-muted); font-size: 12px; }
+    .primary { padding: 8px 14px; border: 0; border-radius: 8px; background: var(--dark-text); color: var(--dark); font-weight: 650; }
+    .home-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 22px; }
+    .home-block { padding: 17px; border-top: 1px solid var(--dark-line); }
+    .home-block h4 { margin: 0 0 12px; color: var(--dark-muted); font: 11px var(--mono); letter-spacing: .1em; text-transform: uppercase; }
+    .site-row { display: flex; align-items: center; gap: 10px; padding: 8px 0; font-size: 13px; }
+    .site-row i { width: 22px; height: 22px; border-radius: 6px; background: #34332f; }
+    .history-head { display: grid; grid-template-columns: 1fr minmax(180px, 300px); gap: 18px; align-items: center; padding: 28px 28px 18px; }
+    .history-head h4 { margin: 0; font: 650 24px var(--sans); }
+    .history-search { padding: 8px 11px; border: 1px solid var(--dark-line); border-radius: 8px; color: #77756f; font-size: 12px; }
+    .history-group { padding: 0 28px 26px; }
+    .history-date { margin: 10px 0 7px; color: var(--dark-muted); font: 11px var(--mono); }
+    .history-row { display: grid; grid-template-columns: 20px 54px 22px minmax(0, 1fr) 130px 22px; align-items: center; gap: 10px; height: 38px; border-top: 1px solid #2c2c29; font-size: 12px; }
+    .history-row .check { width: 13px; height: 13px; border: 1px solid #77756f; border-radius: 3px; }
+    .history-row .time, .history-row .domain, .history-row .more { color: var(--dark-muted); }
+    .history-row .favicon { width: 18px; height: 18px; border-radius: 5px; background: #35342f; }
+    .history-row .title { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+    .compare-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+    .compare-card { padding: 18px; border: 1px solid var(--line); border-radius: 12px; background: rgba(255,255,255,.62); }
+    .compare-card h3 { margin: 8px 0 7px; font: 650 17px/1.3 var(--sans); }
+    .compare-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .choice { display: inline-block; margin-top: 14px; color: var(--green); font: 600 11px var(--mono); }
+    .choice.modified { color: var(--blue); }
+    .choice.rejected { color: var(--accent); }
+    .source-list { margin: 16px 0 0; padding: 0; list-style: none; }
+    .source-list li { padding: 10px 0; border-top: 1px solid var(--line); font-size: 13px; }
+    .architecture { overflow-x: auto; padding: 22px; border: 1px solid var(--line); border-radius: 14px; background: var(--surface); }
+    .architecture svg { display: block; width: 100%; min-width: 720px; height: auto; }
+    .legend { display: flex; flex-wrap: wrap; gap: 18px; margin: 12px 0 0; color: var(--muted); font-size: 12px; }
+    .legend span::before { content: ""; display: inline-block; width: 16px; height: 2px; margin: 0 7px 3px 0; background: var(--ink); }
+    .legend .sensitive::before { background: var(--accent); }
+    .import-types { display: grid; grid-template-columns: repeat(3, minmax(0,1fr)); gap: 12px; margin-top: 24px; }
+    .type-card { padding: 18px; border-top: 3px solid var(--line-strong); background: rgba(255,255,255,.5); }
+    .type-card:nth-child(3) { border-color: var(--accent); }
+    .type-card h3 { margin: 0 0 8px; font-size: 19px; }
+    .type-card ul { margin: 0; padding-left: 18px; color: var(--muted); font-size: 13px; }
+    .boundary-table, .acceptance-table { width: 100%; border-collapse: collapse; }
+    .table-scroll { max-width: 100%; overflow-x: auto; }
+    .table-scroll .acceptance-table { min-width: 760px; }
+    .table-scroll:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+    .boundary-table th, .boundary-table td, .acceptance-table th, .acceptance-table td { padding: 13px 11px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
+    .boundary-table th, .acceptance-table th { color: var(--faint); font: 600 10px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .boundary-table td:first-child { width: 25%; color: var(--ink); font-weight: 650; }
+    .boundary-table td:last-child, .acceptance-table td { color: #55534e; }
+    .risk { color: var(--accent); font: 600 10px var(--mono); }
+    .status { color: var(--green); font: 600 11px var(--mono); white-space: nowrap; }
+    .status.limit { color: var(--blue); }
+    .status.out { color: var(--accent); }
+    .exclusions { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 12px; margin-top: 18px; }
+    .exclusion { padding: 15px 16px; border-left: 3px solid var(--accent); background: var(--accent-soft); font-size: 13px; }
+    .mobile-toc { display: none; margin-top: 24px; border: 1px solid var(--line); border-radius: 10px; background: rgba(255,255,255,.65); }
+    .mobile-toc summary { padding: 10px 13px; cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 650; }
+    .mobile-toc nav { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 4px; padding: 0 10px 10px; }
+    .mobile-toc a { padding: 6px 4px; color: var(--muted); font-size: 12px; text-decoration: none; }
+    .rail { position: sticky; top: 32px; align-self: start; padding-top: 6px; }
+    .rail nav { margin-top: 14px; border-left: 1px solid var(--line); }
+    .rail a { display: block; padding: 6px 0 6px 14px; color: var(--muted); font-size: 12px; text-decoration: none; }
+    .rail a:hover { color: var(--ink); }
+    .footnote { margin-top: 70px; padding-top: 18px; border-top: 1px solid var(--line); color: var(--faint); font-size: 12px; }
+    @media (max-width: 980px) { .shell { grid-template-columns: 1fr; width: min(880px, calc(100% - 36px)); padding-top: 42px; } .rail { display: none; } .mobile-toc { display: block; } }
+    @media (max-width: 720px) {
+      body { font-size: 15px; }
+      .metrics, .compare-grid, .import-types, .home-grid, .exclusions, .scope-grid { grid-template-columns: 1fr; }
+      .metrics { margin-bottom: 54px; padding: 0; }
+      .metric, .metric:first-child { padding: 11px 0; border-left: 0; border-top: 1px solid var(--line); }
+      .metric:first-child { border-top: 0; }
+      .decision { grid-template-columns: 1fr; gap: 7px; }
+      .section-intro { margin-left: 0; }
+      .launcher { grid-template-columns: 1fr; padding: 36px 18px; }
+      .demo-wrap .browser-toolbar { grid-template-columns: auto minmax(0,1fr) auto; gap: 6px; padding-inline: 8px; }
+      .demo-wrap .browser-toolbar .optional-medium { display: none; }
+      .toolbar-stage { padding: 14px; }
+      .toolbar-lab-head { align-items: flex-start; }
+      .import-banner { grid-template-columns: 36px 1fr; }
+      .import-banner .primary { grid-column: 1 / -1; }
+      .history-head { grid-template-columns: 1fr; }
+      .history-row { grid-template-columns: 16px 48px 18px minmax(0,1fr) 18px; }
+      .history-row .domain { display: none; }
+      .demo-panel { min-height: 520px; }
+      .boundary-table, .boundary-table tbody, .boundary-table tr, .boundary-table td { display: block; }
+      .boundary-table thead { display: none; }
+      .boundary-table tr { padding: 12px 0; border-bottom: 1px solid var(--line); }
+      .boundary-table td { width: auto !important; padding: 3px 0; border: 0; }
+    }
+    @media (max-width: 519px) { .demo-wrap .browser-toolbar .optional-narrow { display: none; } }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } .toolbar-preview { transition: none; } }
+  </style>
+</head>
+<body>
+<div class="shell">
+  <main>
+    <header>
+      <div class="eyebrow">OpenProgram · UI design specification</div>
+      <h1>Built-in browser, data import, and new panes</h1>
+      <p class="lede">OpenProgram has its own browser inside the desktop App. Pages render in Electron <code>WebContentsView</code>s on an independent <code>persist:webtabs</code> profile, so they never share cookies or storage with the App itself. Users can import bookmarks, history and passwords from Chrome or Edge, and get bookmarks, History and downloads like an ordinary browser. The agent works on the same pages through the browser target of <code>computer_use_agent</code>: the user watches it act and can take over at any time, and pages a session opens appear in that session's Resources. A New Pane only chooses the content type; web navigation, bookmarks, History and data import appear after entering Browser. The browser toolbar handles the current page and browsing data, the window menu handles OpenProgram and panes, and both settings entry points open the same Settings page.</p>
+      <div class="meta"><span class="pill"><span class="dot"></span>Implemented in the current baseline</span><span class="pill">Desktop App</span><span class="pill">Independent browser profile</span><span class="pill">Browser chrome aligned</span><span class="pill">Popup activation and web context menus implemented</span></div>
+      <details class="mobile-toc">
+        <summary>On this page</summary>
+        <nav aria-label="Mobile in-page navigation"><a href="#decisions">Product decisions</a><a href="#toolbar">Toolbar and menus</a><a href="#surfaces">Visible states</a><a href="#references">Reference behavior</a><a href="#architecture">Architecture and data flow</a><a href="#boundaries">Trust boundaries</a><a href="#session-pages">Session web pages</a>
+          <a href="#acceptance">Acceptance and status</a></nav>
+      </details>
+    </header>
+
+    <section class="metrics" aria-label="Design scope summary">
+      <div class="metric"><span class="metric-label">Scope</span><span class="metric-value">Pane hierarchy · Browser chrome · Profile import</span></div>
+      <div class="metric"><span class="metric-label">Platform</span><span class="metric-value">Desktop App · Independent profile · Read-only source data</span></div>
+      <div class="metric"><span class="metric-label">Implementation status</span><span class="metric-value">Data import · Browser chrome · Browser settings implemented</span></div>
+    </section>
+
+    <section class="section" id="decisions">
+      <div class="section-head"><span class="section-no">01</span><h2>Product decisions</h2></div>
+      <p class="section-intro">Content entry points, browser home, and data management currently share one page. The design separates their responsibilities before defining the controls on each page.</p>
+      <div class="decision"><strong>Bookmark icons and bar</strong><p>Bookmark sites share the tab favicon renderer: saved image, then the site origin’s /favicon.ico, then the Lucide browser fallback. Only HTTP(S) and image data sources are accepted; requests omit referrers and never use a third-party favicon service. New bookmarks retain the current page icon, and revisiting an exact bookmarked URL refreshes its saved icon without erasing it on empty loading state. The bar keeps its existing height and shows bar items, a double-chevron hidden-items menu, a divider, and All bookmarks at the right. All bookmarks opens the existing manager, which retains Other bookmarks and Mobile bookmarks in their original hierarchy. Folder icons remain folders. Acceptance requires actual imported leaves, failed image fallback, icon replacement, overflow actions and manager access. Reference: <a href="https://support.google.com/chrome/answer/188842">Chrome bookmark help</a>.</p></div>
+<div class="decision"><strong>Visible loading feedback</strong><p>During native page loading, the Reload control becomes an accented Lucide X with the accessible name Stop loading. A thin indeterminate progress indicator appears below the browser toolbar, without changing its height. Stop cancels loading; completion, failure, and cancellation remove the indicator and restore Reload. The indicator reflects native loading events, does not invent a percentage, and stays static under reduced-motion preferences.</p></div>
+<div class="decision"><strong>Reload respects unsaved-page confirmation</strong><p>When a webpage prevents reload or navigation with beforeunload, its current owning window displays a native confirmation. Stay on page is the default and cancel action; Leave page permits only the blocked operation. Missing ownership, destruction, or dialog failure keeps the page. Ordinary reloads need no confirmation. This uses Electron's <a href="https://www.electronjs.org/docs/latest/api/web-contents/#event-will-prevent-unload">will-prevent-unload</a> event; tab-close and application-shutdown policy are outside this change.</p></div>
+      <div class="decision"><strong>Web tab icons remain visible</strong><p>Ordinary tabs and split members use the site favicon when it decodes to visible pixels, with the existing animated Lucide browser icon while loading or on failure. The desktop process reads favicon bytes through the page session, limits requests to HTTP(S) and image data, bounds downloads to 256 KiB and five seconds, and sends image data URLs so the renderer can detect fully transparent icons. Navigation and destruction cancel pending reads; stale results cannot replace the current page icon. State snapshots include the current favicon when a retained page is reopened. Browsing history keeps the original site icon URL.</p></div>
+      <div class="decision"><strong>New pane only selects content</strong><p>An empty pane only shows Files, New chat, Browser, and Terminal. The address bar, quick sites, Bookmarks, and History do not appear here.</p></div>
+      <div class="decision"><strong>Four entries use equal visual priority and distinct colors</strong><p>Files, New chat, Browser, and Terminal all use equally sized rounded icon containers and Lucide outline icons. Files uses blue, New chat green, Browser orange and purple, and Terminal purple. Color only identifies content types; it does not change card hierarchy, interaction states, or accessible names, and introduces no brand logos, external assets, or extra animation.</p></div>
+      <div class="decision"><strong>Browser home reuses complete browser chrome</strong><p>Selecting Browser opens browser home in place. Home and actual pages share the address bar and bookmarks bar structure. Back, Forward, Reload, Home, Bookmark, and external opening remain visible but disabled when no current page applies; address input, Bookmarks, Import, and Browser <code>⋯</code> remain available.</p></div>
+      <div class="decision"><strong>The page determines navigation versus popup</strong><p>Ordinary links, form submissions, script assignments, and same-document navigation continue to commit in the current <code>WebContentsView</code> and only update that WebTab's URL, title, and History; they must not create a tab. Only when the page explicitly requests a new browsing context (<code>target="_blank"</code> or <code>window.open</code>) does the main process convert a validated HTTP(S) URL into a WebTab with its own id. The new WebTab immediately becomes active; when already at <code>/chat</code> or <code>/s/&lt;id&gt;</code> , do not push <code>/chat</code>again, so session-route synchronization cannot overwrite popup activation.</p></div>
+      <div class="decision"><strong>Web context menus bind to the hit content</strong><p>The native page area directly uses Electron <code>context-menu</code> hit parameters. HTTP(S) links show Open Link in New Tab and Copy Link Address; editable content shows Undo, Redo, Cut, Copy, Paste, and Select All; ordinary pages show Back, Forward, and Reload. Open Link in New Tab reuses the popup entry point and therefore has the same semantics as the page's own <code>window.open</code> for URL validation, unique tabs, and immediate activation. Menu actions only affect the WebTab that produced the menu and is still owned by the same window.</p></div>
+      <div class="decision"><strong>Floating web previews belong to the initiating session</strong><p>A floating web preview opened by an agent in chat records its session tab at creation. It appears only while that session is the current center content. Switching to another chat, a regular Browser tab, or a non-chat page must remove the WebTab from the renderer's native visible set and restore the user's web zoom. Returning to the original session reuses the same WebTab, URL, scroll position, and form state without reloading. After the user closes the preview, its restore entry also appears only in that session.</p></div>
+      <div class="decision"><strong>Saving and managing bookmarks are separate</strong><p>The star at the right of the address bar only saves or removes the current page; the adjacent Bookmarks button opens the complete bookmarks page. Browser home shows only user-maintained quick sites, not all bookmarks.</p></div>
+      <div class="decision"><strong>Bookmarks manager uses a Chrome-style two-column layout</strong><p>The complete bookmarks page has a fixed page title, search field, and page menu at the top. The left column contains only a collapsible folder tree with the current directory highlighted; the right column contains only that directory's direct children. Bookmark rows have a favicon, title, and single <code>⋮</code> menu; folder rows open the corresponding directory. The entire tree, URLs, and edit/delete buttons no longer share one list. Rows in both lists use <code>36px</code>; the search field uses the global <code>30px</code> control height, inline icon buttons use <code>28px</code>, and the header uses <code>52px</code>. The right list's initial viewport padding is <code>16px</code>. In a narrow pane, the directory tree moves above the content list rather than disappearing.</p></div>
+      <div class="decision"><strong>The bookmarks bar is visible by default</strong><p>Browser home and actual pages show the same bookmarks row below the address bar by default. Users can disable it through Browser <code>⋯</code> or Settings. Narrow split panes temporarily hide the row, while all content remains accessible through Bookmarks in Browser <code>⋯</code> .</p></div>
+      <div class="decision"><strong>The bookmarks bar displays source-directory contents</strong><p>Chromium's <code>Bookmarks bar</code> is the bookmarks-bar container, not an ordinary folder button. Its direct children enter the bar in original order;<code>Other bookmarks</code> and <code>Mobile bookmarks</code> remain in the manager, reached through All bookmarks after the overflow control and divider. Ordinary root bookmarks remain bar items. Items placed in overflow must not leave partially clipped buttons in the visible bar; the last visible button must retain its full background and both rounded ends.</p></div>
+      <div class="decision"><strong>Bookmark menus retain Chrome-style hierarchy</strong><p>The single-row bookmarks bar has no horizontal scrollbar; items that exceed its width appear in the right-side overflow menu. Menus have a fixed width of 280px and ellipsize long titles. Folder rows show a Folder icon in the existing 14px icon slot and a right arrow to enter the next menu, rather than concatenating full paths. Site rows show bookmark favicons; when imported data lacks a favicon, fetch it from the URL and show a Bookmark icon on failure, never an empty slot. In the desktop App, hovering over a bookmarks-bar folder opens it immediately, and moving horizontally to an adjacent folder switches menus without extra delay. Consecutive folder switches reuse one menu view and replace only its data, without rebuilding the view or decoding previously displayed favicons again. The native overlay starts at the bookmarks bar's lower edge and must not cover the buttons' pointer hit areas. Each menu level is constrained by the current window height and supports mouse, trackpad, and keyboard interaction.</p></div>
+      <div class="decision"><strong>Settings have one source of truth</strong><p>Settings in the window menu opens OpenProgram settings; Browser's <code>⋯</code> opens its Browser section directly. The toolbar adds no persistent gear button and no second browser-settings store.</p></div>
+      <div class="decision"><strong>Split layout belongs to panes</strong><p>Splitting, leaving split view, and pane arrangement apply to Files, Chat, Browser, and Terminal; they are not current-page actions. They belong in Tab/Pane controls or the tab context menu, not the browser toolbar.</p></div>
+      <div class="decision"><strong>Import preserves source structure</strong><p>Chromium's bookmark bar, other bookmarks, and nested folders retain their hierarchy and order in the OpenProgram bookmark tree. Import must not flatten bookmarks into separate entries below home.</p></div>
+      <div class="decision"><strong>Each menu binds to its own trigger</strong><p>Browser <code>⋯</code> and the window <code>⋯</code> use their respective trigger buttons' actual screen rectangles. The menu's right edge aligns with the button's right edge, with a 4px vertical gap; the two menus cannot share placement or content.</p></div>
+      <div class="decision"><strong>Menu rows carry icons; checks sit at the end</strong><p>Every row in the browser <code>⋯</code> menu starts with a flat Solar Bold Duotone icon, the same family as the sidebar folder. The desktop overlay is another document, so the opener names the icon (<code>glyph</code>, a Solar name) and the overlay draws it with <code>MenuIcon</code>; the Web fallback menu renders the same <code>MenuRow</code>. A checkable row such as Show bookmarks bar keeps its icon and shows its check at the end of the row, after any key tag, as in every other app menu; unchecked rows keep that column empty so labels stay aligned.</p></div>
+      <div class="decision"><strong>Toolbar tips stay above the toolbar</strong><p>In the desktop App the page under the toolbar is a native view that covers anything drawn over it, so a toolbar tip always opens above its control and never flips below. It keeps to one line, truncating a long label such as a session title in Float over, so it fits in the room above the toolbar.</p></div>
+      <div class="decision"><strong>History uses compact rows</strong><p>Records are grouped by local date. Each row shows only time, favicon, title, domain, and actions; the full URL no longer occupies a second line.</p></div>
+      <div class="decision"><strong>Import requires an explicit action</strong><p>The source browser, profile, and data types are confirmed separately. OpenProgram does not read or modify the source profile actively used by the user.</p></div>
+    </section>
+
+    <section class="section" id="toolbar">
+      <div class="section-head"><span class="section-no">02</span><h2>Toolbar and menu ownership</h2></div>
+      <p class="section-intro">The browser area has three levels: current page, browsing data, and entire window. Whether an action remains visible depends on frequency, relevance to the current page, and space in narrow split panes.</p>
+
+      <div class="toolbar-lab">
+        <div class="toolbar-lab-head">
+          <strong>Target browser chrome</strong>
+          <div class="mode-switch" role="group" aria-label="Preview toolbar state">
+            <button type="button" data-chrome-mode="standard" aria-pressed="true">Standard</button>
+            <button type="button" data-chrome-mode="hidden" aria-pressed="false">Hide bookmarks bar</button>
+            <button type="button" data-chrome-mode="narrow" aria-pressed="false">Narrow split pane</button>
+          </div>
+        </div>
+        <div class="toolbar-stage">
+          <div class="toolbar-preview mode-standard" id="toolbar-preview" role="img" aria-label="Standard browser toolbar: back, forward, reload, home, address bar, bookmark current page, bookmarks, external opening, and browser menu; the bookmarks bar appears below the address bar.">
+            <div class="preview-window-bar"><strong>Browser tab</strong><span>Pane controls · OpenProgram menu</span></div>
+            <div class="browser-toolbar">
+              <div class="browser-actions" aria-hidden="true"><span class="tool-button">←</span><span class="tool-button optional-narrow">→</span><span class="tool-button">↻</span><span class="tool-button optional-medium">⌂</span></div>
+              <div class="address">https://www.google.com/</div>
+              <div class="browser-actions" aria-hidden="true"><span class="tool-button">☆</span><span class="tool-button emphasis optional-medium">▤</span><span class="tool-button optional-medium">↗</span><span class="tool-button">•••</span></div>
+            </div>
+            <div class="bookmarks-bar" aria-label="Optional bookmarks bar">
+              <span class="bookmark-chip"><i></i><span>GitHub</span></span>
+              <span class="bookmark-chip"><i></i><span>OpenProgram Docs</span></span>
+              <span class="bookmark-chip"><i></i><span>Research</span></span>
+              <span class="bookmark-overflow">»</span>
+            </div>
+          </div>
+        </div>
+        <p class="toolbar-note" id="toolbar-note"><strong>Standard:</strong>Full web navigation remains visible; the bookmarks bar is visible by default. The star manages the current page; Bookmarks opens browsing and management. Split controls and global Settings are not in this row.</p>
+      </div>
+
+      <h3>Button order and collapse rules</h3>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Browser toolbar button order and collapse rules, horizontally scrollable">
+        <table class="acceptance-table">
+          <thead><tr><th>Position</th><th>Persistent actions</th><th>Narrow-pane rules</th></tr></thead>
+          <tbody>
+            <tr><td>Left of address bar</td><td>Back · Forward · Reload/Stop · Home</td><td><code>520–719px</code> Move Home into <code>⋯</code>; below <code>520px</code> , also move Forward into <code>⋯</code>. Back and Reload/Stop always remain.</td></tr>
+            <tr><td>Address bar</td><td>URL, search input, and security state; Reload becomes Stop in place during loading.</td><td>Always occupies remaining width, with a minimum usable width of <code>160px</code>; no wrapping.</td></tr>
+            <tr><td>Right of address bar</td><td>Bookmark current page · Bookmarks · Open externally · Browser menu</td><td><code>520–719px</code> Move Bookmarks and Open externally into <code>⋯</code>; the star and <code>⋯</code> always remain.</td></tr>
+            <tr><td>Below address bar</td><td>An optional single-row bookmarks bar directly displays the children of <code>Bookmarks bar</code> ; overflow comes next, followed by a divider and All bookmarks opening the manager with all source folders.</td><td>Below <code>560px</code> , do not render this row; open Bookmarks through Browser <code>⋯</code> . Horizontal scrollbars are prohibited. Folder and overflow menus must not exceed the current available window height and must allow vertical scrolling.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="scope-grid">
+        <article class="scope-card"><h3>Browser toolbar</h3><p>Only frequent current-page actions belong here: navigation, address input, saving the current page, opening bookmarks, external opening, and Browser <code>⋯</code>.</p></article>
+        <article class="scope-card"><h3>Browser <code>⋯</code></h3><p>New browser tab, Find in page, Zoom, Print, Bookmarks, History, Downloads, Show bookmarks bar, Import browser data, Clear browsing data, Browser settings.</p></article>
+        <article class="scope-card"><h3>Window menu</h3><p>New pane/window, pane layout, OpenProgram Settings, Help, and About. It no longer directly contains Bookmarks, History, or page-level settings.</p></article>
+      </div>
+      <h3>Chat floating-preview scope</h3>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Session scope of floating chat web previews, horizontally scrollable">
+        <table class="acceptance-table">
+          <thead><tr><th>Active content</th><th>Floating preview</th><th>Native WebTab constraints</th></tr></thead>
+          <tbody>
+            <tr><td>The chat that created the preview</td><td>Visible; returning to that chat restores its previous position and size.</td><td>Uses PiP bounds and layout zoom; retains the same WebContentsView.</td></tr>
+            <tr><td>Another chat</td><td>Hidden; no restore entry.</td><td>Remove it from the <code>syncVisible</code> set and restore the user's zoom factor.</td></tr>
+            <tr><td>Regular Browser tab or the same page in split view</td><td>Hidden.</td><td>The ordinary pane exclusively owns that WebTab's visible bounds; PiP layout zoom does not persist.</td></tr>
+            <tr><td>The user closes the preview in its owning chat</td><td>Hidden; the owning chat shows a restore entry.</td><td>Retain the background WebTab without exposing it as another session's turn surface.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="surfaces">
+      <div class="section-head"><span class="section-no">03</span><h2>Three visible states</h2></div>
+      <p class="section-intro">The following information-architecture acceptance diagram lets you switch states to verify that controls appear at the correct level.</p>
+      <div class="demo-wrap">
+        <div class="demo-tabs" role="tablist" aria-label="Built-in browser states">
+          <button class="demo-tab" type="button" role="tab" aria-selected="true" aria-controls="demo-launcher" id="tab-launcher" tabindex="0">New pane</button>
+          <button class="demo-tab" type="button" role="tab" aria-selected="false" aria-controls="demo-browser" id="tab-browser" tabindex="-1">Browser home</button>
+          <button class="demo-tab" type="button" role="tab" aria-selected="false" aria-controls="demo-history" id="tab-history" tabindex="-1">History</button>
+        </div>
+        <div class="demo-panel active" id="demo-launcher" role="tabpanel" aria-labelledby="tab-launcher">
+          <div class="pane-head"><span class="window-dot"></span><strong>New pane</strong></div>
+          <div class="launcher">
+            <div class="launcher-item"><span class="icon">F</span><span><strong>Files</strong><small>Browse current project files</small></span><span class="shortcut">⌘P</span></div>
+            <div class="launcher-item"><span class="icon">C</span><span><strong>New chat</strong><small>Create an independent conversation</small></span><span class="shortcut">⌥⌘S</span></div>
+            <div class="launcher-item"><span class="icon">W</span><span><strong>Browser</strong><small>Open built-in browser home</small></span><span class="shortcut">⌘T</span></div>
+            <div class="launcher-item"><span class="icon">&gt;_</span><span><strong>Terminal</strong><small>Open the project terminal</small></span><span class="shortcut">⌃`</span></div>
+          </div>
+        </div>
+        <div class="demo-panel" id="demo-browser" role="tabpanel" aria-labelledby="tab-browser" hidden>
+          <div class="pane-head"><span class="window-dot"></span><strong>Browser</strong></div>
+          <div class="browser-toolbar">
+            <div class="browser-actions" aria-hidden="true"><span class="tool-button">←</span><span class="tool-button optional-narrow">→</span><span class="tool-button">↻</span><span class="tool-button optional-medium">⌂</span></div>
+            <div class="address">Enter a URL or search query</div>
+            <div class="browser-actions" aria-hidden="true"><span class="tool-button">☆</span><span class="tool-button emphasis optional-medium">▤</span><span class="tool-button optional-medium">↗</span><span class="tool-button">•••</span></div>
+          </div>
+          <div class="bookmarks-bar" aria-label="Bookmarks bar">
+            <span class="bookmark-chip"><i></i><span>GitHub</span></span>
+            <span class="bookmark-chip"><i></i><span>OpenProgram Docs</span></span>
+            <span class="bookmark-chip"><i></i><span>Research</span></span>
+            <span class="bookmark-overflow">»</span>
+          </div>
+          <div class="browser-home">
+            <div class="import-banner"><span class="browser-mark">O</span><span><strong>Import browser data</strong><span>Select History, Bookmarks, and Cookies</span></span><span class="primary" aria-hidden="true">Import</span></div>
+            <div class="home-grid">
+              <div class="home-block"><h4>Quick sites</h4><div class="site-row"><i></i>GitHub</div><div class="site-row"><i></i>Google</div><div class="site-row"><i></i>OpenProgram Docs</div></div>
+            </div>
+          </div>
+        </div>
+        <div class="demo-panel" id="demo-history" role="tabpanel" aria-labelledby="tab-history" hidden>
+          <div class="pane-head"><span class="window-dot"></span><strong>History</strong></div>
+          <div class="history-head"><h4>History</h4><div class="history-search">Search history</div></div>
+          <div class="history-group">
+            <div class="history-date">Today</div>
+            <div class="history-row"><span class="check"></span><span class="time">14:22</span><span class="favicon"></span><span class="title">OpenProgram · Documentation</span><span class="domain">openprogram.ai</span><span class="more">•••</span></div>
+            <div class="history-row"><span class="check"></span><span class="time">14:16</span><span class="favicon"></span><span class="title">Repository issues and pull requests</span><span class="domain">github.com</span><span class="more">•••</span></div>
+            <div class="history-row"><span class="check"></span><span class="time">13:58</span><span class="favicon"></span><span class="title">Agent interface research notes</span><span class="domain">example.com</span><span class="more">•••</span></div>
+            <div class="history-row"><span class="check"></span><span class="time">13:41</span><span class="favicon"></span><span class="title">Browser history design references</span><span class="domain">chromium.org</span><span class="more">•••</span></div>
+            <div class="history-date">Yesterday</div>
+            <div class="history-row"><span class="check"></span><span class="time">21:05</span><span class="favicon"></span><span class="title">Electron session and cookies API</span><span class="domain">electronjs.org</span><span class="more">•••</span></div>
+            <div class="history-row"><span class="check"></span><span class="time">20:47</span><span class="favicon"></span><span class="title">Chromium user data directory</span><span class="domain">chromium.org</span><span class="more">•••</span></div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="section" id="references">
+      <div class="section-head"><span class="section-no">04</span><h2>Reference behavior and tradeoffs</h2></div>
+      <p class="section-intro">Reference products establish visible behavior; platform documentation establishes implementation boundaries. OpenProgram does not duplicate the complete Chromium importer.</p>
+      <div class="compare-grid">
+        <article class="compare-card"><span class="label">Content hierarchy</span><h3>Codex pane entry points</h3><p>Files, New chat, Browser, and Terminal are top-level content types; browser controls appear only inside Browser.</p><span class="choice">Adopted</span></article>
+        <article class="compare-card"><span class="label">Browser profile</span><h3>Independent browsing state</h3><p>The built-in browser maintains its own profile. Users explicitly initiate import when existing data is needed.</p><span class="choice modified">Adopted with changes</span></article>
+        <article class="compare-card"><span class="label">Bookmark access</span><h3>Chrome's layered entry points</h3><p>The star saves the current page, the bookmarks bar can be toggled, and the complete manager is separate. OpenProgram retains these three levels with stricter collapse rules for split panes.</p><span class="choice modified">Adopted with changes</span></article>
+        <article class="compare-card"><span class="label">Settings ownership</span><h3>OpenAI App Settings</h3><p>The built-in browser maintains independent state; Cookies and history clearing belong to desktop App Settings. OpenProgram adds a Browser <code>⋯</code>  deep link without duplicating settings storage.</p><span class="choice modified">Adopted with changes</span></article>
+        <article class="compare-card"><span class="label">Page intent</span><h3>Chrome distinguishes navigation from popups</h3><p>Navigation in the current browsing context commits in place; explicit requests for a new context create and activate a new tab. OpenProgram preserves this distinction while converting native popups into WebTabs managed by center-tab state.</p><span class="choice modified">Adopted with changes</span></article>
+        <article class="compare-card"><span class="label">Page menu</span><h3>Electron native context menu</h3><p><code>webContents</code> provides link, selection, edit-state, and frame hit parameters;<code>Menu.popup</code> provides the current OS's native menu. OpenProgram adopts a limited action set without exposing DevTools or arbitrary protocol opening.</p><span class="choice modified">Adopted with changes</span></article>
+        <article class="compare-card"><span class="label">Importer</span><h3>Chromium C++ importer</h3><p>components are not exposed as Electron JavaScript APIs and provide no general Cookies import implementation.</p><span class="choice rejected">Not duplicated</span></article>
+      </div>
+      <ul class="source-list">
+        <li><a href="https://help.openai.com/en/articles/20001277-using-the-built-in-browser-in-the-chatgpt-desktop-app">OpenAI built-in browser documentation</a>: establishes independent browsing state, external-browser boundaries, and clearing Cookies and History through desktop App Settings.</li>
+        <li><a href="https://support.google.com/chrome/answer/188842">Chrome bookmarks documentation</a>: establishes saving the current page beside the address bar, toggling the bookmarks bar, and a separate complete Bookmark manager.</li>
+        <li><a href="https://support.google.com/chrome/answer/96816">Chrome import settings</a>: establishes data-type selection and Imported Bookmarks merging behavior.</li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/main/docs/user_data_dir.md">Chromium user data directory</a>: establishes profile storage locations for History, Bookmarks, and Cookies.</li>
+        <li><a href="https://chromium.googlesource.com/chromium/src/+/refs/tags/145.0.7573.1/components/user_data_importer/">Chromium user_data_importer</a>: establishes native importer capabilities and Electron exposure boundaries.</li>
+        <li><a href="https://www.electronjs.org/docs/latest/api/session">Electron session</a> and <a href="https://www.electronjs.org/docs/latest/api/cookies">Cookies</a>: establish persistent partitions and per-cookie write APIs.</li>
+        <li><a href="https://www.electronjs.org/docs/latest/api/web-contents">Electron webContents</a> and <a href="https://www.electronjs.org/docs/latest/api/window-open">renderer window.open</a>: establish that <code>setWindowOpenHandler</code> receives resolved popup URLs, and<code>context-menu</code> provides link, selection, and edit hit parameters.</li>
+        <li><a href="https://www.electronjs.org/docs/latest/api/menu">Electron Menu</a>: establish that <code>Menu.buildFromTemplate</code> and <code>BaseWindow</code> bound to their owning <code>menu.popup</code> are native context-menu entry points in the main process.</li>
+      </ul>
+    </section>
+
+    <section class="section" id="architecture">
+      <div class="section-head"><span class="section-no">05</span><h2>Import architecture and data flow</h2></div>
+      <p class="section-intro">The renderer passes only opaque source/profile ids issued by the main process. It cannot freely specify file paths, source-browser executable paths, or Cookie values.</p>
+      <div class="architecture">
+        <svg viewBox="0 0 900 390" role="img" aria-labelledby="flow-title flow-desc">
+          <title id="flow-title">Browser data import flow</title>
+          <desc id="flow-desc">The user selects a source in the desktop UI. The main process discovers profiles and makes read-only copies in a temporary directory. Parsers read History and Bookmarks; a temporary source-browser process decrypts Cookies. The results are written to the OpenProgram history store, bookmark tree, and persist webtabs session respectively.</desc>
+          <defs><marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#6f7481"/></marker><marker id="arrow-hot" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="#5d55d7"/></marker></defs>
+          <rect x="24" y="42" width="145" height="70" rx="10" fill="#f4f5f8" stroke="#b9bfcc"/><text x="96" y="71" text-anchor="middle" font-family="ui-monospace" font-size="13">Import dialog</text><text x="96" y="92" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#646977">source · profile · types</text>
+          <rect x="238" y="42" width="164" height="70" rx="10" fill="#f4f5f8" stroke="#b9bfcc"/><text x="320" y="68" text-anchor="middle" font-family="ui-monospace" font-size="12">apps/desktop/main.js</text><text x="320" y="90" text-anchor="middle" font-family="ui-sans-serif" font-size="10" fill="#646977">run/cancel · request id</text>
+          <rect x="475" y="42" width="160" height="70" rx="10" fill="#eceafd" stroke="#5d55d7"/><text x="555" y="68" text-anchor="middle" font-family="ui-monospace" font-size="11">browser-profile-import.js</text><text x="555" y="90" text-anchor="middle" font-family="ui-sans-serif" font-size="10" fill="#646977">0700 dir · 0600 files</text>
+          <path d="M169 77H238" stroke="#6f7481" stroke-width="1.6" marker-end="url(#arrow)"/><path d="M402 77H475" stroke="#5d55d7" stroke-width="1.8" marker-end="url(#arrow-hot)"/><text x="203" y="66" text-anchor="middle" font-family="ui-monospace" font-size="10" fill="#646977">IPC</text><text x="438" y="66" text-anchor="middle" font-family="ui-monospace" font-size="10" fill="#5d55d7">copy only</text>
+          <rect x="475" y="184" width="160" height="62" rx="10" fill="#ffffff" stroke="#b9bfcc"/><text x="555" y="211" text-anchor="middle" font-family="ui-monospace" font-size="11">bounded parsers</text><text x="555" y="230" text-anchor="middle" font-family="ui-sans-serif" font-size="10" fill="#646977">History SQLite · Bookmarks JSON</text>
+          <rect x="475" y="292" width="160" height="62" rx="10" fill="#ffffff" stroke="#5d55d7"/><text x="555" y="319" text-anchor="middle" font-family="ui-monospace" font-size="11">source browser + CDP</text><text x="555" y="338" text-anchor="middle" font-family="ui-sans-serif" font-size="10" fill="#646977">temporary process · cookies</text>
+          <path d="M555 112V184" stroke="#6f7481" stroke-width="1.6" marker-end="url(#arrow)"/><path d="M590 112C690 150 690 265 635 323" fill="none" stroke="#5d55d7" stroke-width="1.8" marker-end="url(#arrow-hot)"/>
+          <rect x="728" y="153" width="148" height="68" rx="10" fill="#e6f1eb" stroke="#367b5a"/><text x="802" y="179" text-anchor="middle" font-family="ui-monospace" font-size="10">browsing-history-store.js</text><text x="802" y="199" text-anchor="middle" font-family="ui-sans-serif" font-size="10" fill="#646977">apps/web/lib/tabs/browser/bookmarks.ts</text>
+          <rect x="728" y="280" width="148" height="68" rx="10" fill="#e6f1eb" stroke="#367b5a"/><text x="802" y="308" text-anchor="middle" font-family="ui-monospace" font-size="12">persist:webtabs</text><text x="802" y="327" text-anchor="middle" font-family="ui-sans-serif" font-size="11" fill="#646977">Electron cookies.set</text>
+          <path d="M635 215H728" stroke="#6f7481" stroke-width="1.6" marker-end="url(#arrow)"/><path d="M635 323H728" stroke="#5d55d7" stroke-width="1.8" marker-end="url(#arrow-hot)"/>
+          <rect x="22" y="155" width="365" height="199" rx="12" fill="none" stroke="#d9d5cc" stroke-dasharray="6 5"/><text x="40" y="181" font-family="ui-monospace" font-size="10" fill="#9b9890">SOURCE PROFILE · READ ONLY</text><text x="40" y="215" font-family="ui-sans-serif" font-size="12" fill="#55534e">1. Discover installed browsers and profile names</text><text x="40" y="246" font-family="ui-sans-serif" font-size="12" fill="#55534e">2. Resolve real paths and reject symlink escapes</text><text x="40" y="277" font-family="ui-sans-serif" font-size="12" fill="#55534e">3. Copy required files without locking active databases</text><text x="40" y="308" font-family="ui-sans-serif" font-size="12" fill="#55534e">4. Delete the temporary directory after success or failure</text>
+        </svg>
+      </div>
+      <div class="legend"><span>Ordinary data path</span><span class="sensitive">Sensitive Cookie path</span></div>
+      <div class="import-types">
+        <article class="type-card"><h3>History</h3><ul><li>Read a copy of Chromium History SQLite</li><li>Accept only http/https</li><li>Deduplicate by URL + visitedAt</li><li>Preserve existing records on error</li></ul></article>
+        <article class="type-card"><h3>Bookmarks</h3><ul><li>Parse Chromium Bookmarks JSON</li><li>Preserve roots, nested folders, and sibling order</li><li>Avoid duplicate URLs and remove empty folders</li><li>Display and manage only on the Bookmarks page</li></ul></article>
+        <article class="type-card"><h3>Cookies</h3><ul><li>Direct Cookie database copying is prohibited</li><li>Decrypt in a temporary source-browser process</li><li>Validate each item before writing to the partition</li><li>Never log values</li></ul></article>
+      </div>
+      <h3>Web navigation, popup, and context-action flow</h3>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Web navigation, popup, and context-action data flow, horizontally scrollable">
+        <table class="acceptance-table">
+          <thead><tr><th>Page intent</th><th>Main process</th><th>Renderer state</th></tr></thead>
+          <tbody>
+            <tr><td>Current-context navigation</td><td><code>did-navigate</code> / <code>did-navigate-in-page</code> Report the same record's state; send no popup event.</td><td><code>updateWebTab</code> Update URL, title, and favicon in place; retain id and active tab.</td></tr>
+            <tr><td><code>target="_blank"</code> / <code>window.open</code></td><td><code>setWindowOpenHandler</code> Reject native child windows; send only valid HTTP(S) URLs and opener ids to the window that owns the View.</td><td><code>openPopupWebTab</code> Create a unique id and activate it immediately; retain the current route when already on a chat surface.</td></tr>
+            <tr><td>Web link context menu → Open Link in New Tab</td><td><code>context-menu</code> Validate exact ownership and URL, then reuse the popup event above; bind Copy/Edit/Navigation directly to the menu-producing <code>webContents</code>.</td><td>The new tab behaves like a page popup; do not execute cross-tab actions after menu dismissal or with a stale owner.</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </section>
+
+    <section class="section" id="boundaries">
+      <div class="section-head"><span class="section-no">06</span><h2>Trust boundaries and failure behavior</h2></div>
+      <p class="section-intro">Web content, renderer, and main process exchange only bounded state required for an action. Data import is not profile migration; it copies only explicitly selected data.</p>
+      <table class="boundary-table">
+        <thead><tr><th>Boundary</th><th>Constraint</th><th>Failure outcome</th></tr></thead>
+        <tbody>
+          <tr><td>renderer → main</td><td>source/profile uses opaque ids returned by main; data types use an allowlist; renderer cannot pass file or executable paths.</td><td><span class="risk">Reject the request</span></td></tr>
+          <tr><td>Web content → main</td><td>Popup and context-menu links accept only resolved HTTP(S) URLs; actions bind to the exact WebTab owner that produced the event.<code>file:</code>, <code>javascript:</code>, transferred/closed records, and forged openers must not create tabs or navigate other Views.</td><td><span class="risk">deny / no-op</span></td></tr>
+          <tr><td>Source profile</td><td>Read-only discovery; real paths must remain under discovered browser roots; reject symlink escapes.</td><td><span class="risk">source_invalid</span></td></tr>
+          <tr><td>Temporary data</td><td>Directories use 0700 and files 0600; delete after success, failure, or timeout. Logs contain only source labels, types, counts, and error codes.</td><td><span class="risk">cleanup + stable error</span></td></tr>
+          <tr><td>Target profile</td><td>Merge History and Bookmarks; write Cookies through the Electron API without replacing the target database.</td><td><span class="risk">Preserve pre-import data</span></td></tr>
+          <tr><td>Concurrency and cancellation</td><td>Only one import job may run across the App at a time. The initiating renderer creates a bounded request id; only that renderer may cancel. Check cancellation at parser phase boundaries, during temporary-browser startup/CDP waits, and before and after each Cookie write.</td><td><span class="risk">import_busy / import_cancelled</span></td></tr>
+          <tr><td>Target state after cancellation</td><td>After accepting cancellation, do not merge History or Bookmarks; terminate the temporary browser and delete temporary files. Electron's Cookie API has no transaction: writes completed before cancellation remain, but no further writes may occur afterward.</td><td><span class="risk">cooperative stop</span></td></tr>
+        </tbody>
+      </table>
+      <div class="exclusions">
+        <div class="exclusion">Import excludes Passwords, payment details, addresses, extensions, downloads, caches, localStorage, and Service Workers. The built-in browser provides no extension installation or management; rationale and code boundaries are in <a href="browser-extensions.html">Browser extension support decision</a>.</div>
+        <div class="exclusion">No password manager, system Credential Store, autofill, or remote debugging of the running source browser is implemented.</div>
+        <div class="exclusion">Cookie import can reduce repeated login, but device binding, expiration, secondary verification, or server-side revocation can still require login.</div>
+        <div class="exclusion">Local browser import is desktop-only and must not appear available in Web-only mode.</div>
+        <div class="exclusion">This web context menu does not implement Save page, Save image, Download linked file, View source, Inspect element, or extension-injected entries. Such actions require separate download, file-authorization, and developer-mode boundaries.</div>
+      </div>
+    </section>
+
+    <section class="section" id="session-pages"><h2>Web pages in session resources</h2><p>Pages are grouped by session and collapsed into the right-side session resources panel by default. The complete entry-point and resource-type design is in <a href="../resources/session-resources.html">Session resources</a>. Page records retain actual session ownership and pin state; manual pages and explicit split views retain top-level placement.</p></section>
+
+    <section class="section" id="task-execution-control">
+      <div class="section-head"><h2>Browser actions follow task execution</h2></div>
+      <p>Clicks, scrolling, keyboard input, navigation and closing a page never pause an agent. This holds for user input and for automation alike, including automation of OpenProgram itself. Only the conversation execution controls pause or cancel a task, and browser resources keep no separate write prohibition. Execution dispatch guards, ownership checks and current-frame validation stay in place.</p>
+      <p>When a target disappears, its session is discarded and the tool returns actionable recovery information with the last URL. Recovery observes a newly opened page at that exact URL; it never replays a mutating action or picks an unrelated tab. The agent continues from a fresh observation and reports missing authentication or unsaved state instead of inventing it.</p>
+      <p>Browser screenshots keep their ToolReturn images and structured errors. Executor shutdown never leaves a live server submitting work into a closed default executor, and recovery respects task cancellation and unresolved external effects.</p>
+    </section>
+    
+  <section class="section" id="favicon-lifetime"><div class="section-head"><h2>Icon and bookmark-menu lifetime</h2></div><p>Bookmark menus retain one detached cascade view per desktop window between openings. Reopening attaches that view and updates its menu data without loading a new document. Ordinary menus retain their existing close behavior. Window cleanup destroys both visible and detached views; detached senders cannot dispatch menu actions.</p><p>A renderer-owned favicon cache deduplicates concurrent image loads, retains decoded 32-pixel surfaces for 30 minutes, and retains failures for 5 minutes. At most 256 source entries remain in memory. Components draw cached surfaces without starting another image request; a changed source selects a different cache entry. Loading is bounded to 5 seconds and uses no referrer or third-party favicon service. Cross-origin images remain drawable without reading their pixels. Transparent readable images retain the existing fallback behavior. Application restart may load icons again through the browser cache; no additional persistent icon database is introduced.</p><p><code>bookmark-bar.tsx</code> owns bookmark layout and menus, <code>browser-controls.tsx</code> owns browser commands, <code>favicon-cache.ts</code> owns loading and bounded reuse, and <code>tab-favicon.tsx</code> owns presentation. Repeated native favicon events for the current successful source do not clear or reload the icon; page navigation still invalidates ownership.</p><p>Acceptance: a real bookmark-folder close/reopen issues no second icon request even when the server sends Cache-Control: no-store. Concurrent instances share one request, failed and transparent icons fall back, changed sources recover, hidden overflow stays hidden, and cache expiry/eviction permits retry. Desktop menu tests prove view reuse, inactive sender rejection, geometry updates and final disposal.</p><p>References: <a href="https://developer.mozilla.org/en-US/docs/Web/API/CanvasRenderingContext2D/drawImage">Canvas drawImage</a>; <a href="https://www.electronjs.org/docs/latest/api/web-contents-view">Electron WebContentsView</a>. Implementation evidence: the renderer cache and retained menu lifecycle pass independent specification and quality review. <code>favicon-cache.test.mjs</code> covers coalescing, expiry, timeout and eviction; <code>check-bookmark-menu-cache.cjs</code> covers document reuse, hidden senders and disposal; <code>test_tab_favicons.py</code> covers actual React rendering, remounts and folder reopening.</p></section>
+<section id="web-tab-identity"><h2>How web tabs present themselves</h2><p>Web tabs present themselves the way a current Chromium browser does, consistently across headers and script, and ask before a site uses a device. Nothing claims to be another browser: the brands are the ones this Chromium reports to script.</p><ul><li><strong>User-Agent.</strong> <code>webtab-user-agent.js</code> drops only the App's own token and keeps <code>Electron/x</code> with the full Chrome version. A User-Agent that claims plain Chrome while <code>navigator.userAgentData</code> names Chromium without Google Chrome reads as forged: Cloudflare keeps such a visitor in its challenge, while the same page passes with <code>Electron/x</code> in place. Cloudflare's clearance cookies (<code>cf_clearance</code>, <code>__cf_bm</code>, <code>cf_chl_*</code>) hold only for the User-Agent that earned them, so when the web tab User-Agent differs from the one recorded in <code>webtab-user-agent.json</code> (a new Electron, or a change here), the App removes them before any tab loads; other cookies stay.</li><li><strong>Client Hints.</strong> Electron sends no <code>Sec-CH-UA</code> headers even though its pages expose <code>navigator.userAgentData</code>. <code>webtab-client-hints.js</code> reads the session's own <code>getHighEntropyValues()</code> once from a loopback page, then sends <code>Sec-CH-UA</code>, <code>-Mobile</code> and <code>-Platform</code> to secure origins and the high-entropy hints an origin names in <code>Accept-CH</code>.</li><li><strong>Permissions.</strong> Electron grants every permission without a handler. <code>webtab-permissions.js</code> allows what Chrome allows silently (fullscreen, pointer lock, clipboard writes, external protocols), asks with a native dialog on the tab's window for the camera, microphone, location, notifications and similar, and denies the rest. Answers are kept per origin in <code>webtab-permissions.json</code>; clearing web tab cookies forgets them. An undecided permission reads as <code>denied</code>, not Chrome's <code>prompt</code>, because Electron's check handler is a yes/no.</li><li><strong>Engine.</strong> The Electron <code>apps/desktop/package.json</code> pins tracks Chrome stable (Electron 45 is Chromium 156); installed Apps take it as the development-instance notes describe.</li></ul><p>Electron itself still differs from Chrome: <code>window.chrome</code> is empty and there is no Widevine. These are not patched over. Pages that need a full Chrome are a separate design (the agent working in the user's own Chrome).</p></section>
+<section id="browser-step-execution"><h2>Browser step execution and caller context</h2><p>The browser workflow owns the outer observe, action and verification loop. Each planner request enables <code>stop_after_tool_round</code>: the shared Agent loop executes its normal validated and permission-checked tool round, retains its receipts, then returns to the workflow without requesting another model response. This is independent of the safety limit <code>max_iterations</code>. Default Agent calls still continue until final output. Exhausting a safety limit is non-retryable so completed actions cannot be replayed by transport recovery. A structured final-output contract cannot be combined with this early return.</p><p>Every BrowserPageController submission to its Playwright owner thread carries the current ContextVars, including cleanup and final verification. Context is copied per submission, not retained as a permanent authority; other conversations do not inherit access. Existing Page isolation, binding validation, permission checks and operation leases remain authoritative.</p><p>A legacy browser task uses an explicitly bound current Page when available, without reloading it because the task also supplies a URL hint. An invalid or stale explicit binding fails rather than opening a replacement Page. Without an explicit Page, existing URL/open behavior is unchanged. </p><p>Acceptance uses the public browser task with a fake provider and real Runtime/Agent loop: one action executes once, the next request verifies, no iteration error or replay occurs, and the controller closes with the same conversation identity. Default safety caps still fail without replay; an explicit current Page is reused without open/navigation. Implementation evidence: independent specification and quality reviews pass. The real-Runtime browser regressions cover one action followed by verification, explicit deny rules, preserved cleanup identity, and stale binding rejection. Agent-loop regressions cover sync/async option propagation, final-output incompatibility, and non-retryable cap exhaustion with exactly one tool effect.</p></section>
+<section id="browser-file-inputs"><h2>File selection and planner failures</h2><p>The planner uses explicit upload with an approved local path and a fresh file-input ref. Upload remains subject to sandbox reads, permission approval, Page ownership, cancellation and step limits. File inputs expose their type and selected file names, never bytes or local paths. Selecting a file is separate from server acceptance; file_selected checks the exact current input and final evidence is rechecked. MCP-backed planners use the same controller for file selection without switching backend ownership.</p><p>Verification uses value, not typing text. Invalid calls return an actionable error. Repeated failed calls on an unchanged frame stop after three consecutive failures and retain the concrete error. A planner can stop with a blocker; this never grants success. Calls that succeed after correcting arguments continue normally. Operation counts still count Page mutations, not model requests.</p><p>Acceptance uses real Runtime planner calls and an owned headless Chromium file-input fixture. It covers corrective retries, persistent invalid verification, stop, file selection/readback, explicit denial, stale refs, sandbox reads, cancellation, and independent server-response verification. No user registration or private-file upload is part of acceptance. Implementation evidence: independent specification and quality reviews pass. Regression coverage includes both Runtime planner paths and real Chromium file selection, server acknowledgement, and cancellation after file read with zero transmission.</p></section>
+<section id="homepage-shortcut-editor">
+  <h2>Homepage shortcut editor</h2>
+  <p>The homepage Add tile toggles a compact, non-modal popover anchored to that tile. The editor uses the shared Popover, Input and Button components, the configured interface font, theme surfaces and focus colors. Two stacked, visibly labelled fields keep the form usable in narrow panes; the name is optional.</p>
+  <p>Cancel, Close, Escape, an outside interaction, or another press of Add dismisses the editor and clears its draft. Keyboard dismissal returns focus to Add. The panel hides when its anchor is detached or hidden. Each homepage owns its editor; no global dismissal listener or application-level state is introduced.</p>
+  <p>Enter submits from either field, except while an input method is composing text. Empty addresses disable submission. Saving preserves the existing address normalization, shortcut persistence and duplicate handling, then clears and closes the editor.</p>
+  
+</section>
+    <section class="section" id="acceptance">
+      <div class="section-head"><span class="section-no">07</span><h2>Acceptance and implementation status</h2></div>
+      <p class="section-intro">Each acceptance item maps to an externally observable result. Design status and implementation evidence are separate; the existence of this document does not prove completion.</p>
+      <div class="table-scroll" tabindex="0" role="region" aria-label="Built-in browser acceptance results and implementation evidence, horizontally scrollable">
+      <table class="acceptance-table">
+        <thead><tr><th>Observable result</th><th>Current status</th><th>Implementation evidence</th></tr></thead>
+        <tbody>
+          <tr><td>Ordinary navigation retains the current WebTab id and active state;<code>target="_blank"</code> / <code>window.open</code> creates a unique WebTab that remains active after creation without being overwritten by the original chat route. Link context menus show Open Link in New Tab and Copy Link Address; ordinary/editable contexts show corresponding Navigation or Edit actions, all restricted to the exact owner.</td><td><span class="status">Implemented and accepted in the default App</span></td><td><code>desktop-bridge.ts</code> popup route contract; <code>apps/desktop/main.js</code> WebContentsView context menu; <code>check-web-split.mjs</code>; <code>check-webtab-navigation.js</code>. Independent specification and quality reviews passed. In the installed App, the popup remained active throughout a continuous 2-second observation and <code>/s/&lt;id&gt;</code> stayed unchanged; ordinary navigation retained tab count and id; native HTTP(S) link context menus displayed Open/Copy and page navigation actions.</td></tr>
+          <tr><td>New Pane shows only Files, New chat, Browser, and Terminal. All four use equally sized rounded icon containers with different semantic colors; browser-only controls are absent from the DOM.</td><td><span class="status">Implemented and accepted in light and dark themes in the default App</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/pages/new-tab-page.tsx"><code>new-tab-page.tsx</code></a>; <code>tests/browser/*.test.mjs</code> effective-cascade and semantic-color mutation checks</td></tr>
+          <tr><td>Selecting Browser displays the same address-bar and bookmarks-bar structure as web tabs, with import and quick-site entries. Actions without a current page remain visible but disabled.</td><td><span class="status">Implemented and accepted in the default App</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/browser/browser-home-page.tsx"><code>browser-home-page.tsx</code></a>; <code>tests/browser/*.test.mjs</code>; toolbar / bookmarks bar in the actual App measure <code>40px / 30px</code></td></tr>
+          <tr><td>At standard width, the Browser toolbar shows Back, Forward, Reload/Stop, Home, address bar, current-page star, Bookmarks, external opening, and Browser <code>⋯</code>in that order; no split controls or Settings gear.</td><td><span class="status">Implemented</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/browser/web-tab-pane.tsx"><code>web-tab-pane.tsx</code></a>; <code>tests/browser/*.test.mjs</code>; <code>check-web-split.mjs</code></td></tr>
+          <tr><td>Browser <code>⋯</code> provides Bookmarks, History, Downloads, bookmarks-bar toggle, Import, Clear browsing data, and Browser settings; the window menu contains only App, window, and pane actions. Desktop popovers report intrinsic size using the menu's <code>scrollWidth/scrollHeight</code> , without recursively shrinking to the current clipped height.</td><td><span class="status">Implemented</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/browser/toolbar/browser-controls.tsx"><code>browser-controls.tsx</code></a>; <code>menu-overlay/context-menu/page.tsx</code>; <code>tests/browser/*.test.mjs</code></td></tr>
+          <tr><td>The bookmarks bar appears by default and remains off after the user disables it. It directly displays the children of <code>Bookmarks bar</code> , with an overflow entry for hidden items followed by a separated All bookmarks manager entry at the right. Overflowed items leave no clipped button behind; the last visible button retains its full background and both rounded ends. Desktop folder hover opens menus and supports horizontal switching. Menus stay open while moving from the trigger into a popover or submenu, and close within 120ms after leaving the trigger and every menu panel, without an extra click. Folder menus are 280px wide, ellipsize titles, and open nested folders level by level. Folder rows show Folder icons; site rows show favicons with the shared browser-icon fallback on failure and no empty icon slots. Below 560px pane width, the bar hides but Bookmarks remains reachable.</td><td>Acceptance criteria</td><td><code>test_tab_favicons.py</code>; <code>bookmark-favicons.test.mjs</code>; <code>tests/browser/*.test.mjs</code>; default App visual verification of icons, overflow and manager access.</td></tr>
+          <tr><td>Bookmarks manager uses top search, a left folder tree, and the current directory list on the right. Ordinary rows contain only a favicon/folder icon, title, and <code>⋮</code>. Rows in both lists are <code>36px</code>, and the header uses <code>52px</code>, and narrow panes stack vertically.</td><td><span class="status">Implemented and density-accepted in the default App</span></td><td><code>builtin-tab-pane.tsx</code>; <code>center-tabs.module.css</code>; <code>tests/browser/bookmarks-store.test.mjs</code>; measured header, folder row, content row, search field, and icon button sizes in the default App are respectively <code>52 / 36 / 36 / 30 / 28px</code></td></tr>
+          <tr><td>Browser settings and window Settings share a route and configuration source; Browser <code>⋯</code> opens the Browser section directly, with no persistent toolbar gear.</td><td><span class="status">Implemented</span></td><td><code>/settings/browser</code>; <code>browser-settings.tsx</code>; <code>browser-prefs.ts</code></td></tr>
+          <tr><td>The import dialog lists source browsers, profiles, and supported data types; closing before starting causes no target changes. During import, Import becomes Cancel in place and closing is disabled. Accepted cancellation shows a stable result and releases the global import lease so another import can start.</td><td><span class="status">Implemented and accepted in the default App</span></td><td><code>browser-import:run/cancel</code> IPC; <code>browser-profile-import.js</code> cancellation self-check; <code>check-webtab-navigation.js</code> sender-ownership, lease-release, and window-cleanup checks;<code>tests/browser/*.test.mjs</code>. The installed App detected 3 Chrome profiles. While running, it displayed Cancel and disabled closing; cancellation returned <code>import_cancelled</code>, and the next request no longer returned <code>import_busy</code>.</td></tr>
+          <tr><td>History groups records by date, retains 36–40px rows with at least 1000 records, and supports search and scrolling.</td><td><span class="status">Implemented and scale-accepted in the default App</span></td><td><code>web-history.css</code> is 38px; History pagination caps at 5000 and search runs in main. Storage self-check covers the 5000-record limit. The installed App's existing 5000 records were incrementally displayed up to 1000 rows; three incremental renders took <code>241.6 / 235.1 / 256.2ms</code>, all row heights were <code>38px</code>, and the last row was visible after scrolling to the bottom;<code>google</code> search returned 250 matches within <code>299.4ms</code> .</td></tr>
+          <tr><td>Built-in page downloads go to the system Downloads directory. The Downloads page shows live progress and final status and supports opening files, revealing them in Finder, cancelling active jobs, and clearing records.</td><td><span class="status ok">Implemented; installed-App checks passed</span></td><td><code>apps/desktop/main.js</code> bound to their owning <code>will-download</code> and <code>downloads:*</code> IPC; <code>builtin-tab-pane.tsx</code>; <code>check-webtab-navigation.js</code>. The installed App completed a 42 B attachment download and cancelled an active 32 MB job; the page displayed <code>Completed</code>, <code>Cancelled</code>respectively. After cancellation, <code>active=false</code>, and test records could be cleared. In another installed-App download check, Open used the system-associated application to open a 58 B text file, and Show in Finder located and selected that same file; test records were then cleared and the file moved to Trash.</td></tr>
+          <tr><td>The current page supports Find in page, Zoom in/out/reset, and Print; commands target only the exact WebTab owned by the requesting window. Print first invokes system printing. If printing fails or no destination is available, the same action opens the owning window's native Save PDF dialog. Cancelling system printing or saving returns incomplete and writes no file; successful system printing must not additionally generate a PDF. Write the PDF to a unique temporary file in the target directory, then replace the selected path on completion; preserve existing targets on failure. Find provides previous/next match, count, and close; closing clears page selection;<code>⌘/Ctrl+F</code>, <code>⌘/Ctrl++/-/0</code>, <code>⌘/Ctrl+P</code> matches menu actions. When frontend and desktop-shell versions temporarily differ, enable actions according to capabilities actually exposed by preload. An older shell lacking new IPC must disable corresponding actions without breaking the page.</td><td><span class="status ok">Implemented; installed-App checks passed</span></td><td><code>apps/desktop/main.js</code> bound to their owning <code>webtab:find/zoom/print</code> IPC; <code>web-tab-pane.tsx</code>; <code>check-webtab-navigation.js</code>; <code>tests/browser/*.test.mjs</code>. The installed App found 35 matches in a local documentation page and advanced to match 2; Zoom returned <code>100 → 110 → 100 → 100</code>. The acceptance machine had no print destination: after system Print failed, the owning window's native Save PDF dialog appeared and generated a 1-page, 8455 B PDF from the current documentation WebTab. IPC returned <code>true</code>; the test file was moved to Trash. Automated checks cover system-print cancellation, save cancellation, preserving existing files on write failure, and avoiding writes when exact ownership is lost during PDF rendering. Persistent toolbar and tab-bar styling did not change.</td></tr>
+          <tr><td>Bookmarks preserve source roots, up to 64 folder levels, and sibling order; invalid URLs are filtered, and repeated imports create neither duplicate URLs nor empty folders.</td><td><span class="status">Implemented</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/tabs/browser/bookmarks.ts"><code>apps/web/lib/tabs/browser/bookmarks.ts</code></a>; <code>tests/browser/bookmarks-store.test.mjs</code></td></tr>
+          <tr><td>In desktop App and Web, the window menu right-aligns with its trigger with a 4px gap below the button. For desktop main, Browser, bookmark, and tab context menus, CSS-pixel coordinates from the renderer must be converted to Electron DIP using the sender page's zoom factor. Menus remain beside their triggers at 80%, 100%, and 125% zoom. Renderer-provided Browser, bookmark, and tab context menus render a left icon slot only when a row actually carries a glyph, folder, or favicon; checks sit at the row end. Rows without icons reserve no empty slot; their text starts at the menu row's default <code>10px</code> padding.</td><td><span class="status">Implemented</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/strip/main-menu.tsx"><code>main-menu.tsx</code></a>; <code>menu-overlay/context-menu/page.tsx</code>; <code>tests/browser/*.test.mjs</code>; <code>check-center-tabs.mjs</code>; <code>check-webtab-zoom-bounds.js</code></td></tr>
+          <tr><td>Chat-composer, model, context, and other popovers must not hide or reset a native Web Page when they do not cover it. Suspend the corresponding WebContentsView only when a visible popover rectangle actually intersects the page rectangle.</td><td><span class="status">Implemented</span></td><td><code>web-tab-bounds.ts</code> rectangle-intersection checks;<code>web-tab-pane.tsx</code>; <code>check-web-split.mjs</code></td></tr>
+          <tr><td>Floating previews created in chat appear only in their owning session. Switching to another chat, ordinary Browser tab, or non-chat page hides them and restores user web zoom. Returning reuses the original WebTab state; the restore entry after closing also belongs only to that session.</td><td><span class="status">Implemented; automated checks and runtime review passed</span></td><td><code>web-tab-pip-store.ts</code>; <code>web-tab-pip.tsx</code>; <code>web-tab-pane.tsx</code>; <code>desktop-bridge.ts</code>; <code>apps/desktop/main.js</code>; <code>check-web-split.mjs</code> covers owner chat, inventory, and switching without pointer-up;<code>check-webtab-navigation.js</code> covers first navigation commit and zoom restoration after transfer commit. The installed production build and default worker health checks passed.</td></tr>
+          <tr><td>Cookies only enter <code>persist:webtabs</code>; Cookie values do not appear in IPC, logs, History, or renderer.</td><td><span class="status">Implemented</span></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/web-views/browser-profile-import.js"><code>browser-profile-import.js</code></a> self-check; <code>apps/desktop/main.js</code></td></tr>
+          <tr><td>Corrupt sources, missing browsers, temporary-process timeouts, and partial Cookie failures return stable error codes and preserve original data.</td><td><span class="status">Implemented</span></td><td><code>browser-profile-import.js</code> and <code>browsing-history-store.js</code> self-check</td></tr>
+          <tr><td>Full-screen terminal programs that depend on PTY.</td><td><span class="status limit">Current limitation</span></td><td>Product boundary, not a current acceptance gap.</td></tr>
+          <tr><td>Passwords, autofill, payment/address data, and source-browser takeover.</td><td><span class="status out">Explicitly excluded</span></td><td><code>browser-profile-import.js</code> import-type allowlist.</td></tr>
+          <tr><td>Chrome Web Store and Edge Add-ons open only as ordinary pages. The product provides no store installation, local-directory loading, CRX downloads, extension runtime, or management page.</td><td><span class="status out">Explicitly excluded; code removed</span></td><td><a href="browser-extensions.html"><code>browser-extensions.html</code></a>; <code>check-no-browser-extensions.js</code>; extensions are outside profile data import.</td></tr>
+        </tbody>
+      </table>
+      </div>
+      <h3>Verification environment</h3>
+      <p>Visible acceptance uses only the installed <code>/Applications/OpenProgram.app</code>, default worker on 18100, and <code>~/.openprogram</code>.</p>
+      <h3>Task execution and the homepage editor</h3>
+      <p>Browser actions following task execution is implemented and independently reviewed: page events leave execution running, an explicit conversation pause still stops dispatch, a closed target returns usable recovery information, and screenshots keep their images. The homepage shortcut editor is implemented and reviewed; headless checks cover its dismissal paths, keyboard focus, input-method composition, persistence, multiple panes, hidden anchors, theme fonts and narrow layouts. Installed-App acceptance has not been run for the editor.</p>
+    </section>
+    <p class="footnote">This page is the normative description of the current design. Update it directly when implementation changes; Git preserves revision history.</p>
+</main>
+
+  <aside class="rail" aria-label="In-page navigation">
+    <div class="rail-title">On this page</div>
+    <nav><a href="#decisions">Product decisions</a><a href="#toolbar">Toolbar and menus</a><a href="#surfaces">Visible states</a><a href="#references">Reference behavior</a><a href="#architecture">Architecture and data flow</a><a href="#boundaries">Trust boundaries</a><a href="#session-pages">Session web pages</a>
+          <a href="#acceptance">Acceptance and status</a></nav>
+  </aside>
+</div>
+<script>
+  const tabs = [...document.querySelectorAll('.demo-tab')];
+  const panels = [...document.querySelectorAll('.demo-panel')];
+  function selectTab(tab, moveFocus = false) {
+    tabs.forEach((item) => {
+      const selected = item === tab;
+      item.setAttribute('aria-selected', String(selected));
+      item.tabIndex = selected ? 0 : -1;
+    });
+    panels.forEach((panel) => {
+      const active = panel.id === tab.getAttribute('aria-controls');
+      panel.classList.toggle('active', active);
+      panel.hidden = !active;
+    });
+    if (moveFocus) tab.focus();
+  }
+  tabs.forEach((tab, index) => {
+    tab.addEventListener('click', () => selectTab(tab));
+    tab.addEventListener('keydown', (event) => {
+      let next = null;
+      if (event.key === 'ArrowRight') next = tabs[(index + 1) % tabs.length];
+      if (event.key === 'ArrowLeft') next = tabs[(index - 1 + tabs.length) % tabs.length];
+      if (event.key === 'Home') next = tabs[0];
+      if (event.key === 'End') next = tabs[tabs.length - 1];
+      if (!next) return;
+      event.preventDefault();
+      selectTab(next, true);
+    });
+  });
+
+  const toolbarPreview = document.getElementById('toolbar-preview');
+  const toolbarNote = document.getElementById('toolbar-note');
+  const toolbarModes = [...document.querySelectorAll('[data-chrome-mode]')];
+  const toolbarNotes = {
+    standard: '<strong>Standard:</strong> Full navigation remains visible; the star manages the current page and Bookmarks handles browsing and management. Split controls and global Settings are outside this row.',
+    hidden: '<strong>Bookmarks bar hidden:</strong> The address bar remains complete; bookmarks remain accessible through Bookmarks or Browser ⋯.',
+    narrow: '<strong>Narrow split pane:</strong> Home, Bookmarks, external opening, and Forward move into Browser ⋯ in order; the address bar, Back, Reload/Stop, star, and ⋯ remain visible.'
+  };
+  const toolbarLabels = {
+    standard: 'Standard browser toolbar: back, forward, reload, home, address bar, bookmark current page, bookmarks, external opening, and browser menu; bookmarks bar below the address bar.',
+    hidden: 'Standard browser toolbar: bookmarks bar hidden below the address bar; bookmarks remain accessible.',
+    narrow: 'Narrow-pane toolbar: back, reload, address bar, bookmark current page, and browser menu; other actions are in the menu and the bookmarks bar is hidden.'
+  };
+  toolbarModes.forEach((button) => {
+    button.addEventListener('click', () => {
+      const mode = button.dataset.chromeMode;
+      toolbarModes.forEach((item) => item.setAttribute('aria-pressed', String(item === button)));
+      toolbarPreview.className = `toolbar-preview mode-${mode}`;
+      toolbarPreview.setAttribute('aria-label', toolbarLabels[mode]);
+      toolbarNote.innerHTML = toolbarNotes[mode];
+    });
+  });
+</script>
+</body>
+</html>

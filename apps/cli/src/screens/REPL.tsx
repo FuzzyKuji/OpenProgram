@@ -1,0 +1,659 @@
+import { usePermissionSetting } from './repl/usePermissionSetting.js';
+import React, { useEffect, useState, useRef } from 'react';
+import { writeFileSync } from 'fs';
+import { join } from 'path';
+import { Box, Text, useApp, useInput } from '../runtime/index';
+import type { ScrollBoxHandle } from '../runtime/index';
+import { Shell, ModalHost, ToastHost } from '../ui/index.js';
+import { StatsEnvelope, ConnectionState } from '../ws/client.js';
+import { BottomBar } from '../components/BottomBar.js';
+import { GoalStatus } from '../components/GoalStatus.js';
+import { Messages } from '../components/Messages.js';
+import { Spinner } from '../components/Spinner.js';
+import { Turn } from '../components/Turn.js';
+import { TranscriptViewport } from '../components/TranscriptViewport.js';
+import { PromptInput } from '../components/PromptInput/PromptInput.js';
+import { handleSlash } from '../commands/handler.js';
+import {
+  loadBackendCommands,
+  findBackendCommand,
+  invokeBackendCommand,
+} from '../commands/registry.js';
+import { loadHistory, appendHistory } from '../utils/history.js';
+import { copyToClipboard } from '../utils/clipboard.js';
+import { useTheme } from '../theme/ThemeProvider.js';
+import { isThemeSetting } from '../theme/themes.js';
+import type {
+  REPLProps,
+  AgentInfo,
+  Activity,
+  BranchRow,
+  ChannelActivity,
+  PickerKind,
+  PendingDecision,
+  PendingAttach,
+  SessionAliasRow,
+  ChannelAccountRow,
+  PastConversation,
+  RegisterForm,
+  SearchResultRow,
+  ThinkingEffort,
+  PermissionMode,
+} from './repl/types.js';
+import { PERMISSION_CYCLE } from './repl/types.js';
+import { ChannelActivityFeed } from '../components/ChannelActivityFeed.js';
+import type { SettingRow } from '../components/SettingsPanel.js';
+import type { JobRow } from '../ws/client.js';
+import { randomLocalId, renderModel } from './repl/helpers.js';
+import { buildPickerNode } from './repl/pickerRouter.js';
+import { useWsEvents } from './repl/useWsEvents.js';
+import { makeAccountsClient } from '../utils/providerAccounts.js';
+import type { AccountsState, AddStarted } from '../utils/providerAccounts.js';
+
+export type { REPLProps } from './repl/types.js';
+
+export const REPL: React.FC<REPLProps> = ({
+  client,
+  initialAgent,
+  initialConversation,
+  altScreen = true,
+  screenReader = false,
+}) => {
+  const app = useApp();
+  const [committed, setCommitted] = useState<Turn[]>([]);
+  const [streaming, setStreaming] = useState<Turn | null>(null);
+  const [agent, setAgent] = useState<string | undefined>(initialAgent);
+  const [model, setModel] = useState<string | undefined>(undefined);
+  const [conversationId, setConversationId] = useState<string | undefined>(initialConversation);
+  const [activity, setActivity] = useState<Activity | null>(null);
+  const [stats, setStats] = useState<StatsEnvelope['data'] | undefined>(undefined);
+  const [tick, setTick] = useState(0);
+  // Per-conversation token + context-window tracking. We key by session_id
+  // so switching branches (resume / new / load_session) flips the
+  // BottomBar indicator to that branch's own usage.
+  const [tokensByConv, setTokensByConv] = useState<
+    Record<string, { input?: number; output?: number }>
+  >({});
+  const [windowByConv, setWindowByConv] = useState<Record<string, number>>({});
+  // Branch-level token stats from /api/sessions/{id}/tokens. Augments
+  // the per-turn input/output already tracked via WS events with
+  // cache_hit_rate / cache_read_total / source_mix for BottomBar pills.
+  const [tokenStatsByConv, setTokenStatsByConv] = useState<
+    Record<string, {
+      current_tokens: number;
+      context_window: number;
+      cache_hit_rate: number;
+      cache_read_total: number;
+      source_mix: Record<string, number>;
+    }>
+  >({});
+  const [history, setHistory] = useState<string[]>(() => loadHistory());
+  const [conversationTitle, setConversationTitle] = useState<string | undefined>(undefined);
+  const [promptDraft, setPromptDraft] = useState<string | undefined>(undefined);
+  const [searchBaseDraft, setSearchBaseDraft] = useState('');
+  const [contextSearchQuery, setContextSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<SearchResultRow[]>([]);
+  const [sessionLiveByConv, setSessionLiveByConv] = useState<Record<string, boolean>>({});
+  // Ambient activity buffer for inbound channel turns (wechat/telegram/...)
+  // landing on conversations the TUI is not currently focused on.
+  // Populated by useWsEvents; rendered above BottomBar.
+  const [channelActivityByConv, setChannelActivityByConv] = useState<
+    Record<string, ChannelActivity>
+  >({});
+  const [bellEnabled, setBellEnabled] = useState(true);
+  const [modelsList, setModelsList] = useState<string[]>([]);
+  const [settingsRows, setSettingsRows] = useState<SettingRow[]>([]);
+  const [jobsList, setJobsList] = useState<JobRow[]>([]);
+  const [selectedJob, setSelectedJob] = useState<JobRow | null>(null);
+  const [branchesList, setBranchesList] = useState<BranchRow[]>([]);
+  const [pastConversations, setPastConversations] = useState<
+    Array<{
+      id?: string;
+      title?: string;
+      created_at?: number;
+      /** Channel name for channel-bound sessions ("wechat", "telegram", …). */
+      source?: string;
+      /** Display name for the bound peer (e.g. WeChat nickname). */
+      peer_display?: string;
+    }>
+  >([]);
+  const [pickerKind, setPickerKind] = useState<PickerKind>(null);
+  // FIFO queue of system "needs a decision" requests (runtime.ask /
+  // confirm / approval). The head occupies the input slot as the
+  // `question` picker; answering pops it and the next surfaces. Mirrors
+  // the web composer's pendingDecisions. Driven by useWsEvents.
+  const [pendingDecisions, setPendingDecisions] = useState<PendingDecision[]>([]);
+  const [pendingAttach, setPendingAttach] = useState<PendingAttach | null>(null);
+  const [registerForm, setRegisterForm] = useState<{
+    channel?: string;
+    accountId?: string;
+  }>({});
+  const { setThemeSetting, currentTheme, colors } = useTheme();
+  const [channelAccounts, setChannelAccounts] = useState<
+    Array<{ channel?: string; account_id?: string; configured?: boolean }>
+  >([]);
+  const [chosenChannel, setChosenChannel] = useState<string | undefined>(undefined);
+  // Per-provider account panel state (the in-TUI account manager): which
+  // provider it manages, the fetched list, the account picked for the action
+  // menu, the in-flight code-paste add (login URL + session awaiting a code),
+  // and the in-flight login-mode add (new account name + chosen method).
+  const [accountsProviderId, setAccountsProviderId] = useState<string>('claude-code');
+  const [accountsState, setAccountsState] = useState<AccountsState>({
+    installed: false, ready: false, active: null, accounts: [],
+  });
+  const [accountSelected, setAccountSelected] = useState<string | null>(null);
+  const [accountPendingAdd, setAccountPendingAdd] = useState<AddStarted | null>(null);
+  const [accountLogin, setAccountLogin] = useState<{ name: string; method: string } | null>(null);
+  // Channel-binding scratch state — held while the user walks
+  // through the channel→account→action→peer picker chain.
+  const [chosenAccount, setChosenAccount] = useState<string | undefined>(undefined);
+  // QR login progress: the ASCII art for the current QR + a status
+  // message ("scanned", "waiting", etc.). Cleared when the picker
+  // closes.
+  const [qrAscii, setQrAscii] = useState<string | undefined>(undefined);
+  const [qrStatus, setQrStatus] = useState<string | undefined>(undefined);
+  const [agentsList, setAgentsList] = useState<AgentInfo[]>([]);
+  // Permission tier for tool calls — the 5 modes shared with the web
+  // Mode menu. Default ask (approval cards), matching web + Claude Code;
+  // a resumed session restores its saved tier via session_loaded.
+  const [permissionMode, setPermissionModeState] = useState<PermissionMode>('ask');
+  // Thinking effort cycle: off → minimal → low → medium → high → xhigh → off.
+  const [thinkingEffort, setThinkingEffort] = useState<ThinkingEffort>('xhigh');
+  const [connState, setConnState] = useState<ConnectionState>(client.getState());
+  const agentSetRef = useRef(false);
+  const transcriptScrollRef = useRef<ScrollBoxHandle | null>(null);
+  // Theme switch: with hermes-ink every render is a full cell-grid
+  // frame, so changing useColors() context just re-renders the entire
+  // tree with the new palette — no Static remount or nonce needed.
+  const lastThemeRef = useRef<string>(currentTheme);
+  // Cache of the last list_session_aliases response. The /channel
+  // picker reads this to render "you'll overwrite X" hints in option
+  // descriptions without firing a fresh round-trip. Default empty so
+  // the picker degrades to "no overwrite info" if alias data hasn't
+  // landed yet.
+  const sessionAliasesRef = useRef<SessionAliasRow[]>([]);
+  // True ⇔ the next session_aliases envelope should be echoed to the
+  // system area. /aliases sets this; picker pre-fetches do not. This
+  // splits "load cache" from "show user the list" so both can use the
+  // same WS action without one path dumping output into the other.
+  const sessionAliasesPrintRef = useRef<boolean>(false);
+  useEffect(() => {
+    if (lastThemeRef.current !== currentTheme) {
+      lastThemeRef.current = currentTheme;
+    }
+  }, [currentTheme]);
+
+  // 1Hz tick for elapsed-seconds display while a turn is active.
+  useEffect(() => {
+    if (!activity) return;
+    const t = setInterval(() => setTick((x) => x + 1), 1000);
+    return () => clearInterval(t);
+  }, [activity]);
+
+  // Pull the worker's unified command registry (skill / user / project /
+  // plugin / mcp layers) so completion, ctrl+K, and /help include them.
+  useEffect(() => {
+    void loadBackendCommands();
+  }, []);
+
+  const pushSystem = (text: string) =>
+    setCommitted((m) => [
+      ...m,
+      { id: `s-${Date.now()}-${m.length}`, role: 'system', text },
+    ]);
+
+  const startTurn = (verb: string) =>
+    setActivity({ verb, startedAt: Date.now() });
+
+  const executionIdRef = useRef<string | undefined>(undefined);
+  const executionVersionRef = useRef<number | undefined>(undefined);
+  const stopStageRef = useRef<0 | 1 | 2>(0);
+
+  const finishTurn = () => {
+    setActivity(null);
+    stopStageRef.current = 0;  // reset three-stage stop for the next turn
+    executionIdRef.current = undefined;
+    executionVersionRef.current = undefined;
+  };
+
+
+  const { setPermissionMode, permissionForSubmit } = usePermissionSetting(
+    client, conversationId, permissionMode, setPermissionModeState, pushSystem,
+  );
+  useWsEvents({
+    client,
+    pushSystem, finishTurn,
+    bellEnabled, conversationId, chosenChannel, chosenAccount,
+    setConversationId, setStreaming, setActivity, setCommitted,
+    setTokensByConv, setWindowByConv, setTokenStatsByConv,
+    setStats, setModel, setAgent, setAgentsList, setModelsList, setBranchesList,
+    setSettingsRows, setJobsList, setSelectedJob,
+    setChannelAccounts, setPastConversations,
+    setQrAscii, setQrStatus,
+    setPickerKind, setPendingDecisions, setChosenChannel, setChosenAccount,
+    setConversationTitle, setConnState,
+    setThinkingEffort, setPermissionMode: setPermissionModeState,
+    setSearchResults, setContextSearchQuery, setSessionLiveByConv,
+    setChannelActivityByConv,
+    agentSetRef, sessionAliasesPrintRef, sessionAliasesRef,
+    executionIdRef,
+    executionVersionRef,
+  });
+
+  // ``openprogram --resume <id>`` seeds the id through the launcher
+  // environment. Setting local state alone only makes subsequent messages use
+  // that id; explicitly load it so the existing transcript and per-session
+  // tools/effort/permission settings are visible before the user types.
+  useEffect(() => {
+    if (initialConversation) {
+      client.send({ action: 'load_session', session_id: initialConversation });
+    }
+  }, [client, initialConversation]);
+  const cancelCurrentExecution = () => {
+    const executionId = executionIdRef.current || streaming?.executionId;
+    const expectedVersion = executionVersionRef.current;
+    if (executionId && typeof expectedVersion === 'number') {
+      client.send({
+        type: 'execution.command',
+        action: 'execution.cancel',
+        command_id: randomLocalId(),
+        execution_id: executionId,
+        expected_version: expectedVersion,
+      });
+      return true;
+    }
+    pushSystem('Cancel unavailable: no current execution version');
+    return false;
+  };
+
+
+  // Double-press Ctrl+C to exit (Claude Code / Hermes pattern).
+  // First press: surface a "Press Ctrl+C again to exit" hint in
+  // BottomBar and start an 800 ms timer. Second press inside the
+  // window: app.exit(). Timer expires: clear the hint and reset.
+  const [exitPending, setExitPending] = useState(false);
+  const exitTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const lastCtrlCRef = useRef<number>(0);
+  // Cancel while a turn is streaming: 0 idle, 1 hinted, 2 cancel sent.
+  // Further presses repeat the same cancel operation.
+
+  useEffect(() => () => {
+    if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+  }, []);
+
+  useInput((input, key) => {
+    if (key.ctrl && input === 'c') {
+      // While a turn is streaming, Ctrl-C cancels the current execution.
+      // First press is a mistouch hint; later presses send the same
+      // cancel operation (no force mode).
+      if (streaming && conversationId) {
+        const stage = stopStageRef.current;
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+        if (stage === 0) {
+          stopStageRef.current = 1;
+          setExitPending(true);
+          exitTimerRef.current = setTimeout(() => {
+            exitTimerRef.current = null;
+            stopStageRef.current = 0;
+            setExitPending(false);
+          }, 1500);
+        } else {
+          stopStageRef.current = 2;
+          if (cancelCurrentExecution()) pushSystem('Cancel execution');
+          exitTimerRef.current = setTimeout(() => {
+            exitTimerRef.current = null;
+            stopStageRef.current = 0;
+            setExitPending(false);
+          }, 5000);
+        }
+        return;
+      }
+      // Idle: double Ctrl-C exits the app (unchanged).
+      const now = Date.now();
+      const recent = now - lastCtrlCRef.current <= 800
+        && exitTimerRef.current !== null;
+      if (recent) {
+        if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+        exitTimerRef.current = null;
+        setExitPending(false);
+        app.exit();
+        return;
+      }
+      lastCtrlCRef.current = now;
+      setExitPending(true);
+      if (exitTimerRef.current) clearTimeout(exitTimerRef.current);
+      exitTimerRef.current = setTimeout(() => {
+        exitTimerRef.current = null;
+        setExitPending(false);
+      }, 800);
+      return;
+    }
+    // shift+tab cycles the safe permission tiers (ask → acceptEdits →
+    // plan → auto), like Claude Code. bypass never enters the cycle —
+    // it's only reachable via /permissions + confirm — and pressing
+    // shift+tab while in bypass exits back to ask. Skipped while a
+    // picker owns the input (multi-ask uses shift+tab to go back).
+    if (key.shift && key.tab && !pickerKind) {
+      setPermissionMode((m) => {
+        const i = PERMISSION_CYCLE.indexOf(m);
+        return i < 0 ? 'ask' : PERMISSION_CYCLE[(i + 1) % PERMISSION_CYCLE.length]!;
+      });
+      return;
+    }
+    // Ctrl+K — command palette over the slash registry (opencode's
+    // command-palette). Only when nothing else is open / streaming.
+    if (key.ctrl && input === 'k' && !pickerKind && !streaming) {
+      setPickerKind('commands');
+      return;
+    }
+    // Esc closes the channel_qr_wait picker (no input form to absorb
+    // it). Other pickers handle their own onCancel via Picker/LineInput
+    // — this is just for the read-only QR display.
+    if (key.escape && pickerKind === 'channel_qr_wait') {
+      pushSystem('QR login cancelled.');
+      setQrAscii(undefined);
+      setQrStatus(undefined);
+      setPickerKind(null);
+      return;
+    }
+  });
+
+  const onSubmit = (text: string) => {
+    if (!text.trim()) return;
+    const sendChat = (chatText: string) => {
+      setCommitted((m) => [...m, { id: `u-${Date.now()}`, role: 'user', text: chatText }]);
+      if (!conversationTitle && committed.length === 0) {
+        // Mirror server-side behaviour: first user message becomes the title.
+        setConversationTitle(chatText.slice(0, 50) + (chatText.length > 50 ? '…' : ''));
+      }
+      startTurn('Thinking');
+      client.send({
+        action: 'chat',
+        session_id: conversationId,
+        agent_id: agent,
+        text: chatText,
+        thinking_effort: thinkingEffort,
+        permission_mode: permissionForSubmit(),
+      } as never);
+    };
+    // Save EVERY submitted line — chat messages and slash commands —
+    // to up-arrow history. Previously only non-slash-handled inputs
+    // landed in history; slash commands like `/channel` would
+    // disappear after submit and ↑ wouldn't bring them back.
+    setHistory((h) => {
+      if (h[h.length - 1] === text) return h;
+      appendHistory(text);
+      return [...h, text].slice(-500);
+    });
+    if (text.startsWith('/')) {
+      if (text.trim().startsWith('/search')) setSearchBaseDraft('');
+      // Open the in-TUI account manager for a provider: prefetch the list so the
+      // panel paints populated; open it even if the fetch fails (Add still works
+      // and triggers auto-install for claude-code).
+      const openAccountsPanel = (providerId: string) => {
+        setAccountsProviderId(providerId);
+        void makeAccountsClient(providerId).fetchAccounts()
+          .then((s) => setAccountsState(s))
+          .catch(() => { /* paint empty; Add will install + refresh */ })
+          .finally(() => {
+            setAccountSelected(null);
+            setAccountPendingAdd(null);
+            setAccountLogin(null);
+            setPickerKind('acct_list');
+          });
+      };
+      const handled = handleSlash(text, {
+        client,
+        pushSystem,
+        clearCommitted: () => {
+          setCommitted([]);
+        },
+        newSession: () => {
+          setConversationId(undefined);
+          setConversationTitle(undefined);
+          setStreaming(null);
+          setCommitted([]);
+        },
+        exit: () => app.exit(),
+        openPicker: (kind) => setPickerKind(kind),
+        openProviderAccounts: openAccountsPanel,
+        openClaudeAccounts: () => openAccountsPanel('claude-code'),
+        currentThinkingEffort: thinkingEffort,
+        setThinkingEffort,
+        currentPermissionMode: permissionMode,
+        setPermissionMode,
+        toggleBell: () => {
+          let next = bellEnabled;
+          setBellEnabled((b) => {
+            next = !b;
+            return next;
+          });
+          return next;
+        },
+        showWelcome: () => {
+          if (!stats) {
+            pushSystem('Stats not loaded yet — try again in a moment.');
+            return;
+          }
+          const lines = [
+            `OpenProgram · ${stats.agent?.name ?? '—'} · ${stats.agent?.model ?? '—'}`,
+            `${stats.programs_count ?? 0} programs · ${stats.skills_count ?? 0} skills · ${stats.agents_count ?? 0} agents · ${stats.conversations_count ?? 0} sessions`,
+          ];
+          if (stats.top_programs?.length) {
+            lines.push(`programs: ${stats.top_programs.map((p) => p.name).filter(Boolean).join(' · ')}`);
+          }
+          if (stats.top_skills?.length) {
+            lines.push(`skills: ${stats.top_skills.map((s) => s.name).filter(Boolean).join(' · ')}`);
+          }
+          pushSystem(lines.join('\n'));
+        },
+        showAgentInfo: () => {
+          const a = agentsList.find((x) => x.id === agent);
+          if (!a) {
+            pushSystem('No active agent.');
+            return;
+          }
+          const lines = [
+            `agent: ${a.name ?? a.id}  (${a.id})`,
+            `model: ${renderModel(a.model) ?? '—'}`,
+            `default: ${a.default ? 'yes' : 'no'}`,
+          ];
+          pushSystem(lines.join('\n'));
+        },
+        lastAssistantText: () => {
+          for (let i = committed.length - 1; i >= 0; i--) {
+            if (committed[i]?.role === 'assistant') return committed[i]!.text;
+          }
+          return null;
+        },
+        copyToClipboard: copyToClipboard,
+        exportTranscript: (filename) => {
+          const fname = filename ?? `openprogram-${Date.now()}.md`;
+          const path = fname.startsWith('/') ? fname : join(process.cwd(), fname);
+          const lines: string[] = [
+            `# OpenProgram session ${conversationId ?? '(unsaved)'}`,
+            `agent: ${agent ?? '—'}`,
+            `model: ${model ?? '—'}`,
+            '',
+          ];
+          for (const t of committed) {
+            lines.push(`## ${t.role}`);
+            lines.push('');
+            lines.push(t.text);
+            lines.push('');
+            for (const tc of t.tools ?? []) {
+              lines.push(`- tool: \`${tc.tool}\` ${tc.input ? `· ${tc.input}` : ''}`);
+            }
+            if ((t.tools ?? []).length) lines.push('');
+          }
+          writeFileSync(path, lines.join('\n'));
+          return path;
+        },
+        currentAgent: agent,
+        currentModel: model,
+        currentConversation: conversationId,
+        submitExecutionCommand: (operation, payload) => {
+          const executionId = executionIdRef.current || streaming?.executionId;
+          const expectedVersion = executionVersionRef.current;
+          if (!executionId || typeof expectedVersion !== 'number') return false;
+          client.send({
+            type: 'execution.command',
+            action: `execution.${operation}` as 'execution.steer' | 'execution.fork' | 'execution.retry',
+            command_id: randomLocalId(),
+            execution_id: executionId,
+            expected_version: expectedVersion,
+            payload,
+          });
+          return true;
+        },
+        setTheme: (name: string) => {
+          if (!isThemeSetting(name)) return false;
+          setThemeSetting(name);
+          return true;
+        },
+        requestAliasesPrint: () => { sessionAliasesPrintRef.current = true; },
+        submitChat: sendChat,
+      });
+      if (handled) return;
+      // Not a TUI-local action — try the worker's unified command
+      // registry (skill / user / project / plugin / mcp layers). The
+      // rendered body becomes this turn's message, mirroring the web
+      // composer's expansion semantics.
+      const head = text.trim().split(/\s+/)[0]!.slice(1);
+      if (findBackendCommand(head)) {
+        void invokeBackendCommand(text, conversationId).then((res) => {
+          if (res?.ok && res.kind === 'prompt' && res.rendered) {
+            sendChat(res.rendered);
+          } else if (res?.ok && res.kind === 'local') {
+            sendChat(text);
+          } else {
+            pushSystem(res?.error || `/${head}: command failed to render.`);
+          }
+        });
+        return;
+      }
+    }
+    sendChat(text);
+  };
+
+  const onCancel = () => {
+    if (!conversationId) return;
+    if (cancelCurrentExecution()) pushSystem('Cancel execution');
+  };
+
+  const elapsed = activity ? (Date.now() - activity.startedAt) / 1000 : undefined;
+  void tick; // depend on tick so elapsed re-renders every second
+  const streamRate = (() => {
+    if (!activity?.streamStartedAt || !activity.streamedChars) return undefined;
+    const dt = (Date.now() - activity.streamStartedAt) / 1000;
+    if (dt <= 0.1) return undefined;
+    return Math.round(activity.streamedChars / dt);
+  })();
+  const sessionStatus = !conversationId
+    ? 'empty'
+    : sessionLiveByConv[conversationId]
+    ? 'active'
+    : 'loaded';
+
+  // Picker switch lives in pickerRouter.tsx — every legacy
+  // picker (model / agent / channel chain / theme / resume / etc.)
+  // wires the same set of REPL setters and the WS client, so we
+  // bundle them through a single ctx object.
+  const pickerNode = buildPickerNode({
+    client, colors, pushSystem,
+    pickerKind, pendingAttach, pendingDecisions,
+    chosenChannel, chosenAccount, conversationId,
+    modelsList, model, agentsList, channelAccounts, branchesList,
+    settingsRows, jobsList, selectedJob,
+    registerForm, qrAscii, qrStatus, pastConversations,
+    contextSearchQuery, searchResults, searchBaseDraft,
+    thinkingEffort, permissionMode,
+    accountsProviderId, accountsState, accountSelected, accountPendingAdd, accountLogin,
+    setPickerKind, setPendingAttach, setPendingDecisions,
+    setChosenChannel, setChosenAccount, setConversationId, setAgent,
+    setQrAscii, setQrStatus, setCommitted, setStreaming, setRegisterForm,
+    setContextSearchQuery, setSearchResults, setPromptDraft,
+    setThinkingEffort, setPermissionMode, setSelectedJob,
+    setAccountsProviderId, setAccountsState, setAccountSelected,
+    setAccountPendingAdd, setAccountLogin,
+    onSubmit,
+    sessionAliasesRef,
+  });
+
+  return (
+    <Shell mouseTracking={altScreen && !screenReader} mode={altScreen && !screenReader ? 'alt' : 'inline'}>
+      <TranscriptViewport stickyBottom scrollRef={transcriptScrollRef}>
+        <Messages
+          committed={committed}
+          streaming={streaming}
+          welcome={pickerNode ? undefined : (stats ?? {})}
+          fillWelcome={committed.length === 0 && !streaming && !pickerNode}
+        />
+      </TranscriptViewport>
+      {activity ? (
+        <Spinner
+          verb={activity.verb}
+          detail={
+            streamRate !== undefined
+              ? `${streamRate} chars/s${activity.detail ? ` · ${activity.detail}` : ''}`
+              : activity.detail
+          }
+          elapsed={elapsed}
+        />
+      ) : null}
+      {/* New-kit modals win over the legacy pickerKind switch. As
+          screens migrate to ModalProvider.push(), they show here.
+          Legacy pickerNode (channel / resume / etc.) renders below
+          when no modal is open and no kit modal is mounted. */}
+      <ModalHost />
+      {/* Toasts overlay any open modal — shown above PromptInput so
+          they don't get clipped by the bottom-anchored chrome. */}
+      <ToastHost />
+      <GoalStatus client={client} sessionId={conversationId} />
+      {pickerNode ? (
+        pickerNode
+      ) : (
+        <PromptInput
+          onSubmit={onSubmit}
+          busy={!!activity}
+          onCancel={onCancel}
+          history={history}
+          initialDraft={promptDraft}
+          onDraftApplied={() => setPromptDraft(undefined)}
+          // Per-session draft persistence keyed by the active
+          // conversation id (or the "__new__" slot before one
+          // exists). See apps/cli/src/utils/draftStore.ts.
+          draftKey={conversationId ?? null}
+          onContextSearch={(draft) => {
+            setSearchBaseDraft(draft);
+            setContextSearchQuery('');
+            setSearchResults([]);
+            setPickerKind('context_search');
+          }}
+          onShowShortcuts={() => setPickerKind('shortcuts')}
+        />
+      )}
+      <ChannelActivityFeed
+        activities={channelActivityByConv}
+        currentConvId={conversationId}
+      />
+      <BottomBar
+          agent={agent}
+          model={model}
+          conversationId={conversationId}
+          conversationTitle={conversationTitle}
+          busy={!!activity}
+          tokens={conversationId ? tokensByConv[conversationId] : undefined}
+          permissionMode={permissionMode}
+          thinkingEffort={thinkingEffort}
+          connState={connState}
+          sessionStatus={sessionStatus}
+          contextWindow={conversationId ? windowByConv[conversationId] : undefined}
+          cacheHitRate={conversationId ? tokenStatsByConv[conversationId]?.cache_hit_rate : undefined}
+          cacheReadTotal={conversationId ? tokenStatsByConv[conversationId]?.cache_read_total : undefined}
+          tokenSourceMix={conversationId ? tokenStatsByConv[conversationId]?.source_mix : undefined}
+          exitPending={exitPending}
+        />
+    </Shell>
+  );
+};

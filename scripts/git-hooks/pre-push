@@ -1,0 +1,25 @@
+#!/bin/sh
+# Installed into .git/hooks by scripts/publish-github.sh.
+# GitHub carries one branch, main, and it only receives local main, the slow
+# line that script builds from promoted versions. Pushing dev or stable, or
+# any other branch, would upload the working history, so it is refused.
+# Deleting a remote branch and pushing tags stay allowed.
+zero=0000000000000000000000000000000000000000
+while read -r local_ref local_oid remote_ref remote_oid; do
+  case "$remote_ref" in
+    refs/heads/main)
+      if test "${OPENPROGRAM_GITHUB_PUBLISH:-}" != "1" || \
+        test "$local_oid" != "$(git rev-parse --verify --quiet refs/heads/main)"; then
+        echo "pushing to main is refused: publish with scripts/publish-github.sh -m \"summary\"" >&2
+        exit 1
+      fi
+      ;;
+    refs/heads/*)
+      if test "$local_oid" != "$zero"; then
+        echo "pushing $remote_ref is refused: GitHub only carries main; keep other branches local" >&2
+        exit 1
+      fi
+      ;;
+  esac
+done
+exit 0

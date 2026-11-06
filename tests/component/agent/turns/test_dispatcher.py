@@ -1,0 +1,526 @@
+"""Coverage for the dispatcher.process_user_turn pipeline.
+
+Real ``agent_loop()`` calls go through provider runtimes (network,
+auth) — too heavy for unit tests. We patch ``_run_loop_blocking`` at
+the seam so we can assert:
+
+  * SessionDB receives both user + assistant messages with proper
+    caller / timestamp / source linkage
+  * `chat_response` envelopes hit ``on_event`` in the right order
+  * Errors get surfaced as a ``system`` message + ``error`` envelope,
+    not a raw exception
+  * Approval consumes a typed answer from a durable wait
+"""
+from __future__ import annotations
+
+import threading
+import time
+from pathlib import Path
+from unittest.mock import patch
+
+import pytest
+
+from openprogram.runtime.conversation import turn_runtime as D
+from openprogram.runtime.agent import turn_request as agent_turn_request
+from openprogram.runtime.permissions import approval as permissions_approval
+from openprogram.runtime.context.session_db import SessionDB
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def tmp_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> SessionDB:
+    """Replace the dispatcher's default_db() with one rooted in tmp_path."""
+    db = SessionDB(tmp_path / "sessions-git")
+    monkeypatch.setattr(
+        "openprogram.runtime.context.session_db.default_db",
+        lambda: db,
+    )
+    monkeypatch.setattr("openprogram.state.store.session.session_store.default_store",
+                        lambda: db)
+    monkeypatch.setattr("openprogram.state.store.default_store", lambda: db)
+    # Also patch the inline import inside dispatcher's module-level
+    # default_db reference, in case the module already cached it.
+    return db
+
+
+@pytest.fixture
+def captured() -> list[dict]:
+    """Collected on_event payloads for assertion."""
+    return []
+
+
+@pytest.fixture
+def collector(captured: list[dict]):
+    return captured.append
+
+
+def _stub_loop_returning(text: str, *,
+                         tool_calls: list[dict] | None = None,
+                         usage: dict | None = None):
+    """Build a _run_loop_blocking replacement that emits a few stream
+    events then returns the given final text/usage/tool_calls."""
+    def _stub(*, req: agent_turn_request.TurnRequest, history, on_event, cancel_event, **_extra):
+        # ``**_extra`` swallows assistant_msg_id /
+        # agentic_tool_names_out / ordered_blocks_out (and any future
+        # plumbing kw-args the dispatcher adds) so test stubs don't
+        # have to track every new argument as the real loop signature
+        # evolves.
+        # Emit a couple of stream events so consumers see live deltas.
+        on_event({"type": "chat_response",
+                  "data": {"type": "stream_event",
+                           "event": {"type": "text", "text": text[:5]}}})
+        on_event({"type": "chat_response",
+                  "data": {"type": "stream_event",
+                           "event": {"type": "text", "text": text[5:]}}})
+        return text, usage or {"input_tokens": 10, "output_tokens": 4}, list(tool_calls or [])
+    return _stub
+
+
+# ---------------------------------------------------------------------------
+# Happy path
+# ---------------------------------------------------------------------------
+
+def test_persists_user_and_assistant(tmp_db: SessionDB, collector) -> None:
+    with patch.object(D, "_run_loop_blocking",
+                      _stub_loop_returning("hello world")):
+        result = D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main", source="tui"),
+            on_event=collector,
+        )
+
+    assert result.failed is False
+    assert result.final_text == "hello world"
+    assert result.assistant_msg_id
+
+    msgs = tmp_db.get_messages("c1")
+    assert [m["role"] for m in msgs] == ["user", "assistant"]
+    assert msgs[0]["content"] == "hi"
+    assert msgs[0]["source"] == "tui"
+    assert msgs[1]["content"] == "hello world"
+    # Assistant message should chain to the user message
+    assert msgs[1]["predecessor"] == msgs[0]["id"]
+
+
+def test_creates_session_if_missing(tmp_db: SessionDB) -> None:
+    with patch.object(D, "_run_loop_blocking",
+                      _stub_loop_returning("ok")):
+        D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main",
+                          source="wechat", peer_display="alice"),
+        )
+    sess = tmp_db.get_session("c1")
+    assert sess is not None
+    assert sess["agent_id"] == "main"
+    assert sess["source"] == "wechat"
+    assert sess["channel"] == "wechat"
+    assert sess["peer_display"] == "alice"
+
+
+def test_emits_chat_ack_then_stream_then_result(tmp_db, captured, collector) -> None:
+    with patch.object(D, "_run_loop_blocking",
+                      _stub_loop_returning("hello")):
+        D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main", source="tui"),
+            on_event=collector,
+        )
+    types = [(e["type"], e["data"].get("type")) for e in captured]
+    assert types[0] == ("chat_ack", None)
+    # Stream events from the stub
+    assert ("chat_response", "stream_event") in types
+    # Final result
+    assert ("chat_response", "result") in types
+    last = captured[-1]
+    assert last["data"]["type"] == "result"
+    assert last["data"]["content"] == "hello"
+
+
+def test_updates_head_id_and_tokens(tmp_db) -> None:
+    with patch.object(D, "_run_loop_blocking",
+                      _stub_loop_returning("done", usage={"input_tokens": 30, "context_tokens": 42, "output_tokens": 7})):
+        result = D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main", source="tui"),
+        )
+    sess = tmp_db.get_session("c1")
+    assert sess["head_id"] == result.assistant_msg_id
+    assert sess["last_prompt_tokens"] == 42
+
+
+def test_history_is_passed_to_loop(tmp_db) -> None:
+    """Turn N+1 should see Turn N's user+assistant in history."""
+    with patch.object(D, "_run_loop_blocking",
+                      _stub_loop_returning("first reply")):
+        D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main", source="tui"),
+        )
+
+    seen_history: list[list[dict]] = []
+    def _capture_stub(*, req, history, on_event, cancel_event, **_extra):
+        seen_history.append(list(history))
+        return "second reply", {"input_tokens": 0, "output_tokens": 0}, []
+
+    with patch.object(D, "_run_loop_blocking", _capture_stub):
+        D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="follow-up", agent_id="main", source="tui"),
+        )
+
+    [history] = seen_history
+    # Dispatcher passes prior history (user+assistant) WITHOUT the new
+    # user message — agent_loop adds the prompt itself via
+    # context.messages, so duplicating it here would break OpenAI
+    # prompt cache.
+    assert len(history) == 2
+    assert history[0]["content"] == "hi"
+    assert history[1]["content"] == "first reply"
+
+
+# ---------------------------------------------------------------------------
+# Error handling
+# ---------------------------------------------------------------------------
+
+@pytest.mark.skip(
+    reason="dispatcher now folds errors into the assistant placeholder row "
+           "(role='assistant', status='error') instead of writing a separate "
+           "role='system' message — production behavior change from the "
+           "placeholder-lifecycle refactor, not a test-migration issue"
+)
+def test_loop_exception_persisted_as_system_message(tmp_db, captured, collector) -> None:
+    def _raise(**_):
+        raise RuntimeError("boom")
+    with patch.object(D, "_run_loop_blocking", _raise):
+        result = D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main", source="tui"),
+            on_event=collector,
+        )
+
+    assert result.failed is True
+    assert "boom" in (result.error or "")
+
+    # User message still recorded; system error message appended.
+    msgs = tmp_db.get_messages("c1")
+    roles = [m["role"] for m in msgs]
+    assert "user" in roles
+    assert "system" in roles
+    sys_msg = [m for m in msgs if m["role"] == "system"][-1]
+    assert "boom" in sys_msg["content"]
+
+    # Client got an error envelope (not a raw exception)
+    err_events = [e for e in captured
+                  if e["type"] == "chat_response"
+                  and e["data"].get("type") == "error"]
+    assert len(err_events) == 1
+
+
+# ---------------------------------------------------------------------------
+# Approval flow
+# ---------------------------------------------------------------------------
+
+def _grab_approval_frames() -> tuple[list[dict], "callable"]:
+    """订阅事件总线抓审批的 question.asked 帧（审批合流后经事件层 emit）。
+    返回 (frames, unsubscribe)。"""
+    from openprogram.runtime.events import get_event_bus, WS_FRAME_EVENT
+    frames: list[dict] = []
+
+    def _grab(ev) -> None:
+        fr = ev.payload.get("frame", {})
+        if fr.get("type") == "question.asked" and fr["data"].get("kind") == "approval":
+            frames.append(fr["data"])
+    return frames, get_event_bus().subscribe(_grab, types={WS_FRAME_EVENT})
+
+
+def _durable_approval_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                           *, wait_id: str = "wait_dispatcher_approval",
+                           tool: str = "bash", args: dict | None = None):
+    """Create the pre-published approval safe point used by these tests."""
+    import openprogram.runtime.execution as execution_module
+    from openprogram.runtime.execution import RuntimeControlService
+    from openprogram.runtime.execution.attempts import AttemptStore
+    from openprogram.runtime.execution.driver import DriverRegistry
+    from openprogram.runtime.execution.model import CapabilitySet
+    from openprogram.runtime.execution.store import ExecutionStore
+    from openprogram.runtime.execution.waits import DurableWaitStore
+
+    request_args = {} if args is None else dict(args)
+    store = ExecutionStore(tmp_path / "dispatcher-executions.db")
+    monkeypatch.setattr(execution_module, "default_store", lambda: store)
+    revision = store.create_revision(manifest={"entrypoint": "dispatcher-test"})
+    execution = store.create_execution(
+        execution_id="exec_dispatcher_approval",
+        run_id="run_dispatcher_approval",
+        session_id="c1",
+        revision_id=revision.revision_id,
+        capabilities=CapabilitySet(
+            pause=True, safe_point_kinds=("agent.wait.before_tool",),
+        ),
+    )
+    attempts = AttemptStore(store)
+    leased, reserved = attempts.lease(
+        execution.execution_id, expected_version=execution.status_version,
+        owner_id="dispatcher-test", ttl_seconds=30,
+    )
+    attempt, execution = attempts.activate(
+        leased.attempt_id, generation=leased.generation,
+        expected_execution_version=reserved.status_version,
+    )
+    wait = DurableWaitStore(store).open_wait(
+        wait_id=wait_id, execution_id=execution.execution_id,
+        attempt_id=attempt.attempt_id, generation=attempt.generation,
+        kind="approval",
+        request={
+            "prompt": f"允许执行 {tool}？", "options": ["允许", "拒绝"],
+            "multi": False, "allow_custom": False, "detail": tool,
+            "schema": {}, "questions": [], "tool": tool, "args": request_args,
+        },
+        policy_snapshot={
+            "version": 1, "kind": "approval",
+            "allowed_scopes": ["once", "always", "always_path"],
+        },
+        expires_at=time.time() + 60,
+    )
+    service = RuntimeControlService(store, attempts, DriverRegistry())
+    return store, service, execution, attempt, wait
+
+
+def _resolve_approval_wait(service, store, wait, answer):
+    import asyncio
+
+    execution = store.get_execution(wait.execution_id)
+    assert execution is not None
+    return asyncio.run(service.request_wait_answer(
+        command_id=f"answer-{wait.wait_id}",
+        execution_id=wait.execution_id,
+        expected_version=execution.status_version,
+        actor={"surface": "test"}, wait_id=wait.wait_id,
+        generation=wait.claim_generation, answer=answer,
+    ))
+
+
+def test_approval_bypass_skips_check(tmp_db, captured, collector) -> None:
+    """permission_mode=bypass should never emit an approval question."""
+    frames, unsub = _grab_approval_frames()
+    try:
+        with patch.object(D, "_run_loop_blocking",
+                          _stub_loop_returning("ok")):
+            D.process_user_turn(
+                agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main",
+                              source="wechat", permission_mode="bypass"),
+                on_event=collector,
+            )
+    finally:
+        unsub()
+    assert not frames
+
+
+def test_approval_wait_resolves_through_canonical_command(tmp_path, monkeypatch) -> None:
+    """Approval answers are durable typed command results, not registry state."""
+    from openprogram.runtime.agent.questions import PendingQuestion, QuestionRegistry
+
+    store, service, execution, _attempt, wait = _durable_approval_wait(
+        tmp_path, monkeypatch,
+    )
+    reg = QuestionRegistry()
+    q = PendingQuestion(id=wait.wait_id, session_id="c1", kind="approval",
+                        prompt="允许执行 bash？", execution_id=execution.execution_id,
+                        options=["允许", "拒绝"])
+    waiter = reg.register(q)
+
+    _resolve_approval_wait(
+        service, store, wait, {"answer": "允许", "scope": "once"},
+    )
+    reg.wake(wait.wait_id)
+    assert waiter.wait(timeout=30) is True
+    assert reg.consume(wait.wait_id) == (
+        "answered", {"answer": "允许", "scope": "once"},
+    )
+
+
+def test_unknown_approval_wait_is_rejected_by_canonical_command(tmp_path, monkeypatch) -> None:
+    import asyncio
+    from openprogram.runtime.execution.store import ExecutionConflict
+
+    _store, service, execution, _attempt, _wait = _durable_approval_wait(
+        tmp_path, monkeypatch, wait_id="known-wait",
+    )
+    with pytest.raises(ExecutionConflict) as raised:
+        asyncio.run(service.request_wait_answer(
+            command_id="answer-missing", execution_id=execution.execution_id,
+            expected_version=execution.status_version, actor={"surface": "test"},
+            wait_id="missing", generation=0,
+            answer={"answer": "允许", "scope": "once"},
+        ))
+    assert raised.value.code == "wait_not_found"
+
+
+# ---------------------------------------------------------------------------
+# Approval flow integrated with dispatcher
+# ---------------------------------------------------------------------------
+
+def test_await_user_approval_consumes_typed_prepublished_wait(tmp_path, monkeypatch) -> None:
+    """The approval primitive only consumes a resolved safe-point wait."""
+    import asyncio
+    from openprogram.runtime.conversation.run_control import reset_preapproved_wait_id, set_preapproved_wait_id
+    from openprogram.runtime.execution.run_control import (
+        reset_current_execution_id,
+        set_current_execution_id,
+    )
+
+    req = agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main",
+                        source="tui", permission_mode="ask")
+    store, service, _execution, _attempt, wait = _durable_approval_wait(
+        tmp_path, monkeypatch, args={"command": "ls"},
+    )
+    _resolve_approval_wait(
+        service, store, wait, {"answer": "允许", "scope": "always"},
+    )
+    token = set_preapproved_wait_id(wait.wait_id)
+    execution_token = set_current_execution_id(wait.execution_id)
+
+    async def _drive():
+        return await permissions_approval.await_user_approval(
+            req=req, tool_name="bash", args={"command": "ls"},
+            on_event=lambda e: None, timeout=5.0,
+        )
+    try:
+        approved, reason, scope = asyncio.run(_drive())
+    finally:
+        reset_current_execution_id(execution_token)
+        reset_preapproved_wait_id(token)
+
+    assert approved is True, (reason, scope)
+    assert reason is None
+    assert scope == "always"
+
+
+def test_await_user_approval_requires_prepublished_safe_point() -> None:
+    import asyncio
+    req = agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main",
+                        source="tui", permission_mode="ask")
+
+    async def _drive():
+        return await permissions_approval.await_user_approval(
+            req=req, tool_name="bash", args={"command": "ls"},
+            on_event=lambda e: None, timeout=5.0,
+        )
+
+    with pytest.raises(RuntimeError, match="pre-dispatch durable wait"):
+        asyncio.run(_drive())
+
+
+def test_ordinary_approval_cannot_authorize_sandbox_escalation(tmp_path, monkeypatch):
+    import asyncio
+    from openprogram.runtime.conversation.run_control import reset_preapproved_wait_id, set_preapproved_wait_id
+    store, service, _execution, _attempt, wait = _durable_approval_wait(tmp_path, monkeypatch)
+    _resolve_approval_wait(service, store, wait, {"answer": "approve", "scope": "once"})
+    req = agent_turn_request.TurnRequest(session_id="c1", user_text="test", agent_id="main", source="web")
+    token = set_preapproved_wait_id(wait.wait_id)
+    try:
+        allowed, reason, _ = asyncio.run(permissions_approval.await_user_approval(
+            req=req, tool_name="bash:sandbox-escalation", args={}, on_event=lambda event: None,
+        ))
+    finally:
+        reset_preapproved_wait_id(token)
+    assert allowed is False
+    assert reason == "approval does not authorize this operation"
+
+
+def test_stream_progress_survives_reload_and_failure(tmp_db, monkeypatch):
+    import json
+
+    expected = [
+        {"type": "thinking", "text": "Checking evidence"},
+        {"type": "text", "text": "Partial response"},
+    ]
+
+    def loop(*, req, on_event, assistant_msg_id, **kwargs):
+        for block in expected:
+            on_event({"type": "chat_response", "data": {
+                "type": "stream_event", "session_id": req.session_id,
+                "msg_id": "progress-user", "event": block,
+            }})
+        on_event({"type": "chat_response", "data": {
+            "type": "stream_event", "session_id": req.session_id,
+            "msg_id": "child-runtime", "event": {"type": "text", "text": "Child only"},
+        }})
+        # Read a fresh store, as a reload must not depend on browser memory.
+        fresh = SessionDB(tmp_db.root_path)
+        try:
+            msg = next(m for m in fresh.get_messages(req.session_id) if m["id"] == assistant_msg_id)
+            assert json.loads(msg["extra"])["blocks"] == expected
+        finally:
+            fresh.close()
+        raise RuntimeError("provider disconnected")
+
+    monkeypatch.setattr(D, "_run_loop_blocking", loop)
+    result = D.process_user_turn(agent_turn_request.TurnRequest(
+        session_id="progress", user_text="hi", user_msg_id="progress-user",
+        agent_id="main", source="tui",
+    ), on_event=lambda _: None)
+    assert result.failed
+    msg = next(m for m in tmp_db.get_messages("progress") if m["role"] == "assistant")
+    assert json.loads(msg["extra"])["blocks"] == expected
+    assert "provider disconnected" in msg["content"]
+    assert "provider disconnected" in msg["error_detail"]
+
+
+
+def test_cancel_keeps_incomplete_iteration_progress(tmp_db, monkeypatch):
+    import json
+    stopped = threading.Event()
+
+    def loop(*, on_event, ordered_blocks_out, cancel_event, **kwargs):
+        ordered_blocks_out.append({"type": "text", "text": "Earlier iteration"})
+        for event in [
+            {"type": "text", "text": "Earlier iteration"},
+            {"type": "thinking", "text": "Unfinished reasoning"},
+        ]:
+            on_event({"type": "chat_response", "data": {"type": "stream_event", "event": event}})
+        cancel_event.set()
+        return "Earlier iteration", {}, []
+
+    monkeypatch.setattr(D, "_run_loop_blocking", loop)
+    result = D.process_user_turn(agent_turn_request.TurnRequest(
+        session_id="stopped",user_text="hi",agent_id="main",source="tui",
+    ), cancel_event=stopped)
+    assert not result.failed
+    msg=next(m for m in tmp_db.get_messages("stopped") if m["role"]=="assistant")
+    assert json.loads(msg["extra"])["blocks"][-1] == {"type":"thinking","text":"Unfinished reasoning"}
+
+
+def test_failed_turn_preserves_partial_reply_and_error_after_reopen(tmp_db, tmp_path, collector, captured):
+    from openprogram.models.providers.utils.errors import LLMError, ErrorReason
+    from openprogram.interfaces.server.persistence import aggregate_tool_messages
+
+    def fail_after_progress(*, req, on_event, **kwargs):
+        on_event({'type': 'chat_response', 'data': {
+            'type': 'stream_event', 'session_id': req.session_id,
+            'event': {'type': 'text', 'text': 'Partial answer'},
+        }})
+        raise LLMError('connection lost', reason=ErrorReason.TRANSPORT, retryable=True)
+
+    with patch.object(D, '_run_loop_blocking', fail_after_progress):
+        result = D.process_user_turn(agent_turn_request.TurnRequest(
+            session_id='failed-reopen', user_text='hi', agent_id='main', source='tui',
+        ), on_event=collector)
+    assert result.failed
+    # Fresh store instance reads the durable node, not the producer's cache.
+    reopened = SessionDB(tmp_path / 'sessions-git')
+    try:
+        rows = aggregate_tool_messages(reopened.get_messages('failed-reopen'))
+        from openprogram.runtime.context.render import render_dag_messages
+        from openprogram.state.store import SessionNodeWriter
+        graph = SessionNodeWriter(reopened, 'failed-reopen').load()
+        context = render_dag_messages(graph, [result.assistant_msg_id])
+        assert 'connection lost' in context[0].content[0].text
+    finally:
+        reopened.close()
+    reply = next(m for m in rows if m['id'] == result.assistant_msg_id)
+    assert reply['status'] == 'error'
+    assert reply['content'] == reply['error_detail']
+    assert 'connection lost' in reply['error_detail']
+    assert reply['error_reason'] == 'transport'
+    assert reply['error_retryable'] is True
+    assert reply['blocks'] == [{'type': 'text', 'text': 'Partial answer'}]
+    event = next(e['data'] for e in captured if e.get('data', {}).get('type') == 'error')
+    assert event['error_detail'] == reply['error_detail']

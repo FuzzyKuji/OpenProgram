@@ -1,0 +1,125 @@
+/**
+ * Shared types for the LLM-Providers settings pane.
+ * Pulled out of providers-section.tsx so each sub-component file can
+ * import what it needs without dragging the whole pane.
+ */
+
+export interface Provider {
+  id: string;
+  label: string;
+  enabled: boolean;
+  configured?: boolean;
+  kind?: "api" | "cli";
+  api_key_env?: string;
+  default_base_url?: string;
+  base_url?: string;
+  supports_fetch?: boolean;
+  cli_binary?: string;
+  /** User-added (tier-3) provider — a config-only OpenAI-compatible endpoint.
+   *  Drives the "custom" badge + delete action + manual model-add input. */
+  custom?: boolean;
+  local?: boolean;
+  /**
+   * Provider-specific setup instructions surfaced in the detail
+   * panel. Backticked spans render as inline <code>; lines starting
+   * with `$ ` render as a command row. Used for provider-specific setup instructions.
+   */
+  setup_hint?: string;
+  /**
+   * Native login methods (OAuth / device-code / import-from-CLI) the web can
+   * drive for this provider, excluding plain api_key (the ApiKey field handles
+   * that). Present only for providers with a real native flow; absent/empty for
+   * key-only providers. Drives the <ProviderLogin/> "Sign in" panel. Source of
+   * truth: openprogram/models/auth/login/login_method_registry.py.
+   */
+  login_methods?: { id: string; label: string }[];
+}
+
+/** Masked-only account projection returned by the provider account API. */
+export interface ProviderAccountView {
+  id: string;
+  label: string;
+  /** Compatibility alias for older backends; new code displays label. */
+  name: string;
+  email?: string;
+  kind?: string;
+  status?: string;
+  is_active: boolean;
+  /** The account requests fall back to while nothing is pinned; it stays
+   *  in use until another account is chosen, so it has no off switch. */
+  is_fallback?: boolean;
+  enabled?: boolean;
+  has_value: boolean;
+  masked_key: string;
+}
+
+export interface Model {
+  id: string;
+  name?: string;
+  enabled: boolean;
+
+  // Capabilities -----------------------------------------------------
+  vision?: boolean;
+  video?: boolean;
+  audio?: boolean;
+  tools?: boolean | null;
+  reasoning?: boolean;
+  /** JSON-schema strict output mode */
+  structured_output?: boolean;
+  /** File / PDF attachments (separate from raw image input) */
+  attachment?: boolean;
+  /** ``temperature`` parameter has any effect on this model */
+  temperature_param?: boolean;
+
+  // Modality lists (verbatim from models.dev) ------------------------
+  input_modalities?: string[];
+  output_modalities?: string[];
+
+  // Limits -----------------------------------------------------------
+  context_window?: number;
+  /** Some models cap the *single-call* input lower than total context
+   *  (e.g. GPT-5.5: 1.05M context, 922K input cap). */
+  input_limit?: number;
+  /** Output cap per completion. */
+  max_tokens?: number;
+
+  // Pricing (USD per 1M tokens) --------------------------------------
+  input_cost?: number;
+  output_cost?: number;
+  cache_read_cost?: number;
+  cache_write_cost?: number;
+  /** Tiered or service-tier pricing pass-throughs. UI renders these
+   *  as a sub-list when present; structure varies per provider so we
+   *  keep them loosely typed. */
+  cost_tiers?: unknown[];
+  cost_context_over_200k?: Record<string, unknown>;
+
+  // Identity / metadata ----------------------------------------------
+  family?: string;
+  /** Training data cutoff date as the upstream catalogue reports it
+   *  (usually ``YYYY-MM`` or ``YYYY-MM-DD``). */
+  knowledge_cutoff?: string;
+  release_date?: string;
+  last_updated?: string;
+  open_weights?: boolean;
+  /** Wire format / endpoint family the model expects
+   *  (``"anthropic-messages-2023-06-01"``, ``"openai-chat-completions"``, …).
+   *  Surfaced in the detail panel so it's clear at a glance which
+   *  SDK / wire schema a model speaks. */
+  api?: string;
+}
+
+/** Compact 'context window' formatter — 128_000 → "128K", 1_000_000 → "1M". */
+export function formatCtx(n?: number): string {
+  if (!n) return "";
+  if (n >= 1_000_000) return Math.round(n / 1_000_000) + "M";
+  if (n >= 1000) return Math.round(n / 1000) + "K";
+  return String(n);
+}
+
+/** Refetch agentSettings so the top-bar agent chip drops a model that was
+ *  just disabled. Dynamic import: runtime-bridge/providers touches `window`
+ *  at module scope, so a static import breaks Next prerendering. */
+export function refreshAgentChip(): void {
+  void import("@/lib/runtime-bridge/providers").then((m) => m.loadAgentSettings());
+}

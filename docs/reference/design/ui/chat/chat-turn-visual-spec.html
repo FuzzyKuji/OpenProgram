@@ -1,0 +1,1044 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Chat turn visual specification — message surfaces, execution timeline, file changes, and message navigation</title>
+<style>
+:root{
+  color-scheme:light dark;
+  --accent-orange:#d19a66; --accent-green:#18a96b; --accent-red:#e5534b;
+  --accent-cyan:#3bc9db; --accent-purple:#a371f7;
+  --page-bg:#141413;
+  --bg-primary:#1f1f1e; --bg-secondary:#171716; --bg-tertiary:#252524;
+  --bg-input:#262624;
+  --composer-shadow:0 1px 3px 0 rgb(0 0 0/.25),0 1px 2px -1px rgb(0 0 0/.25);
+  --composer-shadow-focus:0 4px 6px -1px rgb(0 0 0/.35),0 2px 4px -2px rgb(0 0 0/.35);
+  --primary-fill:#d97757; --tip-bg:#f0efea; --tip-ink:#191917;
+  --bg-hover:#2e2e2c; --border-light:rgba(226,225,218,0.2);
+  --timeline-line:rgba(226,225,218,0.28);
+  --timeline-thinking:#b78cff;--timeline-function:#ff9a66;
+  --timeline-llm:#45d7e8;--timeline-subagent:#4bd58a;
+  --text-primary:#c3c2b7; --text-secondary:#97958c; --text-muted:#6b6a63;
+  --text-bright:#f8f8f6; --radius:8px;
+  --font-sans:-apple-system,"PingFang SC","Helvetica Neue",sans-serif;
+  --font-mono:"SF Mono",Menlo,monospace;
+}
+@media(prefers-color-scheme:light){
+  :root{
+    --accent-orange:#683000;--accent-green:#004a2b;--accent-cyan:#004853;--accent-purple:#522690;--accent-red:#a22d27;
+    --page-bg:#f7f7f5;
+    --bg-primary:#faf9f5;--bg-secondary:#f1f1ee;--bg-tertiary:#e9e9e5;--bg-hover:#e4e4df;
+    --bg-input:#ffffff;
+    --composer-shadow:0 1px 3px 0 rgb(0 0 0/.1),0 1px 2px -1px rgb(0 0 0/.1);
+    --composer-shadow-focus:0 4px 6px -1px rgb(0 0 0/.16),0 2px 4px -2px rgb(0 0 0/.16);
+    --primary-fill:#c15f3c; --tip-bg:#191917; --tip-ink:#f8f8f6;
+    --border-light:rgba(36,36,32,.18);--timeline-line:rgba(36,36,32,.22);
+    --timeline-thinking:#7c3aed;--timeline-function:#d14a1f;
+    --timeline-llm:#00849a;--timeline-subagent:#0b8a4b;
+    --text-primary:#3f3f3a;--text-secondary:#66665f;--text-muted:#8a8a82;--text-bright:#191917;
+  }
+  .num{color:#fff!important}
+}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--page-bg);color:var(--text-primary);font-family:var(--font-sans);
+  font-size:14px;line-height:1.6;padding:36px 12vw 120px}
+h1{font-size:20px;color:var(--text-bright);margin-bottom:6px}
+h2{font-size:16px;color:var(--accent-orange);margin:44px 0 4px;display:flex;gap:10px;align-items:center}
+.num{display:inline-flex;width:22px;height:22px;border-radius:6px;background:var(--accent-orange);
+  color:#141413;font-size:13px;font-weight:700;align-items:center;justify-content:center}
+.desc{color:var(--text-secondary);font-size:13px;margin-bottom:14px;max-width:760px}
+.stage{background:var(--bg-primary);border:1px solid var(--border-light);border-radius:12px;
+  padding:26px 30px;max-width:820px;position:relative;overflow:hidden}
+.rule{color:var(--text-muted);font-size:12px;max-width:760px;margin-top:10px;line-height:1.7}
+.doc-meta{display:flex;flex-wrap:wrap;gap:8px;margin:12px 0 18px;max-width:820px}
+.doc-pill{display:inline-flex;align-items:center;min-height:26px;padding:3px 9px;border:1px solid var(--border-light);
+  border-radius:999px;color:var(--text-secondary);font-size:12px;background:var(--bg-secondary)}
+.doc-pill.current{color:var(--accent-cyan)}
+
+/* ── Chat primitives ── */
+.u-msg{display:flex;justify-content:flex-end;margin:10px 0}
+/* Sent user bubble: the composer's raised surface (--user-msg-bg = --bg-input + --composer-shadow), static on hover. */
+.u-bubble{background:var(--bg-input);box-shadow:var(--composer-shadow);border-radius:16px;padding:10px 16px;max-width:75%;color:var(--text-bright)}
+.reply{margin:10px 0;color:var(--text-primary)}
+.reply b{color:var(--text-bright)}
+.reply-footer{display:flex;align-items:center;gap:2px;margin-top:14px;color:var(--text-muted);font-size:12px;opacity:0}
+.reply-footer .ts{padding-right:6px;font-variant-numeric:tabular-nums}
+.reply-footer .act{display:inline-flex;align-items:center;gap:2px}
+.reply-message:hover .reply-footer,.reply-footer:focus-within{opacity:1}
+
+/* ── Execution timeline (no outer frame) ── */
+/* Toggle = GPT-style plain text: no button background or padding offset; align with body text. Hover brightens text only. */
+.tl-toggle{display:inline-flex;align-items:center;gap:8px;color:var(--text-muted);
+  font-size:13px;cursor:pointer;user-select:none;height:28px;margin:0 0 1.5px;padding:0;
+  letter-spacing:.2px;border:none;background:transparent}
+.tl-toggle:hover{color:var(--text-secondary)}
+.tl-toggle .chev{font-size:11px;transition:transform .15s;display:inline-block}
+.tl.open .tl-toggle .chev{transform:rotate(90deg)}
+.runtime-program-run{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:24px;align-items:start}
+.runtime-program-avatar{display:grid;place-items:center;width:28px;height:28px;border:1px solid var(--border-light);
+  border-radius:8px;background:var(--bg-secondary);color:var(--accent-orange);font:14px/1 var(--font-mono)}
+.runtime-program-content{min-width:0;padding-right:52px}
+.runtime-program-content .tl-toggle{max-width:100%}
+.runtime-program-content .tl-toggle>span:first-child{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+/* Height transition: grid 0fr↔1fr. Expand downward, collapse smoothly, keep viewport fixed. */
+.tl-collapse{display:grid;grid-template-rows:0fr;transition:grid-template-rows .18s ease}
+.tl.open .tl-collapse{grid-template-rows:1fr}
+.tl-collapse-inner{overflow:hidden;min-height:0}
+.tl-body{position:relative;margin:8px 0 6px;padding-left:34px}
+.tl-body::before{content:"";position:absolute;left:11.5px;top:18px;bottom:18px;width:1px;
+  background:linear-gradient(to bottom,transparent,var(--timeline-line) 12px,var(--timeline-line) calc(100% - 12px),transparent)}
+.step{position:relative;padding:1px 0}
+.step-head{position:relative;display:flex;align-items:center;gap:8px;min-height:30px;color:var(--text-secondary);
+  font-size:13px;cursor:pointer;border-radius:8px;padding:3px 8px;user-select:none}
+.step-head:hover{background:var(--bg-hover)}
+.step-head:focus-visible{outline:1px solid var(--accent-cyan);outline-offset:1px;background:var(--bg-hover)}
+/* Icon tile: a 24px rounded square tinted with the step tone (16% fill, 26% inset ring, full-strength glyph). Tones and glyphs follow tool-presentation.ts. */
+.step-icon{--tone:var(--timeline-function);position:absolute;left:-34px;top:50%;transform:translateY(-50%);
+  width:24px;height:24px;display:flex;align-items:center;justify-content:center;border-radius:7px;color:var(--tone);
+  background:linear-gradient(color-mix(in srgb,var(--tone) 16%,transparent),color-mix(in srgb,var(--tone) 16%,transparent)),var(--bg-primary);
+  box-shadow:inset 0 0 0 1px color-mix(in srgb,var(--tone) 26%,transparent);isolation:isolate}
+.step-icon svg{width:13px;height:13px;fill:currentColor}
+.step-icon.is-error svg{fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+/* Tones: thinking purple / LLM cyan / sub-agent green / commands green / edits amber / reads blue / searches cyan / web indigo / other functions orange. */
+.step-icon.k-thinking{--tone:var(--timeline-thinking)}
+.step-icon.k-function{--tone:var(--timeline-function)}
+.step-icon.k-llm{--tone:var(--timeline-llm)}
+.step-icon.k-subagent{--tone:var(--timeline-subagent)}
+.step-icon.t-shell{--tone:light-dark(#15803d,#4ade80)}
+.step-icon.t-edit{--tone:light-dark(#b45309,#fbbf24)}
+.step-icon.t-read{--tone:light-dark(#1d4ed8,#60a5fa)}
+.step-icon.t-search{--tone:light-dark(#0e7490,#22d3ee)}
+.step-icon.t-web{--tone:light-dark(#4338ca,#818cf8)}
+.step-icon.is-error{--tone:var(--accent-red)}
+.step-title{flex:0 0 auto;color:var(--text-primary);font-weight:500}
+.step-target{flex:0 1 auto;min-width:0;max-width:55%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+  font-family:var(--font-mono);font-size:12px;line-height:18px;padding:0 6px;border-radius:5px;
+  color:var(--text-secondary);background:color-mix(in srgb,var(--text-primary) 6%,transparent)}
+/* Title = details entry, underlined on hover; other row areas only expand/collapse. */
+.step-title.link{cursor:pointer}
+.step-title.link:hover{color:var(--text-bright);text-decoration:underline}
+.step-note{color:var(--text-muted);font-size:12px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;min-width:0}
+/* Actions stay at row ends and appear only on the hovered head. Apply :hover to head, not .step, to avoid revealing ancestor actions. */
+.step-act{opacity:0;display:inline-flex;gap:8px;align-items:center;font-size:12px;color:var(--text-muted);
+  order:3;margin-left:auto}
+.step-head:hover .step-act,.step-head:has(:focus-visible) .step-act{opacity:1}
+.step-act .btn{border:1px solid var(--border-light);border-radius:6px;padding:1px 8px;cursor:pointer;
+  color:var(--text-secondary);background:transparent;font-size:12px}
+.step-act .btn:hover{background:var(--bg-hover);color:var(--text-bright)}
+/* Inline content shares title width without extra indentation; thinking rows only. */
+.step-body{display:grid;grid-template-rows:0fr;opacity:0;transform:translateY(-3px);pointer-events:none;
+  transition:grid-template-rows .22s cubic-bezier(.2,.7,.2,1),opacity .14s ease,transform .22s cubic-bezier(.2,.7,.2,1)}
+.step-body-clip{min-height:0;overflow:hidden}
+.step-body-inner{margin:4px 0 6px;padding:10px 14px;
+  background:var(--bg-secondary);border-radius:8px;color:var(--text-secondary);font-size:13px;overflow-wrap:anywhere}
+.step.open>.step-body{grid-template-rows:1fr;opacity:1;transform:translateY(0);pointer-events:auto}
+.step-body .mono{font-family:var(--font-mono);font-size:12px;color:var(--text-primary)}
+
+/* ── Nested levels: an indented child timeline ── */
+.tl-sub{position:relative;display:grid;grid-template-rows:0fr;margin-left:8px;padding-left:34px;
+  opacity:0;transform:translateY(-3px);pointer-events:none;
+  transition:grid-template-rows .22s cubic-bezier(.2,.7,.2,1),opacity .14s ease,transform .22s cubic-bezier(.2,.7,.2,1)}
+.tl-sub-clip{min-height:0;overflow:hidden}
+.tl-sub-inner{padding:2px 0}
+.tl-sub::before{content:"";position:absolute;left:9.5px;top:14px;bottom:14px;width:1px;
+  background:var(--timeline-line);opacity:.7;transform:translateY(-9.5px);
+  transition:transform .22s cubic-bezier(.2,.7,.2,1)}
+.tl-sub .step{padding:1px 0}
+.tl-sub .step-head{font-size:12.5px;padding:3px 8px}
+.tl-sub .step-icon{left:-30px;width:20px;height:20px;border-radius:6px}
+.tl-sub .step-icon svg{width:11px;height:11px}
+.tl-sub .step-body-inner{font-size:12.5px;padding:8px 12px}
+.step.open>.tl-sub{grid-template-rows:1fr;opacity:1;transform:translateY(0);pointer-events:auto}
+.step.open>.tl-sub::before{transform:translateY(-.5px)}
+.spin{width:7px;height:7px;border-radius:50%;background:var(--accent-cyan);animation:pulse 1.4s infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+
+/* ── Message-style footer (manual function actions) ── */
+.runtime-program-conclusion{margin-top:12px}
+.runtime-program-conclusion-label{margin-bottom:3px;color:var(--text-bright);font-size:12px;font-weight:600}
+.runtime-program-conclusion-meta{margin:0;color:var(--text-secondary);font-size:13px;line-height:1.55}
+.run-footer{display:flex;align-items:center;gap:2px;justify-content:flex-start;
+  padding-left:0;margin-top:14px;font-size:12px;color:var(--text-muted)}
+.run-footer .ts{margin-right:6px}
+.run-footer .act{opacity:0;display:inline-flex;gap:2px;align-items:center;transition:opacity .15s}
+.run-host:hover .run-footer .act{opacity:1}
+/* Action buttons = the official ghost round icon Button (icon-xs, 24px) with a 16px line icon.
+   Labels show as a HoverTip (dark badge after a dwell), never a native title. */
+.icon-btn{position:relative;display:inline-flex;align-items:center;justify-content:center;width:24px;height:24px;
+  border:none;background:transparent;border-radius:999px;color:var(--text-muted);cursor:pointer;padding:0}
+.icon-btn:hover{background:var(--bg-hover);color:var(--text-primary)}
+.icon-btn[data-tip]::after{content:attr(data-tip);position:absolute;bottom:calc(100% + 6px);left:50%;z-index:5;
+  transform:translateX(-50%);padding:6px 10px;border-radius:8px;background:var(--tip-bg);color:var(--tip-ink);
+  font:13px/1.3 var(--font-sans);white-space:nowrap;box-shadow:0 2px 8px rgb(0 0 0/.2);opacity:0;pointer-events:none;
+  transition:opacity .12s ease 0s}
+.icon-btn[data-tip]:hover::after{opacity:1;transition-delay:.6s}
+.icon-btn svg{width:16px;height:16px;stroke:currentColor;fill:none;stroke-width:2;
+  stroke-linecap:round;stroke-linejoin:round}
+.msg-nav{display:inline-flex;align-items:center;gap:2px;margin-left:4px}
+.msg-nav .label{font-size:12px;color:var(--text-muted);min-width:28px;text-align:center}
+
+
+/* ── Messages: user bubble, action row, edit box ── */
+.msg-footer{display:flex;align-items:center;gap:2px;margin-top:4px;color:var(--text-muted);font-size:12px}
+.msg-footer.user{justify-content:flex-end}
+.msg-footer.assistant{justify-content:flex-start;margin-top:10px}
+.msg-footer .ts{padding:0 6px;font-variant-numeric:tabular-nums}
+.msg-footer.assistant .ts{padding-left:0}
+.msg-footer .is-disabled{opacity:.4;cursor:not-allowed}
+.msg-footer .is-disabled:hover{background:transparent;color:var(--text-muted)}
+.msg-footer .nav-label{min-width:34px;text-align:center;font-variant-numeric:tabular-nums}
+.msg-demo{display:flex;flex-direction:column}
+.msg-demo .u-msg{margin-bottom:0}
+.msg-demo .msg-footer{opacity:0;transition:opacity .15s ease}
+.msg-demo:hover .msg-footer,.msg-demo .msg-footer:focus-within,.msg-demo.pin .msg-footer{opacity:1}
+.edit-box{margin:10px 0 0 auto;width:100%;padding:4px;border-radius:23px;background:var(--bg-input);
+  box-shadow:var(--composer-shadow);transition:box-shadow .18s ease}
+.edit-box:hover,.edit-box:focus-within{box-shadow:var(--composer-shadow-focus)}
+.edit-box textarea{display:block;width:100%;min-height:52px;resize:none;border:0;outline:0;background:transparent;
+  color:var(--text-bright);font:15px/1.6 var(--font-sans);padding:10px 14px 4px}
+.edit-row{display:flex;align-items:center;gap:8px;padding:4px 6px 6px}
+.edit-row .spacer{flex:1}
+.ghost-icon-sm{position:relative;display:inline-flex;align-items:center;justify-content:center;width:32px;height:32px;
+  border:0;border-radius:999px;background:transparent;color:var(--text-primary);cursor:pointer}
+.ghost-icon-sm:hover{background:var(--bg-hover);color:var(--text-bright)}
+.ghost-icon-sm svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:2}
+.pill-btn{height:32px;padding:0 12px;border-radius:999px;border:0;font:500 14px/1 var(--font-sans);cursor:pointer}
+.pill-btn.elevated{background:var(--bg-input);color:var(--text-bright);box-shadow:var(--composer-shadow);transition:box-shadow .15s}
+.pill-btn.elevated:hover{box-shadow:var(--composer-shadow-focus)}
+.pill-btn.primary{background:var(--primary-fill);color:#fff}
+.pill-btn.primary:hover{opacity:.85}
+.surface-swatches{display:flex;flex-wrap:wrap;gap:10px;margin-top:4px}
+.surface-swatch{display:flex;flex-direction:column;gap:6px;min-width:150px;padding:10px 12px;border-radius:16px;
+  background:var(--bg-input);box-shadow:var(--composer-shadow);font-size:12px;color:var(--text-secondary)}
+.surface-swatch b{color:var(--text-bright);font-weight:600}
+/* ── Current sub-agent behavior diagnostics ── */
+.state-flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:10px;max-width:980px}
+.state-card{position:relative;min-height:126px;padding:14px;border:1px solid var(--border-light);
+  border-radius:10px;background:var(--bg-secondary)}
+.state-card:not(:last-child)::after{content:"→";position:absolute;right:-10px;top:50%;z-index:2;
+  width:18px;height:18px;display:grid;place-items:center;border-radius:50%;background:#141413;
+  color:var(--text-muted);transform:translate(50%,-50%)}
+.state-kicker{font:11px/1.3 var(--font-mono);color:var(--accent-cyan);margin-bottom:9px}
+.state-title{color:var(--text-bright);font-size:13px;margin-bottom:5px}
+.state-copy{color:var(--text-muted);font-size:12px;line-height:1.55}
+.current-demo{max-width:820px;padding:20px 22px;border:1px solid var(--border-light);
+  border-radius:12px;background:var(--bg-primary)}
+.demo-toolbar{display:flex;align-items:center;gap:10px;margin-bottom:16px}
+.demo-btn{border:1px solid var(--border-light);border-radius:7px;padding:5px 10px;
+  color:var(--text-primary);background:var(--bg-tertiary);font:12px/1.4 var(--font-sans);cursor:pointer}
+.demo-btn:hover{background:var(--bg-hover);color:var(--text-bright)}
+.demo-btn:focus-visible{outline:2px solid var(--accent-cyan);outline-offset:2px}
+.demo-status{margin-left:auto;color:var(--text-muted);font-size:12px}
+.demo-runtime{display:grid;grid-template-columns:28px minmax(0,1fr);column-gap:24px;align-items:start}
+.demo-subagent{display:none}
+.demo-subagent.is-mounted{display:block}
+.demo-subagent.is-arriving{animation:demoStepIn 1.1s ease both}
+.demo-subagent .step-icon{color:var(--accent-green)}
+.demo-subagent.is-running .step-icon{color:var(--accent-cyan)}
+@keyframes demoStepIn{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+.diagnostic-note{max-width:820px;margin-top:12px;padding:12px 14px;border-left:2px solid var(--accent-red);
+  background:color-mix(in srgb,var(--accent-red) 6%,transparent);color:var(--text-secondary);font-size:12px}
+.path-table{width:100%;max-width:980px;border-collapse:collapse;margin-top:12px;font-size:12px}
+.path-table th,.path-table td{padding:10px 12px;text-align:left;vertical-align:top;border-bottom:1px solid var(--border-light)}
+.path-table th{color:var(--text-bright);font-weight:600}.path-table td{color:var(--text-secondary)}
+.path-table code{font-family:var(--font-mono);color:var(--text-primary)}
+
+/* ── File-change summaries and Review ── */
+.change-target-demo{display:grid;grid-template-columns:minmax(0,.78fr) minmax(0,1.22fr);gap:1px;max-width:980px;overflow:hidden;border:1px solid var(--border-light);border-radius:12px;background:var(--border-light)}
+.change-chat-pane,.change-review-pane{min-width:0;background:var(--bg-primary)}.change-chat-pane{padding:20px}
+.change-card-demo{container:change-card/inline-size;width:min(100%,680px);margin-top:17px;padding:6px;border-radius:16px;background:var(--bg-input);box-shadow:var(--composer-shadow);transition:box-shadow .15s;font-family:var(--font-sans)}
+.change-card-demo:hover{box-shadow:var(--composer-shadow-focus)}
+.change-summary{min-height:36px;display:flex;align-items:center;gap:10px;padding:0 0 6px 10px;color:var(--text-secondary)}
+.change-summary-mark{flex:none;width:18px;height:18px;color:var(--text-muted)}.change-summary-mark svg{display:block;width:100%;height:100%;fill:currentColor}
+.change-summary-title{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-bright);font-size:13.5px;line-height:1;font-weight:600}.change-summary-stat{flex:none;display:inline-flex;align-items:center;column-gap:4px;font:12px/1.2 var(--font-sans);font-variant-numeric:tabular-nums}
+.change-summary-stat b{font-weight:500}.add{color:var(--accent-green)}.del{color:var(--accent-red)}
+.change-summary-actions{flex:none;display:flex;align-items:center;gap:6px;margin-left:auto;white-space:nowrap}.change-summary-action{flex:none;height:28px;display:inline-flex;align-items:center;justify-content:center;gap:4px;border:0;border-radius:999px;padding:0 12px;background:var(--bg-secondary);box-shadow:0 1px 3px 0 rgb(0 0 0/.25),0 1px 2px -1px rgb(0 0 0/.25);color:var(--text-primary);font:12.5px/1 var(--font-sans);cursor:pointer;white-space:nowrap}.change-summary-action.icon{width:28px;padding:0;color:var(--text-secondary)}.change-summary-action svg{width:15px;height:15px;fill:currentColor}.change-summary-notice{display:block;min-width:0;max-width:min(48ch,40cqi);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--accent-orange);font:12px/1.2 var(--font-sans)}
+.change-category{display:none}
+.change-group{padding:3px;border-radius:11px;background:var(--bg-primary)}.change-row{height:30px;display:grid;grid-template-columns:auto minmax(0,1fr) max-content;align-items:center;column-gap:8px;padding:0 10px;border-radius:9px;color:var(--text-secondary)}.change-row:hover{background:var(--bg-hover)}.change-row-icon{display:inline-flex;color:var(--text-muted)}.change-row-icon svg{width:15px;height:15px;fill:currentColor}
+/* Per-type file icons (Files panel palette): tint by data-file-icon. */.change-row-icon[data-file-icon="json"]{color:light-dark(#d47628,#ffa359)}.change-row-icon[data-file-icon="python"]{color:light-dark(#1a85d4,#69b1ff)}
+.change-row-name{min-width:0;display:flex;overflow:hidden;white-space:nowrap;font:13px/1.2 var(--font-sans)}.change-path-dir{min-width:0;overflow:hidden;text-overflow:ellipsis;color:var(--text-muted)}.change-path-base{flex:none;color:var(--text-bright)}.change-row-counts{min-width:0;display:grid;grid-template-columns:max-content max-content;column-gap:6px;text-align:right;font:12px/1.2 var(--font-sans);font-variant-numeric:tabular-nums}.change-row-counts .add,.change-row-counts .del{min-width:3.5ch}.change-collapse{display:block;width:100%;height:30px;margin-top:6px;padding:0 13px;border:0;border-radius:9px;background:transparent;color:var(--text-secondary);font:13px/1 var(--font-sans);text-align:left;cursor:pointer}.change-collapse:hover{background:var(--bg-hover);color:var(--text-primary)}
+.change-review-tab{display:flex;align-items:center;gap:8px;min-height:38px;padding:0 9px;border-bottom:1px solid var(--border-light);background:var(--bg-secondary);color:var(--text-primary);font-size:12px}.change-review-close{margin-left:auto;color:var(--text-muted)}
+.change-review-toolbar{display:flex;align-items:center;gap:9px;min-height:45px;padding:0 12px;border-bottom:1px solid var(--border-light);color:var(--text-secondary);font-size:11px}.change-review-toolbar .review-total{font:11px/1.4 var(--font-mono)}
+.change-scope-tabs,.change-review-modes{display:inline-flex;gap:2px;padding:2px;border-radius:6px;background:var(--bg-tertiary)}.change-review-modes{margin-left:auto}.change-scope-tab,.change-review-modes span{padding:3px 7px;border-radius:4px;color:var(--text-secondary);font-size:9px}.change-scope-tab.active,.change-review-modes span.active{background:var(--bg-hover);color:var(--text-primary)}
+.change-review-body{display:grid;grid-template-columns:145px minmax(0,1fr);min-height:278px}.change-review-rail{padding:8px;border-right:1px solid var(--border-light);background:color-mix(in srgb,var(--bg-secondary) 72%,var(--bg-primary))}
+.change-review-rail-label{padding:6px 6px 3px;color:var(--text-muted);font:9px/1.4 var(--font-mono);text-transform:uppercase;letter-spacing:.04em}.change-review-file{min-height:34px;padding:8px 7px;color:var(--text-secondary);font:11px/1.4 var(--font-mono)}.change-review-file.selected{background:var(--bg-tertiary);color:var(--text-primary)}
+.change-review-main{min-width:0;padding:9px 0 14px}.change-review-main-title{display:flex;align-items:center;gap:8px;min-height:34px;padding:0 12px;color:var(--text-primary);font:11px/1.4 var(--font-mono)}.change-review-main-title .change-row-counts{margin-left:auto}.change-review-diff{margin:0 0 4px;padding:9px 12px;background:color-mix(in srgb,var(--accent-green) 8%,var(--bg-primary));color:var(--text-secondary);font:10px/1.55 var(--font-mono);white-space:pre;overflow:hidden}
+.change-flow{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;max-width:980px;margin-top:12px}.change-flow-card{min-height:116px;padding:13px;border:1px solid var(--border-light);border-radius:9px;background:var(--bg-secondary)}.change-flow-card b{display:block;margin-bottom:6px;color:var(--text-bright);font-size:12px}.change-flow-card p{color:var(--text-muted);font-size:11px;line-height:1.55}.change-flow-card code{font-family:var(--font-mono);color:var(--text-secondary)}
+.change-note{max-width:980px;margin-top:12px;padding:11px 13px;border-left:2px solid var(--accent-cyan);background:color-mix(in srgb,var(--accent-cyan) 5%,transparent);color:var(--text-secondary);font-size:12px;line-height:1.65}.change-note.danger{border-left-color:var(--accent-red);background:color-mix(in srgb,var(--accent-red) 5%,transparent)}
+.decision{display:inline-flex;padding:2px 6px;border-radius:999px;font:9px/1.4 var(--font-mono)}.decision.adopt{color:var(--accent-green);background:color-mix(in srgb,var(--accent-green) 12%,transparent)}.decision.modify{color:var(--accent-cyan);background:color-mix(in srgb,var(--accent-cyan) 12%,transparent)}.decision.reject{color:var(--accent-red);background:color-mix(in srgb,var(--accent-red) 10%,transparent)}
+.source-links{display:flex;flex-wrap:wrap;gap:8px;max-width:980px;margin-top:10px}.source-links a{color:var(--accent-cyan);font-size:11px;text-decoration:none}.source-links a:hover{text-decoration:underline}
+
+/* ── Parent/child navigation example ── */
+.branch-nav-demo{max-width:980px}
+.branch-map{display:grid;grid-template-columns:minmax(150px,1fr) 88px minmax(150px,1fr) 88px minmax(150px,1fr);
+  align-items:center;gap:8px;margin-bottom:14px}
+.branch-map-node{min-height:66px;padding:10px 12px;border:1px solid var(--border-light);
+  border-radius:9px;background:var(--bg-secondary)}
+.branch-map-node.active{border-color:color-mix(in srgb,var(--accent-green) 68%,var(--border-light));
+  background:color-mix(in srgb,var(--accent-green) 7%,var(--bg-secondary))}
+.branch-map-kicker{font:10px/1.3 var(--font-mono);color:var(--text-secondary);margin-bottom:4px}
+.branch-map-title{color:var(--text-bright);font-size:12px}
+.branch-map-edge{text-align:center;color:var(--text-muted);font:10px/1.35 var(--font-mono)}
+.branch-map-edge svg{display:block;width:100%;height:14px;margin-bottom:2px;stroke:currentColor;fill:none;stroke-width:1.5}
+.branch-map-edge.to-child{color:var(--accent-green)}
+.branch-map-edge.to-latest{color:var(--accent-cyan)}
+.branch-map-edge.to-caller{color:var(--accent-orange)}
+.branch-demo-shell{border:1px solid var(--border-light);border-radius:12px;background:var(--bg-primary);overflow:hidden}
+.branch-demo-bar{display:flex;align-items:center;gap:8px;min-height:40px;padding:0 14px;
+  border-bottom:1px solid var(--border-light);background:var(--bg-secondary);color:var(--text-muted);font-size:11px}
+.branch-demo-dot{width:7px;height:7px;border-radius:50%;background:var(--accent-green)}
+.branch-demo-state{margin-left:auto;font-family:var(--font-mono);color:var(--text-secondary)}
+.branch-view{display:none;min-height:370px;padding:20px 26px 26px}
+.branch-view.active{display:block;animation:branchViewIn .16s ease both}
+@keyframes branchViewIn{from{opacity:.35}to{opacity:1}}
+.branch-context-banner{display:flex;align-items:center;gap:12px;margin:-20px -26px 22px;padding:10px 18px;
+  border-bottom:1px solid var(--border-light);background:color-mix(in srgb,var(--accent-green) 6%,var(--bg-secondary))}
+.branch-context-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;color:var(--text-secondary);font-size:12px}
+.branch-context-label b{color:var(--text-primary)}
+.branch-action{margin-left:auto;flex:none;border:1px solid var(--border-light);border-radius:6px;padding:3px 9px;
+  color:var(--text-primary);background:transparent;font:11px/1.45 var(--font-sans);cursor:pointer}
+.branch-action:hover{background:var(--bg-hover);color:var(--text-bright)}
+.branch-action:focus-visible{outline:2px solid var(--accent-cyan);outline-offset:2px}
+.branch-origin{display:flex;align-items:center;gap:11px;margin:0 0 14px;padding:10px 11px;
+  border:1px solid var(--border-light);border-radius:9px;background:var(--bg-secondary)}
+.branch-origin-icon{display:grid;place-items:center;width:28px;height:28px;border-radius:7px;
+  background:var(--bg-tertiary);color:var(--accent-green);font:15px/1 var(--font-mono)}
+.branch-origin-copy{min-width:0;flex:1}
+.branch-origin-title{color:var(--text-primary);font-size:12px}
+.branch-origin-sub{color:var(--text-muted);font-size:11px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.branch-parent-strip{margin-top:14px}
+#branch-parent-call.is-return-flash .step-head{animation:returnRowFlash 1.2s ease-out both}
+@keyframes returnRowFlash{
+  0%{background:color-mix(in srgb,var(--accent-orange) 16%,transparent)}
+  100%{background:transparent}
+}
+.branch-continuation{margin:18px 0 0;padding-top:16px;border-top:1px solid var(--border-light);color:var(--text-primary)}
+.branch-continuation[hidden]{display:none}
+.branch-landing{display:none;margin:0 0 14px;padding:7px 10px;border-radius:7px;font-size:11px}
+.branch-landing.visible{display:block}
+.branch-landing.latest{color:var(--accent-cyan);background:color-mix(in srgb,var(--accent-cyan) 8%,transparent)}
+.branch-landing.caller{color:var(--accent-orange);background:color-mix(in srgb,var(--accent-orange) 8%,transparent)}
+.branch-explain{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:12px}
+.branch-explain-item{padding:11px 13px;border-left:2px solid var(--border-light);background:var(--bg-secondary);font-size:12px;color:var(--text-secondary)}
+.branch-explain-item.latest{border-left-color:var(--accent-cyan)}
+.branch-explain-item.caller{border-left-color:var(--accent-orange)}
+.branch-explain-item b{display:block;margin-bottom:3px;color:var(--text-bright)}
+
+/* ── Message navigation (left-edge marks) ── */
+.mini{position:absolute;left:10px;top:50%;transform:translateY(-50%);display:flex;
+  flex-direction:column;gap:7px;align-items:flex-start;padding:8px 4px;z-index:3}
+.mini .dash{width:16px;height:2.5px;border-radius:2px;background:var(--text-muted);opacity:.5;transition:all .15s}
+.mini .dash.active{background:var(--text-bright);opacity:.95;width:20px}
+.mini .dash.chapter{width:24px;height:4px;background:var(--accent-purple);opacity:.9}
+.mini .dash.chapter.active{background:var(--accent-purple);opacity:1}
+.mini:hover .dash{opacity:0}
+.mini-panel{position:absolute;left:24px;top:50%;transform:translateY(-50%);width:300px;
+  background:var(--bg-tertiary);border:1px solid var(--border-light);border-radius:12px;
+  padding:6px;display:none;box-shadow:0 8px 30px rgba(0,0,0,.45)}
+.mini:hover .mini-panel{display:block}
+.mini-row{padding:7px 10px;border-radius:8px;color:var(--text-primary);font-size:13px;cursor:pointer;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mini-row:hover{background:var(--bg-hover)}
+.mini-row.active{background:var(--bg-hover)}
+
+@media(max-width:760px){
+  body{padding:24px 18px 80px}
+  .stage,.current-demo{padding:18px}
+  .state-flow{grid-template-columns:1fr}
+  .state-card:not(:last-child)::after{content:"↓";right:auto;left:50%;top:auto;bottom:-10px;transform:translate(-50%,50%)}
+  .path-table{display:block;overflow-x:auto;white-space:nowrap}
+  .demo-status{width:100%;margin-left:0}
+  .demo-toolbar{flex-wrap:wrap}
+  .runtime-program-content{padding-right:0}
+  .branch-map{grid-template-columns:1fr;gap:6px}
+  .branch-map-edge{display:grid;grid-template-columns:20px 1fr;align-items:center;text-align:left;gap:7px}
+  .branch-map-edge svg{width:20px;transform:rotate(90deg);margin:0}
+  .branch-view{padding:18px}
+  .branch-context-banner{margin:-18px -18px 18px;padding:10px 12px}
+  .branch-explain{grid-template-columns:1fr}
+  .change-flow{grid-template-columns:1fr 1fr}.change-target-demo{grid-template-columns:1fr}.change-review-pane{min-height:360px}.change-summary{padding-inline:9px}.change-review-toolbar{flex-wrap:wrap;padding:7px 9px}.change-review-modes{margin-left:0}
+}
+@media(max-width:420px){.change-summary{gap:6px;padding-left:6px}.change-summary-title{font-size:0;white-space:nowrap}.change-summary-title::after{content:attr(data-short);font-size:13px}.change-summary-actions{gap:4px}.change-summary-notice{max-width:92px}}
+@container change-card (max-width:420px){.change-summary{gap:6px;padding-left:6px}.change-summary-title{font-size:0;white-space:nowrap}.change-summary-title::after{content:attr(data-short);font-size:13px}.change-summary-actions{gap:4px}.change-summary-notice{max-width:92px}}
+@media(prefers-reduced-motion:reduce){
+  *,*::before,*::after{animation-duration:.01ms!important;transition-duration:.01ms!important}
+}
+/* +N −N diff badge, the Claude app's DiffIndicator pill: green half, red half. A file row's counts drop the tint. */.change-summary-stat,.change-row-counts{--git-added:light-dark(#1e9e3c,#32d74b);--git-removed:light-dark(#cd2054,#ff2c56);height:18px;column-gap:0;border-radius:4.5px;overflow:hidden;font:500 11px/14px ui-sans-serif,-apple-system,sans-serif;font-variant-numeric:tabular-nums lining-nums}.change-summary-stat .add,.change-summary-stat .del,.change-row-counts .add,.change-row-counts .del{display:flex;align-items:center;min-width:0;padding:0 6px}.change-summary-stat .add,.change-row-counts .add{color:var(--git-added);background:color-mix(in srgb,var(--git-added) 20%,transparent)}.change-summary-stat .del,.change-row-counts .del{color:var(--git-removed);background:color-mix(in srgb,var(--git-removed) 20%,transparent)}
+.change-row-counts{height:auto;column-gap:6px;border-radius:0;overflow:visible;font-size:12px;line-height:16px}.change-row-counts .add,.change-row-counts .del{padding:0;background:none}
+</style>
+</head>
+<body>
+<h1>Chat turn visual specification</h1>
+<div class="desc">Message surfaces (no avatars, user bubble, edit box, action row), execution timeline (no outer frame, icons connected vertically, consistent rows), manual function runs, sub-agent parent/child branch navigation, file-change summaries and Review, and left-edge message navigation. All examples are interactive. This is the sole visual authority for chat turns; related implementations are in <code>apps/web/components/chat/messages/</code> and <code>app/styles/chat/</code>.</div>
+<div class="doc-meta" aria-label="Document status">
+  <span class="doc-pill current">Timeline folding and copying specification · implemented</span>
+  <span class="doc-pill">Scope: Chat / workflow / sub-agent presentation</span>
+  <span class="doc-pill">Continuous circle expand/collapse animation and function-column alignment · implemented</span>
+  <span class="doc-pill current">Message surfaces: raised bubble, edit box and action row · implemented</span>
+  <span class="doc-pill">Exact file attribution, Review, and safe Undo · pending</span>
+</div>
+
+<!-- ═══════ 1. Collapsed state ═══════ -->
+<h2><span class="num">1</span>Default (collapsed): one turn = one muted summary line + reply</h2>
+<div class="desc">Execution has no outer frame. The collapsed state is a <b>plain-text</b> summary ›, without a button background, aligned with body text, and brightening text only on hover. The summary says what the calls did, in the order they happened (“Ran a command, created pill-shadow.html”). A red “· N failed” note and the file card’s +N −M pill follow when they apply. The sentence truncates to one line and the hover tip shows it whole. The grammar is defined in <a href="tool-group-summary.html" style="color:var(--accent-cyan)">Tool group summary</a>. Click to expand the timeline.</div>
+<div class="stage">
+  <div class="u-msg"><div class="u-bubble">Can you start an agent to check today’s weather? I’m at the Asia Financial Center in Beijing.</div></div>
+
+  <div class="tl" id="tl1">
+    <div class="tl-toggle">
+      <span>Ran a command, ran sub-agent check Beijing weather</span><span class="chev">›</span>
+    </div>
+    <div class="tl-collapse"><div class="tl-collapse-inner">
+    <div class="tl-body">
+      <div class="step" data-step-toggle>
+        <div class="step-head"><span class="step-icon k-thinking"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M4 9.67442C4 5.43595 7.35786 2 11.5 2C15.6421 2 19 5.43595 19 9.67442C19 11.9468 18.034 13.9892 16.5014 15.3934C15.9906 15.8614 15.6122 16.2082 15.344 16.4598C15.2099 16.5855 15.1074 16.6838 15.0317 16.7592C14.994 16.7968 14.9651 16.8266 14.9436 16.8496C14.933 16.861 14.925 16.8699 14.9192 16.8766C14.9133 16.8834 14.9108 16.8864 14.9108 16.8864C14.6743 17.1851 14.6231 17.2622 14.5926 17.332C14.5621 17.4018 14.5402 17.4922 14.4805 17.8717C14.457 18.0216 14.4545 18.2782 14.4545 18.9767V19.0067C14.4546 19.4158 14.4546 19.7687 14.4289 20.0583C14.4018 20.3645 14.3418 20.6677 14.1805 20.9535C14.001 21.2717 13.7428 21.5359 13.4318 21.7196C13.1525 21.8846 12.8562 21.946 12.557 21.9738C12.274 22 11.9292 22 11.5294 22H11.5293H11.4707H11.4706C11.0708 22 10.726 22 10.443 21.9738C10.1438 21.946 9.84747 21.8846 9.56818 21.7196C9.25723 21.5359 8.99902 21.2717 8.81949 20.9535C8.65825 20.6677 8.5982 20.3645 8.57107 20.0583C8.54543 19.7687 8.54544 19.4158 8.54545 19.0067L8.54545 18.9767C8.54545 18.2782 8.54305 18.0216 8.51949 17.8717C8.45982 17.4922 8.43787 17.4018 8.40739 17.332C8.3769 17.2622 8.32571 17.1851 8.0892 16.8864C8.0892 16.8864 8.08649 16.8831 8.0808 16.8766C8.07499 16.8699 8.06699 16.861 8.05635 16.8496C8.03486 16.8266 8.00601 16.7968 7.9683 16.7592C7.89262 16.6838 7.7901 16.5855 7.65601 16.4598C7.38782 16.2082 7.0094 15.8614 6.49859 15.3934C4.96602 13.9892 4 11.9468 4 9.67442Z" opacity=".5"/><path d="M13.0848 19.6748H9.91463C9.9176 19.7718 9.92209 19.8565 9.92884 19.9327C9.94739 20.1422 9.97868 20.2182 10.0001 20.2562C10.06 20.3623 10.146 20.4504 10.2497 20.5116C10.2868 20.5335 10.3612 20.5656 10.5658 20.5845C10.7799 20.6044 11.0623 20.6051 11.4997 20.6051C11.9371 20.6051 12.2195 20.6044 12.4336 20.5845C12.6382 20.5656 12.7125 20.5335 12.7497 20.5116C12.8533 20.4504 12.9394 20.3623 12.9993 20.2562C13.0207 20.2182 13.052 20.1422 13.0706 19.9327C13.0773 19.8565 13.0818 19.7718 13.0848 19.6748Z"/><path d="M12.6102 8.17688C12.9166 8.40084 12.9875 8.83658 12.7687 9.15012L11.5907 10.8376H12.9931C13.2485 10.8376 13.4825 10.9837 13.5993 11.2161C13.7162 11.4484 13.6963 11.7282 13.5479 11.9408L11.5998 14.7315C11.381 15.0451 10.9551 15.1177 10.6487 14.8937C10.3423 14.6698 10.2713 14.234 10.4902 13.9205L11.6682 12.233H10.2658C10.0104 12.233 9.77642 12.0869 9.65955 11.8545C9.54269 11.6222 9.56254 11.3424 9.71099 11.1298L11.659 8.33909C11.8779 8.02555 12.3037 7.95292 12.6102 8.17688Z"/></g></svg></span>
+          <span class="step-title">Thinking</span>
+          <span class="step-note">First verify today’s date, then choose the query…</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+        <div class="step-body"><div class="step-body-clip"><div class="step-body-inner">The user is at the Asia Financial Center in Beijing and wants today’s weather. First use bash to check the system date, then start a sub-agent for a live query and summarize brief advice.</div></div></div>
+      </div>
+      <div class="step">
+        <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+          <span class="step-title link">Function call</span>
+          <span class="step-note">bash · date '+%Y-%m-%d %H:%M %Z' → 2026-07-10 16:32 CST</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+      </div>
+      <div class="step">
+        <div class="step-head"><span class="step-icon k-subagent"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M2.73223 12.9391C3.06096 12.7418 3.47962 12.6331 4.05448 12.5732C4.14064 11.3357 4.36306 10.5351 4.93726 9.9519C5.87452 9 7.38301 9 10.4 9H13.6C16.617 9 18.1255 9 19.0627 9.9519C19.6369 10.5351 19.8596 11.3357 19.9458 12.5732C20.5207 12.6331 20.9393 12.7418 21.268 12.9391C22.0003 13.3784 22.0003 14.0855 22.0003 15.4997C22.0003 16.9139 22.0003 17.621 21.268 18.0604C20.9393 18.2576 20.5207 18.3663 19.9458 18.4262C19.8596 19.6637 19.6369 20.4649 19.0627 21.0481C18.1255 22 16.617 22 13.6 22H13.6H10.4C7.38301 22 5.87452 22 4.93726 21.0481C4.36306 20.4649 4.14064 19.6637 4.05448 18.4262C3.47962 18.3663 3.06096 18.2576 2.73223 18.0604C2 17.621 2 16.9139 2 15.4997C2 14.0855 2 13.3784 2.73223 12.9391Z" opacity=".5"/><path d="M14.5537 17.3975C14.8865 17.151 15.3559 17.221 15.6025 17.5537C15.849 17.8865 15.779 18.3559 15.4463 18.6025C14.4739 19.3232 13.2849 19.75 12 19.75C10.7151 19.75 9.52608 19.3232 8.55371 18.6025C8.22102 18.3559 8.15099 17.8865 8.39746 17.5537C8.64407 17.221 9.11354 17.151 9.44629 17.3975C10.1746 17.9373 11.0541 18.25 12 18.25C12.9459 18.25 13.8254 17.9373 14.5537 17.3975Z"/><path d="M9 12C9.42949 12 9.68372 12.3352 9.80078 12.5693C9.93278 12.8334 10 13.1631 10 13.5C10 13.8369 9.93278 14.1666 9.80078 14.4307C9.68372 14.6648 9.42949 15 9 15C8.57051 15 8.31628 14.6648 8.19922 14.4307C8.06722 14.1666 8 13.8369 8 13.5C8 13.1631 8.06722 12.8334 8.19922 12.5693C8.31628 12.3352 8.57051 12 9 12Z"/><path d="M15 12C15.4295 12 15.6837 12.3352 15.8008 12.5693C15.9328 12.8334 16 13.1631 16 13.5C16 13.8369 15.9328 14.1666 15.8008 14.4307C15.6837 14.6648 15.4295 15 15 15C14.5705 15 14.3163 14.6648 14.1992 14.4307C14.0672 14.1666 14 13.8369 14 13.5C14 13.1631 14.0672 12.8334 14.1992 12.5693C14.3163 12.3352 14.5705 12 15 12Z"/><path d="M12 2C12.8284 2 13.5 2.67157 13.5 3.5C13.5 4.05495 13.198 4.5384 12.75 4.79785V9H11.25V4.79785C10.802 4.5384 10.5 4.05495 10.5 3.5C10.5 2.67157 11.1716 2 12 2Z"/></g></svg></span>
+          <span class="step-title link">Sub-agent: check Beijing weather</span>
+          <span class="step-note">Completed</span>
+          <span class="step-act"><button class="btn">Copy</button><button class="btn">Switch ↗</button></span></div>
+      </div>
+      <div class="step" data-step-toggle>
+        <div class="step-head"><span class="step-icon k-thinking"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M4 9.67442C4 5.43595 7.35786 2 11.5 2C15.6421 2 19 5.43595 19 9.67442C19 11.9468 18.034 13.9892 16.5014 15.3934C15.9906 15.8614 15.6122 16.2082 15.344 16.4598C15.2099 16.5855 15.1074 16.6838 15.0317 16.7592C14.994 16.7968 14.9651 16.8266 14.9436 16.8496C14.933 16.861 14.925 16.8699 14.9192 16.8766C14.9133 16.8834 14.9108 16.8864 14.9108 16.8864C14.6743 17.1851 14.6231 17.2622 14.5926 17.332C14.5621 17.4018 14.5402 17.4922 14.4805 17.8717C14.457 18.0216 14.4545 18.2782 14.4545 18.9767V19.0067C14.4546 19.4158 14.4546 19.7687 14.4289 20.0583C14.4018 20.3645 14.3418 20.6677 14.1805 20.9535C14.001 21.2717 13.7428 21.5359 13.4318 21.7196C13.1525 21.8846 12.8562 21.946 12.557 21.9738C12.274 22 11.9292 22 11.5294 22H11.5293H11.4707H11.4706C11.0708 22 10.726 22 10.443 21.9738C10.1438 21.946 9.84747 21.8846 9.56818 21.7196C9.25723 21.5359 8.99902 21.2717 8.81949 20.9535C8.65825 20.6677 8.5982 20.3645 8.57107 20.0583C8.54543 19.7687 8.54544 19.4158 8.54545 19.0067L8.54545 18.9767C8.54545 18.2782 8.54305 18.0216 8.51949 17.8717C8.45982 17.4922 8.43787 17.4018 8.40739 17.332C8.3769 17.2622 8.32571 17.1851 8.0892 16.8864C8.0892 16.8864 8.08649 16.8831 8.0808 16.8766C8.07499 16.8699 8.06699 16.861 8.05635 16.8496C8.03486 16.8266 8.00601 16.7968 7.9683 16.7592C7.89262 16.6838 7.7901 16.5855 7.65601 16.4598C7.38782 16.2082 7.0094 15.8614 6.49859 15.3934C4.96602 13.9892 4 11.9468 4 9.67442Z" opacity=".5"/><path d="M13.0848 19.6748H9.91463C9.9176 19.7718 9.92209 19.8565 9.92884 19.9327C9.94739 20.1422 9.97868 20.2182 10.0001 20.2562C10.06 20.3623 10.146 20.4504 10.2497 20.5116C10.2868 20.5335 10.3612 20.5656 10.5658 20.5845C10.7799 20.6044 11.0623 20.6051 11.4997 20.6051C11.9371 20.6051 12.2195 20.6044 12.4336 20.5845C12.6382 20.5656 12.7125 20.5335 12.7497 20.5116C12.8533 20.4504 12.9394 20.3623 12.9993 20.2562C13.0207 20.2182 13.052 20.1422 13.0706 19.9327C13.0773 19.8565 13.0818 19.7718 13.0848 19.6748Z"/><path d="M12.6102 8.17688C12.9166 8.40084 12.9875 8.83658 12.7687 9.15012L11.5907 10.8376H12.9931C13.2485 10.8376 13.4825 10.9837 13.5993 11.2161C13.7162 11.4484 13.6963 11.7282 13.5479 11.9408L11.5998 14.7315C11.381 15.0451 10.9551 15.1177 10.6487 14.8937C10.3423 14.6698 10.2713 14.234 10.4902 13.9205L11.6682 12.233H10.2658C10.0104 12.233 9.77642 12.0869 9.65955 11.8545C9.54269 11.6222 9.56254 11.3424 9.71099 11.1298L11.659 8.33909C11.8779 8.02555 12.3037 7.95292 12.6102 8.17688Z"/></g></svg></span>
+          <span class="step-title">Thinking</span>
+          <span class="step-note">The sub-agent result is reliable; summarize travel advice…</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+        <div class="step-body"><div class="step-body-clip"><div class="step-body-inner">China Weather and Open-Meteo agree. Summarize current conditions, daily range, and advice in three lines.</div></div></div>
+      </div>
+    </div>
+    </div></div>
+  </div>
+
+  <div class="reply-message">
+    <div class="reply">Beijing today:<b>light rain becoming heavy rain</b>, currently 25.8°C and 89% humidity; daily range 24–28°C, approximately 98% chance of precipitation.<b>Bring an umbrella</b> and minimize unnecessary outings.</div>
+    <div class="reply-footer">
+      <span class="ts">16:33</span>
+      <span class="act">
+        <button class="icon-btn" aria-label="Copy" data-tip="Copy"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+        <button class="icon-btn" aria-label="Regenerate" data-tip="Regenerate"><svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2-9.4L1 10"/></svg></button>
+      </span>
+    </div>
+  </div>
+</div>
+<div class="rule">Rules: no outer border or background; the collapsed row is a plain-text summary + ›, without a button background, aligned to the body column. Every collapsed row is exactly 28px tall, with its text and arrow vertically centered in the row, without top, transform, or translate offsets. The transcript has no avatar column; the text column lines up with the composer’s left and right edges. Reply text is always directly visible. The bottom timestamp and copy/retry actions appear together only on message hover or keyboard focus within the footer.<b>Time contract:</b>User messages record local time on successful send. Agent replies and independent function/runtime messages record start time when their first visible state is created. Thinking and ordinary tool steps inside an Agent share that Agent message’s start time; independent runtime/sub-agent messages keep their own. Subsequent streaming, terminal updates, and hierarchy moves preserve it; after reload, prefer persisted authoritative time. Temporary thinking after send/retry but before the first reply content occupies one row, with start time immediately after status text and no normal message footer. Switch to the formal message layout when reply content arrives. Execution summaries, body text, code cards, and timestamps use different font sizes and line heights, so a turn keeps one 16px rhythm measured between their text boxes: summary row to reply, code card to the next line, and last line to the footer are all 16px, without changing collapsed-row height.<br> Functions and execution trees initiated by an Agent reply belong only to that reply’s execution timeline and must not also create top-level runtime cards. Only user-invoked functions appear as independent runtime messages.<br>
+<b>Expand downward only</b>: use grid 0fr↔1fr height transitions (0.18s), pushing lower content down on expansion and smoothly removing it on collapse;<b>the viewport must not jump</b>. Disable native scroll anchoring in chat (overflow-anchor:none), and suspend bottom following for 600ms after user clicks. The toggle row stays fixed on screen while expanding/collapsing. Unmount children after collapse animation to eliminate rendering cost while folded.<b>Execution always defaults to collapsed</b>: streaming and historical messages show only the summary, with the original text shimmer while running. Users can expand it; new steps append downward with a 0.22s fade/slide. Running rows use the original small status dot, and thinking notes show the latest line. Manual choices persist through later streaming and finalization. Streaming and finalized states use one timeline renderer: synthetic blocks derive from live fields until real blocks replace them after finalize.</div>
+
+<!-- ═══════ 2. Timeline details ═══════ -->
+<h2><span class="num">2</span>Timeline rows: circles indicate both expandability and open state</h2>
+<div class="desc">The left column retains type icons: filled Solar Bold Duotone glyphs (24×24), the same set as the composer; generic function rows use the sledgehammer. Colors indicate type:<b style="color:var(--timeline-thinking)">purple thinking</b> / <b style="color:var(--timeline-function)">orange function</b> / <b style="color:var(--timeline-llm)">cyan LLM</b> / <b style="color:var(--timeline-subagent)">green sub-agent</b>. Dark and light modes each use clear, vivid type colors. Rows with direct child content always show a circular state:<b>a uniform light solid circle when collapsed, a hollow ring when expanded</b>, independent of hover. Collapsed circles have one uniform surface without separate center and rim. Mix 8% type color in light mode and 14% in dark mode with the page background to create an opaque color that fully covers the timeline behind it. An independent static outer ring is fixed at 2px, with outer diameters of 26px for main rows and 23px for children. The outer ring never transitions or animates; opening and closing change only the inner fill between matching color and page background. During expansion, the inner circle shrinks over 220ms to a 1.5px-wide, 12px-high vertical segment, moves downward from the center to the ring’s lower edge, and fades out to reveal the existing neutral timeline. Do not draw a second translucent line over it. Child content simultaneously uses 0fr→1fr, 220ms height, 140ms opacity, and -3px→0 translation. Collapse reverses these transitions exactly; repeated clicks reverse from current animation progress. Circle centers, outer diameters, and icon positions do not animate. Leaf rows have no circle. Add no arrows or descendant-step counts. Interaction still has two regions:<b>underlined titles</b> open specific information on the right; clicking icons, summaries, or row whitespace only expands/collapses.</div>
+<div class="stage">
+  <div class="tl open">
+    <div class="tl-toggle"><span>Thinking ×1 · Functions ×2 (running)</span><span class="chev">›</span></div>
+    <div class="tl-collapse"><div class="tl-collapse-inner">
+    <div class="tl-body">
+      <div class="step open" data-step-toggle>
+        <div class="step-head"><span class="step-icon k-thinking"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M4 9.67442C4 5.43595 7.35786 2 11.5 2C15.6421 2 19 5.43595 19 9.67442C19 11.9468 18.034 13.9892 16.5014 15.3934C15.9906 15.8614 15.6122 16.2082 15.344 16.4598C15.2099 16.5855 15.1074 16.6838 15.0317 16.7592C14.994 16.7968 14.9651 16.8266 14.9436 16.8496C14.933 16.861 14.925 16.8699 14.9192 16.8766C14.9133 16.8834 14.9108 16.8864 14.9108 16.8864C14.6743 17.1851 14.6231 17.2622 14.5926 17.332C14.5621 17.4018 14.5402 17.4922 14.4805 17.8717C14.457 18.0216 14.4545 18.2782 14.4545 18.9767V19.0067C14.4546 19.4158 14.4546 19.7687 14.4289 20.0583C14.4018 20.3645 14.3418 20.6677 14.1805 20.9535C14.001 21.2717 13.7428 21.5359 13.4318 21.7196C13.1525 21.8846 12.8562 21.946 12.557 21.9738C12.274 22 11.9292 22 11.5294 22H11.5293H11.4707H11.4706C11.0708 22 10.726 22 10.443 21.9738C10.1438 21.946 9.84747 21.8846 9.56818 21.7196C9.25723 21.5359 8.99902 21.2717 8.81949 20.9535C8.65825 20.6677 8.5982 20.3645 8.57107 20.0583C8.54543 19.7687 8.54544 19.4158 8.54545 19.0067L8.54545 18.9767C8.54545 18.2782 8.54305 18.0216 8.51949 17.8717C8.45982 17.4922 8.43787 17.4018 8.40739 17.332C8.3769 17.2622 8.32571 17.1851 8.0892 16.8864C8.0892 16.8864 8.08649 16.8831 8.0808 16.8766C8.07499 16.8699 8.06699 16.861 8.05635 16.8496C8.03486 16.8266 8.00601 16.7968 7.9683 16.7592C7.89262 16.6838 7.7901 16.5855 7.65601 16.4598C7.38782 16.2082 7.0094 15.8614 6.49859 15.3934C4.96602 13.9892 4 11.9468 4 9.67442Z" opacity=".5"/><path d="M13.0848 19.6748H9.91463C9.9176 19.7718 9.92209 19.8565 9.92884 19.9327C9.94739 20.1422 9.97868 20.2182 10.0001 20.2562C10.06 20.3623 10.146 20.4504 10.2497 20.5116C10.2868 20.5335 10.3612 20.5656 10.5658 20.5845C10.7799 20.6044 11.0623 20.6051 11.4997 20.6051C11.9371 20.6051 12.2195 20.6044 12.4336 20.5845C12.6382 20.5656 12.7125 20.5335 12.7497 20.5116C12.8533 20.4504 12.9394 20.3623 12.9993 20.2562C13.0207 20.2182 13.052 20.1422 13.0706 19.9327C13.0773 19.8565 13.0818 19.7718 13.0848 19.6748Z"/><path d="M12.6102 8.17688C12.9166 8.40084 12.9875 8.83658 12.7687 9.15012L11.5907 10.8376H12.9931C13.2485 10.8376 13.4825 10.9837 13.5993 11.2161C13.7162 11.4484 13.6963 11.7282 13.5479 11.9408L11.5998 14.7315C11.381 15.0451 10.9551 15.1177 10.6487 14.8937C10.3423 14.6698 10.2713 14.234 10.4902 13.9205L11.6682 12.233H10.2658C10.0104 12.233 9.77642 12.0869 9.65955 11.8545C9.54269 11.6222 9.56254 11.3424 9.71099 11.1298L11.659 8.33909C11.8779 8.02555 12.3037 7.95292 12.6102 8.17688Z"/></g></svg></span>
+          <span class="step-title">Thinking</span>
+          <span class="step-note">Expanded rows: content aligns to the title row width</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+        <div class="step-body"><div class="step-body-clip"><div class="step-body-inner">Expanded content has one light background, no border, and no header of its own—the row above is its header. Content’s left edge aligns with the title row, without extra indentation. Click the row again to collapse. Only thinking expands inline; function/sub-agent details appear in the right panel.</div></div></div>
+      </div>
+      <div class="step open" data-step-toggle>
+        <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+          <span class="step-title link">Function call</span>
+          <span class="step-note">paper_agent · has internal child calls → expands to an indented child timeline</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+        <div class="tl-sub"><div class="tl-sub-clip"><div class="tl-sub-inner">
+          <div class="step">
+            <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+              <span class="step-title link">web_search</span>
+              <span class="step-note">“Beijing Chaoyang district weather today” → 12 results</span>
+              <span class="step-act"><button class="btn">Copy</button></span></div>
+          </div>
+          <div class="step">
+            <div class="step-head"><span class="step-icon k-llm"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M12 3C12.3853 3 12.6977 3.31236 12.6977 3.69767V6.48884C13.2084 6.48991 13.6717 6.49342 14.0932 6.50495L14.093 6.48837V3.69767C14.093 3.31236 14.4054 3 14.7907 3C15.176 3 15.4884 3.31236 15.4884 3.69767V6.48837C15.4884 6.52487 15.4856 6.56072 15.4802 6.5957C16.4162 6.71067 17.0648 6.94879 17.558 7.44198C18.0512 7.93517 18.2893 8.58381 18.4043 9.51984C18.4393 9.51443 18.4751 9.51163 18.5116 9.51163H21.3023C21.6876 9.51163 22 9.82399 22 10.2093C22 10.5946 21.6876 10.907 21.3023 10.907H18.5116L18.495 10.9068C18.5066 11.3283 18.5106 11.7916 18.5116 12.3023H21.3023C21.6876 12.3023 22 12.6147 22 13C22 13.3853 21.6876 13.6977 21.3023 13.6977L18.5112 13.6977C18.5101 14.2084 18.5066 14.6717 18.495 15.0932L18.5116 15.093H21.3023C21.6876 15.093 22 15.4054 22 15.7907C22 16.176 21.6876 16.4884 21.3023 16.4884H18.5116C18.4751 16.4884 18.4393 16.4856 18.4043 16.4802C18.2893 17.4162 18.0512 18.0648 17.558 18.558C17.0648 19.0512 16.4162 19.2893 15.4802 19.4043C15.4856 19.4393 15.4884 19.4751 15.4884 19.5116V22.3023C15.4884 22.6876 15.176 23 14.7907 23C14.4054 23 14.093 22.6876 14.093 22.3023V19.5116L14.0932 19.495C13.6717 19.5066 13.2084 19.5106 12.6977 19.5116V22.3023C12.6977 22.6876 12.3853 23 12 23C11.6147 23 11.3023 22.6876 11.3023 22.3023L11.3023 19.5112C10.7916 19.5101 10.3283 19.5066 9.90678 19.495L9.90698 19.5116V22.3023C9.90698 22.6876 9.59462 23 9.2093 23C8.82399 23 8.51163 22.6876 8.51163 22.3023V19.5116C8.51163 19.4751 8.51443 19.4393 8.51984 19.4043C7.58381 19.2893 6.93517 19.0512 6.44198 18.558C5.94879 18.0648 5.71067 17.4162 5.5957 16.4802C5.56071 16.4856 5.52487 16.4884 5.48837 16.4884H2.69767C2.31236 16.4884 2 16.176 2 15.7907C2 15.4054 2.31236 15.093 2.69767 15.093H5.48837L5.50495 15.0932C5.49342 14.6717 5.48944 14.2084 5.48837 13.6977H2.69767C2.31236 13.6977 2 13.3853 2 13C2 12.6147 2.31236 12.3023 2.69767 12.3023L5.48884 12.3023C5.48991 11.7916 5.49342 11.3283 5.50495 10.9068L5.48837 10.907H2.69767C2.31236 10.907 2 10.5946 2 10.2093C2 9.82399 2.31236 9.51163 2.69767 9.51163H5.48837C5.52487 9.51163 5.56071 9.51443 5.5957 9.51984C5.71067 8.58381 5.94879 7.93517 6.44198 7.44198C6.93517 6.94879 7.58381 6.71067 8.51984 6.5957C8.51443 6.56072 8.51163 6.52487 8.51163 6.48837V3.69767C8.51163 3.31236 8.82399 3 9.2093 3C9.59462 3 9.90698 3.31236 9.90698 3.69767V6.48837L9.90678 6.50495C10.3283 6.49342 10.7916 6.48944 11.3023 6.48837V3.69767C11.3023 3.31236 11.6147 3 12 3ZM11.0238 8.5814C10.4054 8.58136 9.87247 8.58133 9.44573 8.63871C8.98839 8.70019 8.55001 8.83885 8.19443 9.19443C7.83885 9.55001 7.70019 9.98839 7.63871 10.4457C7.58133 10.8725 7.58136 11.4054 7.5814 12.0238V13.9762C7.58136 14.5946 7.58133 15.1275 7.63871 15.5543C7.70019 16.0116 7.83885 16.45 8.19443 16.8056C8.55001 17.1612 8.98839 17.2998 9.44573 17.3613C9.87247 17.4187 10.4054 17.4186 11.0238 17.4186H12.9762C13.5946 17.4186 14.1275 17.4187 14.5543 17.3613C15.0116 17.2998 15.45 17.1612 15.8056 16.8056C16.1612 16.45 16.2998 16.0116 16.3613 15.5543C16.4187 15.1275 16.4186 14.5946 16.4186 13.9762V12.0238C16.4186 11.4054 16.4187 10.8725 16.3613 10.4457C16.2998 9.98839 16.1612 9.55001 15.8056 9.19443C15.45 8.83885 15.0116 8.70019 14.5543 8.63871C14.1275 8.58133 13.5947 8.58136 12.9762 8.5814H11.0238Z" clip-rule="evenodd"/><path d="M9.18091 10.1809C9.23402 10.1278 9.32886 10.0621 9.63147 10.0214C9.95415 9.97804 10.3921 9.97656 11.0696 9.97656H12.9301C13.6075 9.97656 14.0455 9.97804 14.3682 10.0214C14.6708 10.0621 14.7656 10.1278 14.8187 10.1809C14.8718 10.234 14.9375 10.3289 14.9782 10.6315C15.0216 10.9542 15.0231 11.3921 15.0231 12.0696V13.9301C15.0231 14.6075 15.0216 15.0455 14.9782 15.3682C14.9375 15.6708 14.8718 15.7656 14.8187 15.8187C14.7656 15.8718 14.6708 15.9375 14.3682 15.9782C14.0455 16.0216 13.6075 16.0231 12.9301 16.0231H11.0696C10.3921 16.0231 9.95415 16.0216 9.63147 15.9782C9.32886 15.9375 9.23402 15.8718 9.18091 15.8187C9.1278 15.7656 9.06211 15.6708 9.02143 15.3682C8.97804 15.0455 8.97656 14.6075 8.97656 13.9301V12.0696C8.97656 11.3921 8.97804 10.9542 9.02143 10.6315C9.06211 10.3289 9.1278 10.234 9.18091 10.1809Z" opacity=".5"/></g></svg></span>
+              <span class="step-title link">LLM</span>
+              <span class="step-note">Both sources agree; use China Weather as primary…</span>
+              <span class="step-act"><button class="btn">Copy</button></span></div>
+          </div>
+          <div class="step">
+            <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+              <span class="step-title link">read_page</span>
+              <span class="step-note">weather.com.cn/101010300.shtml</span>
+              <span class="step-act"><button class="btn">Copy</button></span></div>
+          </div>
+        </div></div></div>
+      </div>
+      <div class="step" data-step-toggle>
+        <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+          <span class="step-title link">Function call</span>
+          <span class="step-note">deep_lookup · click outside the title to expand each level</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+        <div class="tl-sub"><div class="tl-sub-clip"><div class="tl-sub-inner">
+          <div class="step"><div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span><span class="step-title link">search_index</span><span class="step-note">18 candidate matches</span><span class="step-act"><button class="btn">Copy</button></span></div></div>
+          <div class="step"><div class="step-head"><span class="step-icon k-llm"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M12 3C12.3853 3 12.6977 3.31236 12.6977 3.69767V6.48884C13.2084 6.48991 13.6717 6.49342 14.0932 6.50495L14.093 6.48837V3.69767C14.093 3.31236 14.4054 3 14.7907 3C15.176 3 15.4884 3.31236 15.4884 3.69767V6.48837C15.4884 6.52487 15.4856 6.56072 15.4802 6.5957C16.4162 6.71067 17.0648 6.94879 17.558 7.44198C18.0512 7.93517 18.2893 8.58381 18.4043 9.51984C18.4393 9.51443 18.4751 9.51163 18.5116 9.51163H21.3023C21.6876 9.51163 22 9.82399 22 10.2093C22 10.5946 21.6876 10.907 21.3023 10.907H18.5116L18.495 10.9068C18.5066 11.3283 18.5106 11.7916 18.5116 12.3023H21.3023C21.6876 12.3023 22 12.6147 22 13C22 13.3853 21.6876 13.6977 21.3023 13.6977L18.5112 13.6977C18.5101 14.2084 18.5066 14.6717 18.495 15.0932L18.5116 15.093H21.3023C21.6876 15.093 22 15.4054 22 15.7907C22 16.176 21.6876 16.4884 21.3023 16.4884H18.5116C18.4751 16.4884 18.4393 16.4856 18.4043 16.4802C18.2893 17.4162 18.0512 18.0648 17.558 18.558C17.0648 19.0512 16.4162 19.2893 15.4802 19.4043C15.4856 19.4393 15.4884 19.4751 15.4884 19.5116V22.3023C15.4884 22.6876 15.176 23 14.7907 23C14.4054 23 14.093 22.6876 14.093 22.3023V19.5116L14.0932 19.495C13.6717 19.5066 13.2084 19.5106 12.6977 19.5116V22.3023C12.6977 22.6876 12.3853 23 12 23C11.6147 23 11.3023 22.6876 11.3023 22.3023L11.3023 19.5112C10.7916 19.5101 10.3283 19.5066 9.90678 19.495L9.90698 19.5116V22.3023C9.90698 22.6876 9.59462 23 9.2093 23C8.82399 23 8.51163 22.6876 8.51163 22.3023V19.5116C8.51163 19.4751 8.51443 19.4393 8.51984 19.4043C7.58381 19.2893 6.93517 19.0512 6.44198 18.558C5.94879 18.0648 5.71067 17.4162 5.5957 16.4802C5.56071 16.4856 5.52487 16.4884 5.48837 16.4884H2.69767C2.31236 16.4884 2 16.176 2 15.7907C2 15.4054 2.31236 15.093 2.69767 15.093H5.48837L5.50495 15.0932C5.49342 14.6717 5.48944 14.2084 5.48837 13.6977H2.69767C2.31236 13.6977 2 13.3853 2 13C2 12.6147 2.31236 12.3023 2.69767 12.3023L5.48884 12.3023C5.48991 11.7916 5.49342 11.3283 5.50495 10.9068L5.48837 10.907H2.69767C2.31236 10.907 2 10.5946 2 10.2093C2 9.82399 2.31236 9.51163 2.69767 9.51163H5.48837C5.52487 9.51163 5.56071 9.51443 5.5957 9.51984C5.71067 8.58381 5.94879 7.93517 6.44198 7.44198C6.93517 6.94879 7.58381 6.71067 8.51984 6.5957C8.51443 6.56072 8.51163 6.52487 8.51163 6.48837V3.69767C8.51163 3.31236 8.82399 3 9.2093 3C9.59462 3 9.90698 3.31236 9.90698 3.69767V6.48837L9.90678 6.50495C10.3283 6.49342 10.7916 6.48944 11.3023 6.48837V3.69767C11.3023 3.31236 11.6147 3 12 3ZM11.0238 8.5814C10.4054 8.58136 9.87247 8.58133 9.44573 8.63871C8.98839 8.70019 8.55001 8.83885 8.19443 9.19443C7.83885 9.55001 7.70019 9.98839 7.63871 10.4457C7.58133 10.8725 7.58136 11.4054 7.5814 12.0238V13.9762C7.58136 14.5946 7.58133 15.1275 7.63871 15.5543C7.70019 16.0116 7.83885 16.45 8.19443 16.8056C8.55001 17.1612 8.98839 17.2998 9.44573 17.3613C9.87247 17.4187 10.4054 17.4186 11.0238 17.4186H12.9762C13.5946 17.4186 14.1275 17.4187 14.5543 17.3613C15.0116 17.2998 15.45 17.1612 15.8056 16.8056C16.1612 16.45 16.2998 16.0116 16.3613 15.5543C16.4187 15.1275 16.4186 14.5946 16.4186 13.9762V12.0238C16.4186 11.4054 16.4187 10.8725 16.3613 10.4457C16.2998 9.98839 16.1612 9.55001 15.8056 9.19443C15.45 8.83885 15.0116 8.70019 14.5543 8.63871C14.1275 8.58133 13.5947 8.58136 12.9762 8.5814H11.0238Z" clip-rule="evenodd"/><path d="M9.18091 10.1809C9.23402 10.1278 9.32886 10.0621 9.63147 10.0214C9.95415 9.97804 10.3921 9.97656 11.0696 9.97656H12.9301C13.6075 9.97656 14.0455 9.97804 14.3682 10.0214C14.6708 10.0621 14.7656 10.1278 14.8187 10.1809C14.8718 10.234 14.9375 10.3289 14.9782 10.6315C15.0216 10.9542 15.0231 11.3921 15.0231 12.0696V13.9301C15.0231 14.6075 15.0216 15.0455 14.9782 15.3682C14.9375 15.6708 14.8718 15.7656 14.8187 15.8187C14.7656 15.8718 14.6708 15.9375 14.3682 15.9782C14.0455 16.0216 13.6075 16.0231 12.9301 16.0231H11.0696C10.3921 16.0231 9.95415 16.0216 9.63147 15.9782C9.32886 15.9375 9.23402 15.8718 9.18091 15.8187C9.1278 15.7656 9.06211 15.6708 9.02143 15.3682C8.97804 15.0455 8.97656 14.6075 8.97656 13.9301V12.0696C8.97656 11.3921 8.97804 10.9542 9.02143 10.6315C9.06211 10.3289 9.1278 10.234 9.18091 10.1809Z" opacity=".5"/></g></svg></span><span class="step-title link">LLM</span><span class="step-note">Filter and merge duplicates</span><span class="step-act"><button class="btn">Copy</button></span></div></div>
+          <div class="step"><div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span><span class="step-title link">write_report</span><span class="step-note">Research file written</span><span class="step-act"><button class="btn">Copy</button></span></div></div>
+        </div></div></div>
+      </div>
+      <div class="step">
+        <div class="step-head"><span class="step-icon"><span class="spin"></span></span>
+          <span class="step-title link">Function call</span>
+          <span class="step-note">web_fetch · weather.com.cn (running)</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+      </div>
+      <div class="step">
+        <div class="step-head"><span class="step-icon is-error"><svg viewBox="0 0 24 24"><line x1="6" y1="6" x2="18" y2="18"/><line x1="18" y1="6" x2="6" y2="18"/></svg></span>
+          <span class="step-title link" style="color:var(--accent-red)">Function call</span>
+          <span class="step-note">bash · exit code 1 — failed rows use a red ✗ icon</span>
+          <span class="step-act"><button class="btn">Copy</button></span></div>
+      </div>
+    </div>
+    </div></div>
+  </div>
+</div>
+<div class="rule">Every step row starts with a 24px rounded-square tile (7px corners) tinted with the step tone: a 16% tone fill over the page background, a 1px inset ring at 26%, and the glyph at full strength. Tones and glyphs come from <code>tool-presentation.ts</code>: commands green (terminal), file edits amber (pen), reads blue (file), searches cyan (search), web and browser indigo (globe or pointer), sub-agents green (bot), memory fuchsia, planning slate, media rose, system stone, other functions orange (hammer); thinking stays purple and LLM cyan. Failed = red tile with ✗; running = the normal glyph with a conic sweep orbiting the tile. Row text: a verb title (Ran, Edited, Searched the web…) at weight 500, then the identifying argument as a monospace chip, then the first line of the result in muted text. Raw JSON never appears in a row; the side panel keeps the full parameters and output.<br> Geometry: the main tl-body left padding is 34px; the 24px tile occupies 0..24 (center 12) and a 1px rail sits at 11.5px, fading in and out over its first and last 12px. Child timelines indent 6px with 30px left padding, 20px tiles (6px corners, 11px glyphs) and the rail at 9.5px. Rows are at least 30px tall (26px nested).<br> Animation: expandable rows show a small chevron after the summary that rotates 90° when open. Child content and the child timeline share one 220ms cubic-bezier(.2,.7,.2,1) transition; the whole strip keeps its 180ms collapse. prefers-reduced-motion reduces every transition to 0.01ms.<br> Expandability is shown only by that chevron; add no arrow slot or “⋯ N steps” label. Keep only actions such as Copy and Switch on the right; action right edges do not depend on expandability. Underlined titles always open details. Auxiliary actions appear only on the hovered row, changing immediately on entry/exit without opacity transitions. Apply :hover to step-head rather than the entire step so child hover does not reveal ancestor actions. Keyboard interaction retains actions only through :focus-visible; pointer focus must not leave old-row actions visible. Icons, summaries, and whitespace only expand/collapse, never open details.<br> Nesting: when functions have child calls (Agent method execution trees or multi-level tool call trees), expansion shows<b>an indented child timeline</b>, recursively using identical row styles without a depth limit.<br>
+<b>Implementation status:</b>Production components use tone-tinted rounded tiles per tool, verb titles with argument chips, a conic sweep while running and a chevron on expandable rows. Every timeline row offers copy; step counts are removed.</div>
+
+<!-- ═══════ 3. Manual function runs ═══════ -->
+<h2><span class="num">3</span>Manual function runs: one FunctionInvocation, two input modes</h2>
+<div class="desc">The function form and complete function expression are two editors for the same <code>FunctionInvocation { name, kwargs }</code> . Clicking Run in the form submits typed kwargs directly. Entire composer text that exactly matches a registered function with named arguments is converted to the same object before creating a user message. Both create only the ProgramRun below, without UserBubble or an extra Agent text turn. Function fragments with surrounding prose, backticks, or code fences remain ordinary messages to avoid executing code under discussion.</div>
+<table class="path-table">
+  <thead><tr><th>Input</th><th>Entry classification</th><th>Persistence and display</th></tr></thead>
+  <tbody>
+    <tr><td><code>gui_agent(task=&quot;…&quot;, surface=&quot;browser&quot;)</code></td><td>Exact whole-input match, registered function, named literal arguments only</td><td><code>POST /api/function/gui_agent</code> → single ProgramRun</td></tr>
+    <tr><td>gui_agent form in Favorite Programs</td><td>Form schema generates the same typed kwargs</td><td><code>POST /api/function/gui_agent</code> → single ProgramRun</td></tr>
+    <tr><td><code>Please explain gui_agent(...)</code> or <code>`gui_agent(...)`</code></td><td>Not a complete function expression</td><td>Ordinary UserMessage → Agent</td></tr>
+  </tbody>
+</table>
+<div class="desc">The recognizer executes neither JavaScript nor Python and supports no positional arguments, attribute access, variables, or arbitrary expressions. It parses only strings, numbers, booleans, null, and flat named arguments allowed by the function schema. Missing required or invalidly typed parameters retain the draft, open the same form, and display errors instead of falling back to chat. Runs keep a 28px ƒ type marker on the left and the unframed timeline on the right. The marker identifies a ProgramRun; it is not a speaker avatar. Expanded run summaries show only direct root children; their descendants stay collapsed until users expand each level.</div>
+<div class="stage run-host">
+  <div class="runtime-program-run">
+    <div class="runtime-program-avatar" aria-hidden="true">ƒ</div>
+    <div class="runtime-program-content">
+      <div class="tl" id="runtime-demo">
+        <button class="tl-toggle" type="button">
+          <span>weather_report · completed · 00:03 · Light rain becoming heavy rain today, 24–28°C…</span><span class="chev">›</span>
+        </button>
+        <div class="tl-collapse"><div class="tl-collapse-inner">
+          <div class="tl-body">
+            <div class="step open" data-step-toggle>
+              <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+                <span class="step-title link">weather_report</span>
+                <span class="step-note">{"city": "Beijing"} · 3.2s → Light rain becoming heavy rain today, 24–28°C…</span>
+                <span class="step-act"><button class="btn">Copy</button></span></div>
+              <div class="tl-sub"><div class="tl-sub-clip"><div class="tl-sub-inner">
+                <div class="step">
+                  <div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span>
+                    <span class="step-title link">web_search</span>
+                    <span class="step-note">“Beijing weather today” → 12 results</span>
+                    <span class="step-act"><button class="btn">Copy</button></span></div>
+                </div>
+                <div class="step">
+                  <div class="step-head"><span class="step-icon k-llm"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M12 3C12.3853 3 12.6977 3.31236 12.6977 3.69767V6.48884C13.2084 6.48991 13.6717 6.49342 14.0932 6.50495L14.093 6.48837V3.69767C14.093 3.31236 14.4054 3 14.7907 3C15.176 3 15.4884 3.31236 15.4884 3.69767V6.48837C15.4884 6.52487 15.4856 6.56072 15.4802 6.5957C16.4162 6.71067 17.0648 6.94879 17.558 7.44198C18.0512 7.93517 18.2893 8.58381 18.4043 9.51984C18.4393 9.51443 18.4751 9.51163 18.5116 9.51163H21.3023C21.6876 9.51163 22 9.82399 22 10.2093C22 10.5946 21.6876 10.907 21.3023 10.907H18.5116L18.495 10.9068C18.5066 11.3283 18.5106 11.7916 18.5116 12.3023H21.3023C21.6876 12.3023 22 12.6147 22 13C22 13.3853 21.6876 13.6977 21.3023 13.6977L18.5112 13.6977C18.5101 14.2084 18.5066 14.6717 18.495 15.0932L18.5116 15.093H21.3023C21.6876 15.093 22 15.4054 22 15.7907C22 16.176 21.6876 16.4884 21.3023 16.4884H18.5116C18.4751 16.4884 18.4393 16.4856 18.4043 16.4802C18.2893 17.4162 18.0512 18.0648 17.558 18.558C17.0648 19.0512 16.4162 19.2893 15.4802 19.4043C15.4856 19.4393 15.4884 19.4751 15.4884 19.5116V22.3023C15.4884 22.6876 15.176 23 14.7907 23C14.4054 23 14.093 22.6876 14.093 22.3023V19.5116L14.0932 19.495C13.6717 19.5066 13.2084 19.5106 12.6977 19.5116V22.3023C12.6977 22.6876 12.3853 23 12 23C11.6147 23 11.3023 22.6876 11.3023 22.3023L11.3023 19.5112C10.7916 19.5101 10.3283 19.5066 9.90678 19.495L9.90698 19.5116V22.3023C9.90698 22.6876 9.59462 23 9.2093 23C8.82399 23 8.51163 22.6876 8.51163 22.3023V19.5116C8.51163 19.4751 8.51443 19.4393 8.51984 19.4043C7.58381 19.2893 6.93517 19.0512 6.44198 18.558C5.94879 18.0648 5.71067 17.4162 5.5957 16.4802C5.56071 16.4856 5.52487 16.4884 5.48837 16.4884H2.69767C2.31236 16.4884 2 16.176 2 15.7907C2 15.4054 2.31236 15.093 2.69767 15.093H5.48837L5.50495 15.0932C5.49342 14.6717 5.48944 14.2084 5.48837 13.6977H2.69767C2.31236 13.6977 2 13.3853 2 13C2 12.6147 2.31236 12.3023 2.69767 12.3023L5.48884 12.3023C5.48991 11.7916 5.49342 11.3283 5.50495 10.9068L5.48837 10.907H2.69767C2.31236 10.907 2 10.5946 2 10.2093C2 9.82399 2.31236 9.51163 2.69767 9.51163H5.48837C5.52487 9.51163 5.56071 9.51443 5.5957 9.51984C5.71067 8.58381 5.94879 7.93517 6.44198 7.44198C6.93517 6.94879 7.58381 6.71067 8.51984 6.5957C8.51443 6.56072 8.51163 6.52487 8.51163 6.48837V3.69767C8.51163 3.31236 8.82399 3 9.2093 3C9.59462 3 9.90698 3.31236 9.90698 3.69767V6.48837L9.90678 6.50495C10.3283 6.49342 10.7916 6.48944 11.3023 6.48837V3.69767C11.3023 3.31236 11.6147 3 12 3ZM11.0238 8.5814C10.4054 8.58136 9.87247 8.58133 9.44573 8.63871C8.98839 8.70019 8.55001 8.83885 8.19443 9.19443C7.83885 9.55001 7.70019 9.98839 7.63871 10.4457C7.58133 10.8725 7.58136 11.4054 7.5814 12.0238V13.9762C7.58136 14.5946 7.58133 15.1275 7.63871 15.5543C7.70019 16.0116 7.83885 16.45 8.19443 16.8056C8.55001 17.1612 8.98839 17.2998 9.44573 17.3613C9.87247 17.4187 10.4054 17.4186 11.0238 17.4186H12.9762C13.5946 17.4186 14.1275 17.4187 14.5543 17.3613C15.0116 17.2998 15.45 17.1612 15.8056 16.8056C16.1612 16.45 16.2998 16.0116 16.3613 15.5543C16.4187 15.1275 16.4186 14.5946 16.4186 13.9762V12.0238C16.4186 11.4054 16.4187 10.8725 16.3613 10.4457C16.2998 9.98839 16.1612 9.55001 15.8056 9.19443C15.45 8.83885 15.0116 8.70019 14.5543 8.63871C14.1275 8.58133 13.5947 8.58136 12.9762 8.5814H11.0238Z" clip-rule="evenodd"/><path d="M9.18091 10.1809C9.23402 10.1278 9.32886 10.0621 9.63147 10.0214C9.95415 9.97804 10.3921 9.97656 11.0696 9.97656H12.9301C13.6075 9.97656 14.0455 9.97804 14.3682 10.0214C14.6708 10.0621 14.7656 10.1278 14.8187 10.1809C14.8718 10.234 14.9375 10.3289 14.9782 10.6315C15.0216 10.9542 15.0231 11.3921 15.0231 12.0696V13.9301C15.0231 14.6075 15.0216 15.0455 14.9782 15.3682C14.9375 15.6708 14.8718 15.7656 14.8187 15.8187C14.7656 15.8718 14.6708 15.9375 14.3682 15.9782C14.0455 16.0216 13.6075 16.0231 12.9301 16.0231H11.0696C10.3921 16.0231 9.95415 16.0216 9.63147 15.9782C9.32886 15.9375 9.23402 15.8718 9.18091 15.8187C9.1278 15.7656 9.06211 15.6708 9.02143 15.3682C8.97804 15.0455 8.97656 14.6075 8.97656 13.9301V12.0696C8.97656 11.3921 8.97804 10.9542 9.02143 10.6315C9.06211 10.3289 9.1278 10.234 9.18091 10.1809Z" opacity=".5"/></g></svg></span>
+                    <span class="step-title link">LLM</span>
+                    <span class="step-note">Summarize two sources · 1.1s</span>
+                    <span class="step-act"><button class="btn">Copy</button></span></div>
+                </div>
+              </div></div></div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+          <section class="runtime-program-conclusion">
+            <div class="runtime-program-conclusion-label">Conclusion</div>
+            <p class="runtime-program-conclusion-meta">Completed 3 calls: weather data retrieved, checked, and summarized.</p>
+          </section>
+          <div class="run-footer">
+            <span class="ts">16:32</span>
+            <span class="act">
+              <button class="icon-btn" aria-label="Copy result" data-tip="Copy result"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button>
+              <button class="icon-btn" aria-label="Retry" data-tip="Retry"><svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2-9.4L1 10"/></svg></button>
+              <button class="icon-btn" aria-label="Edit and rerun" data-tip="Edit and rerun"><svg viewBox="0 0 24 24"><path d="M17 3a2.8 2.8 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg></button>
+              <span class="msg-nav">
+                <button class="icon-btn" aria-label="Previous version" data-tip="Previous version"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></button>
+                <span class="label">1 / 2</span>
+                <button class="icon-btn" aria-label="Next version" data-tip="Next version"><svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg></button>
+              </span>
+            </span>
+          </div>
+    </div>
+  </div>
+</div>
+<div class="rule"><b>Entry contract:</b>FunctionForm and exact function expressions share one kwargs converter and one HTTP submitter. Chat submission only performs precise recognition before them; it must not duplicate function placeholders, Project, channel, session navigation, or error rollback. Successful recognition must not call <code>sendChatMessage</code> or write pending user text. Attachments, queuing during a run, and system decisions do not implicitly become function parameters.<br> The top collapsed title, Conclusion, and footer share one content-column start, without separate left, padding-left, margin-left, or transform adjustments. Footer uses the same icon buttons, timestamp, and hover reveal as chat footers, with justify-content:flex-start. Conclusion or direct result-to-footer spacing reuses the assistant body’s 16px rhythm, without a separate compact gap. Version navigation<b>reuses the chat .message-nav component</b> (◀ N/M ▶), with no new style. Footer copy copies<b>the root call’s actual result</b> (error ?? output), not argument JSON.<br>
+<b>Branch semantics</b>: Retry creates <b>a sibling branch with unchanged arguments</b>; Edit prefills previous arguments into the form and submits as<b>a sibling branch with editable arguments</b> (fork_of_node anchors to the original call’s predecessor). Both replace the displayed run in place; old runs remain accessible via ◀ N/M ▶.<b>Never append a new call at the conversation’s end</b>. Running placeholder = one breathing-dot row; nested runs render no footer.<br>
+<b>Implementation status:</b>Production function footers no longer have extra left padding. Timestamp rows, collapsed titles, and Conclusion share exactly one left edge. Exact function expressions, FunctionForm, shared HTTP dispatcher, Advanced argument groups, and bound-session isolation are implemented;<code>function-invocation.test.mjs</code> covers direct calls, ordinary-text boundaries, typed kwargs, successful binding, navigation, and failure rollback. Corresponding Python regressions cover non-executable GUI results and metadata. Independent specification review passed.</div>
+
+<!-- ═══════ 4. Current sub-agent behavior ═══════ -->
+<h2><span class="num">4</span>Current sub-agent live display: records retained, execution collapsed by default</h2>
+<div class="desc">Sub-agent rows update the execution tree live, while the outer execution area defaults to collapsed in streaming and terminal states. Data remains in the message’s <code>attachCards</code> or <code>contextTree</code> ; expansion reveals the same continuously updated timeline record.</div>
+
+<div class="state-flow" aria-label="Current sub-agent display-state sequence">
+  <div class="state-card">
+    <div class="state-kicker">T0 · parent RUNNING</div>
+    <div class="state-title">Execution area defaults to collapsed</div>
+    <div class="state-copy"><code>const [open, setOpen] = useState(false)</code>; streaming state does not determine its initial open value.</div>
+  </div>
+  <div class="state-card">
+    <div class="state-kicker">T1 · sub-agent starts</div>
+    <div class="state-title">Record “Sub-agent · Running”</div>
+    <div class="state-copy">Timeline data updates while the summary stays collapsed. If the user has expanded it, the new row appears with normal animation.</div>
+  </div>
+  <div class="state-card">
+    <div class="state-kicker">T2 · sub-agent finishes</div>
+    <div class="state-title">Update the same row in place</div>
+    <div class="state-copy">The row with stable <code>card_id</code> changes to “Completed/Error,” without duplication or deletion.</div>
+  </div>
+  <div class="state-card">
+    <div class="state-kicker">T3 · parent TERMINAL</div>
+    <div class="state-title">Execution area stays collapsed</div>
+    <div class="state-copy">Terminal updates neither change the default nor override the user’s manual expansion.</div>
+  </div>
+  <div class="state-card">
+    <div class="state-kicker">T4 · user expands again</div>
+    <div class="state-title">Still the same timeline row</div>
+    <div class="state-copy">The record has not become a card. Hovering or focusing the row still displays at its end <b>Switch ↗</b>.</div>
+  </div>
+</div>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Slow replay of current behavior</h3>
+<div class="desc">The demo is deliberately slow so running-state changes can be seen not to expand the execution area automatically. T4 simulates manual expansion and confirms that records updated while collapsed remain the same timeline rows.</div>
+<div class="current-demo">
+  <div class="demo-toolbar">
+    <button class="demo-btn" type="button" id="replay-subagent">Slow replay</button>
+    <button class="demo-btn" type="button" id="reset-subagent">Reset</button>
+    <span class="demo-status" id="subagent-status" aria-live="polite">Waiting to replay</span>
+  </div>
+  <div class="demo-runtime">
+    <div class="runtime-program-avatar" aria-hidden="true">ƒ</div>
+    <div class="runtime-program-content">
+      <div class="tl" id="subagent-demo">
+        <button class="tl-toggle" type="button" id="subagent-demo-toggle" aria-expanded="false">
+          <span id="subagent-demo-label">report_workflow · waiting to run</span><span class="chev">›</span>
+        </button>
+        <div class="tl-collapse"><div class="tl-collapse-inner">
+          <div class="tl-body">
+            <div class="step demo-subagent" id="demo-subagent-row">
+              <div class="step-head"><span class="step-icon k-subagent"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M2.73223 12.9391C3.06096 12.7418 3.47962 12.6331 4.05448 12.5732C4.14064 11.3357 4.36306 10.5351 4.93726 9.9519C5.87452 9 7.38301 9 10.4 9H13.6C16.617 9 18.1255 9 19.0627 9.9519C19.6369 10.5351 19.8596 11.3357 19.9458 12.5732C20.5207 12.6331 20.9393 12.7418 21.268 12.9391C22.0003 13.3784 22.0003 14.0855 22.0003 15.4997C22.0003 16.9139 22.0003 17.621 21.268 18.0604C20.9393 18.2576 20.5207 18.3663 19.9458 18.4262C19.8596 19.6637 19.6369 20.4649 19.0627 21.0481C18.1255 22 16.617 22 13.6 22H13.6H10.4C7.38301 22 5.87452 22 4.93726 21.0481C4.36306 20.4649 4.14064 19.6637 4.05448 18.4262C3.47962 18.3663 3.06096 18.2576 2.73223 18.0604C2 17.621 2 16.9139 2 15.4997C2 14.0855 2 13.3784 2.73223 12.9391Z" opacity=".5"/><path d="M14.5537 17.3975C14.8865 17.151 15.3559 17.221 15.6025 17.5537C15.849 17.8865 15.779 18.3559 15.4463 18.6025C14.4739 19.3232 13.2849 19.75 12 19.75C10.7151 19.75 9.52608 19.3232 8.55371 18.6025C8.22102 18.3559 8.15099 17.8865 8.39746 17.5537C8.64407 17.221 9.11354 17.151 9.44629 17.3975C10.1746 17.9373 11.0541 18.25 12 18.25C12.9459 18.25 13.8254 17.9373 14.5537 17.3975Z"/><path d="M9 12C9.42949 12 9.68372 12.3352 9.80078 12.5693C9.93278 12.8334 10 13.1631 10 13.5C10 13.8369 9.93278 14.1666 9.80078 14.4307C9.68372 14.6648 9.42949 15 9 15C8.57051 15 8.31628 14.6648 8.19922 14.4307C8.06722 14.1666 8 13.8369 8 13.5C8 13.1631 8.06722 12.8334 8.19922 12.5693C8.31628 12.3352 8.57051 12 9 12Z"/><path d="M15 12C15.4295 12 15.6837 12.3352 15.8008 12.5693C15.9328 12.8334 16 13.1631 16 13.5C16 13.8369 15.9328 14.1666 15.8008 14.4307C15.6837 14.6648 15.4295 15 15 15C14.5705 15 14.3163 14.6648 14.1992 14.4307C14.0672 14.1666 14 13.8369 14 13.5C14 13.1631 14.0672 12.8334 14.1992 12.5693C14.3163 12.3352 14.5705 12 15 12Z"/><path d="M12 2C12.8284 2 13.5 2.67157 13.5 3.5C13.5 4.05495 13.198 4.5384 12.75 4.79785V9H11.25V4.79785C10.802 4.5384 10.5 4.05495 10.5 3.5C10.5 2.67157 11.1716 2 12 2Z"/></g></svg></span>
+                <span class="step-title link">Sub-agent: search recent papers</span>
+                <span class="step-note" id="demo-subagent-note">Running…</span>
+                <span class="step-act"><button class="btn" type="button">Copy</button><button class="btn" type="button">Switch ↗</button></span></div>
+            </div>
+          </div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="diagnostic-note"><b>State boundary:</b>Whether the parent workflow is still <code>running</code> affects only summary activity indicator and step status, not outer expansion. Collapsing does not delete records; expansion shows the original record as a timeline row.</div>
+
+<table class="path-table">
+  <thead><tr><th>Call path</th><th>Live data</th><th>Page node</th><th>Shared visibility control</th></tr></thead>
+  <tbody>
+    <tr><td>In chat, <code>agent()</code></td><td><code>sub_agent</code> events update by stable <code>card_id</code> : <code>attachCards</code></td><td><code>SubAgentStep</code></td><td rowspan="2"><code>ExecutionStrip</code><br><code>const [open, setOpen] = useState(false)</code></td></tr>
+    <tr><td><code>report_workflow</code> internal role call</td><td><code>tree_update</code> : <code>contextTree</code></td><td><code>TreeStep</code> child node</td></tr>
+  </tbody>
+</table>
+<div class="rule"><b>Implementation contract:</b>Completion events update the same sub-agent record only;<code>ExecutionStrip</code> uses <code>false</code> as the common default for streaming and historical messages, with manual choices taking precedence. Related entries:<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/execution-strip.tsx" style="color:var(--accent-cyan)">execution-strip.tsx</a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/net/ws/chat-stream.ts" style="color:var(--accent-cyan)">chat-stream.ts</a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/runtime/runtime-block.tsx" style="color:var(--accent-cyan)">runtime-block.tsx</a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/tests/chat/messages/spawn-cards.test.mjs" style="color:var(--accent-cyan)">spawn-cards.test.mjs</a>.</div>
+
+<!-- ═══════ 5. Parent/child navigation ═══════ -->
+<h2><span class="num">5</span>Sub-agent parent/child navigation: one entry, two return destinations</h2>
+<div class="desc">The two existing return interactions are shown here. The parent enters a child branch through the timeline’s <b>Switch ↗</b> . The child’s top <b>Return to main conversation</b> returns to the parent’s latest position; before the first message, <b>Created from / Return to call site</b> returns to the message that started the sub-agent. Click the three sample buttons to inspect destinations.</div>
+
+<div class="branch-nav-demo">
+  <div class="branch-map" aria-label="Parent/child branch-navigation destinations">
+    <div class="branch-map-node" id="branch-map-caller">
+      <div class="branch-map-kicker">A · callerId</div>
+      <div class="branch-map-title">Parent branch · original call site</div>
+    </div>
+    <div class="branch-map-edge to-child">
+      <svg viewBox="0 0 88 18" role="img"><title>Bidirectional paths between parent and child branches</title><desc>Switch enters the child branch to the right; return to call site goes left.</desc><path d="M2 5h80m0 0-6-3m6 3-6 3M86 13H6m0 0 6-3m-6 3 6 3"/></svg>
+      <span>Switch →<br><span style="color:var(--accent-orange)">← Call site</span></span>
+    </div>
+    <div class="branch-map-node" id="branch-map-child">
+      <div class="branch-map-kicker">B · attach.head_id</div>
+      <div class="branch-map-title">Sub-agent child branch</div>
+    </div>
+    <div class="branch-map-edge to-latest">
+      <svg viewBox="0 0 88 18" role="img"><title>Child returns to the parent’s latest position</title><desc>The top return-to-main button navigates to the parent’s latest message.</desc><path d="M2 9h80m0 0-6-3m6 3-6 3"/></svg>
+      <span>Return to main conversation →</span>
+    </div>
+    <div class="branch-map-node" id="branch-map-latest">
+      <div class="branch-map-kicker">C · backTarget</div>
+      <div class="branch-map-title">Parent branch · latest position</div>
+    </div>
+  </div>
+
+  <div class="branch-demo-shell">
+    <div class="branch-demo-bar">
+      <span class="branch-demo-dot" aria-hidden="true"></span>
+      <span>Interaction preview</span>
+      <button class="branch-action" type="button" id="branch-demo-reset">Reset to parent conversation</button>
+      <span class="branch-demo-state" id="branch-demo-state" aria-live="polite">Parent branch · latest position</span>
+    </div>
+
+    <section class="branch-view active" id="branch-view-parent" tabindex="-1" aria-label="Parent conversation preview">
+      <div class="branch-landing latest" id="branch-landing-latest">Returned to the parent’s latest position, with the originating sub-agent execution row expanded and highlighted.</div>
+      <div class="branch-landing caller" id="branch-landing-caller">Returned to the original call site; later parent-branch messages are not in the current transcript.</div>
+      <div class="u-msg"><div class="u-bubble">Find relevant papers from 2025–2026 and organize the research developments.</div></div>
+      <div class="reply">I’ll ask a sub-agent to independently search and verify papers.</div>
+      <div class="tl open branch-parent-strip">
+        <div class="tl-toggle"><span>Thinking ×1 · Sub-agent ×1</span><span class="chev">›</span></div>
+        <div class="tl-collapse"><div class="tl-collapse-inner"><div class="tl-body">
+          <div class="step" id="branch-parent-call">
+            <div class="step-head">
+              <span class="step-icon k-subagent"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M2.73223 12.9391C3.06096 12.7418 3.47962 12.6331 4.05448 12.5732C4.14064 11.3357 4.36306 10.5351 4.93726 9.9519C5.87452 9 7.38301 9 10.4 9H13.6C16.617 9 18.1255 9 19.0627 9.9519C19.6369 10.5351 19.8596 11.3357 19.9458 12.5732C20.5207 12.6331 20.9393 12.7418 21.268 12.9391C22.0003 13.3784 22.0003 14.0855 22.0003 15.4997C22.0003 16.9139 22.0003 17.621 21.268 18.0604C20.9393 18.2576 20.5207 18.3663 19.9458 18.4262C19.8596 19.6637 19.6369 20.4649 19.0627 21.0481C18.1255 22 16.617 22 13.6 22H13.6H10.4C7.38301 22 5.87452 22 4.93726 21.0481C4.36306 20.4649 4.14064 19.6637 4.05448 18.4262C3.47962 18.3663 3.06096 18.2576 2.73223 18.0604C2 17.621 2 16.9139 2 15.4997C2 14.0855 2 13.3784 2.73223 12.9391Z" opacity=".5"/><path d="M14.5537 17.3975C14.8865 17.151 15.3559 17.221 15.6025 17.5537C15.849 17.8865 15.779 18.3559 15.4463 18.6025C14.4739 19.3232 13.2849 19.75 12 19.75C10.7151 19.75 9.52608 19.3232 8.55371 18.6025C8.22102 18.3559 8.15099 17.8865 8.39746 17.5537C8.64407 17.221 9.11354 17.151 9.44629 17.3975C10.1746 17.9373 11.0541 18.25 12 18.25C12.9459 18.25 13.8254 17.9373 14.5537 17.3975Z"/><path d="M9 12C9.42949 12 9.68372 12.3352 9.80078 12.5693C9.93278 12.8334 10 13.1631 10 13.5C10 13.8369 9.93278 14.1666 9.80078 14.4307C9.68372 14.6648 9.42949 15 9 15C8.57051 15 8.31628 14.6648 8.19922 14.4307C8.06722 14.1666 8 13.8369 8 13.5C8 13.1631 8.06722 12.8334 8.19922 12.5693C8.31628 12.3352 8.57051 12 9 12Z"/><path d="M15 12C15.4295 12 15.6837 12.3352 15.8008 12.5693C15.9328 12.8334 16 13.1631 16 13.5C16 13.8369 15.9328 14.1666 15.8008 14.4307C15.6837 14.6648 15.4295 15 15 15C14.5705 15 14.3163 14.6648 14.1992 14.4307C14.0672 14.1666 14 13.8369 14 13.5C14 13.1631 14.0672 12.8334 14.1992 12.5693C14.3163 12.3352 14.5705 12 15 12Z"/><path d="M12 2C12.8284 2 13.5 2.67157 13.5 3.5C13.5 4.05495 13.198 4.5384 12.75 4.79785V9H11.25V4.79785C10.802 4.5384 10.5 4.05495 10.5 3.5C10.5 2.67157 11.1716 2 12 2Z"/></g></svg></span>
+              <span class="step-title link">Sub-agent: search recent papers</span>
+              <span class="step-note">Completed</span>
+              <span class="step-act"><button class="btn" type="button">Copy</button><button class="btn" type="button" data-branch-destination="child">Switch ↗</button></span>
+            </div>
+          </div>
+        </div></div></div>
+      </div>
+      <div class="branch-continuation" id="branch-parent-continuation">
+        <div class="reply">Continued the parent conversation: deduplicated the returned papers and wrote the research overview to project files.</div>
+        <div class="run-footer" style="margin-top:14px"><span class="ts">15:42</span></div>
+      </div>
+    </section>
+
+    <section class="branch-view" id="branch-view-child" tabindex="-1" aria-label="Sub-agent child-branch preview" aria-hidden="true">
+      <div class="branch-context-banner">
+        <span class="branch-context-label">Viewing sub-agent branch · <b>Search recent papers</b></span>
+        <button class="branch-action" type="button" data-branch-destination="latest">Return to main conversation</button>
+      </div>
+      <div class="branch-origin">
+        <div class="branch-origin-icon" aria-hidden="true">↰</div>
+        <div class="branch-origin-copy">
+          <div class="branch-origin-title">Created from: recent-paper research</div>
+          <div class="branch-origin-sub">This branch was created by an agent() call in the parent conversation</div>
+        </div>
+        <button class="branch-action" type="button" data-branch-destination="caller">Return to call site ↗</button>
+      </div>
+      <div class="u-msg"><div class="u-bubble">Search relevant papers from 2025–2026, checking dates, methods, and research relationships.</div></div>
+      <div class="tl open" style="margin-top:16px">
+        <div class="tl-toggle"><span>Thinking ×2 · Functions ×4 · Completed</span><span class="chev">›</span></div>
+        <div class="tl-collapse"><div class="tl-collapse-inner"><div class="tl-body">
+          <div class="step"><div class="step-head"><span class="step-icon k-function"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M7.60379 4.60379C9.33965 2.86793 10.2076 2 11.2861 2C12.3646 2 13.2326 2.86793 14.9684 4.60379L19.3872 9.02256C21.123 10.7584 21.991 11.6263 21.991 12.7049C21.991 13.7834 21.123 14.6513 19.3872 16.3872C17.6513 18.123 16.7834 18.991 15.7049 18.991C14.6263 18.991 13.7584 18.123 12.0226 16.3872L7.60379 11.9684C5.86793 10.2326 5 9.36462 5 8.2861C5 7.20757 5.86793 6.33965 7.60379 4.60379Z"/><g opacity=".5"><path d="M8.34466 12.7093L2.82581 18.2281C2.48337 18.5706 2.31214 18.7418 2.2093 18.9199C1.93023 19.4033 1.93023 19.9988 2.2093 20.4822C2.31214 20.6603 2.48336 20.8315 2.82578 21.1739C3.16823 21.5164 3.33948 21.6876 3.5176 21.7905C4.00097 22.0696 4.5965 22.0696 5.07987 21.7905C5.25799 21.6876 5.42921 21.5164 5.77166 21.174L11.2905 15.6551L8.34466 12.7093Z"/><path d="M18.6551 8.29051L19.028 7.91766C19.3704 7.57521 19.5416 7.40399 19.6445 7.22587C19.9236 6.7425 19.9236 6.14696 19.6445 5.66359C19.5416 5.48547 19.3704 5.31425 19.028 4.97181C18.6855 4.62936 18.5143 4.45814 18.3362 4.3553C17.8528 4.07623 17.2573 4.07623 16.7739 4.3553C16.5958 4.45814 16.4246 4.62936 16.0821 4.97181L15.7093 5.34466L18.6551 8.29051Z"/></g></g></svg></span><span class="step-title link">web_search</span><span class="step-note">2025 2026 persona spillover LLM → 24 results</span><span class="step-act"><button class="btn">Copy</button></span></div></div>
+          <div class="step"><div class="step-head"><span class="step-icon k-llm"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M12 3C12.3853 3 12.6977 3.31236 12.6977 3.69767V6.48884C13.2084 6.48991 13.6717 6.49342 14.0932 6.50495L14.093 6.48837V3.69767C14.093 3.31236 14.4054 3 14.7907 3C15.176 3 15.4884 3.31236 15.4884 3.69767V6.48837C15.4884 6.52487 15.4856 6.56072 15.4802 6.5957C16.4162 6.71067 17.0648 6.94879 17.558 7.44198C18.0512 7.93517 18.2893 8.58381 18.4043 9.51984C18.4393 9.51443 18.4751 9.51163 18.5116 9.51163H21.3023C21.6876 9.51163 22 9.82399 22 10.2093C22 10.5946 21.6876 10.907 21.3023 10.907H18.5116L18.495 10.9068C18.5066 11.3283 18.5106 11.7916 18.5116 12.3023H21.3023C21.6876 12.3023 22 12.6147 22 13C22 13.3853 21.6876 13.6977 21.3023 13.6977L18.5112 13.6977C18.5101 14.2084 18.5066 14.6717 18.495 15.0932L18.5116 15.093H21.3023C21.6876 15.093 22 15.4054 22 15.7907C22 16.176 21.6876 16.4884 21.3023 16.4884H18.5116C18.4751 16.4884 18.4393 16.4856 18.4043 16.4802C18.2893 17.4162 18.0512 18.0648 17.558 18.558C17.0648 19.0512 16.4162 19.2893 15.4802 19.4043C15.4856 19.4393 15.4884 19.4751 15.4884 19.5116V22.3023C15.4884 22.6876 15.176 23 14.7907 23C14.4054 23 14.093 22.6876 14.093 22.3023V19.5116L14.0932 19.495C13.6717 19.5066 13.2084 19.5106 12.6977 19.5116V22.3023C12.6977 22.6876 12.3853 23 12 23C11.6147 23 11.3023 22.6876 11.3023 22.3023L11.3023 19.5112C10.7916 19.5101 10.3283 19.5066 9.90678 19.495L9.90698 19.5116V22.3023C9.90698 22.6876 9.59462 23 9.2093 23C8.82399 23 8.51163 22.6876 8.51163 22.3023V19.5116C8.51163 19.4751 8.51443 19.4393 8.51984 19.4043C7.58381 19.2893 6.93517 19.0512 6.44198 18.558C5.94879 18.0648 5.71067 17.4162 5.5957 16.4802C5.56071 16.4856 5.52487 16.4884 5.48837 16.4884H2.69767C2.31236 16.4884 2 16.176 2 15.7907C2 15.4054 2.31236 15.093 2.69767 15.093H5.48837L5.50495 15.0932C5.49342 14.6717 5.48944 14.2084 5.48837 13.6977H2.69767C2.31236 13.6977 2 13.3853 2 13C2 12.6147 2.31236 12.3023 2.69767 12.3023L5.48884 12.3023C5.48991 11.7916 5.49342 11.3283 5.50495 10.9068L5.48837 10.907H2.69767C2.31236 10.907 2 10.5946 2 10.2093C2 9.82399 2.31236 9.51163 2.69767 9.51163H5.48837C5.52487 9.51163 5.56071 9.51443 5.5957 9.51984C5.71067 8.58381 5.94879 7.93517 6.44198 7.44198C6.93517 6.94879 7.58381 6.71067 8.51984 6.5957C8.51443 6.56072 8.51163 6.52487 8.51163 6.48837V3.69767C8.51163 3.31236 8.82399 3 9.2093 3C9.59462 3 9.90698 3.31236 9.90698 3.69767V6.48837L9.90678 6.50495C10.3283 6.49342 10.7916 6.48944 11.3023 6.48837V3.69767C11.3023 3.31236 11.6147 3 12 3ZM11.0238 8.5814C10.4054 8.58136 9.87247 8.58133 9.44573 8.63871C8.98839 8.70019 8.55001 8.83885 8.19443 9.19443C7.83885 9.55001 7.70019 9.98839 7.63871 10.4457C7.58133 10.8725 7.58136 11.4054 7.5814 12.0238V13.9762C7.58136 14.5946 7.58133 15.1275 7.63871 15.5543C7.70019 16.0116 7.83885 16.45 8.19443 16.8056C8.55001 17.1612 8.98839 17.2998 9.44573 17.3613C9.87247 17.4187 10.4054 17.4186 11.0238 17.4186H12.9762C13.5946 17.4186 14.1275 17.4187 14.5543 17.3613C15.0116 17.2998 15.45 17.1612 15.8056 16.8056C16.1612 16.45 16.2998 16.0116 16.3613 15.5543C16.4187 15.1275 16.4186 14.5946 16.4186 13.9762V12.0238C16.4186 11.4054 16.4187 10.8725 16.3613 10.4457C16.2998 9.98839 16.1612 9.55001 15.8056 9.19443C15.45 8.83885 15.0116 8.70019 14.5543 8.63871C14.1275 8.58133 13.5947 8.58136 12.9762 8.5814H11.0238Z" clip-rule="evenodd"/><path d="M9.18091 10.1809C9.23402 10.1278 9.32886 10.0621 9.63147 10.0214C9.95415 9.97804 10.3921 9.97656 11.0696 9.97656H12.9301C13.6075 9.97656 14.0455 9.97804 14.3682 10.0214C14.6708 10.0621 14.7656 10.1278 14.8187 10.1809C14.8718 10.234 14.9375 10.3289 14.9782 10.6315C15.0216 10.9542 15.0231 11.3921 15.0231 12.0696V13.9301C15.0231 14.6075 15.0216 15.0455 14.9782 15.3682C14.9375 15.6708 14.8718 15.7656 14.8187 15.8187C14.7656 15.8718 14.6708 15.9375 14.3682 15.9782C14.0455 16.0216 13.6075 16.0231 12.9301 16.0231H11.0696C10.3921 16.0231 9.95415 16.0216 9.63147 15.9782C9.32886 15.9375 9.23402 15.8718 9.18091 15.8187C9.1278 15.7656 9.06211 15.6708 9.02143 15.3682C8.97804 15.0455 8.97656 14.6075 8.97656 13.9301V12.0696C8.97656 11.3921 8.97804 10.9542 9.02143 10.6315C9.06211 10.3289 9.1278 10.234 9.18091 10.1809Z" opacity=".5"/></g></svg></span><span class="step-title link">LLM</span><span class="step-note">Group by year, problem setting, and method relationships…</span><span class="step-act"><button class="btn">Copy</button></span></div></div>
+        </div></div></div>
+      </div>
+      <div class="reply" style="margin-top:14px">Search and verification are complete; organized results are written to the working directory.</div>
+    </section>
+  </div>
+
+  <div class="branch-explain">
+    <div class="branch-explain-item latest"><b>Top “Return to main conversation”</b>Return to the parent’s latest position; after reload, locate the originating turn, expand execution, and highlight the sub-agent row.</div>
+    <div class="branch-explain-item caller"><b>“Return to call site” before the first message</b>Return directly to <code>callerId</code>; later continuation in the parent branch is hidden.</div>
+  </div>
+</div>
+<div class="rule"><b>Shared boundary:</b>All three actions switch the active HEAD in one session and reload the transcript; they do not open a new tab. The backend prohibits HEAD movement during execution. Legacy cross-session AttachCard opens a target session only and is outside this same-session example.<code>report_workflow</code> contains only <code>TreeStep</code> without an attach pointer still open right-panel details only and show none of these branch-navigation actions.</div>
+
+<!-- ═══════ 6. Message navigation ═══════ -->
+<h2><span class="num">6</span>Left-edge message navigation: lines mark messages; hover opens a list</h2>
+<p>Message navigation previews treat user text and assistant summaries as untrusted Markdown. Raw HTML and HTML-like math remain literal text; links follow the document URL policy. Attachment extraction and secret masking run before rendering.</p>
+<div class="desc">Small horizontal marks along the chat column’s left edge each represent one user message; the currently visible one is brighter and longer. Hover the column to open a message list, then click to jump. Try hovering the marks on the left.</div>
+<div class="stage" style="min-height:300px">
+  <div class="u-msg"><div class="u-bubble">Hello</div></div>
+  <div class="reply">Hello! How can I help?</div>
+  <div class="u-msg"><div class="u-bubble">Can you start an agent to check today’s weather?</div></div>
+  <div class="reply">Beijing has light rain becoming heavy rain today, currently 25.8°C… Bring an umbrella.</div>
+  <div class="u-msg"><div class="u-bubble">What about tomorrow?</div></div>
+  <div class="reply">Tomorrow turns from cloudy to sunny, 26–31°C, no precipitation…</div>
+
+  <div class="mini">
+    <span class="dash chapter"></span>
+    <span class="dash active"></span>
+    <span class="dash"></span>
+    <div class="mini-panel">
+      <div class="mini-row">Hello</div>
+      <div class="mini-row active">Can you start an agent to check today’s weather?</div>
+      <div class="mini-row">What about tomorrow?</div>
+    </div>
+  </div>
+</div>
+<div class="rule">Marks count only user messages; replies occupy no mark. The column<b>stays at the left edge</b> beside the sidebar divider (left: calc((100% - 100cqw)/2 + 8px), with chat-area an inline-size container), not amid body text. The panel expands to the right of the marks with single-line truncated rows. Clicking smoothly scrolls to and briefly highlights a message. Marks disappear while the panel is visible. Highlight follows the current visible message during scrolling.</div>
+<div class="rule"><b>Chapters.</b> A reply's action row has <b>Pin as chapter</b> (<b>Unpin chapter</b> while pinned; the bookmark is then filled in purple on the pressed fill, and that reply's action row stays shown instead of appearing on hover only). It pins the turn: the pin is stored on the turn's user message node as <code>metadata.chapter = {"pinned_at": &lt;epoch seconds&gt;}</code>, with <code>None</code> or a missing key meaning unpinned, so it follows that node through every branch containing it and returns on <code>load_session</code> as the row's <code>chapter</code>. The WebSocket action <code>set_message_chapter {session_id, message_id, pinned}</code> accepts only a user message of that session and broadcasts <code>message_chapter_updated {session_id, message_id, chapter}</code> to every connection; the server patches its in-memory mirror and each connection's history snapshot so later pages carry the pin. On the rail a pinned turn's mark is the theme purple (<code>--accent-purple</code>), 4px thick instead of 2.5px, and rests at 18px (<code>CHAPTER_W</code>) instead of 9px; hover growth never makes it shorter than that, and it keeps its full purple while the rest of the rail dims away from the chat area; the preview card and every other mark stay as they are (the first mark above). The rail selector carries the pin as one more scalar in its packed row (<code>packRailRow</code>), so it still shallow-compares flat strings.</div>
+
+<!-- ═══════ 7. File changes and Review ═══════ -->
+<h2><span class="num">7</span>File changes: exact attribution, scoped Review, safe Undo</h2>
+<div class="desc">This section defines only chat-card and Changes center-tab visuals. The sole authority for file attribution, Undo, historical Revert, multi-turn Restore, Branch, checkpoints, concurrency, and retention is <a href="../../runtime/operations/file-management.html">File changes, Review, and history recovery</a>. Chat cards report only exact changes from this turn. Review uses This turn, Current branch, and Workspace.</div>
+
+<div class="change-target-demo" aria-label="Target sketch: chat summary card and independent Review page">
+  <div class="change-chat-pane">
+    <div class="reply">Background-process logic and tests updated.</div>
+    <div class="change-card-demo">
+      <div class="change-summary"><span class="change-summary-mark" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="currentColor"><path d="M1 12C1 6.81455 1 4.22183 2.61091 2.61091C4.22183 1 6.81455 1 12 1C17.1854 1 19.7782 1 21.3891 2.61091C23 4.22183 23 6.81455 23 12C23 17.1854 23 19.7782 21.3891 21.3891C19.7782 23 17.1854 23 12 23C6.81455 23 4.22183 23 2.61091 21.3891C1 19.7782 1 17.1854 1 12Z" opacity=".5"/><path d="M13.9261 14.3018C14.1711 14.1107 14.3933 13.8885 14.8377 13.4441L20.378 7.90374C20.512 7.7698 20.4507 7.53909 20.2717 7.477C19.6178 7.25011 18.767 6.82414 17.9713 6.02835C17.1755 5.23257 16.7495 4.38186 16.5226 3.72788C16.4605 3.54892 16.2298 3.48761 16.0959 3.62156L10.5555 9.16192C10.1111 9.60634 9.88888 9.82854 9.69778 10.0736C9.47235 10.3626 9.27908 10.6753 9.12139 11.0062C8.98771 11.2867 8.88834 11.5848 8.68959 12.181L8.43278 12.9515L8.02443 14.1765L7.64153 15.3252C7.54373 15.6186 7.6201 15.9421 7.8388 16.1608C8.0575 16.3795 8.38099 16.4559 8.67441 16.3581L9.82308 15.9752L11.0481 15.5668L11.8186 15.31L11.8186 15.31C12.4148 15.1113 12.7129 15.0119 12.9934 14.8782C13.3243 14.7205 13.637 14.5273 13.9261 14.3018Z"/><path d="M22.1127 6.16905C23.2952 4.98656 23.2952 3.06936 22.1127 1.88687C20.9302 0.704377 19.013 0.704377 17.8306 1.88687L17.6524 2.06499C17.4806 2.23687 17.4027 2.47695 17.4456 2.7162C17.4726 2.8667 17.5227 3.08674 17.6138 3.3493C17.796 3.87439 18.14 4.56368 18.788 5.21165C19.4359 5.85961 20.1252 6.20364 20.6503 6.38581C20.9129 6.4769 21.1329 6.52697 21.2834 6.55399C21.5227 6.59693 21.7627 6.51905 21.9346 6.34717L22.1127 6.16905Z"/></g></svg></span><span class="change-summary-title" data-short="3 files">3 files changed</span><span class="change-summary-stat"><b class="add">+27</b><b class="del">−6</b></span><span class="change-summary-actions"><span class="change-summary-notice" title="current file state does not match the recorded source" role="status">current file state does not match the recorded source</span><button class="change-summary-action primary" type="button">Review</button></span></div>
+      <div class="change-group">
+        <div class="change-row"><span class="change-row-icon" data-file-icon="json" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M14 22H10C6.22876 22 4.34315 22 3.17157 20.8284C2 19.6569 2 17.7712 2 14V10C2 6.22876 2 4.34315 3.17157 3.17157C4.34315 2 6.23869 2 10.0298 2C10.6358 2 11.1214 2 11.53 2.01666C11.5166 2.09659 11.5095 2.17813 11.5092 2.26057L11.5 5.09497C11.4999 6.19207 11.4998 7.16164 11.6049 7.94316C11.7188 8.79028 11.9803 9.63726 12.6716 10.3285C13.3628 11.0198 14.2098 11.2813 15.0569 11.3952C15.8385 11.5003 16.808 11.5002 17.9051 11.5001L18 11.5001H21.9574C22 12.0344 22 12.6901 22 13.5629V14C22 17.7712 22 19.6569 20.8284 20.8284C19.6569 22 17.7712 22 14 22Z" clip-rule="evenodd" opacity=".5"/><path d="M11.5 17.25C11.9142 17.25 12.25 17.5858 12.25 18C12.25 18.4142 11.9142 18.75 11.5 18.75H6C5.58579 18.75 5.25 18.4142 5.25 18C5.25 17.5858 5.58579 17.25 6 17.25H11.5Z"/><path d="M14 13.75C14.4142 13.75 14.75 14.0858 14.75 14.5C14.75 14.9142 14.4142 15.25 14 15.25H6C5.58579 15.25 5.25 14.9142 5.25 14.5C5.25 14.0858 5.58579 13.75 6 13.75H14Z"/><path d="M11.5 2.00586C12.0266 2.01725 12.4003 2.05009 12.7842 2.14453C12.9404 2.18298 13.1407 2.24407 13.292 2.29883C13.8622 2.50534 14.2785 2.7833 15.1104 3.33887C16.0788 3.98569 17.1892 4.777 18 5.5C18.911 6.31239 19.9546 7.49387 20.7471 8.44238C20.8745 8.59494 20.938 8.67168 21.0312 8.79883C21.5613 9.52144 21.9336 10.546 21.9902 11.4404C22.0002 11.5979 22 11.7325 22 12H21.9844C21.9781 11.8216 21.9694 11.6555 21.957 11.5H17.9053C16.8082 11.5001 15.8382 11.4996 15.0566 11.3945C14.2097 11.2806 13.363 11.0192 12.6719 10.3281C11.9806 9.63685 11.7184 8.7895 11.6045 7.94238C11.4995 7.16098 11.4999 6.19157 11.5 5.09473L11.5088 2.25977L11.5 2.00586Z"/></g></svg></span><span class="change-row-name"><span class="change-path-base">playbook.json</span></span><span class="change-row-counts"><span class="add">+1</span><span class="del">−1</span></span></div>
+        <div class="change-row"><span class="change-row-icon" data-file-icon="python" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M14 22H10C6.22876 22 4.34315 22 3.17157 20.8284C2 19.6569 2 17.7712 2 14V10C2 6.22876 2 4.34315 3.17157 3.17157C4.34315 2 6.23869 2 10.0298 2C10.6358 2 11.1214 2 11.53 2.01666C11.5166 2.09659 11.5095 2.17813 11.5092 2.26057L11.5 5.09497C11.4999 6.19207 11.4998 7.16164 11.6049 7.94316C11.7188 8.79028 11.9803 9.63726 12.6716 10.3285C13.3628 11.0198 14.2098 11.2813 15.0569 11.3952C15.8385 11.5003 16.808 11.5002 17.9051 11.5001L18 11.5001H21.9574C22 12.0344 22 12.6901 22 13.5629V14C22 17.7712 22 19.6569 20.8284 20.8284C19.6569 22 17.7712 22 14 22Z" clip-rule="evenodd" opacity=".5"/><path d="M11.5 17.25C11.9142 17.25 12.25 17.5858 12.25 18C12.25 18.4142 11.9142 18.75 11.5 18.75H6C5.58579 18.75 5.25 18.4142 5.25 18C5.25 17.5858 5.58579 17.25 6 17.25H11.5Z"/><path d="M14 13.75C14.4142 13.75 14.75 14.0858 14.75 14.5C14.75 14.9142 14.4142 15.25 14 15.25H6C5.58579 15.25 5.25 14.9142 5.25 14.5C5.25 14.0858 5.58579 13.75 6 13.75H14Z"/><path d="M11.5 2.00586C12.0266 2.01725 12.4003 2.05009 12.7842 2.14453C12.9404 2.18298 13.1407 2.24407 13.292 2.29883C13.8622 2.50534 14.2785 2.7833 15.1104 3.33887C16.0788 3.98569 17.1892 4.777 18 5.5C18.911 6.31239 19.9546 7.49387 20.7471 8.44238C20.8745 8.59494 20.938 8.67168 21.0312 8.79883C21.5613 9.52144 21.9336 10.546 21.9902 11.4404C22.0002 11.5979 22 11.7325 22 12H21.9844C21.9781 11.8216 21.9694 11.6555 21.957 11.5H17.9053C16.8082 11.5001 15.8382 11.4996 15.0566 11.3945C14.2097 11.2806 13.363 11.0192 12.6719 10.3281C11.9806 9.63685 11.7184 8.7895 11.6045 7.94238C11.4995 7.16098 11.4999 6.19157 11.5 5.09473L11.5088 2.25977L11.5 2.00586Z"/></g></svg></span><span class="change-row-name"><span class="change-path-dir">src/runtime/</span><span class="change-path-base">player.py</span></span><span class="change-row-counts"><span class="add">+16</span><span class="del">−4</span></span></div>
+        <div class="change-row"><span class="change-row-icon" data-file-icon="python" aria-hidden="true"><svg viewBox="0 0 24 24"><g fill="currentColor"><path fill-rule="evenodd" d="M14 22H10C6.22876 22 4.34315 22 3.17157 20.8284C2 19.6569 2 17.7712 2 14V10C2 6.22876 2 4.34315 3.17157 3.17157C4.34315 2 6.23869 2 10.0298 2C10.6358 2 11.1214 2 11.53 2.01666C11.5166 2.09659 11.5095 2.17813 11.5092 2.26057L11.5 5.09497C11.4999 6.19207 11.4998 7.16164 11.6049 7.94316C11.7188 8.79028 11.9803 9.63726 12.6716 10.3285C13.3628 11.0198 14.2098 11.2813 15.0569 11.3952C15.8385 11.5003 16.808 11.5002 17.9051 11.5001L18 11.5001H21.9574C22 12.0344 22 12.6901 22 13.5629V14C22 17.7712 22 19.6569 20.8284 20.8284C19.6569 22 17.7712 22 14 22Z" clip-rule="evenodd" opacity=".5"/><path d="M11.5 17.25C11.9142 17.25 12.25 17.5858 12.25 18C12.25 18.4142 11.9142 18.75 11.5 18.75H6C5.58579 18.75 5.25 18.4142 5.25 18C5.25 17.5858 5.58579 17.25 6 17.25H11.5Z"/><path d="M14 13.75C14.4142 13.75 14.75 14.0858 14.75 14.5C14.75 14.9142 14.4142 15.25 14 15.25H6C5.58579 15.25 5.25 14.9142 5.25 14.5C5.25 14.0858 5.58579 13.75 6 13.75H14Z"/><path d="M11.5 2.00586C12.0266 2.01725 12.4003 2.05009 12.7842 2.14453C12.9404 2.18298 13.1407 2.24407 13.292 2.29883C13.8622 2.50534 14.2785 2.7833 15.1104 3.33887C16.0788 3.98569 17.1892 4.777 18 5.5C18.911 6.31239 19.9546 7.49387 20.7471 8.44238C20.8745 8.59494 20.938 8.67168 21.0312 8.79883C21.5613 9.52144 21.9336 10.546 21.9902 11.4404C22.0002 11.5979 22 11.7325 22 12H21.9844C21.9781 11.8216 21.9694 11.6555 21.957 11.5H17.9053C16.8082 11.5001 15.8382 11.4996 15.0566 11.3945C14.2097 11.2806 13.363 11.0192 12.6719 10.3281C11.9806 9.63685 11.7184 8.7895 11.6045 7.94238C11.4995 7.16098 11.4999 6.19157 11.5 5.09473L11.5088 2.25977L11.5 2.00586Z"/></g></svg></span><span class="change-row-name"><span class="change-path-dir">tests/</span><span class="change-path-base">test_player.py</span></span><span class="change-row-counts"><span class="add">+10</span><span class="del">−1</span></span></div>
+      </div>
+      <button class="change-collapse" type="button">Collapse</button>
+    </div>
+  </div>
+  <div class="change-review-pane">
+    <div class="change-review-tab">Changes <span class="change-review-close">×</span></div>
+    <div class="change-review-toolbar"><span class="change-scope-tabs"><span class="change-scope-tab active">This turn</span><span class="change-scope-tab">Current branch</span><span class="change-scope-tab">Workspace</span></span><span class="review-total"><b class="add">+27</b> <b class="del">−6</b></span><span class="change-review-modes"><span class="active">Unified</span><span>Side-by-side</span><span>Open file</span></span></div>
+    <div class="change-review-body">
+      <div class="change-review-rail"><div class="change-review-rail-label">Code</div><div class="change-review-file selected">player.py</div><div class="change-review-file">playbook.json</div><div class="change-review-rail-label">Tests</div><div class="change-review-file">test_player.py</div></div>
+      <div class="change-review-main"><div class="change-review-main-title"><span>src/runtime/player.py</span><span class="change-row-counts"><span class="add">+16</span><span class="del">−4</span></span></div><div class="change-review-diff">38  def start_process(config):
+39 -    process = launch(config.command)
+39 +    process = launch(config.command, cwd=config.cwd)
+40 +    process.wait_until_ready(timeout=config.timeout)
+41      return process</div></div>
+    </div>
+  </div>
+</div>
+<div class="rule"><b>File rows and overflow:</b>Each row leads with the Files panel’s per-type icon (<code>FileTypeIcon</code>: the @pierre/trees built-in icon set rendered as inline SVG, 15px in a 16px box), tinted per file type with separate light and dark palettes, so .ts, .md, .json and .py rows are told apart at a glance; the header keeps the pen icon. The header count is the turn’s <code>file_count</code>, and the list never silently disagrees with it. Collapsed, the card shows three rows plus a “Show N more files” toggle for the other loaded rows (at most 20). Counted files the card does not list — more than 20, or a bounded summary whose full list has not loaded — end the list in one “and N more files — open Review” row that opens the Review tab exactly like the Review button. Persisted summaries keep up to 20 rows; a summary that counts more files than it lists makes the card request the full list through <code>review_scope</code>, which then reads the complete mutation journal instead of the bounded summary.</div>
+<div class="rule"><b>Display state:</b>Mount a chat card only when persisted turn file records exist or the turn contains a direct file-writing tool. Ordinary text replies and turns confirmed to have no records display neither card nor Review. Legacy file-writing turns without embedded summaries query on demand when entering the viewport. During queries, keep only an invisible probe; hide empty results. Query failure shows only a compact “Unable to load file changes / Retry” inline status, without unsupported Review controls. This state implementation passed independent specification review, quality review, real component tests, and the complete Web gate.</div>
+<div class="rule"><b>Visual boundary:</b>Retain the full outer border, rounded corners, file list, and footer. The entire card uses product <code>--font-sans</code>; titles, paths, statistics, status, and buttons do not switch to a separate monospace font, while numbers retain tabular alignment. Header is 40px high with 12px left padding. FeatherIcon-to-title and title-to-statistics gaps are both 12px. Use the user-specified 19px FeatherIcon on the left, with a horizontal divider between summary and files. Dark-theme header and footer use <code>--bg-tertiary</code>, and the file list uses <code>--bg-primary</code>. In light mode, the card, header, Review button, and footer all use <code>--bg-primary</code>, without shadows or dark top/bottom blocks; only outer borders and dividers establish boundaries. File rows are transparent by default in every theme, adding only <code>--bg-hover</code> on hover. Footer hover likewise adds only <code>--bg-hover</code>. FeatherIcon indicates direct file edits in this turn, not the site logo. Hover uses the component’s 1.6-second movement/rotation sequence, disabled for reduced motion. Header FeatherIcon, 14px title, statistics, 13px Undo/Redo, and Review button share one vertical centerline rather than baseline alignment. Direction icons use <code>1em</code> at the same height as button text. Always show both addition and deletion totals, including <code>+0</code> or <code>−0</code>. Statistics are 12px; the 2.5px two-color proportion bar below encodes actual additions/deletions only, without category chips or decorative numbers. The card is an inline-size container. At width ≤420px, shorten “3 files changed” to “3 files,” retain FeatherIcon/statistics/actions, and restore compact 6px / 5px gaps. Viewport media queries are compatibility-only. When history preflight fails, hide Undo/Revert/Redo/Reapply and show one 12px theme-accent status before Review. Truncate it to one line;<code>title</code> retains full text; narrow cards limit it to 92px. Do not append a separate status below the file list or footer. After successful Undo, show <b>Redo</b>; the inverse of historical Revert is <b>Reapply</b>. Both use the same safe reapply transaction with renewed preflight, without a separate linear redo stack. Review is a neutral outlined button. Undo/Revert use text with a backward icon, not accent color. Code / Tests / Docs / Large categories appear only in Review. File-list padding is 4px on all sides. Rows are 28px high with 6px horizontal padding, 13px product sans paths, and 12px product sans statistics in fixed-width columns. The whole row navigates; add no expansion arrow or hover action group. Only the Show more footer expands. Once expanded, the footer shows only 13px <b>Collapse</b>. Full Review always opens from the header button, without an added “Review all” footer.</div>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Official references and verifiable boundaries</h3>
+<table class="path-table"><thead><tr><th>System</th><th>This turn / checkpoint</th><th>Review</th><th>Undo / rewind</th></tr></thead><tbody>
+  <tr><td>Codex</td><td>Open-source <code>TurnDiffTracker</code> consumes only committed <code>apply_patch</code> exact deltas without rereading the workspace; inexact deltas clear this-turn diff.</td><td><code>/diff</code> independently uses Git: tracked files use <code>git diff</code>, untracked files use <code>git ls-files --others --exclude-standard</code>.</td><td>Open-source <code>thread/revert</code> explicitly restores conversation history only. Codex App file Undo client implementation is not confirmed in the current open-source repository; do not infer it.</td></tr>
+  <tr><td>Claude Code</td><td>Create a checkpoint per user prompt, tracking only direct file-editing tools such as Write, Edit, and NotebookEdit. Retain the latest 100 checkpoints.</td><td>Desktop/Web exposes session-level additions/deletions; opening shows file navigation on the left and a single-file diff on the right, supporting line comments and another Agent revision.</td><td>Code and conversation can be restored separately. Bash, general background sub-agents, external concurrent changes, and symlink/hardlink recovery are not guaranteed. Without tracked edits, no code-restore option appears.</td></tr>
+  <tr><td>Current OpenProgram implementation</td><td>Beyond direct-tool checkpoints, recursively scans up to 20,000 files around every Bash call and precopies candidate content up to 5 MiB.</td><td>Chat cards request full diffs; historical messages request file lists individually; shadow Git is mixed with current-disk fallback.</td><td>Large files without baselines are recorded as <code>pre_existing=false</code>; Undo may delete preexisting files, and partial failures may still persist reverted state.</td></tr>
+</tbody></table>
+<div class="source-links" aria-label="Official reference links"><a href="https://code.claude.com/docs/en/checkpointing">Claude Code checkpointing</a><a href="https://code.claude.com/docs/en/desktop">Claude Code Desktop diff view</a><a href="https://code.claude.com/docs/en/web-quickstart">Claude Code Web review</a><a href="https://github.com/openai/codex/blob/main/codex-rs/core/src/turn_diff_tracker.rs">Codex turn diff tracker</a><a href="https://github.com/openai/codex/blob/main/codex-rs/tui/src/get_git_diff.rs">Codex Git diff</a><a href="https://github.com/openai/codex/blob/main/codex-rs/app-server-protocol/src/protocol/v2/thread.rs">Codex thread revert protocol</a></div>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Adopted, adapted, and rejected</h3>
+<table class="path-table"><thead><tr><th>Decision</th><th>Design item</th><th>OpenProgram handling</th></tr></thead><tbody>
+  <tr><td><span class="decision adopt">Adopt</span></td><td>Codex’s exact incremental attribution</td><td>Turn statistics derive only from committed file-mutation events. Without exact before/after, omit from the turn card.</td></tr>
+  <tr><td><span class="decision adopt">Adopt</span></td><td>Claude/Codex’s independent review surface</td><td>Chat retains summaries only. Review has left file navigation and right single-file content, with line comments.</td></tr>
+  <tr><td><span class="decision modify">Adapt</span></td><td>Claude session diff and Codex turn/repository diff</td><td>Place in three scopes within one Review tab: This turn, Current branch, Workspace. Switching scope does not alter terminology.</td></tr>
+  <tr><td><span class="decision modify">Adapt</span></td><td>Claude checkpoint recovery</td><td>Retain quick turn-level Undo with complete conflict preflight first. Store recovery as a new immutable journal transaction.</td></tr>
+  <tr><td><span class="decision reject">Reject</span></td><td>Bash directory-scan attribution</td><td>Delete cwd traversal and candidate precopy around Bash. Ordinary Bash, background processes, and external changes neither count toward this turn nor qualify for its Undo.</td></tr>
+  <tr><td><span class="decision reject">Reject</span></td><td>Approximate turn diffs and silent partial recovery</td><td>Unproven provenance appears only in Workspace Review. Failed Undo preflight changes no files and lists conflict paths.</td></tr>
+  <tr><td><span class="decision modify">Adapt</span></td><td>Reference-product header action hierarchy</td><td>Adopt “text Undo + neutral outlined Review.” FeatherIcon on the left identifies direct edits; dimensions, spacing, colors, and Review pages retain OpenProgram’s visual system.</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Three Review scopes</h3>
+<table class="path-table"><thead><tr><th>Scope</th><th>Authoritative data source</th><th>Contains</th><th>Undo</th></tr></thead><tbody>
+  <tr><td><code>This turn</code></td><td>Exact mutation journal for the current turn</td><td>Primary change set; linked child change sets retain actual producers and group by origin without copying mutations.</td><td>Only when every record is recoverable and current digest equals the recorded after digest.</td></tr>
+  <tr><td><code>Current branch</code></td><td>Mutation projection of the current active lineage</td><td>All completed turns and explicit revert/restore/reapply; excludes sibling branches, ordinary Bash, and external writes.</td><td>Start from a specific turn/checkpoint; no unscoped one-click branch Undo.</td></tr>
+  <tr><td><code>Workspace</code></td><td>Git tracked diff + <code>ls-files --others --exclude-standard</code></td><td>Current uncommitted tracked/untracked files; respects <code>.gitignore</code>. Non-Git workspaces show unavailable, without directory-scan substitution.</td><td>None. Workspace changes may come from users, other sessions, or background processes.</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Target mutation journal</h3>
+<div class="change-flow" aria-label="Exact file-change data flow">
+  <div class="change-flow-card"><b>1 · Before mutation</b><p>Before writing, direct-edit tools record canonical path, file type,<code>before_digest</code> , and a recoverable baseline. If a baseline cannot be saved safely, mark <code>recoverability=unavailable</code>, never “original file absent.”</p></div>
+  <div class="change-flow-card"><b>2 · Commit mutation</b><p>After successful writes, record <code>after_digest</code>, operation, line counts, binary/large,<code>turn_id</code> and <code>actor_id</code>. Failures create no committed mutation.</p></div>
+  <div class="change-flow-card"><b>3 · Persist summary</b><p>Turn finalize merges only this turn’s mutations, generating net file lists and addition/deletion statistics persisted with the transcript. Complexity depends only on changed paths, without cwd scans.</p></div>
+  <div class="change-flow-card"><b>4 · Review on demand</b><p>Review reads summaries first, requesting one bounded diff only after file selection. Switching files cancels old requests. Chat DOM never mounts diffs.</p></div>
+</div>
+<div class="change-note danger"><b>Current logic that must be removed:</b><code>agent_loop._snapshot_cwd</code>, <code>_walk_scan</code> and <code>_checkpoint_changed_files</code> must no longer participate in file attribution. In particular, “over 5 MiB not staged → use nonexistent path → <code>pre_existing=false</code>” must disappear. Missing baselines mean unrecoverable, never newly created files.</div>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Undo safety contract</h3>
+<table class="path-table"><thead><tr><th>Phase / state</th><th>Rule</th><th>Visible result</th></tr></thead><tbody>
+  <tr><td>Eligibility</td><td>Every file requires exact operation and before/after digests. Only regular files are recoverable; symlinks, hardlinks, and missing baselines are unavailable.</td><td>If any file is unavailable, the card shows no executable Undo; Review explains why.</td></tr>
+  <tr><td>Preflight</td><td>Reread all current digests before recovery. Newly created files may be deleted only while equal to after digest; modifications, deletions, and renames likewise require no subsequent edits.</td><td>Any conflict prevents all disk writes for this Undo; state becomes <code>blocked-conflict</code>, listing conflict paths.</td></tr>
+  <tr><td>Apply</td><td>After complete preflight, write restored contents to same-directory temporary files and atomically replace. Multi-file operations retain rollback staging.</td><td>Unexpected I/O failures roll back applied items; partial success must not be labeled Reverted.</td></tr>
+  <tr><td>Record</td><td>Successful recovery appends a <code>revert_of=&lt;turn_id&gt;</code> transaction; original-turn state derives from the journal.</td><td>Chat and Review show Reverted; historical file lists remain reviewable without changing original conversation content.</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Performance and content limits</h3>
+<table class="path-table"><thead><tr><th>Path</th><th>Target limit</th><th>Fallback</th></tr></thead><tbody>
+  <tr><td>Turn finalize</td><td>Never traverse workspace; merge only changed paths in the mutation journal.</td><td>Exclude mutations missing exact information and record diagnostics; produce no approximate statistics.</td></tr>
+  <tr><td>Transcript</td><td>Return summaries with messages; initially display at most three files and stop sending <code>list_turn_files</code>.</td><td> for every historical message. Query legacy messages only on viewport entry or explicit Review.</td></tr>
+  <tr><td>File list</td><td>Server pages contain 100 files; frontend retains adjacent pages only and supports keyboard navigation.</td><td>Category statistics come from summaries without loading every row.</td></tr>
+  <tr><td>Selected diff</td><td>Mount only one diff at a time, with at most 200 lines or 256 KiB per batch, continuing by hunk/page.</td><td>Binary or oversized single hunks show statistics, reasons, and Open file; never present incomplete content as a full diff.</td></tr>
+  <tr><td>Render budget</td><td>Diff computation has an explicit time budget. Exceeding it returns metadata; Review never blocks chat or Agent completion.</td><td>Allow retry later or opening the original file; never fall back to cross-turn approximate “before versus current disk” diffs.</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Review tab and interaction contract</h3>
+<table class="path-table"><thead><tr><th>Action or state</th><th>Result</th><th>Boundary</th></tr></thead><tbody>
+  <tr><td>Review / file row</td><td>Open the same deterministic <code>r:&lt;sessionId&gt;:&lt;assistantMsgId&gt;</code> center tab; file rows also select their path.</td><td>Do not load inline chat diffs; repeated clicks only focus or update selection.</td></tr>
+  <tr><td>Layout</td><td>Without split view, reuse the existing group and place Review to the chat’s right; with a full split, use a normal active tab.</td><td>Do not replace existing peers, add a third pane, or create a second tab store.</td></tr>
+  <tr><td>Scope switching</td><td>This turn, Current branch, and Workspace share one layout, updating title and source labels together.</td><td>Workspace has no Undo; ignored files are absent; non-Git is explicitly unavailable.</td></tr>
+  <tr><td>Pane layout</td><td>The header has two rows: title, source and totals; then the scope switch and a file-type menu (All types, Code, Tests, Docs, Large). Below 900px of pane width the file list folds into the selected file's header, which names the file in full, lists folder, actor, producing turn and line counts, and switches files through an <em>n / N</em> menu; from 900px the list is a 260px column with the file name over its folder. The diff omits the file headers, labels each hunk as a line range, wraps long lines, and shows only the line-number column an added or deleted file has. Diff paging sits below the diff. Markdown, image and PDF files also offer a rendered Preview of the current file.</td><td>Preview reads the file as it is now, not the version this scope recorded; deleted files have no Preview. Surfaces stay the page colour, separated by hairlines.</td></tr>
+  <tr><td>Line comments</td><td>Click diff lines to comment; send multiple comments with structured file locations in the next prompt.</td><td>Comments do not directly edit files or claim code review has been performed.</td></tr>
+  <tr><td>Large / binary</td><td>Show exact statistics, diff-unavailable reasons, and Open file.</td><td>Do not render entire large files or automatically classify logs as Agent edits.</td></tr>
+  <tr><td>Undo conflict</td><td>Card shows Review conflict; Review locates conflicting files.</td><td>No Force undo shortcut that could overwrite later user or other-session edits.</td></tr>
+</tbody></table>
+
+<h3 style="font-size:14px;color:var(--text-bright);margin:24px 0 8px">Implementation boundaries and acceptance</h3>
+<table class="path-table"><thead><tr><th>Scope</th><th>Preferred location</th><th>Explicit exclusions</th></tr></thead><tbody>
+  <tr><td>Exact mutations and recovery</td><td><code>programs/tools/files/</code>, <code>store/snapshot/checkpoint/</code>, turn context/finalize, and <code>conversation/revert.py</code>.</td><td>Do not add Bash directory watchers, modify user Git, or infer this turn from current disk.</td></tr>
+  <tr><td>Review protocol</td><td><code>ws_actions/turn_files.py</code>, message metadata, and existing Git helpers; add paginated summary/diff requests.</td><td>No unbounded strings or approximate fallback.</td></tr>
+  <tr><td>Review center tab</td><td><code>center-tab-ids.ts</code>, <code>center-tabs-store.ts</code>, <code>center-tab-groups.ts</code> and a minimal Review pane.</td><td>No new window, modal, third pane, or reference-product branding.</td></tr>
+  <tr><td>Chat card</td><td><code>turn-files-chips.tsx</code>, user-provided <code>FeatherIcon</code> , and existing CSS.</td><td>FeatherIcon identifies direct file edits only; no site logo, inline diff, file-row arrows, hover action groups, or reference-product branding.</td></tr>
+</tbody></table>
+<div class="rule"><b>Visual acceptance:</b>Chat cards initially show at most three filenames and load no diff; expand to at most 20 paths, with the remainder reached through the final “and N more files — open Review” row. Changes mounts one bounded diff at a time. This turn / Current branch / Workspace source labels remain visible. Historical Restore uses a separate impact sheet rather than crowding Undo/Revert/Restore/Branch into card headers. Full data/recovery acceptance is in the<a href="../../runtime/operations/file-management.html#acceptance">authoritative runtime design</a>.<br><b>Implementation status:</b>Production chat cards retain outer borders and header dividers, with 40px headers and 19px Feather file-edit icons. Undo/Redo/Revert/Reapply shows only the currently executable action; Review uses a neutral outlined button. Center Review implements This turn / Current branch / Workspace, bounded file/diff pagination, and actor/producer/linked impact. A branch checkout mismatch banner requires Keep current files or Restore branch code before file modification. Runtime and visual implementations passed Task A–E independent reviews. Fonts, three background levels, 8ch fixed statistics columns, Collapse-only footer, compact spacing, and light primary-background revisions passed independent review. Moving history-preflight hints into the header also passed this iteration’s independent specification and quality reviews.</div>
+
+<!-- ═══════ 8. Message surfaces ═══════ -->
+<h2><span class="num">8</span>Message surfaces: no avatars, a raised user bubble, the edit box and the action row</h2>
+<div class="desc">The transcript has no avatars and no speaker-name line: a bubble on the right and flat text on the left already tell the speakers apart, and the text column lines up with the composer’s left and right edges. Two marks remain and neither is a speaker avatar: a reply from a named agent other than main keeps a compact 18px identity line above its text in multi-agent sessions, and a manual function run keeps its ƒ type marker (section 3). The user bubble, the input box and the file-change card share one raised surface: a <code>--bg-input</code> fill (white in light themes, per theme in dark ones) with <code>--composer-shadow</code>. The assistant reply sits flat on the page without a bubble. Hover the messages below to see their action rows; rest on a button to see its tip.</div>
+<div class="stage">
+  <div class="msg-demo">
+    <div class="u-msg"><div class="u-bubble">Switch the README install steps to uv, and check the Python version requirement while you’re there.</div></div>
+    <div class="msg-footer user"><span class="ts">16:31</span><button class="icon-btn" aria-label="Copy" data-tip="Copy"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button><button class="icon-btn" aria-label="Edit message" data-tip="Edit message"><svg viewBox="0 0 24 24"><path d="M12 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.4 2.6a2.1 2.1 0 0 1 3 3L12 15l-4 1 1-4z"/></svg></button><button class="icon-btn" aria-label="Rewind to here" data-tip="Rewind to here"><svg viewBox="0 0 24 24"><path d="M9 14 4 9l5-5"/><path d="M4 9h10.5a5.5 5.5 0 0 1 0 11H11"/></svg></button><span class="msg-nav"><button class="icon-btn" aria-label="Previous version" data-tip="Previous version"><svg viewBox="0 0 24 24"><polyline points="15 18 9 12 15 6"/></svg></button><span class="nav-label">2 / 3</span><button class="icon-btn is-disabled" aria-label="Next version" data-tip="Next version"><svg viewBox="0 0 24 24"><polyline points="9 18 15 12 9 6"/></svg></button></span></div>
+  </div>
+  <div class="msg-demo">
+    <div class="reply">Switched to <b>uv sync</b> and set the minimum to Python 3.11, matching <code>pyproject.toml</code>.</div>
+    <div class="msg-footer assistant"><span class="ts">16:33</span><button class="icon-btn" aria-label="Copy" data-tip="Copy"><svg viewBox="0 0 24 24"><rect x="9" y="9" width="11" height="11" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg></button><button class="icon-btn" aria-label="Regenerate" data-tip="Regenerate"><svg viewBox="0 0 24 24"><polyline points="1 4 1 10 7 10"/><path d="M3.5 15a9 9 0 1 0 2-9.4L1 10"/></svg></button></div>
+  </div>
+  <div class="edit-box" tabindex="-1">
+    <textarea aria-label="Edit message">Switch the README install steps to uv, and check the Python version requirement.</textarea>
+    <div class="edit-row">
+      <button class="ghost-icon-sm icon-btn" aria-label="Add images or files" data-tip="Add images or files"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m21.44 11.05-9.19 9.19a6 6 0 0 1-8.49-8.49l8.57-8.57A4 4 0 1 1 18 8.84l-8.59 8.57a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg></button>
+      <span class="spacer"></span>
+      <button class="pill-btn elevated" type="button">Cancel</button>
+      <button class="pill-btn primary" type="button">Save &amp; resend</button>
+    </div>
+  </div>
+</div>
+<div class="rule"><b>User bubble:</b> right-aligned and as wide as its content, up to 75% (88% in narrow layouts and split panes); 16px corners, 10px 16px padding, no border. The fill is <code>--user-msg-bg</code>, which equals <code>var(--bg-input)</code> in every theme; the shadow is a static <code>--composer-shadow</code>. A sent message is not a control, so hover does not deepen it. Code blocks and collapsed pastes inside the bubble use a <code>--bg-primary</code> inset to stand apart from the bubble surface. Queued rows above the composer are user messages not yet sent and use the same surface with 10px corners.<br>
+<b>Edit state:</b> Edit message turns the bubble into an input box that matches the main composer: a <code>--bg-input</code> fill, 23px corners, <code>--composer-shadow</code> at rest and a 180ms transition to <code>--composer-shadow-focus</code> on hover and while focus is inside; it spans the full column. Inside are the kept attachments (each removable), the new-attachment strip and the composer’s own input row (with @ file mentions). The bottom row holds the Solar paperclip in the official ghost round icon Button (icon-sm) with the tip “Add images or files” on the left, then Cancel (elevated sm) and Save &amp; resend (default primary sm) on the right. Esc cancels and ⌘/Ctrl+Enter saves; files can be dropped onto the box. The action row is hidden while editing.<br>
+<b>Action row:</b> sits under every message, right-aligned under a user bubble and left-aligned 16px below assistant text (measured between text boxes). Order: timestamp, Quote, Copy, Retry, Edit (user only), Branch (assistant only), Rewind to here (user only), then ‹ N / M › when sibling versions exist. Every button is the official ghost round icon Button at icon-xs (24px, the official size closest to 26px) holding a 16px animated line icon; it rests in muted ink and turns primary ink with a round muted fill on hover. The whole button drives the icon’s animation on hover and keyboard focus. Labels show through HoverTip + TipBody after a 1.5s dwell, never a native title, and the same text is the aria-label. The row is transparent until the message is hovered or holds focus, and always visible on touch devices; its height stays 24px whether or not it shows. A busy button is disabled at 40% opacity; Copy flashes a green check for 1.2s.</div>
+
+<script>
+document.getElementById('tl1').querySelector(':scope > .tl-toggle').addEventListener('click',()=>{
+  document.getElementById('tl1').classList.toggle('open');
+});
+document.getElementById('runtime-demo').querySelector(':scope > .tl-toggle').addEventListener('click',()=>{
+  document.getElementById('runtime-demo').classList.toggle('open');
+});
+document.querySelectorAll('.step-act .btn').forEach(btn=>{
+  btn.addEventListener('click',event=>event.stopPropagation());
+});
+document.querySelectorAll('[data-step-toggle]').forEach(step=>{
+  const head=step.querySelector(':scope>.step-head');
+  if(!head)return;
+  head.tabIndex=0;
+  head.setAttribute('role','button');
+  const sync=()=>head.setAttribute('aria-expanded',String(step.classList.contains('open')));
+  const toggle=()=>{step.classList.toggle('open');sync()};
+  head.addEventListener('click',event=>{
+    if(event.target.closest('button,.step-title.link'))return;
+    toggle();
+  });
+  head.addEventListener('keydown',event=>{
+    if(event.key!=='Enter'&&event.key!==' ')return;
+    event.preventDefault();toggle();
+  });
+  sync();
+});
+document.querySelectorAll('.mini-row').forEach(r=>r.addEventListener('click',()=>r.style.background='var(--bg-selected,#33332f)'));
+
+const branchParentView=document.getElementById('branch-view-parent');
+const branchChildView=document.getElementById('branch-view-child');
+const branchState=document.getElementById('branch-demo-state');
+const branchContinuation=document.getElementById('branch-parent-continuation');
+const branchParentCall=document.getElementById('branch-parent-call');
+const branchLatestNotice=document.getElementById('branch-landing-latest');
+const branchCallerNotice=document.getElementById('branch-landing-caller');
+const branchMapCaller=document.getElementById('branch-map-caller');
+const branchMapChild=document.getElementById('branch-map-child');
+const branchMapLatest=document.getElementById('branch-map-latest');
+let branchFlashTimer;
+function showBranchDestination(destination,reveal=true){
+  const child=destination==='child';
+  branchParentView.classList.toggle('active',!child);
+  branchParentView.setAttribute('aria-hidden',String(child));
+  branchChildView.classList.toggle('active',child);
+  branchChildView.setAttribute('aria-hidden',String(!child));
+  branchContinuation.hidden=destination==='caller';
+  branchParentCall.classList.remove('is-return-flash');
+  clearTimeout(branchFlashTimer);
+  if(!child&&reveal) requestAnimationFrame(()=>{
+    branchParentCall.classList.add('is-return-flash');
+    branchFlashTimer=setTimeout(()=>branchParentCall.classList.remove('is-return-flash'),1200);
+  });
+  branchLatestNotice.classList.toggle('visible',destination==='latest'&&reveal);
+  branchCallerNotice.classList.toggle('visible',destination==='caller'&&reveal);
+  branchMapCaller.classList.toggle('active',destination==='caller');
+  branchMapChild.classList.toggle('active',child);
+  branchMapLatest.classList.toggle('active',destination==='latest');
+  branchState.textContent=child
+    ? 'Sub-agent · child branch'
+    : destination==='caller'
+      ? 'Parent branch · original call site'
+      : 'Parent branch · latest position';
+  if(reveal) requestAnimationFrame(()=>{
+    (child?branchChildView:branchParentView).focus({preventScroll:true});
+  });
+}
+document.querySelectorAll('[data-branch-destination]').forEach(button=>{
+  button.addEventListener('click',()=>showBranchDestination(button.dataset.branchDestination));
+});
+document.getElementById('branch-demo-reset').addEventListener('click',()=>showBranchDestination('latest',false));
+showBranchDestination('latest',false);
+
+const subagentDemo=document.getElementById('subagent-demo');
+const subagentToggle=document.getElementById('subagent-demo-toggle');
+const subagentLabel=document.getElementById('subagent-demo-label');
+const subagentRow=document.getElementById('demo-subagent-row');
+const subagentNote=document.getElementById('demo-subagent-note');
+const subagentStatus=document.getElementById('subagent-status');
+let subagentTimers=[];
+function setSubagentOpen(open){
+  subagentDemo.classList.toggle('open',open);
+  subagentToggle.setAttribute('aria-expanded',String(open));
+}
+function resetSubagentDemo(){
+  subagentTimers.forEach(clearTimeout);subagentTimers=[];
+  setSubagentOpen(false);
+  subagentLabel.textContent='report_workflow · waiting to run';
+  subagentRow.className='step demo-subagent';
+  subagentNote.textContent='Running…';
+  subagentStatus.textContent='Waiting to replay';
+}
+function replaySubagentDemo(){
+  resetSubagentDemo();
+  subagentLabel.textContent='report_workflow · running';
+  subagentStatus.textContent='T0: parent running; execution area stays collapsed';
+  subagentTimers.push(setTimeout(()=>{
+    subagentRow.className='step demo-subagent is-mounted is-arriving is-running';
+    subagentStatus.textContent='T1: sub-agent row appears';
+  },900));
+  subagentTimers.push(setTimeout(()=>{
+    subagentRow.className='step demo-subagent is-mounted';
+    subagentNote.textContent='Completed';
+    subagentStatus.textContent='T2: same row updates to Completed';
+  },2800));
+  subagentTimers.push(setTimeout(()=>{
+    subagentLabel.textContent='report_workflow · Completed';
+    setSubagentOpen(false);
+    subagentStatus.textContent='T3: parent finished; execution area stays collapsed';
+  },4800));
+  subagentTimers.push(setTimeout(()=>{
+    setSubagentOpen(true);
+    subagentRow.className='step demo-subagent is-mounted';
+    subagentStatus.textContent='T4: user expands again; still the same timeline row';
+  },6500));
+}
+subagentToggle.addEventListener('click',()=>setSubagentOpen(!subagentDemo.classList.contains('open')));
+document.getElementById('replay-subagent').addEventListener('click',replaySubagentDemo);
+document.getElementById('reset-subagent').addEventListener('click',resetSubagentDemo);
+</script>
+<section><h2>Assistant rendering across lifecycle states</h2><p>Streaming, completed, and restored assistant messages use the same ExecutionStrip, ThinkingStep, and FunctionStep components. When ordered blocks are absent, existing thinking and tool records are adapted for presentation in their stored order; this fallback does not reconstruct missing interleaving or invent tool records. Tool results, error state, identifiers, and full-output references remain intact. Completion never switches to the legacy boxed ToolsBlock table.</p><p>Implementation acceptance: complete a turn with tool calls, expand its execution summary, then reload the conversation. The same shared rows and detail interaction remain available.</p></section>
+<section>
+<h2>Chat math delimiters</h2>
+<p class="desc">Chat markdown already stashes complete <code>$$</code>/<code>$</code>/<code>\[</code>/<code>\(</code> blocks before <code>marked</code> and restores them as escaped text after sanitize. The React bubble still has to run KaTeX: <code>MarkdownText</code> typesets after paint, and the chat-area pin path calls <code>typesetMath</code> on the observed message column. Unclosed streaming math is not a complete stash pair; the next paint with a closer typesets. Sanitize, code, links, and ordinary escapes stay as they were. No new math library.</p>
+<p class="rule">Acceptance: the sample <code>\(d_t\)</code> / <code>\(v_t = (d_t - d_{t+1}) / d_t\)</code> produces KaTeX HTML on the assistant bubble; display <code>\[</code>/<code>$$</code> and inline <code>$</code> do too; prose without math and incomplete openers do not typeset; invalid math does not throw.</p>
+</section>
+<p>Assistant replies omit the token and service-tier usage footer. The current execution segment uses the original text shimmer and running dot. Reply footers add no loading mark.</p>
+<section id="automatic-history"><h2>Bounded transcript history</h2>
+<p>The transcript uses bidirectional, byte-budgeted pages. A connection owns a small LRU of immutable disk-backed snapshots with message-ID indexes. A page request reads only its selected display groups, preserving tool descendants and compaction metadata. Snapshot tokens are scoped to the connection, session and captured branch head. Replaced snapshots and disconnected connections release temporary files.</p>
+<p>The browser targets four cached conversations, allowing displayed panes and requests in flight to temporarily exceed that limit, and releases page references when conversations are deleted. Each conversation retains at most six ordinary pages and an 8 MiB content budget per loaded transcript, with an indivisible page allowed when needed to preserve a single large turn. Eviction occurs opposite the reading position, never deleting persisted records; active updates are retained. Scrolling back automatically retrieves evicted pages in either direction. Measured rows outside the viewport unmount, preserving their height. Heights of evicted rows are removed.</p>
+<p>Prefetch distance follows scroll direction and speed with a bounded maximum. Only one page request runs at a time; failures retry with exponential backoff. Invisible panes stop requesting and stale responses cannot overwrite a newer generation. Page insertion and eviction restore the visible message and its offset before paint. Restoration uses a message ID rather than a pixel offset in an obsolete window. Jump to latest retrieves the latest window directly.</p>
+<p>Acceptance uses a 300,000-message synthetic source: repeated bidirectional paging keeps cached pages, rendered rows and measurements bounded; rapid scrolling under latency preserves a visible message; stale replies, reconnect, branch changes and live updates cannot corrupt the window. Backend page reads must not scan or parse the full snapshot after indexing. Cold snapshot construction remains a separate measured operation.</p>
+<p>Protocol v2 defers the full graph until its view is visible; ordinary branch metadata requests omit graph bodies. Cold snapshot construction reads and enriches the authoritative branch once. Subsequent indexed pages avoid full hydration.</p>
+<table><tr><th>Module</th><th>Responsibility</th></tr><tr><td>message-list.tsx</td><td>Message composition and measured row rendering</td></tr><tr><td>use-chat-area-stick / use-message-viewport / use-history-window</td><td>Following, viewport measurement, active history lifecycle</td></tr><tr><td>history-window / history-viewport</td><td>Bounded page storage and message anchor operations</td></tr><tr><td>session-history-loader</td><td>Network requests, generation checks and state coordination</td></tr><tr><td>session_history.py</td><td>Disk-backed snapshot index and bounded page reads</td></tr></table>
+<p>Interaction contract: the bottom of an intermediate history window is not the latest conversation position. Main and split panes share the same following, adaptive rendering and jump behavior. Jump remains available while newer history exists and after a failed request; repeated clicks share one pending intent. Wheel, pointer and keyboard interaction cancel a pending jump or saved-position restoration before it changes the visible window. Ordinary paging still compensates for inserted rows at the current reading position. Pane teardown saves the final reading anchor. Connectivity recovery resumes automatic loading without retaining an obsolete retry delay.</p>
+<p>Interaction acceptance: browser tests exercise an intermediate-window bottom, failed and repeated jumps, interrupted delayed restoration, independent split panes and unmount/remount. These interaction refinements are implemented and pass independent specification and quality review. Browser acceptance also checks that the saved anchor survives queued animation frames after unmount.</p>
+<p>Performance contract: bounded Chat loads skip graph construction when the captured messages have neither compaction coverage nor spawn/attach relationships requiring graph annotations. When those annotations are needed, the shared graph builder performs the same semantic filtering without viewport geometry; opening the DAG still requests its full layout. First-open persistence hydration remains linear in stored nodes. The Markdown cache uses a 256-entry LRU and an 8 MiB budget estimated from UTF-16 source and sanitized output lengths; an individual entry exceeding the budget is rendered but not retained. Cache policy never bypasses sanitization.</p>
+<p>Performance acceptance uses persisted synthetic messages through the public load handler and production browser components. Timing, frame intervals and retained heap are recorded separately; stable regression checks assert skipped work, semantic equivalence, cache eviction and bounded retention rather than machine-specific timing. Performance refinements are implemented and pass independent specification and quality review. Public-handler regression verifies skipped graph work and compaction equivalence; browser regression verifies byte-budget eviction, LRU promotion and oversized-entry bypass. Timing and retained-heap comparisons are synthetic measurements, not guarantees for full-App workloads.</p>
+<p>Implementation status: implemented. The 300,000-message synthetic-source browser test verifies bounded bidirectional paging, rapid reversals under delayed transport, saved-message restoration, live-row preservation and jumps during pending loads. Indexed backend reads, snapshot cleanup and the web regression suite pass. Cold construction still reads the authoritative branch once; synthetic measurements do not establish latency for large real-world attachments or tool output.</p></section>
+<section id="generation-motion"><h2>Conversation loading mark</h2><p>Only the existing empty-reply thinking… placeholder replaces its loading mark with the approved 18px open double ring. The rings counter-rotate while exchanging radius and stroke width. Colors follow theme tokens; reduced motion freezes the mark and forced colors use system text color.</p><p>Execution summaries, thinking steps, function steps, nested calls, pane titles, retry notices and reply footers do not use this mark. No additional indicator position is selected by tool, thinking or text phase. The function timeline retains its original layout, text shimmer, running dot, disclosure structure and detail interactions.</p><p>Acceptance: an empty-reply placeholder displays one new mark; tool calls, thinking content and reply text add no double rings to the timeline or footer. Approval and terminal states suppress the placeholder. Independent history reconciliation, nested progress and stable-message rendering fixes remain intact. Implementation and acceptance evidence is recorded in the generation-motion-layout task report.</p></section>
+<section id="transcript-consistency"><h2>Transcript update ownership</h2><p>Message IDs and ordered assistant blocks define the transcript. Execution trees supplement the owning reply; status trees never generate replacement chat rows. History snapshots reconcile with observed progress for the same message: running snapshots cannot remove received tool calls, shorten text, or reopen a settled reply. Terminal snapshots update lifecycle and metadata while retaining received trace when omitted. Branch and history-window replacement still removes rows absent from that window.</p><p>Each execution root keeps its persisted path. Repeated calls to the same function remain distinct, and a root is consumed once across all text-separated execution groups. A completed function remains in its existing execution summary. Direct function runs retain their standalone presentation. Acceptance exercises stream, partial history, completion, late tree updates, errors, cancellation, and reload through production reducers and rendered components.</p><p>Implementation status: verification pending.</p></section>
+<section id="queue-steer"><h2>Queue and current-turn input</h2><p>Ordinary sends reserve preparation per draft owner across composers. The deduplication signature contains draft text, attachment id/order/sourcePath and the thinking, toolsEnabled, toolsProfile, webSearchEnabled, fastEnabled and fastSupported values passed to useChatSubmit; it excludes attachment base64 and focused/bound presentation. Repeated submission with the same pending signature is ignored. Permission, model, project and channel settings read later by sendChatMessage retain their existing late-binding behavior; this reservation does not snapshot all delivery settings or introduce a new snapshot protocol. A changed draft remains editable and receives an explicit not-sent notice; another conversation prepares independently. File-mention resolution has one 15-second batch deadline covering response bodies; unresolved mentions retain their original text. Exact reservation ownership releases after transport handoff or failure, and completion clears only an unchanged captured draft. Queue, steering and acknowledgement ownership remain unchanged.</p><p>Queued messages dispatch in order after the current turn. Consumed steering input appears between the preceding and subsequent reply content. Its user node remains independent; the reply stores an ordered boundary reference shared by streaming, cancellation and history loading. Older records without a boundary place steering before the owning reply using persisted predecessor edges, without guessing a text offset.</p><p>Receipt polling confirms the same command without changing the visible waiting label. Pending or uncertain delivery cannot be resent, edited or removed. Definitive rejection retains the ordinary queued draft; transport failure retains uncertain delivery and never resends it as another turn. Attachments use ordinary queue delivery. Session queues and editing order remain independent.</p><p>Streaming steer: an accepted text instruction interrupts the active ordinary text/reasoning response, preserves its emitted content, then applies the durable command at the completed provider boundary before the next model request. The request is closed before continuation. Tool-call argument streams, running tools and structured-output responses retain their existing safe-point delivery; no tool is replayed or cancelled by steer. Polling is bounded and works while the provider is silent.</p><p>Stop during pending steer preserves the partial reply and its active history position. A command rejected because of cancellation remains an unsent draft with an explicit Send action; cancellation never automatically converts that draft into a new turn. Cancellation projection may advance only the exact top-level turn from its own user node to its existing assistant node, using compare-and-set, and never changes a newer or explicitly selected branch.</p><p>Implementation status: streaming interruption and stop retention pass independent specification and quality review, affected tests and the full verification manifest. Installed-App acceptance is recorded separately in release evidence.</p></section>
+<section id="chat-failures"><h2>Failed replies</h2><p>A failed reply retains its partial answer and ordered thinking/function trace. One terminal notice appears after that content, before message actions. A concise localized headline describes the failure; technical details expand on request and render as plain text. No automatic retry is added.</p><p>Partial reply blocks and failure detail have separate fields. The legacy node output retains the error text for model-context and non-Web consumers; the Web mapper restores the partial answer from ordered text blocks. The failed assistant node persists the detail, reason, retryability and retry delay before the final failure event. History restores the same notice. Legacy error output is recognized without rewriting history and does not repeat the answer inside the notice.</p><p>Scope: main chat failures, shared assistant bubble and history mapping. Existing cancellation, approval, nested function details, retry/branch semantics and Goal reports retain their behavior. The existing provider taxonomy design remains authoritative; this adds durable presentation without a competing error store or third-party UI dependency.</p><p>Acceptance: a public turn emits text and tools then fails; live rendering and cold history both show answer, trace and one final notice. Empty and legacy failed replies remain visible. Successful/cancelled replies gain no error notice. Details work in narrow and dark layouts.</p><p>Release regression coverage also retains browser permission inheritance and high-level agent delegation checks. Bound-page tests supply an explicit binding and expect the existing stop after three failed attempts on the same observation, including the concrete failure reason. They do not change the browser workflow or its permission policy.</p><p>Implementation status: implementation, independent specification and quality reviews, and the full declared verification manifest pass. The browser regression fixtures match the existing bound-page path and failure limit. Installed-App acceptance is recorded separately in release evidence.</p></section>
+<section id="secret-display-state"><h2>Sensitive text in message previews</h2><p>Known token formats and complete private-key blocks are masked in passive message presentation. Pasted-text previews mask the complete text before truncation. Revealing a secret is scoped to the current source message, conversation and rendered prose; expanding a paste or replacing message content never transfers reveal state to another value. Explicit edit/copy and model payloads preserve original text. This is display masking, not arbitrary password recognition or data removal.</p><p>Acceptance uses the real UserBubble with synthetic secrets: long private-key preview, paste expansion after reveal, content/session changes, explicit show/hide and unchanged source content.</p></section><section id="send-preparation-status"><h2>Implementation status appendix</h2><p data-status="review-passed">Sensitive text in message previews: Source implementation is present; independent specification and quality reviews and affected checks pass. The combined automated verification passes; installed-App acceptance remains pending.</p><p data-status="review-passed">Ordinary send preparation: Source implementation is present; independent specification and quality reviews and affected checks pass. The combined automated verification passes; installed-App acceptance remains pending.</p></section></body>
+</html>

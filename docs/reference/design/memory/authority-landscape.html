@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Authority and Attribution: Current Work, Reference Systems and Next Steps</title>
+<style>
+  :root{
+    --bg:#16150f; --pan:#1d1c14; --bd:#2e2c20; --tx:#bdb9a6; --acc:#d4843a;
+    --cb:#12110b; --dim:#8a8675;
+    --owner:#5aad4e; --paired:#4f8ef7; --unpaired:#9d6fe0; --no:#e0445a; --warn:#d4b23a;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--tx);
+    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:40px 24px 96px}
+  .wrap{max-width:1100px;margin:0 auto}
+  h1{font-size:23px;color:#f0eee6;margin:0 0 6px}
+  .sub{color:var(--dim);margin:0 0 26px;max-width:78ch}
+  h2{font-size:16px;color:var(--acc);margin:40px 0 4px}
+  h2 .num{color:var(--dim);font-size:12px;margin-right:8px;letter-spacing:.16em}
+  .lead{color:var(--dim);font-size:13px;margin:0 0 14px;max-width:82ch}
+  code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
+  .card{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:16px;margin-bottom:14px}
+
+  /* 三个人的场景卡 */
+  .people{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}
+  .person{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:14px;
+    border-top:3px solid var(--bd)}
+  .person.owner{border-top-color:var(--owner)}
+  .person.paired{border-top-color:var(--paired)}
+  .person.unpaired{border-top-color:var(--unpaired)}
+  .person h3{margin:0 0 2px;font-size:14px;color:#f0eee6}
+  .person .via{font-size:11.5px;color:var(--dim);margin-bottom:10px}
+  .bubble{background:var(--cb);border:1px solid var(--bd);border-radius:10px;
+    padding:7px 11px;font-size:12.5px;margin-bottom:8px;color:#d8d4c2}
+  .verdict{font-size:12.5px;line-height:1.75}
+  .verdict .y::before{content:"✓ ";color:var(--owner)}
+  .verdict .n::before{content:"✕ ";color:var(--no)}
+  .verdict .m::before{content:"◐ ";color:var(--warn)}
+  .tier-tag{display:inline-block;font-size:10px;letter-spacing:.14em;border:1px solid;
+    border-radius:99px;padding:1px 8px;margin-bottom:8px}
+  .owner .tier-tag{color:var(--owner);border-color:var(--owner)}
+  .paired .tier-tag{color:var(--paired);border-color:var(--paired)}
+  .unpaired .tier-tag{color:var(--unpaired);border-color:var(--unpaired)}
+
+  /* 执行顺序 */
+  .pipe{display:flex;align-items:stretch;gap:0;margin:6px 0 2px;flex-wrap:wrap}
+  .stage{flex:1;min-width:150px;background:var(--cb);border:1px solid var(--bd);
+    border-radius:10px;padding:10px 12px;position:relative}
+  .stage h4{margin:0 0 4px;font-size:13px;color:#f0eee6}
+  .stage p{margin:0;font-size:12px;color:var(--dim);line-height:1.6}
+  .arrow{align-self:center;color:var(--acc);font-size:18px;padding:0 6px;flex:0}
+  .stage .done{position:absolute;top:-9px;right:10px;font-size:10px;letter-spacing:.12em;
+    background:var(--bg);color:var(--owner);border:1px solid var(--owner);border-radius:99px;padding:0 8px}
+  .stage .gap{position:absolute;top:-9px;right:10px;font-size:10px;letter-spacing:.12em;
+    background:var(--bg);color:var(--no);border:1px solid var(--no);border-radius:99px;padding:0 8px}
+  .pipe-note{font-size:12px;color:var(--dim);margin-top:10px;line-height:1.8}
+  .pipe-note b{color:var(--no);font-weight:600}
+
+  /* 他们怎么做 */
+  .others{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+  .other{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:14px}
+  .other h3{margin:0 0 2px;font-size:14px;color:#f0eee6}
+  .other .one{font-size:12px;color:var(--acc);margin-bottom:8px}
+  .other p{margin:0;font-size:12.5px;line-height:1.75}
+  .other .take{margin-top:8px;font-size:12px;color:var(--dim)}
+  .other .take b{color:#f0eee6;font-weight:600}
+
+  .matrix{width:100%;border-collapse:collapse;margin:10px 0 16px;font-size:12px}
+  .matrix th,.matrix td{border:1px solid var(--bd);padding:9px 10px;text-align:left;vertical-align:top}
+  .matrix th{background:var(--cb);color:#f0eee6;font-weight:600}
+  .matrix td:first-child{white-space:nowrap;color:var(--acc);font-weight:600}
+
+  /* 计划 */
+  .plan{border-left:2px solid var(--bd);margin-left:8px;padding-left:22px}
+  .step{position:relative;margin-bottom:18px}
+  .step::before{content:"";position:absolute;left:-28px;top:6px;width:9px;height:9px;
+    border-radius:99px;background:var(--acc)}
+  .step.s2::before{background:var(--paired)}
+  .step.s3::before{background:var(--unpaired)}
+  .step h3{margin:0 0 4px;font-size:14px;color:#f0eee6}
+  .step h3 .phase{font-size:10px;letter-spacing:.14em;color:var(--dim);margin-right:8px}
+  .feel{background:var(--cb);border:1px solid var(--bd);border-radius:10px;
+    padding:9px 12px;font-size:12.5px;margin:6px 0 0;line-height:1.75}
+  .feel .lb{color:var(--dim);font-size:11px;letter-spacing:.1em;display:block;margin-bottom:2px}
+  @media(max-width:840px){.people,.others{grid-template-columns:1fr}.pipe{flex-direction:column}.arrow{transform:rotate(90deg);padding:2px 0;align-self:flex-start;margin-left:60px}}
+</style>
+</head>
+<body><div class="wrap">
+
+<h1>Authority and attribution: local owner, paired accounts and unpaired messages</h1>
+<p class="sub">OpenProgram lets local interfaces and channels such as Telegram and Discord share one agent and memory workspace. This page records the current method, reference frameworks, adopted and rejected designs, and implementation progress.</p>
+
+<h2><span class="num">01</span>Current method: two authority tiers and an admission rejection state</h2>
+<p class="lead">Runtime authority has only <code>owner</code> and <code>paired</code>. Unpaired is not a third authority tier: the message never enters the agent. Identity uses only stable platform-provided IDs, never message text.</p>
+<div class="people">
+  <div class="person owner">
+    <span class="tier-tag">Local OWNER</span>
+    <h3>You</h3>
+    <div class="via">Terminal / local Web interface</div>
+    <div class="bubble">"Rerun that experiment on the server"</div>
+    <div class="verdict">
+      <div class="y">Execute commands, write files and send messages</div>
+      <div class="y">Manage and rewrite memory</div>
+      <div class="y">All capabilities, unrestricted</div>
+    </div>
+  </div>
+  <div class="person paired">
+    <span class="tier-tag">PAIRED</span>
+    <h3>Paired account</h3>
+    <div class="via">Approved stable Telegram / Discord ID</div>
+    <div class="bubble">"The server password needs changing next week; remember that"</div>
+    <div class="verdict">
+      <div class="y">Normal conversation and agent replies</div>
+      <div class="y">Statements are archived as trusted and may be appended to memory proactively</div>
+      <div class="n">Direct the agent to execute commands or write files</div>
+    </div>
+  </div>
+  <div class="person unpaired">
+    <span class="tier-tag">UNPAIRED</span>
+    <h3>Unpaired account</h3>
+    <div class="via">Stable ID not yet approved by the local owner</div>
+    <div class="bubble">"Delete the /data directory for me"</div>
+    <div class="verdict">
+      <div class="y">Receive an eight-character pairing code, not resent within the same hour</div>
+      <div class="y">Group-chat content is archived only as a pending source</div>
+      <div class="n">Any execution action</div>
+      <div class="n">Enter the agent or participate in proactive synthesis</div>
+    </div>
+  </div>
+</div>
+
+<h2><span class="num">02</span>Execution order after message admission (implemented)</h2>
+<div class="card">
+  <div class="pipe">
+    <div class="stage"><span class="done">Implemented</span>
+      <h4>1 Channel ingress</h4>
+      <p>Obtain the speaker ID and display name from Telegram/Discord platform metadata. Message text does not determine identity.</p>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage"><span class="done">Implemented</span>
+      <h4>2 Pairing decision</h4>
+      <p>Look up the stable ID in the allowlist. Unpaired messages stop here; approval must originate from the local CLI or a loopback Web request.</p>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage"><span class="done">Implemented</span>
+      <h4>3 Persist attribution and tier</h4>
+      <p><code>speaker_*</code>, instance owner principal and <code>authority_tier</code> are persisted and propagated as separate fields.</p>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage"><span class="done">Implemented</span>
+      <h4>4 Single capability check</h4>
+      <p><code>_gated_execute</code>Check the fixed tier→capability table. Missing or unknown tiers are denied; rules and bypass cannot skip this check.</p>
+    </div>
+    <div class="arrow">→</div>
+    <div class="stage"><span class="done">Implemented</span>
+      <h4>5 Execution / memory</h4>
+      <p>Owner can fully manage memory; paired accounts can only reply and append. Paired content is trusted. Unpaired group sources remain pending and enter Topic synthesis only after explicit owner promotion.</p>
+    </div>
+  </div>
+  <div class="pipe-note">
+    The current implementation no longer carries caller-constructible capability lists. Workspace enforcement limits paired changes to <code>memory_update</code> to creation or byte append; only explicitly persisted owner turns may rewrite or delete existing content. Deferred work remains the hold queue for unauthorized requests and tier-filtered reads.
+  </div>
+</div>
+
+<h2><span class="num">03</span>Local reference implementations and missing capabilities</h2>
+<p class="lead">The following conclusions were checked against local source snapshots of <code>refs-a/</code> and <code>refs-b/</code>: Codex <code>f344a80a</code>, OpenCode <code>0bff28de</code>, OpenClaw <code>c71c29ec</code>, Hermes Agent <code>3bd844ed</code>, pi-mono <code>936aff00</code>, WeClaw <code>10711d0c</code>. External documentation research also covers Claude Code, the MCP specification, LangGraph, OpenAI Agents SDK, AutoGen and Letta. This section treats only authority and memory mechanisms verifiable in local code as implementation evidence.</p>
+<div class="others">
+  <div class="other">
+    <h3>OpenClaw</h3>
+    <div class="one"><code>refs-b/openclaw/src/pairing/pairing-store.ts</code></div>
+    <p>Pairing codes are eight characters, exclude <code>0O1I</code>, expire after one hour, and allow at most three pending requests per channel account.<code>docs/channels/pairing.md</code>Unknown DMs are explicitly not processed. DM admission, command owner and group authorization are separate states.</p>
+    <div class="take"><b>Adopted:</b>Pairing constants, stable-ID authorization and rejecting unknown messages before agent entry.<b>Modified:</b>OpenProgram additionally defines owner/paired tool-authority tiers; pairing does not imply owner authority.</div>
+  </div>
+  <div class="other">
+    <h3>Codex</h3>
+    <div class="one"><code>refs-a/codex/codex-rs/memories/README.md</code></div>
+    <p>Memory extraction claims bounded rollout tasks with leases and failure backoff. Global consolidation permits one writer to modify the shared workspace and records success or failure. Progress uses thread-level watermarks and does not resolve branch provenance within one SessionDAG.</p>
+    <div class="take"><b>Adopted:</b>Bounded batches, a single writer and failure classification.<b>Rejected:</b>No separate task database; OpenProgram already has node markers, Source references and workspace revisions.</div>
+  </div>
+  <div class="other">
+    <h3>Hermes Agent</h3>
+    <div class="one"><code>refs-b/hermes-agent/agent/memory_manager.py</code></div>
+    <p><code>sync_all</code>Calls all providers after a completed turn; <code>MemoryProvider.on_session_switch</code> provides session-switch notifications. Memory writing has no durable pending cursor; whether a provider handles switches depends on its implementation.</p>
+    <div class="take"><b>Adopted:</b>Unified provider entry and post-turn trigger.<b>Modified:</b>Model writing runs at token thresholds or through an idle watcher, not unconditionally every turn.</div>
+  </div>
+  <div class="other">
+    <h3>OpenCode, pi-mono, WeClaw</h3>
+    <div class="one"><code>refs-a/opencode</code> and <code>refs-b/{pi-mono,weclaw}</code></div>
+    <p>These three snapshots lack an equivalent long-term memory write flow. pi-mono SessionDAG uses append-only <code>label</code>/<code>leaf</code> records; OpenCode stores linear messages and manages the tail through revert; WeClaw retains only downstream session IDs or limited in-process history.</p>
+    <div class="take"><b>Adopted:</b>pi-mono demonstrates stable node IDs for node-linked records.<b>Missing:</b>None combines trusted Sources, Topic transactions, historical backfill and writer status.</div>
+  </div>
+</div>
+
+<table class="matrix" aria-label="Reference design decisions">
+  <tr><th>Decision</th><th>Source</th><th>OpenProgram design</th></tr>
+  <tr><td>Adopted</td><td>OpenClaw pairing; Codex bounded tasks and single writer; Hermes unified provider entry</td><td>Stable-ID admission, a fixed owner/paired capability table, unified writer entry, persistent status and bounded backfill.</td></tr>
+  <tr><td>Adopted with modifications</td><td>OpenClaw session backfill and memory status</td><td>Backfill selects only trusted Sources not referenced by Topics. Status performs local read-only statistics without loading models or repairing the workspace.</td></tr>
+  <tr><td>Rejected</td><td>Codex separate task database; Hermes per-turn synchronization; OpenClaw external archives in backfill preview</td><td>Reuse node markers, Source references, workspace revisions and file locks. Invoke models only at thresholds or idle time. External archives do not enter trusted synthesis.</td></tr>
+</table>
+
+<h2><span class="num">04</span>Decisions, implementation and deferrals (2026-08-10)</h2>
+<p class="lead">Ingress uses stable-ID pairing; runtime retains only owner and paired; tool execution checks only a fixed constant table. Unpaired group sources are archived as pending without proactive synthesis. Detailed decisions:<code>authority-handoff.md</code>.</p>
+<div class="plan">
+  <div class="step">
+    <h3><span class="phase">First batch · Implemented</span>Tier enum, pairing, source trust and default writer</h3>
+    <p class="lead">Requests carry only the owner/paired enum. Unknown accounts receive an eight-character pairing code; approval uses local owner channels only (terminal/local Web), never channel messages. No migration code: after rollout, all non-owner accounts pair on first contact. Mutable nicknames do not determine identity. Display names are sanitized. Rejections return structured reason codes.</p>
+    <div class="feel"><span class="lb">User-visible changes</span>Unknown private senders receive a pairing code instead of being ignored; the owner approves with one terminal command. Renaming an account to impersonate the owner does not work. A paired group member’s “remember this” request is proactively recorded. Unpaired group messages never become turns, so memory never records or cites them.</div>
+  </div>
+  <div class="step s2">
+    <h3><span class="phase">Stabilization batch · Implemented</span>Writer status, disabled boundaries and integration tests</h3>
+    <p class="lead">Writer status from tools, CLI and Web includes last success, last failure classification, retryability and pending counts.<code>memory.backend=none</code> rejects all CLI memory verbs and <code>/api/memory/*</code> routes before workspace creation.</p>
+    <div class="feel"><span class="lb">Verification boundary</span>Integration tests cover SessionDB, default model resolution, managed tools, staged transactions, Topics, markers and watcher status.</div>
+  </div>
+  <div class="step s2">
+    <h3><span class="phase">Second batch · Deferred</span>Hold queue and read scope</h3>
+    <p class="lead">Unauthorized requests from paired members, such as “restart the service,” enter a queue for one-time owner approval. Memory reads are filtered by requester tier; write-side attribution metadata is already implemented.</p>
+    <div class="feel"><span class="lb">User-visible changes</span>The agent submits paired members’ unauthorized requests to the owner and executes only that request after approval. Non-owner queries do not expose owner-private content; message records retain source identity.</div>
+  </div>
+</div>
+
+<div class="pipe-note"><b>Implementation record (2026-08-11)</b>: the background writer uses the default chat agent’s provider, model and credentials; <code>memory.writer.model</code> supports live overrides. Unknown exceptions default to non-retryable. Writer status, CLI/Web disabled boundaries, paired naming and integration tests are implemented. Write-failure reason codes form a closed enum. Footnotes cite chat messages directly.</div>
+
+</div></body>
+</html>

@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>输入框本地路径</title>
+  <style>
+    :root { color-scheme: dark; --bg:#171719; --panel:#202023; --line:#38383d; --text:#f1f0f3; --muted:#aaa8af; --blue:#7198ff; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:15px/1.55 Inter,ui-sans-serif,system-ui,sans-serif; }
+    main { width:min(980px,calc(100% - 40px)); margin:44px auto 72px; }
+    h1 { margin:0 0 8px; font-size:30px; }
+    h2 { margin:30px 0 10px; font-size:18px; }
+    p,li,td { color:var(--muted); }
+    code { color:#cbd8ff; font:13px/1.5 "JetBrains Mono",ui-monospace,monospace; }
+    table { width:100%; border-collapse:collapse; background:var(--panel); border:1px solid var(--line); }
+    th,td { padding:11px 13px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
+    th { color:var(--text); }
+    .flow { display:grid; grid-template-columns:1fr auto 1fr auto 1fr; gap:10px; align-items:center; padding:18px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+    .step { padding:12px; border:1px solid var(--line); border-radius:7px; }
+    .arrow { color:var(--blue); }
+    @media (max-width:760px) { .flow { grid-template-columns:1fr; } .arrow { transform:rotate(90deg); text-align:center; } }
+  </style>
+</head>
+<body>
+<main>
+  <h1>输入框本地路径</h1>
+  <p>用户在 Electron 桌面 App 中拖入或选择本地文件、图像或文件夹时，发出的消息必须标识原始绝对路径。现有附件卡片和字节上传行为保持不变。</p>
+
+  <h2>已确认缺口</h2>
+  <table>
+    <thead><tr><th>边界</th><th>当前行为</th><th>要求行为</th></tr></thead>
+    <tbody>
+      <tr><td>Electron preload</td><td>提供窗口和 Web 标签 API，但没有获准的文件路径访问器。</td><td>通过现有桥接暴露 <code>webUtils.getPathForFile</code>。</td></tr>
+      <tr><td>输入框待提交状态</td><td>仅保存来自以下字段的 basename：<code>File.name</code>.</td><td>为图像与文档保存可选且不可变的 <code>sourcePath</code>。</td></tr>
+      <tr><td>提交</td><td>文档仅在后端保存副本后获得路径；图像没有原始路径；无法读取的文件夹被描述为未发送。</td><td>存在以下字段时，发送带有 JSON 编码原始绝对路径的附件标记：<code>sourcePath</code>。</td></tr>
+    </tbody>
+  </table>
+
+  <h2>数据流</h2>
+  <div class="flow" aria-label="附件路径数据流">
+    <div class="step">用户拖入或选择<br><code>File</code></div><div class="arrow">→</div>
+    <div class="step">预加载<br><code>getPathForFile(file)</code></div><div class="arrow">→</div>
+    <div class="step">待提交状态与消息标记<br><code>[attachment: … @json "/abs/path"]</code></div>
+  </div>
+
+  <h2>行为合同</h2>
+  <ul>
+    <li>桌面桥接是渲染器唯一可访问的原生路径来源。渲染器不获得 Node 文件系统权限。</li>
+    <li>每个拖入或选择的 <code>File</code> 在异步读取开始前查询一次。图像和非图像均保留返回路径。</li>
+    <li>具有可读字节的文档保留当前上传与预览流程。可见及模型使用的标记指向原始路径；后端仍可持久化会话副本。</li>
+    <li>具有来源路径的文件夹或不可读本地项，即使无法上传字节，也是有效路径引用。不得标记为“过大，未发送”。</li>
+    <li>图像保留多模态载荷，并额外获得一个原始路径标记。</li>
+    <li>当前含路径标记将路径编码为 JSON 字符串，保留方括号、引号、反斜杠和尾随空格；读取器继续兼容历史未加引号标记。</li>
+    <li>每个上传附件携带自身可选的 <code>source_path</code> 来源信息。后端仅在存在该附件的精确来源路径时保留前端标记，避免混淆同名浏览器上传。</li>
+    <li>本地预览时，存储标记在 <code>@json</code> 中保留供 agent 使用的原始路径，并在 <code>@previewjson</code> 中添加供 UI 使用的不可变会话副本路径。没有预览路径的旧消息仍可读取。原始文件端点不将来源路径的父目录加入可读根目录。</li>
+    <li>后端在向提供商派发前，从图像附件元数据删除 <code>source_path</code>。该路径仍按设计保留在用户消息标记中。</li>
+    <li>剪贴板生成的 blob 和普通浏览器文件没有原生路径。它们保留现有上传、保存行为和生成的会话路径。</li>
+  </ul>
+
+  <h2>项目与附加目录控件</h2>
+  <p>环境标签行包含两种路径控件。项目标签选择草稿的主要工作目录；首次提交轮次后变为只读，因为 cwd、权限基线和会话仓库位置已经固定。文件夹加号控件管理附加工作目录，在活动会话中仍可编辑。</p>
+  <ul>
+    <li>草稿中选择现有项目只更新该草稿。打开新文件夹会创建或解析项目，并立即选中返回的项目；仅刷新而未选中不算完成选择操作。</li>
+    <li>没有会话时，附加目录菜单从草稿待提交的项目选择推导实际主项目。不得把主项目路径作为附加目录选项。</li>
+    <li>以已连接后端的回复为准。项目请求无法完成时，控件保留之前的状态，不显示虚假的选择成功。</li>
+  </ul>
+
+  <h2>范围与拒绝的修改</h2>
+  <p>涉及 Electron preload 桥接、桥接 TypeScript 合同、输入框附件状态、提交标记构建及现有后端标记改写。不涉及附件卡片样式、目录遍历、递归浏览器上传、任意文件系统扫描、新 IPC 处理器、上传大小修改、Programs UI 或依赖。</p>
+  <p>拒绝使用非标准旧字段 <code>File.path</code>；拒绝在渲染器启用 Node integration、对可读文件以仅路径消息替代上传、在普通浏览器中编造相对路径，或递归枚举拖入目录。</p>
+
+  <h2>验收与验证</h2>
+  <p>聚焦检查必须证明：preload 对同一个 <code>File</code> 对象返回精确原生路径；路径捕获处理桥接缺失、空结果和异常；文档、图像及不可读文件夹标记包含完整路径；带括号的文件名安全显示；包含 <code>]</code>、引号及尾随空格的路径可通过两个解析器往返；无路径浏览器附件保留当前标记；同名浏览器附件及混合来源附件保持区分；后端持久化不重复添加已有路径标记的附件；TypeScript、桌面检查、Web 检查、后端附件测试、构建、文档链接及 diff 空白检查通过。</p>
+
+  <h2>实现状态</h2>
+  <p>已实现并通过审查。聚焦 RED 确认 preload 路径边界缺失、输入框缺少来源信息及后端标记重复。最终实现为文件、图像和文件夹保留 Electron 路径；普通浏览器上传保持不变；区分同名附件来源；使用 JSON 编码路径标记往返合法分隔符和尾随空格，并继续读取历史标记。聚焦 Web 与 Python 检查、TypeScript、完整 Web 与 Desktop 检查、生产构建、文档构建与链接检查、Ruff 和 diff 空白检查通过。独立规格与质量审查通过。preload 边界在 VM 中使用同一个 <code>File</code> 对象验证；本次验证不包含真实窗口手动拖拽。</p>
+</main>
+</body>
+</html>

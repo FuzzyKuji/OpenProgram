@@ -1,0 +1,226 @@
+"use client";
+
+/**
+ * Per-session pending-attachment persistence in IndexedDB.
+ *
+ * Why IndexedDB and not localStorage: a pending image/doc carries its
+ * full base64 bytes (often several MB). localStorage has a ~5MB total
+ * cap and is synchronous — a couple of images would blow it. IndexedDB
+ * is the browser-native (no dependency) store for large binary-ish
+ * blobs, so unsent attachments survive a refresh too.
+ *
+ * One object store keyed by sessionId; the value is the serialized
+ * pending lists for that session. The blob/previewUrl of an image is
+ * NOT stored (object URLs die on reload) — only the base64 attachment
+ * payload is, and the preview is rebuilt from it on load.
+ */
+
+import { originalImageBytes, type PendingImage } from "./image/image-attach";
+import type { PendingDoc } from "./strip/file-tiles";
+
+const DB_NAME = "openprogram-composer";
+const STORE = "attachments";
+const DB_VERSION = 1;
+
+// Closing an unsent tab is synchronous, while FileReader and IndexedDB
+// callbacks may complete later. Keep a process-local tombstone so those
+// callbacks cannot recreate attachment state for a closed owner.
+const closedAttachmentOwners = new Set<string>();
+const attachmentOwnerClosedListeners = new Set<(sessionId: string) => void>();
+
+export function markAttachmentOwnerClosed(sessionId: string): void {
+  if (closedAttachmentOwners.has(sessionId)) return;
+  closedAttachmentOwners.add(sessionId);
+  for (const listener of attachmentOwnerClosedListeners) {
+    try { listener(sessionId); } catch { /* ignore */ }
+  }
+}
+
+export function attachmentOwnerIsClosed(sessionId: string): boolean {
+  return closedAttachmentOwners.has(sessionId);
+}
+
+export function onAttachmentOwnerClosed(
+  listener: (sessionId: string) => void,
+): () => void {
+  attachmentOwnerClosedListeners.add(listener);
+  return () => attachmentOwnerClosedListeners.delete(listener);
+}
+
+export interface StoredAttachments {
+  images: PendingImage[];
+  docs: PendingDoc[];
+}
+
+function openDb(): Promise<IDBDatabase | null> {
+  return new Promise((resolve) => {
+    if (typeof window === "undefined" || !window.indexedDB) {
+      resolve(null);
+      return;
+    }
+    try {
+      const req = window.indexedDB.open(DB_NAME, DB_VERSION);
+      req.onupgradeneeded = () => {
+        const db = req.result;
+        if (!db.objectStoreNames.contains(STORE)) {
+          db.createObjectStore(STORE);
+        }
+      };
+      req.onsuccess = () => resolve(req.result);
+      req.onerror = () => resolve(null);
+    } catch {
+      resolve(null);
+    }
+  });
+}
+
+function waitForTransaction(tx: IDBTransaction): Promise<void> {
+  return new Promise((resolve) => {
+    tx.oncomplete = () => resolve();
+    tx.onabort = () => resolve();
+    tx.onerror = () => resolve();
+  });
+}
+
+/** Strip the un-persistable / heavy-but-derivable bits before saving.
+ *  ``previewUrl`` is an object URL (dead after reload) — drop it; it's
+ *  rebuilt from the base64 ``attachment.data`` on load. ``loading``
+ *  placeholders are skipped entirely (their bytes aren't ready). */
+function serialize(a: StoredAttachments): StoredAttachments {
+  return {
+    images: a.images
+      .filter((i) => !i.loading && (i.attachment?.data || i.error))
+      .map((i) => ({ ...i, previewUrl: null })),
+    docs: a.docs.filter((d) => !d.loading && (d.sourcePath || typeof d.dataB64 === "string" || d.error)),
+  };
+}
+
+async function putRecord(key: string, data: StoredAttachments, skip: () => boolean): Promise<void> {
+  if (skip()) return;
+  const db = await openDb();
+  if (!db) return;
+  if (skip()) {
+    db.close();
+    return;
+  }
+  try {
+    const payload = serialize(data);
+    const tx = db.transaction(STORE, "readwrite");
+    const store = tx.objectStore(STORE);
+    if (!payload.images.length && !payload.docs.length) {
+      store.delete(key);
+    } else {
+      store.put(payload, key);
+    }
+    await waitForTransaction(tx);
+  } catch {
+    /* ignore */
+  } finally {
+    db.close();
+  }
+}
+
+/** Read one record; null when it is missing or the store is unavailable. */
+async function getRecord(key: string, skip: () => boolean): Promise<StoredAttachments | null> {
+  if (skip()) return null;
+  const db = await openDb();
+  if (!db) return null;
+  if (skip()) {
+    db.close();
+    return null;
+  }
+  return new Promise((resolve) => {
+    try {
+      const tx = db.transaction(STORE, "readonly");
+      const req = tx.objectStore(STORE).get(key);
+      req.onsuccess = () => {
+        const v = req.result as StoredAttachments | undefined;
+        db.close();
+        if (!v || skip()) {
+          resolve(null);
+          return;
+        }
+        // Rebuild preview object URLs from the persisted base64 so chips
+        // render after a refresh.
+        const images = (v.images || []).map((i) => {
+          let previewUrl: string | null = null;
+          try {
+            const original = originalImageBytes(i.attachment || {});
+            if (original) {
+              const byteStr = atob(original.data);
+              const bytes = new Uint8Array(byteStr.length);
+              for (let k = 0; k < byteStr.length; k++) bytes[k] = byteStr.charCodeAt(k);
+              const blob = new Blob([bytes], { type: original.media_type });
+              previewUrl = URL.createObjectURL(blob);
+            }
+          } catch {
+            previewUrl = null;
+          }
+          return { ...i, previewUrl, loading: false };
+        });
+        const docs = (v.docs || []).map((d) => ({ ...d, loading: false }));
+        resolve({ images, docs });
+      };
+      req.onerror = () => {
+        db.close();
+        resolve(null);
+      };
+    } catch {
+      db.close();
+      resolve(null);
+    }
+  });
+}
+
+async function deleteRecord(key: string): Promise<void> {
+  const db = await openDb();
+  if (!db) return;
+  try {
+    const tx = db.transaction(STORE, "readwrite");
+    tx.objectStore(STORE).delete(key);
+    await waitForTransaction(tx);
+  } catch {
+    /* ignore */
+  } finally {
+    db.close();
+  }
+}
+
+export async function saveAttachments(
+  sessionId: string,
+  data: StoredAttachments,
+): Promise<void> {
+  return putRecord(sessionId, data, () => attachmentOwnerIsClosed(sessionId));
+}
+
+export async function loadAttachments(
+  sessionId: string,
+): Promise<StoredAttachments> {
+  return await getRecord(sessionId, () => attachmentOwnerIsClosed(sessionId))
+    ?? { images: [], docs: [] };
+}
+
+export async function deleteAttachments(sessionId: string): Promise<void> {
+  markAttachmentOwnerClosed(sessionId);
+  return deleteRecord(sessionId);
+}
+
+/* ===== Queued-message attachments ================================= */
+
+// A queued row's files live beside the composer drafts, under their own key,
+// until the row is sent or removed. A row can leave the queue and come back
+// (a failed send restores it), so these keys carry no closed-owner tombstone.
+const queuedKey = (rowId: string) => `queue:${rowId}`;
+const never = () => false;
+
+export function saveQueuedAttachments(rowId: string, data: StoredAttachments): Promise<void> {
+  return putRecord(queuedKey(rowId), data, never);
+}
+
+export function loadQueuedAttachments(rowId: string): Promise<StoredAttachments | null> {
+  return getRecord(queuedKey(rowId), never);
+}
+
+export function deleteQueuedAttachments(rowId: string): Promise<void> {
+  return deleteRecord(queuedKey(rowId));
+}

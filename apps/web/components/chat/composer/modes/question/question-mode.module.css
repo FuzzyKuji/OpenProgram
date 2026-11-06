@@ -1,0 +1,165 @@
+/* Current-question flow using the existing theme and typography. */
+.header {
+  position: relative;
+  display: flex;
+  align-items: center;
+  padding: 12px 16px;
+  min-height: 48px;
+  gap: 10px;
+  box-sizing: border-box;
+  flex-shrink: 0;
+}
+
+/* Decision headings use the same sans-serif typography as their fields. */
+.badge {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 0 16px 16px;
+  overflow-y: auto;
+  min-height: 0;
+  box-sizing: border-box;
+  min-width: 0;
+}
+
+.questionList {
+  display: flex;
+  flex-direction: column;
+  gap: 18px;
+  min-width: 0;
+}
+
+.questionItem {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 0;
+  margin: 0;
+  padding: 0;
+  border: 0;
+}
+
+.groupPrompt {
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.summaryItem {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.summaryPrompt,
+.summaryAnswer {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.summaryPrompt { color: var(--text-secondary); }
+.summaryAnswer { color: var(--text-primary); }
+
+.submissionStatus {
+  padding: 12px 16px 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+
+.prompt {
+  font-weight: 400;
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.detail {
+  font-family: var(--font-sans);
+  font-size: var(--fs-base);
+  line-height: 1.5;
+  color: var(--text-muted);
+  white-space: pre-wrap;
+  max-height: 160px;
+  overflow: auto;
+  padding: 8px 10px;
+  border-radius: var(--radius-md);
+  background: var(--bg-primary);
+  border: 1px solid var(--border);
+}
+
+/* Choices remain readable on separate rows, including long labels. */
+.options {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+
+/* One submit action sends the complete set of answers. */
+.actions {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.actionButtons {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-left: auto;
+}
+
+/* Primary action follows the existing submit accent. */
+
+/* Give the discussion editor more space than the read-only operation context. */
+.discussionInput {
+  min-height: 96px;
+  width: 100%;
+  margin-inline: 0;
+  resize: vertical;
+}
+
+/* Actions follow the complete question list. */
+.footer {
+  flex: 0 0 auto;
+  padding: 0 16px 16px;
+  margin-top: auto;
+}
+
+.panel { display: flex; flex-direction: column; max-height: min(64dvh, 640px); min-width: 0; }
+.badge { min-width: 0; overflow-wrap: anywhere; flex: 1; line-height: 1.5; }
+.headerActions { display: flex; gap: 4px; flex-shrink: 0; }
+.optionContent { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
+.optionTitle { color: var(--text-primary); font-weight: 500; }
+.optionDescription, .choiceHint { color: var(--text-secondary); line-height: 1.5; }
+.customOption { display: flex; flex-direction: column; gap: 8px; }
+.customTitle { display: flex; justify-content: space-between; gap: 12px; font-size: var(--fs-base); }
+@media (max-width: 480px) {
+  .header { padding: 10px 12px; gap: 6px; }
+  .body { padding: 0 12px 12px; }
+  .footer { padding: 0 12px 12px; }
+}
+
+.badge { max-height: 4.5em; overflow-y: auto; }

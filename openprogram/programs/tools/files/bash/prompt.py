@@ -1,0 +1,71 @@
+"""Prompt text for the bash tool (description shown to the LLM).
+
+Each call starts a new shell. A command still running after its yield time
+keeps running as a session that write_stdin reaches; shell state such as cd
+and exported variables never carries over to the next call.
+"""
+
+from __future__ import annotations
+
+# Only for a call outside a conversation, which runs to completion.
+DEFAULT_MAX_TIMEOUT_MS = 10 * 60 * 1000   # 10 min
+
+DESCRIPTION = (
+    "Execute a host shell command and return its starting directory, output "
+    "(stdout and stderr together) and exit code. macOS/Linux use their shell; "
+    "Windows uses Git Bash when available and otherwise Windows PowerShell.\n"
+    "\n"
+    "The call waits up to yield_time_ms (default 30000, at most 30000). A "
+    "command that is still running then keeps running in the background and "
+    "the result says `Process running with session ID <id>`: call write_stdin "
+    "with that session_id and empty chars to wait for more output and the exit "
+    "code, or with \"\\u0003\" to interrupt it. Use this for servers, watchers "
+    "and long builds. When a background command ends and you have not seen "
+    "its exit, you are told in a later message. Set tty=true for programs "
+    "you will type into (REPLs, prompts); without it stdin is closed. At most "
+    "64 commands run at once per conversation; starting another stops the "
+    "least recently used one.\n"
+    "\n"
+    "Each call starts a new shell subprocess. Use workdir to choose the "
+    "starting directory for this call only. With workdir omitted, use the "
+    "currently bound agent worktree directory, or the active backend's default "
+    "working directory when no worktree is bound. Relative workdir paths are "
+    "resolved from that worktree (local process directory when unbound), not "
+    "from the previous command. Paths are literal: no ~ or variable expansion. "
+    "Directory changes (`cd`) and shell state (exported variables, aliases) "
+    "do not persist between calls. workdir does not change file-tool paths "
+    "or grant new filesystem permissions. Invalid or denied directories fail "
+    "without executing the command.\n"
+    "\n"
+    "- Prefer workdir over cd'ing around. Change directories in the same call "
+    "as the commands that need them if a shell-specific sequence requires cd.\n"
+    "- SSH/Docker workdir uses POSIX paths; a relative path requires a bound "
+    "POSIX worktree. Explicit remote workdir is refused under a host sandbox "
+    "policy until backend-native path authorization is available.\n"
+    "- Prefer dedicated file/search tools or Python for portable file and text "
+    "operations. Avoid assuming Unix coreutils exist on Windows.\n"
+    "- For Word/PPT and other binary documents, write the completed output to a "
+    "staged ordinary local file, then publish it with `write(file_path=..., "
+    "source_path=...)`. Read the existing target first; `content` and `source_path` "
+    "cannot be used together.\n"
+    "- Emit independent commands as parallel tool calls in one turn. When "
+    "chaining is necessary, use syntax supported by the active host shell.\n"
+    "- To wait on a background command, call write_stdin with empty chars "
+    "rather than running sleep.\n"
+    "- For a long command, pass description (\"Evaluate 100 samples\") so the "
+    "user can tell what is running. If it works through a known number of "
+    "items, have it print `##progress <done>/<total> <what>` lines (for "
+    "example `##progress 45/100 samples`) as it goes; the user sees them as a "
+    "progress bar. tqdm bars and `Epoch 3/10`-style counters are picked up "
+    "too.\n"
+    "- For git, prefer new commits over amending, and never skip hooks "
+    "(--no-verify) unless explicitly asked.\n"
+    "\n"
+    "When the sandbox is on, commands have no network and can write only the "
+    "workspace. A command that needs more — git push/pull/fetch/clone, gh, "
+    "package installs, curl, writes outside the workspace — should be called "
+    "with sandbox_permissions=\"require_escalated\" and a one-sentence "
+    "justification from the start: the user is asked before it runs and, once "
+    "approved, it runs outside the sandbox. Do the same when a result says the "
+    "sandbox blocked a command; never retry a blocked command unchanged.\n"
+)

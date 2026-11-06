@@ -1,0 +1,47 @@
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  height: 64px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+  background: var(--bg-primary);
+  position: sticky;
+  top: 0;
+  z-index: 10;
+}
+
+.title {
+  font-size: var(--fs-title);
+  font-weight: 600;
+  color: var(--text-bright);
+  flex-shrink: 0;
+}
+
+.body {
+  flex: 1;
+  display: grid;
+  grid-template-columns: calc(var(--sidebar-width) - 1px) 1fr;
+  padding: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+/* Inside a project page the recency rail is off; the list fills the body. */
+.bodyNoRail {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+/* Narrow widths: the range filters stack above the list instead of a
+   287px rail beside it. */
+@media (max-width: 760px) {
+  .body {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+  .content {
+    padding: 14px 16px 16px;
+  }
+}

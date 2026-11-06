@@ -1,0 +1,121 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent capability policies — OpenProgram</title>
+<style>
+.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
+</style>
+</head>
+<body>
+<main class="ad">
+<header>
+<div class="eyebrow">OpenProgram · Agents</div>
+<h1>Agent capability policies</h1>
+<p class="lead">Reusable configuration, optional long-term memory, consistent execution semantics.</p>
+<a href="agent-capability-configuration-ui.zh.html">中文</a>
+<div class="status">Partly implemented · The Agents page, saved configurations with revisions and the memory policy are in place; the closing Implementation status lists what is still target design. The linked prototype uses illustrative data and never changes live configuration.</div>
+<nav aria-label="Design documents">
+<a href="agent-configuration-ui.html">Configuration contract</a>
+<a href="agent-core-configuration-ui.html">Editor and core fields</a>
+<a href="agent-capability-configuration-ui.html">Capabilities</a>
+<a href="agent-tool-configuration-ui.html">Programs selector</a>
+<a href="agent-configuration-plan.html">Implementation plan</a>
+</nav>
+<nav class="toc" aria-label="On this page">
+<a href="#ownership">Catalog ownership and Agent references</a>
+<a href="#modes">Policy algebra and migration</a>
+<a href="#flow">Discovery, invocation and change propagation</a>
+<a href="#ui">Editor responsibilities</a>
+</nav>
+</header>
+<section id="ownership">
+<h2>Catalog ownership and Agent references</h2>
+<p>An Agent selects capability scope without copying definitions. Programs own callable Tools, Workflows and Applications; Skills own procedural instructions; MCP owns connections and credentials. These stay distinct in the editor. See the configuration contract for inheritance and enforced authority.</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Catalog</th>
+<th>Agent stores</th>
+<th>Agent never stores</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Programs</td>
+<td>Policy, preset reference, explicit names and denies</td>
+<td>Python source, expanded schemas, workflow repositories</td>
+</tr>
+<tr>
+<td>Skills</td>
+<td>Mode, names/categories, exclusions</td>
+<td>A copied Skill directory or permanently injected full text</td>
+</tr>
+<tr>
+<td>MCP</td>
+<td>Allowed and required service references</td>
+<td>Credentials, authentication cookies, server implementations</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="modes">
+<h2>Policy algebra and migration</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>Mode</th>
+<th>Requested set</th>
+<th>Constraint</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>inherit</td>
+<td>Use base policy</td>
+<td>Resolved before discovery</td>
+</tr>
+<tr>
+<td>all</td>
+<td>All globally available entries</td>
+<td>Denies and enforced ceilings still apply</td>
+</tr>
+<tr>
+<td>selected</td>
+<td>Explicit names and category filters intersect; Programs may instead reference one preset</td>
+<td>Explicit allowed=[] means empty; preset + explicit names is invalid for Programs</td>
+</tr>
+<tr>
+<td>none</td>
+<td>Empty</td>
+<td>Cannot be bypassed by a deferred explicit-name load</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>Effective set = requested set ∩ global availability ∩ caller authority ∩ parent delegation ceiling ∩ environment restrictions − explicit denies. Missing refs remain stored but not callable. Required MCP refs must be a subset of effective services; reject contradictory patterns, including wildcard denies. Skill instructions cannot authorize the tools they mention.</p>
+<p>Canonical target policies gain an explicit mode for Skills/MCP as well as Programs. Legacy automatic maps to all; legacy disabled=["*"] maps to none; nonempty allowed/categories maps to selected; legacy empty allowlists map to all only during schema migration. Target selected=[] must never pass through legacy empty-is-all semantics. For Skills selected mode, omitted allowed with nonempty categories means category filtering alone; nonempty allowed and categories intersect. A declared category must match; items without a category retain the existing exemption and the UI shows them as uncategorized. Explicit allowed=[] means no entries, even when categories are present. Neither names nor categories selects anything when both are absent. Migrate a legacy empty allowed list by omitting it if categories are active, preserving the old predicate rather than turning it into an empty explicit whitelist. Normalize at one boundary, not independently in UI, search and executor.</p>
+</section>
+<section id="flow">
+<h2>Discovery, invocation and change propagation</h2>
+<ul>
+<li>Profile save stores intent. A run resolves a versioned effective scope and catalog/preset references; no full schema inventory enters the first prompt.</li>
+<li>tool_search searches only the effective allowed scope and returns limited matching schemas. Explicit names and nested workflow/program entry calls use the same policy.</li>
+<li>Invoke rechecks revocation, availability and resource permission. Globally disabled entries stop being callable immediately at the next boundary even in queued or pinned runs.</li>
+<li>Optional MCP outage disables that service and surfaces status; required outage blocks admission/startup. Auth errors never trigger automatic connection to a different account.</li>
+<li>Selectors display missing names until explicitly removed. Save does not erase them. A preset update affects newly resolved calls; in-flight snapshots retain intended selections subject to revocation.</li>
+<li>Memory read/write tools are additionally narrowed by the execution memory policy. A capability allowlist cannot override memory off or read-only.</li>
+</ul>
+</section>
+<section id="ui">
+<h2>Editor responsibilities</h2>
+<p>Keep Programs, Skills and MCP separate. Each shows mode, inherited source, effective count, missing count and a catalog action. Catalogs load only when opened. Categories/presets are selectors, not copies. MCP adds required markers and global connection links. Credentials remain outside the draft. The Programs selector document owns list/tree/inspector behavior; do not repeat its catalog here.</p>
+<p>Acceptance: selected empty is empty at search and call, denied explicit names fail, missing required service blocks before side effects, missing references survive reload, changing tabs preserves the one draft, and memory-off tools cannot execute. Current policy primitives exist; target canonical modes and cross-entry enforcement remain pending the implementation plan.</p>
+</section>
+</main>
+</body>
+</html>

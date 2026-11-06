@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Layout density prototype</title>
+<style>
+  :root{
+    --bg:#141416; --bg2:#1c1c1f; --bg3:#232327; --border:#2c2c31;
+    --text:#e8e8ea; --text2:#9b9ba3; --text3:#66666e; --accent:#7aa2f7; --green:#4ec97f;
+    font-family:-apple-system,"SF Pro","PingFang SC",sans-serif;
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{background:var(--bg);color:var(--text);font-size:13.5px;height:100vh;display:flex;flex-direction:column;overflow:hidden}
+  .mono{font-family:ui-monospace,"SF Mono",Menlo,monospace}
+  .bar{display:flex;gap:6px;align-items:center;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--bg2);flex-shrink:0;font-size:12px;color:var(--text2)}
+  .bar b{color:var(--text2)}
+  .swbtn{padding:4px 12px;border-radius:999px;border:1px solid var(--border);background:transparent;color:var(--text2);cursor:pointer;font-size:12px}
+  .swbtn.on{background:var(--accent);border-color:var(--accent);color:#0c0c10;font-weight:600}
+  .app{flex:1;display:flex;min-height:0}
+
+  /* ═══ Left sidebar: no fixed blocks, uniform spacing ═══ */
+  .left{width:232px;flex-shrink:0;border-right:1px solid var(--border);background:var(--bg2);display:flex;flex-direction:column}
+  .brand{height:48px;display:flex;align-items:center;padding:0 10px 0 14px;flex-shrink:0;gap:8px}
+  .brand .name{font-weight:700;font-size:14.5px;flex:1}
+  .brand .name i{color:var(--accent);font-style:normal}
+  .brand .hbtn{width:28px;height:28px;display:grid;place-items:center;border-radius:7px;color:var(--text2);cursor:pointer;font-size:15px}
+  .brand .hbtn:hover{background:var(--bg3);color:var(--text)}
+  .lscroll{flex:1;overflow-y:auto;padding:2px 8px 8px}
+  .row{display:flex;align-items:center;gap:12px;height:32px;padding:6px 8px;border-radius:9px;font-size:13.5px;cursor:pointer;color:var(--text2);margin-bottom:1px}
+  .row:hover{background:var(--bg3);color:var(--text)}
+  .row .ic{width:16px;text-align:center;flex-shrink:0}
+  .sect{padding:12px 8px 4px;font-size:11px;color:var(--text2)}
+
+  /* ═══ Center ═══ */
+  .center{flex:1;display:flex;flex-direction:column;min-width:0;background:var(--bg)}
+  /* 40px tab strip; no second bar beneath chat tabs */
+  .strip{height:40px;display:flex;align-items:flex-end;padding:0 8px;background:var(--bg2);flex-shrink:0;position:relative}
+  .strip::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--border)}
+  .tb{display:flex;align-items:center;gap:7px;padding:0 10px 0 12px;height:34px;border-radius:9px 9px 0 0;color:var(--text2);cursor:pointer;font-size:12.5px;position:relative}
+  .tb.on{background:var(--bg);color:var(--text);z-index:1}
+  .tb.on::before,.tb.on::after{content:"";position:absolute;bottom:0;width:8px;height:8px;z-index:1}
+  .tb.on::before{left:-8px;background:radial-gradient(circle 8px at 0 0,transparent 7.5px,var(--bg) 8px)}
+  .tb.on::after{right:-8px;background:radial-gradient(circle 8px at 100% 0,transparent 7.5px,var(--bg) 8px)}
+  .tb .x{color:var(--text3);font-size:11px}
+  .plus{color:var(--text2);padding:4px 10px;cursor:pointer;align-self:center}
+  .statusdot{margin-left:auto;align-self:center;width:8px;height:8px;border-radius:50%;background:var(--green)}
+
+  .content{flex:1;display:flex;flex-direction:column;min-height:0;position:relative}
+  .pane{position:absolute;inset:0;display:none;flex-direction:column}
+  .pane.on{display:flex}
+  .msgs{flex:1;overflow-y:auto;padding:22px 9vw;display:flex;flex-direction:column;gap:14px}
+  .m-user{align-self:flex-end;background:var(--bg3);border-radius:14px 14px 4px 14px;padding:9px 13px;max-width:75%}
+  .m-ai{line-height:1.7;max-width:92%}
+  .note{color:var(--text3);font-size:12px}
+
+  /* Session settings move to the composer */
+  .composer{margin:8px 9vw 14px;border:1px solid var(--border);border-radius:14px;background:var(--bg2);padding:10px 12px;flex-shrink:0}
+  .composer .in{color:var(--text2);font-size:13px;padding:2px 2px 10px}
+  .crow{display:flex;gap:6px;align-items:center;font-size:11.5px}
+  .chip{display:inline-flex;align-items:center;gap:5px;border:1px solid var(--border);border-radius:7px;padding:3px 9px;color:var(--text2);cursor:pointer;white-space:nowrap}
+  .chip:hover{color:var(--text);border-color:var(--text3)}
+  .chip.green{color:var(--green);border-color:#2e4636}
+  .crow .send{margin-left:auto;width:26px;height:26px;border-radius:50%;background:var(--accent);color:#0c0c10;display:grid;place-items:center;flex-shrink:0}
+
+  /* 40px toolbar for file / web tabs */
+  .toolbar40{height:40px;display:flex;align-items:center;gap:8px;padding:0 12px;border-bottom:1px solid var(--border);flex-shrink:0;font-size:12px;color:var(--text2)}
+  .addr{flex:1;background:var(--bg3);border:1px solid var(--border);border-radius:7px;padding:5px 10px;font-size:12px;color:var(--text)}
+  .viewer{flex:1;display:grid;place-items:center;color:var(--text3);font-size:12.5px;text-align:center;line-height:2}
+  .browser-live{flex:1;margin:0;background:
+    repeating-linear-gradient(45deg,var(--bg2),var(--bg2) 12px,var(--bg) 12px,var(--bg) 24px);
+    display:grid;place-items:center;color:var(--text2);font-size:13px;text-align:center;line-height:2}
+  .badge{display:inline-block;border:1px solid var(--accent);color:var(--accent);border-radius:999px;padding:2px 10px;font-size:11px;margin-top:6px}
+
+  /* Right-side annotations */
+  .anno{position:fixed;right:14px;bottom:12px;background:var(--bg3);border:1px solid var(--border);border-radius:10px;padding:10px 14px;font-size:12px;color:var(--text2);line-height:1.9;z-index:9;max-width:330px}
+  .anno b{color:var(--text)}
+  .anno .old{color:var(--text3);text-decoration:line-through}
+  @media (max-width:760px){
+    body{height:auto;min-height:100vh;overflow:auto}
+    .app{flex-direction:column;min-height:0}
+    .left{width:100%;height:auto;border-right:0;border-bottom:1px solid var(--border);flex:none}
+    .lscroll{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:1px;overflow:visible}
+    .row{margin-bottom:0}
+    .sect{grid-column:1/-1;padding-top:8px}
+    .center{min-height:640px}
+    .strip{overflow-x:auto}
+    .msgs{padding:18px 20px}
+    .m-user,.m-ai{max-width:100%}
+    .composer{margin:8px 20px 14px}
+    .crow{flex-wrap:wrap}
+    .anno{position:static;max-width:calc(100% - 24px);margin:12px auto}
+  }
+</style>
+</head>
+<body>
+<div class="bar">
+  <b>Design v4</b><span>Three issues addressed: fixed sidebar blocks, vertical space and a real browser</span>
+  <span style="flex:1"></span>
+  <button class="swbtn on" data-p="chat">Chat tab</button>
+  <button class="swbtn" data-p="file">File tab</button>
+  <button class="swbtn" data-p="web">Web tab</button>
+</div>
+<div class="app">
+
+  <!-- Left sidebar: persistent new-session + in the brand row; all content below scrolls together with 1px spacing -->
+  <div class="left">
+    <div class="brand">
+      <span class="name">Open<i>Program</i></span>
+      <span class="hbtn" title="New session (always available, even when the list scrolls)">＋</span>
+      <span class="hbtn">⎔</span>
+    </div>
+    <div class="lscroll">
+      <div class="row"><span class="ic">＋</span>New chat</div>
+      <div class="row"><span class="ic">🧩</span>Functions</div>
+      <div class="row"><span class="ic">🖥</span>Programs</div>
+      <div class="row"><span class="ic">🎓</span>Skills</div>
+      <div class="row"><span class="ic">📂</span>Projects</div>
+      <div class="row"><span class="ic">🧠</span>Memory</div>
+      <div class="row"><span class="ic">💬</span>Chats</div>
+      <div class="sect">PROJECTS</div>
+      <div class="row"><span class="ic">📁</span>fzkuji</div>
+      <div class="sect">RECENTS…</div>
+    </div>
+  </div>
+
+  <!-- Center -->
+  <div class="center">
+    <div class="strip">
+      <div class="tb on" id="t-chat">💬 Proxy refactoring <span class="x">✕</span></div>
+      <div class="tb" id="t-file">📄 http_proxy.py</div>
+      <div class="tb" id="t-web">🌐 google.com</div>
+      <div class="plus">＋</div>
+      <span class="statusdot" title="Local · Connected (top-bar status chip becomes a corner status dot)"></span>
+    </div>
+    <div class="content">
+
+      <!-- Chat tab: conversation begins directly below the 40px tab strip, without another bar -->
+      <div class="pane on" id="p-chat">
+        <div class="msgs">
+          <div class="m-user">Fix the socksio issue</div>
+          <div class="m-ai">With ALL_PROXY=socks5, httpx requires socksio when constructing the client. Proxy resolution now uses one entry point.</div>
+          <div class="m-ai note">↑ The conversation extends from the tab strip bottom (y=40) to the composer; a 48px settings bar previously occupied this space.
+            Model, permissions and thinking controls move into the composer (↓), following the Claude/ChatGPT layout.</div>
+        </div>
+        <div class="composer">
+          <div class="in">Ask for follow-up changes…</div>
+          <div class="crow">
+            <span class="chip">📁 OpenProgram</span>
+            <span class="chip">⚡ frontier · GPT-5.5</span>
+            <span class="chip">🧠 auto</span>
+            <span class="chip green">🛡 Ask</span>
+            <span class="chip">🕘</span>
+            <span class="send">↑</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- File tab: retain the 40px toolbar (breadcrumbs belong to content) -->
+      <div class="pane" id="p-file">
+        <div class="toolbar40"><span class="mono">providers › utils › http_proxy.py</span>
+          <span style="flex:1"></span><span>✏️</span><span>⬇</span></div>
+        <div class="viewer">Code viewer (line numbers / Markdown / images / PDF remain as implemented)</div>
+      </div>
+
+      <!-- Web tab: 40px address bar + real browser screencast -->
+      <div class="pane" id="p-web">
+        <div class="toolbar40">
+          <span>←</span><span>→</span><span>⟳</span>
+          <input class="addr mono" value="https://www.google.com/">
+          <span title="Open externally">⧉</span>
+        </div>
+        <div class="browser-live">
+          <div>
+            <b>Sidecar Chrome display (CDP screencast)</b><br>
+            The backend reuses the existing Playwright + openprogram browser sidecar:<br>
+            Page.startScreencast → frames over WS → canvas rendering here;<br>
+            Mouse and keyboard events return through Input.dispatch*. Actual Google pages and authenticated sessions.<br>
+            <span class="badge">The user sees the same browser that the agent controls</span><br>
+            <span class="note">iframe is only a fallback when the sidecar is unavailable</span>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<div class="anno">
+  <b>Dimension comparison</b><br>
+  Chat top chrome:<span class="old">48+48 = 96px</span> → <b>40px</b>(56px more content height)<br>
+  File/web tabs: 40 + 40 = 80px (breadcrumbs/address bar belong to content)<br>
+  Left sidebar:<span class="old">Fixed New chat + divider</span> → Everything scrolls together with 1px spacing;
+  The brand-row + remains available<br>
+  Former top-bar chips: two model controls / permissions / project → composer; status → corner dot in tab strip; branch → History panel header
+</div>
+
+<script>
+document.querySelectorAll('.swbtn').forEach(b=>b.onclick=()=>{
+  document.querySelectorAll('.swbtn').forEach(x=>x.classList.toggle('on',x===b));
+  document.querySelectorAll('.pane').forEach(x=>x.classList.remove('on'));
+  document.getElementById('p-'+b.dataset.p).classList.add('on');
+  document.querySelectorAll('.tb').forEach(x=>x.classList.remove('on'));
+  document.getElementById('t-'+b.dataset.p).classList.add('on');
+});
+document.getElementById('t-chat').onclick=()=>document.querySelector('[data-p="chat"]').click();
+document.getElementById('t-file').onclick=()=>document.querySelector('[data-p="file"]').click();
+document.getElementById('t-web').onclick=()=>document.querySelector('[data-p="web"]').click();
+</script>
+</body>
+</html>

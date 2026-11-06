@@ -1,0 +1,562 @@
+$ErrorActionPreference = "Stop"
+Set-StrictMode -Version Latest
+
+function Invoke-Native {
+    param([string]$FilePath)
+
+    $Arguments = $args
+    & $FilePath @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath exited with code $LASTEXITCODE"
+    }
+}
+
+function Invoke-NativeOutput {
+    param([string]$FilePath)
+
+    $Arguments = $args
+    $Output = (& $FilePath @Arguments | Out-String).Trim()
+    if ($LASTEXITCODE -ne 0) {
+        throw "$FilePath exited with code $LASTEXITCODE"
+    }
+    return $Output
+}
+
+function Assert-AllowedUrl {
+    param([Parameter(Mandatory = $true)][string]$Url)
+
+    $Parsed = [Uri]$Url
+    $AllowedHosts = @(
+        "github.com",
+        "release-assets.githubusercontent.com"
+    )
+    if ($Parsed.Scheme -ne "https" -or $Parsed.UserInfo -or $Parsed.Host -notin $AllowedHosts) {
+        throw "release URL is not allowed: $Url"
+    }
+}
+
+function Download-ReleaseFile {
+    param(
+        [Parameter(Mandatory = $true)][string]$Url,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    $Curl = (Get-Command curl.exe -ErrorAction SilentlyContinue).Source
+    if (-not $Curl) {
+        throw "curl.exe is required to download OpenProgram"
+    }
+    $CurrentUrl = $Url
+    for ($Redirect = 0; $Redirect -le 5; $Redirect++) {
+        Assert-AllowedUrl $CurrentUrl
+        $Headers = Join-Path ([IO.Path]::GetDirectoryName($Destination)) (".headers-" + [guid]::NewGuid().ToString("N"))
+        try {
+            $Status = Invoke-NativeOutput $Curl --disable --proto "=https" --tlsv1.2 `
+                --silent --show-error --connect-timeout 15 --speed-limit 1024 `
+                --speed-time 120 --dump-header $Headers --output $Destination `
+                --write-out "%{http_code}" $CurrentUrl
+            if ($Status -match "^20[0-6]$") {
+                return
+            }
+            if ($Status -notmatch "^(301|302|303|307|308)$") {
+                throw "release download failed with HTTP $Status"
+            }
+            $Location = [IO.File]::ReadAllLines(
+                $Headers,
+                [Text.Encoding]::GetEncoding(28591)
+            ) |
+                Where-Object { $_ -match "^Location:\s*(.+?)\s*$" } |
+                Select-Object -Last 1
+            if (-not $Location) {
+                throw "release redirect has no location"
+            }
+            $CurrentUrl = ([regex]::Match($Location, "^Location:\s*(.+?)\s*$", "IgnoreCase")).Groups[1].Value
+        } finally {
+            Remove-Item -LiteralPath $Headers -Force -ErrorAction SilentlyContinue
+        }
+    }
+    throw "release redirect limit exceeded"
+}
+
+function Assert-SafeArchive {
+    param([Parameter(Mandatory = $true)][string]$Archive)
+
+    Add-Type -AssemblyName System.IO.Compression
+    Add-Type -AssemblyName System.IO.Compression.FileSystem
+    $Zip = [IO.Compression.ZipFile]::OpenRead((ConvertTo-ExtendedFileSystemPath $Archive))
+    $Names = [Collections.Generic.HashSet[string]]::new(
+        [StringComparer]::OrdinalIgnoreCase
+    )
+    [long]$ExpandedBytes = 0
+    try {
+        foreach ($Entry in $Zip.Entries) {
+            $Name = $Entry.FullName
+            if (
+                -not $Name -or
+                $Name.Contains("\") -or
+                $Name.StartsWith("/") -or
+                $Name.Contains(":") -or
+                ($Name -ne "runtime" -and -not $Name.StartsWith("runtime/"))
+            ) {
+                throw "invalid archive path: $Name"
+            }
+            $Parts = $Name.Split("/")
+            for ($Index = 0; $Index -lt $Parts.Count; $Index++) {
+                $Part = $Parts[$Index]
+                if ($Part -eq ".." -or $Part -eq ".") {
+                    throw "invalid archive path: $Name"
+                }
+                if (
+                    -not $Part -and
+                    $Index -ne ($Parts.Count - 1)
+                ) {
+                    throw "invalid archive path: $Name"
+                }
+                if ($Part -and $Part.TrimEnd(@(" ", ".")) -ne $Part) {
+                    throw "archive path is not portable to Windows: $Name"
+                }
+            }
+            if (-not $Names.Add($Name.TrimEnd("/"))) {
+                throw "archive contains a duplicate path: $Name"
+            }
+            $ExpandedBytes += $Entry.Length
+            if ($ExpandedBytes -gt 8589934592) {
+                throw "runtime archive expands beyond the 8 GiB safety limit"
+            }
+            $UnixType = (($Entry.ExternalAttributes -shr 16) -band 0xF000)
+            if ($UnixType -eq 0xA000) {
+                throw "archive contains a symbolic link: $Name"
+            }
+        }
+    } finally {
+        $Zip.Dispose()
+    }
+}
+
+function ConvertTo-ExtendedFileSystemPath {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $Full = [IO.Path]::GetFullPath($Path)
+    if ($Full.StartsWith('\\?\', [StringComparison]::Ordinal)) { return $Full }
+    if ($Full.StartsWith('\\', [StringComparison]::Ordinal)) {
+        return '\\?\UNC\' + $Full.Substring(2)
+    }
+    return '\\?\' + $Full
+}
+
+function Expand-SafeArchive {
+    param(
+        [Parameter(Mandatory = $true)][string]$Archive,
+        [Parameter(Mandatory = $true)][string]$Destination
+    )
+
+    Assert-SafeArchive $Archive
+    # Windows PowerShell 5's default .NET paths and provider enumeration can
+    # fail on ordinary dependency trees once the staging prefix exceeds 260
+    # characters. Keep extraction and inspection on extended-length paths.
+    $Extended = ConvertTo-ExtendedFileSystemPath $Destination
+    if ([IO.Directory]::Exists($Extended) -and
+        ([IO.File]::GetAttributes($Extended) -band [IO.FileAttributes]::ReparsePoint)) {
+        throw "runtime extraction destination is redirected: $Destination"
+    }
+    $Zip = [IO.Compression.ZipFile]::OpenRead((ConvertTo-ExtendedFileSystemPath $Archive))
+    try {
+        [IO.Directory]::CreateDirectory($Extended) | Out-Null
+        $Buffer = New-Object byte[] 65536
+        [long]$Written = 0
+        foreach ($Entry in $Zip.Entries) {
+            $Name = $Entry.FullName.Replace('\', '/')
+            $Target = $Extended.TrimEnd('\') + '\' + $Name.Replace('/', '\').TrimEnd('\')
+            if ($Name.EndsWith('/')) {
+                [IO.Directory]::CreateDirectory($Target) | Out-Null
+                continue
+            }
+            [IO.Directory]::CreateDirectory([IO.Path]::GetDirectoryName($Target)) | Out-Null
+            $InputStream = $Entry.Open()
+            try {
+                $OutputStream = [IO.File]::Open($Target, [IO.FileMode]::CreateNew,
+                    [IO.FileAccess]::Write, [IO.FileShare]::None)
+                try {
+                    while (($Count = $InputStream.Read($Buffer, 0, $Buffer.Length)) -gt 0) {
+                        $Written += $Count
+                        if ($Written -gt 8589934592) { throw 'runtime archive expands beyond the 8 GiB limit' }
+                        $OutputStream.Write($Buffer, 0, $Count)
+                    }
+                    if ($OutputStream.Length -ne $Entry.Length) { throw "archive entry length mismatch: $Name" }
+                } finally { $OutputStream.Dispose() }
+            } finally { $InputStream.Dispose() }
+        }
+    } finally { $Zip.Dispose() }
+    $Pending = [Collections.Generic.Stack[string]]::new()
+    $Pending.Push($Extended)
+    while ($Pending.Count -gt 0) {
+        foreach ($Entry in [IO.Directory]::EnumerateFileSystemEntries($Pending.Pop())) {
+            $Attributes = [IO.File]::GetAttributes($Entry)
+            if ($Attributes -band [IO.FileAttributes]::ReparsePoint) {
+                throw "extracted runtime contains a reparse point: $Entry"
+            }
+            if ($Attributes -band [IO.FileAttributes]::Directory) { $Pending.Push($Entry) }
+        }
+    }
+}
+
+function Test-WorkerHealth {
+    param(
+        [Parameter(Mandatory = $true)][string]$Python,
+        [Parameter(Mandatory = $true)][int]$Port
+    )
+
+    Invoke-Native $Python -I -B -c @'
+import json
+import sys
+import time
+import urllib.request
+
+url = f"http://127.0.0.1:{sys.argv[1]}/healthz"
+for attempt in range(120):
+    try:
+        with urllib.request.urlopen(url, timeout=1) as response:
+            payload = json.load(response)
+        if payload.get("status") == "ok":
+            raise SystemExit(0)
+    except Exception:
+        if attempt == 119:
+            raise
+        time.sleep(0.25)
+raise SystemExit("worker health probe did not become ready")
+'@ ([string]$Port)
+}
+
+function Write-Utf8NoBom {
+    param(
+        [Parameter(Mandatory = $true)][string]$Path,
+        [Parameter(Mandatory = $true)][string]$Content
+    )
+
+    [IO.File]::WriteAllText($Path, $Content, [Text.UTF8Encoding]::new($false))
+}
+
+function ConvertTo-CmdBatchLiteral {
+    param([Parameter(Mandatory = $true)][string]$Value)
+
+    if ($Value.Contains('"') -or $Value.Contains("`r") -or $Value.Contains("`n")) {
+        throw "path cannot be represented safely in a Windows batch launcher"
+    }
+    # Percent signs are environment-variable syntax even inside quotes. A
+    # doubled percent survives batch parsing as the literal path character.
+    return $Value.Replace("%", "%%")
+}
+
+function Get-Sha256 {
+    param([Parameter(Mandatory = $true)][string]$Path)
+
+    $Algorithm = [Security.Cryptography.SHA256]::Create()
+    $Stream = [IO.File]::OpenRead($Path)
+    try {
+        return ([BitConverter]::ToString($Algorithm.ComputeHash($Stream))).Replace("-", "").ToLowerInvariant()
+    } finally {
+        $Stream.Dispose()
+        $Algorithm.Dispose()
+    }
+}
+
+function Move-Atomic {
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [string]$Backup
+    )
+
+    if (Test-Path -LiteralPath $Destination -PathType Leaf) {
+        if ($Backup) {
+            Remove-Item -LiteralPath $Backup -Force -ErrorAction SilentlyContinue
+            [IO.File]::Replace($Source, $Destination, $Backup, $true)
+        } else {
+            # PowerShell 5 binds $null to an empty string for this .NET
+            # parameter. NullString requests a genuine null backup path.
+            [IO.File]::Replace($Source, $Destination, [NullString]::Value, $true)
+        }
+    } else {
+        [IO.File]::Move($Source, $Destination)
+    }
+}
+
+function Publish-CliLaunchers {
+    param([string]$Ps1Source, [string]$Ps1Target, [string]$CmdSource, [string]$CmdTarget)
+
+    $Entries = @(
+        @{ Source = $Ps1Source; Target = $Ps1Target; Extension = 'ps1' },
+        @{ Source = $CmdSource; Target = $CmdTarget; Extension = 'cmd' }
+    )
+    foreach ($Entry in $Entries) {
+        $Directory = Split-Path -Parent $Entry.Target
+        $Entry.Previous = Join-Path $Directory "openprogram.previous.$($Entry.Extension)"
+        $Entry.Rollback = Join-Path $Directory ('.openprogram-' + [guid]::NewGuid().ToString('N') + ".rollback.$($Entry.Extension)")
+        $Entry.HadFile = $false
+        $Entry.Activated = $false
+        $Entry.KeepRollback = $false
+    }
+    try {
+        # Snapshot both entry points before either replacement. These private
+        # copies also survive a failed rollback; previous launchers remain the
+        # normal user-facing rollback aid after a successful installation.
+        foreach ($Entry in $Entries) {
+            if (Test-Path -LiteralPath $Entry.Target) {
+                if (-not (Test-Path -LiteralPath $Entry.Target -PathType Leaf)) {
+                    throw "CLI launcher target is not a file: $($Entry.Target)"
+                }
+                [IO.File]::Copy($Entry.Target, $Entry.Rollback, $false)
+                $Entry.HadFile = $true
+            }
+        }
+        foreach ($Entry in $Entries) {
+            Move-Atomic $Entry.Source $Entry.Target $Entry.Previous
+            $Entry.Activated = $true
+        }
+    } catch {
+        $ActivationError = $_
+        $Recovery = [Collections.Generic.List[string]]::new()
+        for ($Index = $Entries.Count - 1; $Index -ge 0; $Index--) {
+            $Entry = $Entries[$Index]
+            if (-not $Entry.Activated) { continue }
+            try {
+                if ($Entry.HadFile) {
+                    Move-Atomic $Entry.Rollback $Entry.Target
+                } else {
+                    # Delete only the new launcher this transaction created,
+                    # never an installation directory or a pre-existing file.
+                    [IO.File]::Delete($Entry.Target)
+                }
+            } catch {
+                $Entry.KeepRollback = $true
+                $RecoveryDetail = if ($Entry.HadFile) {
+                    "original retained at $($Entry.Rollback)"
+                } else { 'new launcher could not be removed' }
+                $Recovery.Add("$($Entry.Target) (${RecoveryDetail}; $($_.Exception.Message))")
+            }
+        }
+        if ($Recovery.Count -gt 0) {
+            throw "CLI launcher activation and rollback failed; manual recovery required: $($Recovery -join '; ')"
+        }
+        throw $ActivationError
+    } finally {
+        foreach ($Entry in $Entries) {
+            if (-not $Entry.KeepRollback) {
+                Remove-Item -LiteralPath $Entry.Rollback -Force -ErrorAction SilentlyContinue
+            }
+        }
+    }
+}
+
+$Version = if ($env:OPENPROGRAM_VERSION) { $env:OPENPROGRAM_VERSION } else { "1.0.0" }
+$Repository = if ($env:OPENPROGRAM_REPOSITORY) { $env:OPENPROGRAM_REPOSITORY } else { "FuzzyKuji/OpenProgram" }
+if ($Version -notmatch "^\d+\.\d+\.\d+$") {
+    throw "invalid OpenProgram version: $Version"
+}
+if ($Repository -notmatch "^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$") {
+    throw "invalid OpenProgram repository: $Repository"
+}
+if (-not [Environment]::Is64BitOperatingSystem) {
+    throw "OpenProgram release installer requires 64-bit Windows"
+}
+$Architecture = [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString().ToLowerInvariant()
+if ($Architecture -notin @("x64", "arm64")) {
+    throw "unsupported CPU architecture: $Architecture"
+}
+$Arch = if ($Architecture -eq "x64") { "x86_64" } else { "arm64" }
+
+$StateRoot = if ($env:OPENPROGRAM_STATE_DIR) {
+    [IO.Path]::GetFullPath($env:OPENPROGRAM_STATE_DIR)
+} else {
+    Join-Path $env:USERPROFILE ".openprogram"
+}
+$RuntimeRoot = Join-Path $StateRoot "runtime\cli"
+$ReleasesRoot = Join-Path $RuntimeRoot "releases"
+$ReleaseDir = Join-Path $ReleasesRoot $Version
+$BinDir = if ($env:OPENPROGRAM_BIN_DIR) {
+    [IO.Path]::GetFullPath($env:OPENPROGRAM_BIN_DIR)
+} elseif ($env:LOCALAPPDATA) {
+    Join-Path $env:LOCALAPPDATA "OpenProgram\bin"
+} else {
+    Join-Path $StateRoot "bin"
+}
+New-Item -ItemType Directory -Path $ReleasesRoot, $BinDir -Force | Out-Null
+
+$InstallLock = [IO.File]::Open((Join-Path $RuntimeRoot '.install.lock'),
+    [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+$Staging = Join-Path $RuntimeRoot (".staging-$Version-" + [guid]::NewGuid().ToString("N"))
+try {
+    New-Item -ItemType Directory -Path $Staging | Out-Null
+    $CandidateRoot = $ReleaseDir
+    if (-not (Test-Path -LiteralPath $ReleaseDir -PathType Container)) {
+        $ArchiveName = "OpenProgram-$Version-runtime-windows-$Arch.zip"
+        if ($env:OPENPROGRAM_RUNTIME_ARCHIVE) {
+            $Archive = [IO.Path]::GetFullPath($env:OPENPROGRAM_RUNTIME_ARCHIVE)
+            if (-not [IO.Path]::IsPathRooted($env:OPENPROGRAM_RUNTIME_ARCHIVE) -or
+                -not $Archive.EndsWith(".zip", [StringComparison]::OrdinalIgnoreCase) -or
+                -not (Test-Path -LiteralPath $Archive -PathType Leaf)) {
+                throw "OPENPROGRAM_RUNTIME_ARCHIVE must be an absolute existing .zip path"
+            }
+        } else {
+            $Archive = Join-Path $Staging $ArchiveName
+            $ReleaseUrl = "https://github.com/$Repository/releases/download/v$Version"
+            Download-ReleaseFile "$ReleaseUrl/$ArchiveName" $Archive
+            Download-ReleaseFile "$ReleaseUrl/$ArchiveName.sha256" "$Archive.sha256"
+        }
+
+        $Expected = $env:OPENPROGRAM_RUNTIME_SHA256
+        if (-not $Expected -and (Test-Path -LiteralPath "$Archive.sha256" -PathType Leaf)) {
+            $Expected = ((Get-Content -LiteralPath "$Archive.sha256" -TotalCount 1) -split "\s+")[0]
+        }
+        if (-not $Expected -or $Expected -notmatch "^[a-fA-F0-9]{64}$") {
+            throw "runtime archive checksum is required"
+        }
+        $Actual = Get-Sha256 $Archive
+        if (-not $Actual.Equals($Expected, [StringComparison]::OrdinalIgnoreCase)) {
+            throw "runtime archive checksum mismatch"
+        }
+
+        Expand-SafeArchive $Archive $Staging
+        $ExtractedRuntime = Join-Path $Staging "runtime"
+        if (-not (Test-Path -LiteralPath (Join-Path $ExtractedRuntime "runtime-manifest.json") -PathType Leaf)) {
+            throw "runtime archive has no manifest"
+        }
+        $CandidateRoot = $ExtractedRuntime
+    }
+
+$ManifestPath = Join-Path $CandidateRoot "runtime-manifest.json"
+if (-not (Test-Path -LiteralPath $ManifestPath -PathType Leaf)) {
+    throw "candidate runtime has no manifest: $CandidateRoot"
+}
+$Manifest = Get-Content -LiteralPath $ManifestPath -Raw -Encoding UTF8 | ConvertFrom-Json
+$PythonRelative = [string]$Manifest.python
+if (-not $PythonRelative -or [IO.Path]::IsPathRooted($PythonRelative)) {
+    throw "runtime manifest Python path is invalid"
+}
+$PythonBin = [IO.Path]::GetFullPath((Join-Path $CandidateRoot $PythonRelative))
+$ReleasePrefix = [IO.Path]::GetFullPath($CandidateRoot).TrimEnd("\") + "\"
+if (-not $PythonBin.StartsWith($ReleasePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+    throw "runtime manifest Python path escapes the release directory"
+}
+if (-not (Test-Path -LiteralPath $PythonBin -PathType Leaf)) {
+    throw "managed Python is missing: $PythonBin"
+}
+Invoke-Native $PythonBin -I (Join-Path $CandidateRoot "bin\verify-product-runtime.py") $CandidateRoot
+Invoke-Native $PythonBin -I -m openprogram --version
+
+$ProbeListener = [Net.Sockets.TcpListener]::new([Net.IPAddress]::Loopback, 0)
+$ProbeListener.Start()
+$ProbePort = ([Net.IPEndPoint]$ProbeListener.LocalEndpoint).Port
+$ProbeListener.Stop()
+$ProbeState = Join-Path ([IO.Path]::GetTempPath()) ("openprogram-release-probe-" + [guid]::NewGuid().ToString("N"))
+New-Item -ItemType Directory -Path $ProbeState | Out-Null
+$PreviousEnvironment = @{
+    OPENPROGRAM_STATE_DIR = $env:OPENPROGRAM_STATE_DIR
+    OPENPROGRAM_WEB_PORT = $env:OPENPROGRAM_WEB_PORT
+    PLAYWRIGHT_BROWSERS_PATH = $env:PLAYWRIGHT_BROWSERS_PATH
+    HOME = $env:HOME
+    USERPROFILE = $env:USERPROFILE
+}
+try {
+    # Product state follows Path.home(); isolate both Windows and POSIX-style
+    # home resolution so this probe never sees or stops the user's worker.
+    $env:HOME = $ProbeState
+    $env:USERPROFILE = $ProbeState
+    Remove-Item Env:OPENPROGRAM_STATE_DIR -ErrorAction SilentlyContinue
+    $env:OPENPROGRAM_WEB_PORT = [string]$ProbePort
+    $env:PLAYWRIGHT_BROWSERS_PATH = Join-Path $CandidateRoot "assets\playwright"
+    Invoke-Native $PythonBin -I -B -m openprogram worker start
+    Test-WorkerHealth $PythonBin $ProbePort
+    Invoke-Native $PythonBin -I -B -m openprogram worker stop
+} finally {
+    try {
+        & $PythonBin -I -B -m openprogram worker stop *> $null
+    } catch {
+    }
+    foreach ($Name in $PreviousEnvironment.Keys) {
+        $Value = $PreviousEnvironment[$Name]
+        if ($null -eq $Value) {
+            Remove-Item "Env:$Name" -ErrorAction SilentlyContinue
+        } else {
+            Set-Item "Env:$Name" $Value
+        }
+    }
+    Remove-Item -LiteralPath $ProbeState -Recurse -Force -ErrorAction SilentlyContinue
+}
+
+# Only a completely verified candidate becomes a reusable immutable release.
+# The per-runtime lock also serializes launcher activation and rollback.
+if ($CandidateRoot -ne $ReleaseDir) {
+    [IO.Directory]::Move($CandidateRoot, $ReleaseDir)
+    $PythonBin = [IO.Path]::GetFullPath((Join-Path $ReleaseDir $PythonRelative))
+}
+
+$LauncherPs1 = Join-Path $BinDir "openprogram.ps1"
+$LauncherCmd = Join-Path $BinDir "openprogram.cmd"
+$LauncherTemporary = Join-Path $BinDir (".openprogram-" + [guid]::NewGuid().ToString("N") + ".ps1")
+$LauncherContent = @"
+`$ErrorActionPreference = "Stop"
+`$env:PLAYWRIGHT_BROWSERS_PATH = '$((Join-Path $ReleaseDir "assets\playwright").Replace("'", "''"))'
+`$env:OPENPROGRAM_IMMUTABLE_RUNTIME = "1"
+& '$($PythonBin.Replace("'", "''"))' -I -m openprogram @args
+exit `$LASTEXITCODE
+"@
+$CmdTemporary = Join-Path $BinDir (".openprogram-" + [guid]::NewGuid().ToString("N") + ".cmd")
+$CmdPython = ConvertTo-CmdBatchLiteral $PythonBin
+$CmdPlaywright = ConvertTo-CmdBatchLiteral (Join-Path $ReleaseDir "assets\playwright")
+$CmdContent = @"
+@echo off
+setlocal DisableDelayedExpansion
+for /f "tokens=2 delims=:" %%P in ('chcp') do set "_OPENPROGRAM_CODEPAGE=%%P"
+chcp 65001 >nul
+set "PLAYWRIGHT_BROWSERS_PATH=$CmdPlaywright"
+set "OPENPROGRAM_IMMUTABLE_RUNTIME=1"
+"$CmdPython" -I -B -m openprogram %*
+set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"
+chcp %_OPENPROGRAM_CODEPAGE% >nul
+exit /b %_OPENPROGRAM_EXIT%
+"@
+# CMD needs BOM-free UTF-8 and an ASCII preamble selecting that code page
+# before it parses embedded paths. Restore the caller's console on return;
+# delayed expansion must not consume literal exclamation marks in paths.
+try {
+    # Finish both files before changing either active entry point.
+    # Windows PowerShell 5 needs the BOM to decode Unicode paths correctly.
+    [IO.File]::WriteAllText($LauncherTemporary, $LauncherContent, [Text.UTF8Encoding]::new($true))
+    Write-Utf8NoBom $CmdTemporary $CmdContent
+    # A managed install must replace launchers left by an older release or a
+    # source checkout. Otherwise PATH can silently continue to run a stale
+    # virtualenv even though the new runtime passed every activation probe.
+    Publish-CliLaunchers $LauncherTemporary $LauncherPs1 $CmdTemporary $LauncherCmd
+} finally {
+    Remove-Item -LiteralPath $LauncherTemporary -Force -ErrorAction SilentlyContinue
+    Remove-Item -LiteralPath $CmdTemporary -Force -ErrorAction SilentlyContinue
+}
+
+if (-not $env:OPENPROGRAM_BIN_DIR) {
+    $UserPath = [Environment]::GetEnvironmentVariable("Path", "User")
+    $Parts = @($UserPath -split ";" | Where-Object { $_ })
+    if (-not ($Parts | Where-Object { $_.TrimEnd("\") -ieq $BinDir.TrimEnd("\") })) {
+        $NextPath = (@($Parts) + $BinDir) -join ";"
+        [Environment]::SetEnvironmentVariable("Path", $NextPath, "User")
+    }
+}
+
+Write-Host "OpenProgram $Version installed."
+Write-Host "Executable: $LauncherCmd"
+Write-Host "Runtime: $ReleaseDir"
+Write-Host "Desktop control is optional. Before using it, open Settings > System on the execution computer. Installation does not elevate the application."
+} finally {
+    try {
+        if (Test-Path -LiteralPath $Staging) {
+            $StagingFull = [IO.Path]::GetFullPath($Staging)
+            $RuntimePrefix = [IO.Path]::GetFullPath($RuntimeRoot).TrimEnd('\') + '\'
+            if (-not $StagingFull.StartsWith($RuntimePrefix, [StringComparison]::OrdinalIgnoreCase)) {
+                throw 'refusing cleanup outside the CLI runtime staging directory'
+            }
+            try { [IO.Directory]::Delete((ConvertTo-ExtendedFileSystemPath $StagingFull), $true) }
+            catch { Write-Warning "runtime staging retained at ${StagingFull}: $($_.Exception.Message)" }
+        }
+    } finally {
+        $InstallLock.Dispose()
+    }
+}

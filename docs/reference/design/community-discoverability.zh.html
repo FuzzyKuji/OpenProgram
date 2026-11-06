@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>社区可发现性设计 · OpenProgram</title>
+</head>
+<body>
+<h1>社区可发现性设计</h1>
+<p>此次改动帮助仓库访客提出有价值的问题、报告和贡献，不增加独立社区平台。</p>
+<h2>当前缺口</h2>
+<p>仓库使用规范的 <code>FuzzyKuji/OpenProgram</code> 贡献链接、公开安全政策、结构化问题表单，以及用于私密漏洞报告的 GitHub Security Advisories 链接。这些仓库内可见的合同实现在 <code>.github/CONTRIBUTING.md</code>, <code>.github/SECURITY.md</code>, <code>.github/ISSUE_TEMPLATE/</code>以及拉取请求模板中。仓库文件不能证明外部 GitHub 安全公告设置是否已启用。</p>
+<h2>参考行为与决策</h2>
+<ul>
+<li>GitHub 会在仓库贡献流程中展示 <code>.github/CONTRIBUTING.md</code> 。采用一份规范指南，包含当前安装和验证命令。</li>
+<li>GitHub 识别位于 <code>.github/ISSUE_TEMPLATE</code>下的问题表单。分别提供缺陷与功能表单，将问题咨询引导到 Discussions，并禁用空白公开 Issue。</li>
+<li>GitHub 识别 <code>.github/SECURITY.md</code> 及私密漏洞报告。两者均采用，避免在公开 Issue 中披露安全报告。</li>
+<li>增加 Contributor Covenant 行为准则、支持分流文件和拉取请求模板，使 GitHub 能展示完整社区资料，并为贡献者提供一致的验证提示。</li>
+<li>公开首页的页脚直接链接 Discussions 和贡献指南。</li>
+<li>不增加论坛、聊天服务器、表单服务或机器人；现有 GitHub 页面已满足要求，避免增加审核渠道。</li>
+</ul>
+<h2>验收</h2>
+<ul>
+<li>所有仓库 URL 使用规范的 <code>FuzzyKuji/OpenProgram</code> 路径。</li>
+<li>问题表单 YAML 可解析，包含 GitHub 要求的名称和说明字段，并把支持与安全报告引导至正确的现有页面。</li>
+<li>贡献、安全和问题模板链接返回成功响应。</li>
+<li>仓库设置已启用私密漏洞报告。</li>
+</ul>
+<h2>实现证据</h2>
+<ul>
+<li>拉取请求 <a href="https://github.com/FuzzyKuji/OpenProgram/pull/4">#4</a> 已合入 <code>main</code> ，提交为 <code>ac07ac5f</code> ；文档、Web 和 Python 3.11–3.13 CI 已通过。</li>
+<li>发布工作流成功完成，线上首页显示 Discussions 和贡献链接。</li>
+<li>GitHub 报告社区资料完整度为 100%，包含行为准则、贡献指南、拉取请求模板、README 和许可证。</li>
+<li>私密漏洞报告已启用。问题选择页把缺陷和功能请求引导到结构化表单，把咨询引导到 Discussions，把安全报告引导到私密安全公告。</li>
+</ul>
+</body>
+</html>

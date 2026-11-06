@@ -1,0 +1,47 @@
+  <div id="sidebar" class="sidebar">
+    <div class="sidebar-header">
+      <div class="logo"><img src="/images/logo.svg" alt="OpenProgram" class="logo-img"></div>
+      <button class="sidebar-toggle" onclick="toggleSidebar()" title="Toggle sidebar"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H88V56H216V200Z"/></svg></button>
+    </div>
+    <div class="sidebar-nav-group">
+      <div class="sidebar-nav-item" onclick="newSession()" id="navNewChat">
+        <span class="sidebar-nav-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M10.75 4.75a.75.75 0 0 0-1.5 0v4.5h-4.5a.75.75 0 0 0 0 1.5h4.5v4.5a.75.75 0 0 0 1.5 0v-4.5h4.5a.75.75 0 0 0 0-1.5h-4.5v-4.5Z"/></svg></span>
+        <span class="sidebar-nav-label">New chat</span>
+      </div>
+      <a class="sidebar-nav-item" href="/programs" id="navPrograms">
+        <span class="sidebar-nav-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M4.25 2A2.25 2.25 0 0 0 2 4.25v2.5A2.25 2.25 0 0 0 4.25 9h2.5A2.25 2.25 0 0 0 9 6.75v-2.5A2.25 2.25 0 0 0 6.75 2h-2.5Zm0 9A2.25 2.25 0 0 0 2 13.25v2.5A2.25 2.25 0 0 0 4.25 18h2.5A2.25 2.25 0 0 0 9 15.75v-2.5A2.25 2.25 0 0 0 6.75 11h-2.5Zm9-9A2.25 2.25 0 0 0 11 4.25v2.5A2.25 2.25 0 0 0 13.25 9h2.5A2.25 2.25 0 0 0 18 6.75v-2.5A2.25 2.25 0 0 0 15.75 2h-2.5Zm0 9A2.25 2.25 0 0 0 11 13.25v2.5A2.25 2.25 0 0 0 13.25 18h2.5A2.25 2.25 0 0 0 18 15.75v-2.5A2.25 2.25 0 0 0 15.75 11h-2.5Z"/></svg></span>
+        <span class="sidebar-nav-label">Programs</span>
+        <span class="sidebar-nav-action refresh-btn" onclick="event.preventDefault();event.stopPropagation();doRefreshFunctions(this)" title="Refresh"><svg width="12" height="12" viewBox="0 0 16 16" fill="currentColor"><path d="M8 1.5a6.5 6.5 0 1 0 6.5 6.5h-1.5A5 5 0 1 1 8 3V1.5z"/><path d="M8 0l3 3-3 3V0z"/></svg></span>
+      </a>
+      <a class="sidebar-nav-item" href="/memory" id="navMemory">
+        <span class="sidebar-nav-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor"><path d="M2 4.5A2.5 2.5 0 0 1 4.5 2h11a2.5 2.5 0 0 1 0 5h-11A2.5 2.5 0 0 1 2 4.5ZM2.75 9.083a.75.75 0 0 0 0 1.5h14.5a.75.75 0 0 0 0-1.5H2.75ZM2.75 12.663a.75.75 0 0 0 0 1.5h14.5a.75.75 0 0 0 0-1.5H2.75ZM2.75 16.25a.75.75 0 0 0 0 1.5h14.5a.75.75 0 1 0 0-1.5H2.75Z"/></svg></span>
+        <span class="sidebar-nav-label">Memory</span>
+      </a>
+      <a class="sidebar-nav-item sidebar-nav-chats group" href="/chats" id="navChats">
+        <span class="sidebar-nav-icon"><svg width="20" height="20" viewBox="0 0 20 20" fill="currentColor" aria-hidden="true"><path class="nav-chats-bubble-l" d="M3.505 2.365A41.369 41.369 0 0 1 9 2c1.863 0 3.697.124 5.495.365 1.247.167 2.18 1.108 2.435 2.268a4.45 4.45 0 0 0-.577-.069 43.141 43.141 0 0 0-4.706 0C9.229 4.696 7.5 6.727 7.5 8.998v2.24c0 1.413.67 2.735 1.76 3.562l-2.98 2.98A.75.75 0 0 1 5 17.25v-3.443c-.501-.048-1-.106-1.495-.172C2.033 13.438 1 12.162 1 10.72V5.28c0-1.441 1.033-2.717 2.505-2.914Z"/><path class="nav-chats-bubble-r" d="M14 6c-.762 0-1.52.02-2.271.062C10.157 6.148 9 7.472 9 8.998v2.24c0 1.519 1.147 2.839 2.71 2.935.214.013.428.024.642.034.2.009.385.09.518.224l2.35 2.35a.75.75 0 0 0 1.28-.531v-2.07c1.453-.195 2.5-1.463 2.5-2.915V8.998c0-1.526-1.157-2.85-2.729-2.936A41.645 41.645 0 0 0 14 6Z"/></svg></span>
+        <span class="sidebar-nav-label">Chats</span>
+      </a>
+    </div>
+
+    <div class="sidebar-favorites empty" id="favSection">
+      <div class="sidebar-section-header" onclick="toggleFavList()">
+        <span class="sidebar-section-title">Favorite Programs</span>
+        <span class="sidebar-section-hint" id="favHint">Hide</span>
+      </div>
+      <div class="sidebar-fav-list" id="favList"></div>
+    </div>
+
+    <div class="sidebar-conversations" id="convSection">
+      <div class="sidebar-section-header" onclick="toggleConvList()">
+        <span class="sidebar-section-title">Recents</span>
+        <span class="sidebar-section-hint" id="convHint">Hide</span>
+      </div>
+      <div class="sidebar-conv-list" id="convList"></div>
+    </div>
+
+    <!-- React mount point — UserMenuFooter is rendered into here by
+         AppShell via createPortal. The whole .sidebar-footer / #userMenu
+         block previously here lived in legacy CSS + sidebar.js
+         globals; the React component owns its own state + module CSS. -->
+    <div id="userMenuFooterMount"></div>
+  </div>

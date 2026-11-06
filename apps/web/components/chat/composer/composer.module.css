@@ -1,0 +1,817 @@
+/* Composer — chat input box, slash menu, plus menu, effort selector.
+   Scoped via CSS Module so class names don't collide with the legacy
+   stylesheet while it still exists. Values mirror the visual the user
+   approved before this React migration. */
+
+.inputArea {
+  /* 底部留白 12px：和画布上所有浮动控件到边缘的距离一致
+     （dag/panels/tools.css、chat/center-pane.css）。原 24 太空。 */
+  padding: 12px 24px 12px;
+  /* The column's margin inside this box: the pane's
+     --chat-column-gutter less the 24px side padding above, so the box
+     lines up with the transcript column. */
+  --composer-column-gutter: calc(var(--chat-column-gutter) - 24px);
+}
+/* 层级（从上到下）：输入框各组件 ≈ 弹出菜单 > 聊天遮罩 > 聊天内容。
+   inputArea 本身不建层叠上下文（z-index: auto），遮罩（::before/::after，
+   z 4）和组件（直接子元素，z 5）都直接排在聊天区的层叠里，所以遮罩永远
+   在组件和菜单之下，菜单的阴影能自然落在遮罩上。
+   envChips（Local / 项目那排）或 effort 的菜单开着时，只把组件提到
+   portal（z-50）之上：触发按钮画在菜单阴影之上，不被覆盖；遮罩不跟着
+   上去。controlsRow（模型/权限等）的菜单又高又罩在输入框上方，不提升，
+   否则输入框会反盖菜单下缘。 */
+.inputArea > * {
+  position: relative;
+  z-index: 5;
+}
+/* Tucked rows (use-tucked-controls.ts) slide behind the box. */
+.inputArea[data-tucked] > .composerStack {
+  z-index: 6;
+}
+/* The band along the box's edge, a little inside and outside it, is the
+   tuck switch (use-tucked-controls.ts): a hand there; the rest of the
+   box belongs to the text field. */
+.inputWrapper[data-tuckable] {
+  cursor: text;
+}
+.inputWrapper[data-tuckable] button {
+  cursor: pointer;
+}
+.inputArea[data-tuck-rim],
+.inputArea[data-tuck-rim] .inputWrapper[data-tuckable] {
+  cursor: pointer;
+}
+/* The band's outer half: a transparent ring RIM_OUT past the box on
+   every side (placed on the box's rectangle by use-tucked-controls.ts),
+   painted under the box because it comes earlier in the stack. */
+.tuckBand {
+  position: absolute;
+}
+.inputArea:has([data-environment-row] [aria-expanded="true"]) > *,
+.inputArea:has([data-effort-expanded="true"]) > * {
+  z-index: 51;
+}
+.inputArea {
+  background: transparent;
+  /* 80%-ink text token shared by env pills + compact controls (measured
+     from claude.ai/code: rgba(10,10,10,0.8) on light). --text-bright is
+     the theme's ink, so one mix covers both themes. */
+  --ink-80: color-mix(in srgb, var(--text-bright) 80%, transparent);
+  /* Opaque version of the input-box surface — used by the fn-form
+     bottom row, the outgoing overlay and the slash menu, which must
+     visually match the box. Dark surface is already opaque; light is
+     0.8 white over --bg-primary, composited below. */
+  --surface-solid: var(--bg-tertiary);
+  /* Anchored to the bottom of `#chatView` and floated OVER the chat
+     area, not pushed into the flex flow — so growing the fn-form
+     overlaps the chat content instead of squeezing it shorter (which
+     made the welcome screen reflow). */
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: auto;
+}
+/* Chat mask in two layers at z 4: above the transcript, below the
+   composer components and every popup. ::before is solid from the
+   env-chip row down (hides transcript text behind the chips, box and
+   controls); ::after is the short fade above the chips. */
+.inputArea::before {
+  content: "";
+  position: absolute;
+  inset: 12px 0 0;
+  background: var(--bg-primary);
+  pointer-events: none;
+  z-index: 4;
+}
+.inputArea::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: -16px;
+  height: 28px;
+  background: linear-gradient(to bottom, transparent, var(--bg-primary));
+  pointer-events: none;
+  z-index: 4;
+}
+
+/* Wrapper — the rounded rectangle the textarea sits inside.
+   The fn-form open / close animation is driven by an inline `height`
+   transition wired up in the React component. We deliberately do NOT
+   transition padding here: padding flips instantly with the class, and
+   the simultaneous height transition hides the snap. Two overlapping
+   0.3s transitions used to cause visible jitter on every open / close. */
+/* All geometry tokens come from `app/styles/design/composer.css`.
+   Every circular button and every wrapper corner is laid out from the
+   same `--composer-corner` value, so a single token change keeps the
+   wrapper / send / stop / close / plus buttons concentric. */
+/* Wrapper layout strategy:
+   - top row (textarea OR fn-form header): in normal flow at the top.
+   - body (fn-form / question only): in normal flow below the top row.
+   The controls render in the detached `.controlsRow` below the wrapper
+   in EVERY mode — the wrapper itself only ever holds the input/form
+   content, so opening a fn-form grows the box upward (the inputArea is
+   bottom-anchored) while the controls row stays put underneath. */
+.inputWrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  /* 内容列和 .chat-messages 消息列同宽同轴（共用 --chat-column-max，
+     空间够就扩）；输入框右缘对齐消息头像列。紧凑时同列一样每侧留
+     56px（inputArea 24px padding + 这里再收 32px），左侧车道让给
+     消息刻度条。 */
+
+  background: var(--composer-surface);
+  backdrop-filter: var(--composer-backdrop-filter);
+  -webkit-backdrop-filter: var(--composer-backdrop-filter);
+  border: none;
+  /* shadcn Nova input corner (rounded-lg), the same family as the
+     chips and buttons around it. */
+  border-radius: var(--radius-xl);
+  /* Chat mode: the controls row lives OUTSIDE the wrapper now, so no
+     bottom band is reserved. fn-form mode restores it (below). */
+  padding: 0;
+  /* Surface / shadow tokens are per theme (app/styles/themes/*): the
+     borderless shadcn Luma Card look, shadow-sm at rest and shadow-md
+     on hover / focus. */
+  box-shadow: var(--composer-shadow);
+  overflow: hidden;
+  transition: box-shadow 180ms ease,
+    height var(--composer-height-transition);
+}
+.inputWrapper:hover,
+.inputWrapper:focus-within {
+  box-shadow: var(--composer-shadow-focus);
+}
+/* Crossfade overlay shown briefly during fn-form A → fn-form B
+   switches. Sits on top of the new form (z-index 1) and fades opacity
+   1→0 over one composer fade duration. Covers the whole wrapper —
+   header + body are all the wrapper holds now. */
+.outgoingLayer {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 1;
+  background: var(--surface-solid);
+  border-radius: var(--radius-xl);
+  animation: outgoingLayerFade var(--composer-fade-duration) ease forwards;
+}
+/* Suppress the cloned header/body's own fadeIn animation — we want
+   them visible at opacity 1 while the LAYER fades from 1 to 0. */
+.outgoingLayer [data-fn-form-header],
+.outgoingLayer [data-fn-form-body] {
+  animation: none;
+  opacity: 1;
+}
+/* Keyframes kept HERE (not the global styles) so turbopack mangles the
+   ``@keyframes`` name and the ``animation: <name>`` reference above
+   with the same hash. Same fix as the slashOpen/slashClose pair
+   further down — turbopack's CSS-module pass mangles ``animation:``
+   identifiers, so a globally-defined keyframe of the original name
+   wouldn't match. */
+@keyframes outgoingLayerFade {
+  from { opacity: 1; }
+  to   { opacity: 0; }
+}
+
+/* Dark-mode override removed — `var(--text-bright)` already swaps
+   between near-black (light) and near-white (dark) via the theme
+   tokens in design/composer.css, so a single rule covers both. */
+
+/* Left cluster of the controls row (permission / plus / tool chips). */
+.inputOptions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  position: relative;
+  /* Narrow composer (side panels open): the left cluster scrolls
+     horizontally inside its own box instead of wrapping or colliding
+     with the right cluster on the same absolute-positioned row.
+     (Popovers/menus are portaled, so nothing here gets clipped.) */
+  min-width: 0;
+  overflow-x: auto;
+  /* Shadow room: overflow-x clips y too, and this row is exactly as
+     tall as its pills; the padding keeps their drop shadow whole and the
+     negative margin leaves the layout unchanged. */
+  padding: 6px;
+  margin: -6px;
+  scrollbar-width: none;
+}
+.inputOptions::-webkit-scrollbar { display: none; }
+.inputOptions > * { flex-shrink: 0; }
+
+/* Permission control — an sm control-row Button (buttonVariants) that shows
+   only its label. */
+/* Text-only: drop the shield glyph (no chevron — plain text). 隐藏的
+   必须是图标的整个 wrapper——只藏 svg 会留下一个 gap 的幽灵边距，把文本
+   推离 768px 列左缘（Claude 实测文本缩进 = 6px padding）。 */
+.inputOptions :global(.permission-badge > :has(svg)) {
+  display: none;
+}
+
+/* Agent-model cluster — right side of the bottom row: sm control-row Buttons
+   (buttonVariants) with the role glyph + model name. Scrolls in its own
+   box when narrow. */
+.agentChips {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  overflow-x: auto;
+  /* Shadow room: overflow-x clips y too, and this row is exactly as
+     tall as its pills; the padding keeps their drop shadow whole and the
+     negative margin leaves the layout unchanged. */
+  padding: 6px;
+  margin: -6px;
+  scrollbar-width: none;
+}
+.agentChips::-webkit-scrollbar { display: none; }
+.agentChips > * { flex-shrink: 0; }
+/* 模型图标（气泡）常驻——用户要求模型名旁保留 logo。 */
+
+/* Send / stop button — a single absolute-positioned square anchored
+   to the wrapper's bottom-right corner in chat mode, so attachments
+   above and long text grow the box upward without moving it. `top`
+   (not `bottom`) carries the anchor so it still transitions into the
+   fn-form header slot below. */
+.actionBtn {
+  position: absolute;
+  /* Colours come from buttonVariants in index.tsx (default when there is
+     something to send, ghost when empty, destructive to stop); size and
+     place come from the composer tokens in design/composer.css, centred in the last
+     text line. ONE geometry for every mode — inside fn-forms only `top`
+     and `right` glide (.morphed below). */
+  width: var(--composer-action-size);
+  height: var(--composer-action-size);
+  right: var(--composer-action-inset);
+  top: var(--composer-action-top);
+  transition: top var(--composer-height-transition),
+    right var(--composer-height-transition),
+    background-color 0.15s,
+    color 0.15s,
+    opacity 180ms ease;
+  /* Above the form content during the wrapper height transition. */
+  z-index: 2;
+}
+/* Morphed (fn-form) — the button sits in the 48px form header, beside
+   the close ✕: vertically centred (top 10) and 8px left of the 24px ✕
+   at right:12. `top`/`right` transition on the same
+   curve as the wrapper height, so opening a form slides the button
+   from the input row's corner into the header slot. */
+.morphed .actionBtn {
+  top: calc((48px - var(--composer-action-size)) / 2);
+  right: 44px;
+}
+/* In the chat composer the attachments share the text's column (the
+   chat-input-row's mic gutter + 2px text inset on the left, the send
+   gutter on the right), so cards line up with what you type and the mic
+   keeps the left gutter to itself. The message editor and queued rows
+   reuse the strip at its own padding. */
+.inputWrapper:not(.morphed) > :global([data-attachment-strip]) {
+  padding-left: calc(var(--composer-action-inset) + var(--composer-action-size) + var(--composer-action-gap));
+  padding-right: calc(var(--composer-action-inset) + var(--composer-action-size) + 5px);
+}
+.actionBtn svg {
+  fill: currentColor;
+  /* 16px like the chip glyphs around the box; icon-sm would shrink an
+     unsized svg to 14px. */
+  width: 16px;
+  height: 16px;
+}
+
+
+.sendBtn[data-fn-missing="true"] {
+  opacity: 0.58;
+}
+.sendBtn[data-fn-missing="true"]:hover {
+  opacity: 0.72;
+}
+
+/* Close button — same 24px circle family as the action button, solid
+   tint fill. Pinned in the 48px form header at the content's 12px
+   right inset, vertically centred (top 12). */
+.closeBtn {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  width: var(--ui-button-h-xs);
+  height: var(--ui-button-h-xs);
+  border-radius: var(--radius-md);
+  border: none;
+  background: color-mix(in srgb, var(--text-secondary) 14%, transparent);
+  color: var(--text-secondary);
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  box-sizing: border-box;
+  flex-shrink: 0;
+  transition: background 0.15s, color 0.15s, opacity 180ms ease;
+  z-index: 2;
+}
+.closeBtn:hover {
+  background: color-mix(in srgb, var(--text-secondary) 22%, transparent);
+  color: var(--text-bright);
+}
+.closeBtn svg {
+  display: block;
+}
+
+/* Right-aligned group in the bottom row (agent text chips + effort
+   pill + context badge). min-width:0 lets it shrink on narrow
+   composers; the shrink is absorbed by .agentChips' own overflow-x
+   scroll while the fixed-size pill / ring stay visible. */
+.inputBottomRight {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.inputBottomRight > :not(.agentChips) { flex-shrink: 0; }
+
+/* Plus button — 32×32 circle. Sits at bottomRow padding (12px), so its
+   centre is `--composer-corner` away from the wrapper's bottom-left
+   corner → concentric with that corner's quarter-circle. */
+.plusBtn {
+  width: var(--composer-button-size);
+  height: var(--composer-button-size);
+  border-radius: var(--radius-md);
+  background: transparent;
+  border: none;
+  color: var(--text-secondary);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+  padding: 0;
+}
+.plusBtn:hover {
+  background: var(--bg-hover);
+  color: var(--text-bright);
+}
+.plusBtn.hasActive {
+  color: var(--accent-blue);
+}
+
+/* Active tool chips — circular icon by default, hover expands to reveal
+   close X + tooltip below. 1:1 with legacy `.tool-chip` / `.tool-chip-*`. */
+.activeToolChips {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+.activeToolChips:empty {
+  display: none;
+}
+.toolChip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  /* Icon stays pinned to the left side; the × slot grows out the
+     right edge on hover. ``justify-content: flex-start`` + fixed
+     left padding = icon-position-invariant. Width is the only thing
+     that animates on the chip; the circular icon area is rock-solid
+     while the chip "extends" rightwards. */
+  justify-content: flex-start;
+  width: var(--composer-button-size);
+  height: var(--composer-button-size);
+  /* Left padding sized so the 16px icon centres inside the 32px
+     collapsed circle (8 + 16 + 8 = 32). The right padding fades in
+     with the × slot on hover. */
+  padding-left: 8px;
+  padding-right: 8px;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--accent-blue) 14%, transparent);
+  color: var(--accent-blue);
+  cursor: pointer;
+  transition: width 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              padding-right 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              background 0.15s;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+.toolChip:hover {
+  background: color-mix(in srgb, var(--accent-blue) 22%, transparent);
+  /* Tight fit: 8 (padding-left) + 16 (icon) + 4 (gap) + 12 (× hit
+     box at the narrower 10px stroke) + 6 (padding-right) = 46. */
+  width: 46px;
+  padding-right: 6px;
+}
+.toolChipIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.toolChipClose {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  /* Collapsed: zero footprint so the chip can shrink to a perfect
+     circle. Hover expands max-width to the icon width + restores
+     the margin-left so the close sits next to the icon with a
+     consistent gap. ``opacity`` fades it in lock-step. */
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+  overflow: hidden;
+  transition: max-width 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              margin-left 180ms cubic-bezier(0.16, 1, 0.3, 1),
+              opacity 180ms ease;
+  flex-shrink: 0;
+}
+.toolChip:hover .toolChipClose {
+  max-width: 12px;
+  margin-left: 4px;
+  opacity: 1;
+}
+/* The icon's wrapper must not flex-shrink inside the max-width-animated
+   span. */
+.toolChipClose > span {
+  flex-shrink: 0;
+}
+/* Disabled tool: muted circle, no accent, no × — click turns it on.
+   Stays a fixed circle on hover (no width-expand, since there's no ×). */
+.toolChipOff {
+  background: transparent;
+  color: var(--text-secondary);
+  opacity: 0.8;
+}
+.toolChipOff:hover {
+  /* No filled circle on hover. The ON state of these chips is itself a
+     filled tinted circle, so a gray fill here read as "enabled" — the
+     off Tools chip looked lit up the moment you hovered it. Hover now
+     just brightens the icon to signal it's clickable; the chip stays a
+     transparent circle (no × to expand for, so width/padding pinned). */
+  background: transparent;
+  color: var(--text-secondary);
+  width: var(--composer-button-size);
+  padding-right: 8px;
+  opacity: 1;
+}
+.toolChip[data-tooltip]::after {
+  content: attr(data-tooltip);
+  position: absolute;
+  /* These chips sit at the very bottom of the viewport, so a tooltip
+     below them gets clipped off-screen — show it ABOVE instead. */
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  white-space: nowrap;
+  /* Same badge as every HoverTip (Nova's tooltip, components/ui/tooltip.tsx). */
+  background: var(--surface-tooltip);
+  color: var(--text-on-tooltip);
+  border: none;
+  padding: 6px 12px;
+  border-radius: var(--radius-md);
+  font-size: var(--fs-xs);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease 0.1s;
+  z-index: 50;
+}
+.toolChip[data-tooltip]:hover::after {
+  opacity: 1;
+}
+
+/* ===== Detached controls row (chat mode) ===========================
+   Claude Code's three-band composer: env pills / small input box /
+   quiet controls on the page background. The controls render HERE — a
+   static sibling row 10px below the wrapper — in EVERY mode, so
+   opening a fn-form / question grows the wrapper above without moving
+   or restyling this row. */
+.controlsRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  /* Exactly the box's column (.inputWrapper's width rule): the box has
+     no ring, only a soft shadow, so its visible edge is the wrapper
+     edge and the first/last controls sit flush with it. */
+  max-width: min(var(--chat-column-max), calc(100% - 2 * var(--composer-column-gutter)));
+  /* 10px to the box, the same as the env row above it (6px shadow
+     padding + 4px margin). No fixed height: the row is as tall as its
+     chips (the sm / icon-sm Button), so the chips' tops sit 10px under
+     the box just as the env chips' bottoms sit 10px over it, whatever
+     size the Button has. */
+  margin: 10px auto 0;
+  padding: 0;
+  position: relative;
+}
+/* Right cluster order is chat model · effort · Agent · ring
+   (JSX order), on one 4px rhythm across both nesting levels. */
+.controlsRow .inputBottomRight,
+.controlsRow .agentChips {
+  gap: 4px;
+}
+
+/* Every control in this row is a shadcn Button (buttonVariants — the
+   app's `elevated` variant, the same borderless raised look as the box;
+   size sm / icon-sm): height, radius, padding, font and hover all come
+   from those classes. The legacy base rules above (.plusBtn, .toolChip,
+   .effortText — still used by the fn-form band) are unlayered and would
+   beat Tailwind's layered utilities, so this row reverts them to the
+   Button's values with revert-layer instead of restating a lookalike. */
+.controlsRow .plusBtn,
+.controlsRow .plusBtn:hover,
+.controlsRow .toolChip,
+.controlsRow .toolChip:hover,
+.controlsRow .effortText,
+.controlsRow .effortText:hover {
+  width: revert-layer;
+  height: revert-layer;
+  padding: revert-layer;
+  border: revert-layer;
+  border-radius: revert-layer;
+  background: revert-layer;
+  color: revert-layer;
+  font: revert-layer;
+  justify-content: revert-layer;
+}
+/* One glyph size and one glyph–label gap for every chip in the row:
+   16px and 5px. The Button's sm and icon-sm sizes shrink an unsized svg
+   to 12.25px from the utilities layer; these unlayered rules win. The
+   effort card opened from the row keeps its own controls' sizes. */
+.controlsRow :is(button, [role="button"]):not(:global(.effort-pill-host) *) svg,
+.controlsRow .toolChipIcon svg {
+  width: 16px;
+  height: 16px;
+}
+.controlsRow :is(button, [role="button"]):not(:global(.effort-pill-host) *) {
+  gap: 5px;
+}
+.controlsRow .effortText {
+  display: inline-flex;
+}
+/* State tints that are information, not chrome: the plus button and
+   an enabled tool chip show the accent while a tool is on. */
+.controlsRow .plusBtn.hasActive,
+.controlsRow .toolChip:not(.toolChipOff) {
+  color: var(--accent-blue);
+}
+/* The internal band's ×-slide is suppressed here — it would shift the
+   row's neighbours on every hover; the chip body click already toggles
+   the tool off (ToolChip's onClick={onToggle}). */
+.controlsRow .toolChip:hover .toolChipClose {
+  max-width: 0;
+  margin-left: 0;
+  opacity: 0;
+}
+
+/* Effort control — wrapper around the text trigger + the reused
+   <ThinkingEffortPill/>. In the detached row the pill's own icon chip
+   is hidden (display:none below) and the compact TEXT trigger opens
+   it; the expanded slider floats ABOVE the row as its own layer, so
+   nothing in the row moves or gets painted over. The morphed internal
+   band keeps the original 32px icon pill (the text trigger is
+   display:none by default). */
+.effortControl {
+  display: inline-flex;
+  align-items: center;
+  position: relative;
+}
+.effortText {
+  display: none;
+  align-items: center;
+  height: 20px;
+  padding: 0 8px;
+  border: none;
+  border-radius: var(--radius-md);
+  background: transparent;
+  color: var(--ink-80);
+  font-family: var(--font-sans);
+  font-size: var(--fs-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+/* The host is a zero-width anchor at the wrapper's right edge — the
+   floating shell right-aligns to it. */
+.controlsRow :global(.effort-pill-host) {
+  /* As tall as the row (its own h-[32px] is for the standalone pill). */
+  height: auto;
+  align-self: stretch;
+  width: 0;
+}
+.controlsRow :global(.effort-pill-shell) {
+  font-size: var(--fs-xs);
+}
+/* Collapsed chip hidden — the text trigger replaces it (it still
+   receives the trigger's programmatic .click(); display:none doesn't
+   block that). Expanded needs NO overrides here anymore: the shared
+   floating-card geometry in chat.css (bottom: 100% / right: 0 /
+   .effort-card surface) already floats it above the row. */
+.controlsRow :global(.effort-pill-shell:not([data-expanded])) {
+  display: none;
+}
+/* Narrow composer control labels collapse to their existing role icons
+   when the controls do not fit: controls/use-compact-controls-row.ts
+   measures the row's real need (it depends on the tool toggles and the
+   model names, so no fixed width is right) and sets data-compact. The
+   labels use the visually-hidden pattern instead of display:none so
+   each popover trigger keeps its accessible name. */
+.controlsRow[data-compact="true"] :global(.permission-badge .badge-details),
+.controlsRow[data-compact="true"] :global(.agent-badge .badge-details),
+.controlsRow[data-compact="true"] .effortValue {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.controlsRow[data-compact="true"] :global(.permission-badge),
+.controlsRow[data-compact="true"] :global(.agent-badge),
+.controlsRow[data-compact="true"] .effortText {
+  /* Square icon chips at whatever height the Button size gives. */
+  width: auto;
+  min-width: 0;
+  aspect-ratio: 1;
+  padding: 0 !important;
+  justify-content: center;
+}
+
+.controlsRow[data-compact="true"] :global(.permission-badge > :has(svg)) {
+  display: inline-flex !important;
+}
+
+.controlsRow[data-compact="true"] .effortText {
+  width: auto;
+}
+
+/* The lone effort glyph shows the level's colour while the label hides. */
+.controlsRow[data-compact="true"] .effortIcon {
+  color: var(--effort-color);
+}
+
+/* The hidden measuring copy (controls/use-compact-controls-row.ts): every
+   cluster lays out at its natural width, and nothing transitions, so the
+   copy reports full-size widths at once. */
+.controlsRow[data-measuring] > *,
+.controlsRow[data-measuring] > * > * {
+  flex-shrink: 0 !important;
+}
+.controlsRow[data-measuring],
+.controlsRow[data-measuring] * {
+  transition: none !important;
+  animation: none !important;
+}
+
+/* The options (+) dropdown is the shared radix <DropdownMenu> on
+   MENU_PANEL / itemCls (components/ui/menu/menu-styles.ts) — no
+   module CSS lives here for it. */
+
+/* Thinking-effort pill (`<ThinkingEffortPill />` in composer/index.tsx)
+   is fully Tailwind. The pill collapses to a `effort: {value} ⌄` chip
+   inline in the bottom row and expands rightward to a 340px slider
+   when clicked — no module CSS lives here for the effort UI. */
+
+/* Slash menu (popup above input that rolls up out of the input box) */
+/* Stack wrapper: makes the inputWrapper the positioning reference
+   for the slash menu. Its only job is ``position: relative`` — its
+   height is the inputWrapper's natural height (slashClip is
+   absolute, doesn't contribute), so anything inside positioned
+   ``bottom: 100%`` lands on the wrapper's top edge. */
+.composerStack {
+  position: relative;
+}
+.slashClip {
+  position: absolute;
+  left: 0;
+  right: 0;
+  /* .inputWrapper's width rule minus 48px per side — the menu docks
+     onto the input box as a narrower centered tab, never flush with
+     the box edges. absolute + left/right 0 + margin auto = centered. */
+  max-width: min(calc(var(--chat-column-max) - 96px), calc(100% - 2 * var(--composer-column-gutter) - 96px));
+  margin: 0 auto;
+  /* Bottom edge of the clip = inputWrapper's top edge.
+     No magic-number offset; no breakage when the wrapper grows
+     (multi-line input, fn-form open, etc.). */
+  bottom: 100%;
+  /* Tall enough for the menu's hover-expanded max-height. The clip's
+     overflow:hidden is what makes the open / close translateY
+     animation work — the menu starts at translateY(100%) inside the
+     clip, visually below the clip's bottom, and slides up to
+     translateY(0) anchored to the clip's own bottom (= wrapper top). */
+  height: 80vh;
+  overflow: hidden;
+  pointer-events: none;
+}
+.slashMenu {
+  position: absolute;
+  bottom: 0;
+  /* Full composer width — the menu docks onto the input box below,
+     so it spans exactly the box it merges with. */
+  left: 0;
+  right: 0;
+  transform-origin: 50% 100%;
+  pointer-events: auto;
+  /* Symmetric *visual* gap on all four sides. Top / left / right
+     each get 8px padding + 1px border = 9px. The bottom border is
+     removed so the menu merges with the textarea below, so we
+     compensate with an extra 1px of bottom padding to keep the
+     gap identical. */
+  padding: 8px 8px 9px 8px;
+  /* Same surface as the input box it docks onto — with the light
+     theme's near-white box, --bg-tertiary would show a seam. */
+  background: var(--surface-solid);
+  border: 1px solid var(--border);
+  border-radius: 14px 14px 0 0;
+  border-bottom: none;
+  box-shadow: none;
+  /* Compact by default so the popup never buries the conversation.
+     Expansion is scroll-driven (slash-menu.tsx sets an inline
+     max-height as the wheel turns, bottom-anchored so it grows
+     upward); mouseleave clears the inline value and this base value
+     plus the transition pulls it back down. */
+  max-height: 250px;
+  transition: max-height 220ms cubic-bezier(0.22, 1, 0.36, 1);
+  overflow-y: auto;
+  scrollbar-width: none;
+}
+.slashMenu::-webkit-scrollbar {
+  display: none;
+}
+
+.opening {
+  animation: slashOpen 380ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+.closing {
+  animation: slashClose 380ms cubic-bezier(0.4, 0, 0.84, 0) forwards;
+  pointer-events: none;
+}
+/* Keyframes live HERE inside the module so turbopack mangles the
+   ``@keyframes`` name and the ``animation: <name>`` reference with the
+   same hash. Before this they sat in the global styles unmangled
+   while the reference above was mangled to
+   ``composer-module__xxx__slashOpen``, which never matched anything —
+   the slash menu jumped in/out with no transition.
+
+   The global styles keep duplicates for any non-module consumers; harmless. */
+@keyframes slashOpen {
+  from { transform: translateY(100%); }
+  to   { transform: translateY(0); }
+}
+@keyframes slashClose {
+  from { transform: translateY(0); }
+  to   { transform: translateY(100%); }
+}
+
+.slashMenuItem {
+  display: block;
+  /* Equal padding on every side so the hover-state background
+     extends the same distance away from the text in every
+     direction — no horizontal stretch that makes vertical
+     spacing look pinched. */
+  padding: 10px;
+  border-radius: var(--radius-lg);
+  cursor: pointer;
+  user-select: none;
+  transition: background 0.12s;
+  text-align: left;
+}
+.slashMenuItem:hover,
+.slashMenuItemActive {
+  background: var(--bg-hover);
+}
+.slashMenuName {
+  font-size: var(--fs-sm);
+  color: var(--text-bright);
+  font-weight: 600;
+}
+.slashMenuArgs {
+  font-size: var(--fs-xs);
+  color: var(--text-muted);
+}
+.slashMenuDesc {
+  font-size: var(--fs-2xs);
+  color: var(--text-muted);
+  margin-top: 3px;
+  line-height: 1.4;
+}
+
+/* ===== Function-form mode ==========================================
+   The bottom row stays IDENTICAL to chat mode — same padding, same
+   layout, no extra border. The visual divider between the form
+   fields and the bottom row lives on the body itself
+   (`.body { border-bottom }` in fn-form.module.css). */
+
+/* "Select a model first" hint — shown in the bottom-left controls slot
+   (where the effort pill normally lives) when no chat model is picked.
+   Muted/warning tone so it reads as guidance, not an error. */
+
+/* Pending requests and the input use one shared column width. */
+.inputWrapper, .decisionColumn {
+  max-width: min(var(--chat-column-max), calc(100% - 2 * var(--composer-column-gutter)));
+  margin: 0 auto;
+}

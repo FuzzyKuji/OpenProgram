@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>Sidebar widths and collapsed state</title>
+  <style>
+    :root{color-scheme:light dark;font:15px/1.55 system-ui,sans-serif;--bg:#181817;--panel:#232321;--text:#eee;--muted:#aaa;--line:#444;--accent:#6ea8fe}
+    body{margin:0;background:var(--bg);color:var(--text)}
+    main{max-width:900px;margin:auto;padding:40px 24px 64px}h1{margin:0 0 8px;font-size:28px}h2{margin:32px 0 8px;font-size:18px}p{color:var(--muted);max-width:76ch}code{color:var(--accent)}
+    table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left}th{color:var(--text)}td{color:var(--muted)}
+  </style>
+</head>
+<body><main>
+  <h1>Sidebar widths and collapsed state</h1>
+  <p>Both sidebars share width, drag and collapse behavior. Each sidebar owns only its navigation, state sources and main content.</p>
+
+  <h2>State constraints</h2>
+  <table>
+    <tr><th>State</th><th>Width rules</th><th>Behavior</th></tr>
+    <tr><td>Left expanded</td><td>180–480px</td><td>Drag from the right edge; stop changing at the range limit</td></tr>
+    <tr><td>Right expanded</td><td>240–720px</td><td>Drag from the left edge; stop changing at the range limit</td></tr>
+    <tr><td>Collapsed</td><td>Fixed at 63px (a 47px card inside the 8px gutters)</td><td>Both sides use the same 200ms width animation</td></tr>
+    <tr><td>Expand again</td><td>Restore the valid width from before collapse</td><td>Use the same width animation and retain the most recently adjusted width</td></tr>
+  </table>
+
+  <h2>Implementation boundaries</h2>
+  <p><code>components/layout/use-resizable-rail.ts</code> is the sole implementation of width behavior: it saves expanded widths, enforces limits, handles pointer capture, generates expanded/collapsed styles and controls transitions. The sidebars supply their own limits and growth directions instead of maintaining separate event listeners. Handles share the rail-resize-handle style in base.css, with a hit area extending about 8px on either side of the divider without affecting layout width. The shell permits handle overflow while the inner content container remains clipped. Only the primary button starts a drag; touch panning and text selection on the handle are disabled.</p>
+
+  <h2>Opening and closing</h2>
+  <p>Every part of a rail exists in both states: opening and closing never mount, unmount or change the display of anything inside the rail, in either direction or when the rail is toggled again mid-move. The shell's width starts moving in the click's frame, and <code>.collapsed</code> comes and goes in that same render. Each part is one of three kinds (rules in <code>app/styles/base/layout.css</code>, "Opening and closing"):</p>
+  <table>
+    <tr><th>Kind</th><th>Parts</th><th>How it moves</th></tr>
+    <tr><td>Same place in both states</td><td>The left sidebar's New chat chip and link icons</td><td>Laid out against the left edge, which stays put; never moves. Each row's box rides the card's moving edge 8px in.</td></tr>
+    <tr><td>Two places</td><td>Both toggles, the right panel's view rows, the left footer's avatar</td><td>The toggles sit 8px in from the moving edge when open and centred in the collapsed card (8.5px); the header's padding moves between the two on the width's duration and curve. The right panel's rows are one column in both states and ride its moving left edge. The avatar's padding glides from 16px to 6px.</td></tr>
+    <tr><td>Open only</td><td>The wordmark, labels, the Ability refresh action, favourites, the conversation list, the scroll divider, the footer's name and chevron, the right panel's views (Files, Activity, Resources, Detail, Context)</td><td>Laid out at the open width in both states against the edge that stays put and clipped by the card, so nothing re-wraps; faded on the width's duration and curve (the footer's name on its own 160ms curve) by opacity alone; inert (no pointer, no focus, out of the accessibility tree) from a close's settle to an open's settle. The labels and the footer's name stay reachable inside their rows, which the collapsed rail keeps.</td></tr>
+  </table>
+  <p>A move changes no inherited property of a part (<code>pointer-events</code>, <code>visibility</code>, <code>color</code>, custom properties): the browser restyles the whole subtree under an element whose inherited property changes, and in the click's frame that was the whole conversation list (1,764 elements for <code>pointer-events</code>, 1,946 for <code>visibility</code>, against 1 for <code>opacity</code>; traced). <code>use-resizable-rail.ts</code> writes <code>inert</code> on the outermost open-only parts itself, at the settle (the width's <code>transitionend</code>, or a timer), so that restyle lands after the move; a part that mounts while the rail is at rest collapsed becomes inert with it.</p>
+  <p>The toggle's two glyphs (hide, show) stay mounted and cross-fade. <code>data-rail-closed</code> marks a close that has settled (the width's <code>transitionend</code>, or a timer); only what cannot be seen keys on it: the narrow layout's return to the flow beside a split canvas, the left list's scroll reset and paused running markers in the hidden list. A left sidebar closed with its list scrolled slides its links down to the top with the width (one Web Animation on transform) and resets the scroll at the settle in the same frame. Work in the right panel's views runs only while it is open: Activity, Resources' processes, page pictures and terminal reads pause while it is collapsed. A stored closed left sidebar paints collapsed in the first frame under <code>html[data-sidebar-closed]</code>, with no transition, its open-only parts out of reach by <code>interactivity: inert</code> until the mounted rail makes them inert.</p>
+
+  <h2>Component boundaries</h2>
+  <table>
+    <tr><th>File</th><th>Responsibility</th></tr>
+    <tr><td><code>sidebar/sidebar.tsx</code></td><td>Left shell, persisted toggle, New chat, favorites and session composition</td></tr>
+    <tr><td><code>sidebar/sidebar-primary-nav.tsx</code></td><td>Fixed navigation, route highlighting, navigation icon animation and Programs refresh</td></tr>
+    <tr><td><code>right-sidebar/right-sidebar.tsx</code></td><td>Right shell, file entry and view container</td></tr>
+    <tr><td><code>right-sidebar/detail-panel.tsx</code></td><td>Details/Context switching and detail rendering for the selected DAG node</td></tr>
+  </table>
+  <p>Do not split the session list or AppShell in this restructuring: their independent state and interaction boundaries require a change separate from moving sidebar shells.</p>
+
+  <h2>Acceptance</h2>
+  <p>Drag each sidebar to its limit and collapse it: it should smoothly become 63px wide within 200ms, with nothing in it vanishing or appearing in one frame. Expanding again restores its previous width. Dragging can begin within about 8px on either side of the divider. Hovering and dragging change only the cursor, with no extra highlight. Dragging continues after the pointer leaves the handle. Release, pointer cancellation or window blur must restore the collapse animation. Window-level end events supplement captured handle events; a move event that detects a released button also ends the drag.</p>
+
+  <h2>Implementation status</h2>
+  <p>Implemented: both sidebars use the same width behavior module. Fixed navigation and detail rendering have moved out of the shell files; shell components only compose them.</p>
+</main></body>
+</html>

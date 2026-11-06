@@ -1,0 +1,567 @@
+/* Shared chrome for management pages such as /skills, /mcp, /plugins
+   and /scheduler. Extracted verbatim from
+   skills-page.module.css (the most complete of the three) so all
+   three share ONE topbar height, ONE tab pill, ONE row geometry.
+
+   ponytail: only the pieces that were duplicated across all three
+   pages live here. Page-specific bits (mcp's server rail, plugins'
+   dialogs) stay in their own module. */
+
+.view {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  overflow: visible;
+}
+
+.topbar {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 16px 24px;
+  height: 64px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.topbarWithToggle {
+  /* The toggle's left edge lines up with the rail rows below it. */
+  gap: 8px;
+  padding-left: 8px;
+}
+
+.title {
+  display: inline-flex;
+  align-items: center;
+  height: var(--ui-button-h);
+  font-size: var(--fs-title);
+  font-weight: 600;
+  line-height: 1;
+  color: var(--text-bright);
+  flex-shrink: 0;
+}
+
+.tabs {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-left: 24px;
+}
+
+.tabBtn {
+  /* Same height + corner as every other control in the header row
+     (Button, SearchInput), so the pills don't read as a different
+     component family. */
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  box-sizing: border-box;
+  height: var(--ui-button-h);
+  padding: 0 12px;
+  font-size: var(--fs-sm);
+  line-height: 1;
+  color: var(--text-secondary);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--ui-button-radius);
+  cursor: pointer;
+  transition: background var(--motion-medium) var(--ease-standard), color var(--motion-medium) var(--ease-standard);
+  font-family: inherit;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tabIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+}
+.tabBtn:hover {
+  color: var(--text-bright);
+}
+.tabBtn.active {
+  color: var(--text-bright);
+  border-color: var(--border);
+  background: var(--bg-input);
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-left: auto;
+  min-width: 0;
+}
+
+/* Scrollable single-column body — the shape /skills browse uses. */
+.body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 18px 24px 24px;
+}
+
+.panel {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+/* Master-detail body (used by /mcp only, kept here so the grid
+   metrics match the single-column padding). */
+.splitBody {
+  flex: 1;
+  display: grid;
+  grid-template-columns: calc(var(--sidebar-width) - 1px) 1fr;
+  padding: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.errorBar {
+  padding: 8px 24px;
+  font-size: var(--fs-xs);
+  color: var(--danger-soft);
+  border-bottom: 1px solid var(--border);
+}
+
+.empty {
+  padding: 48px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: var(--fs-base);
+}
+
+.headerSummary {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* --- shared empty / first-run state ---------------------------------
+   One anatomy for every management page: framed icon, heading, one
+   explanatory line, optional action. Centered in whatever column it sits
+   in; `.emptyStateCompact` keeps it near the top of a list body. */
+.emptyState {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 48px 24px;
+  text-align: center;
+}
+.emptyStateCompact {
+  flex: none;
+  justify-content: flex-start;
+  padding: 56px 24px 40px;
+}
+.emptyIcon {
+  display: grid;
+  place-items: center;
+  width: 44px;
+  height: 44px;
+  margin-bottom: 10px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-xl);
+  background: var(--bg-secondary);
+  color: var(--text-secondary);
+}
+.emptyIcon svg {
+  width: 20px;
+  height: 20px;
+}
+.emptyTitle {
+  margin: 0;
+  color: var(--text-bright);
+  font-size: var(--fs-chat);
+  font-weight: 600;
+  line-height: 1.4;
+}
+.emptyDescription {
+  max-width: 420px;
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 1.55;
+}
+.emptyAction {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 12px;
+}
+
+
+/* Section label above a list ("Installed · 3"). */
+.sectionHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 8px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 600;
+}
+.sectionHeader > span:last-child:not(:first-child) {
+  margin-left: auto;
+  color: var(--text-secondary);
+  font-weight: 500;
+}
+
+/* --- shared list row ---------------------------------------------
+   One row geometry for a manageable item on all three pages:
+   16px icon slot, name line + description line, meta badges, then
+   trailing controls (switch / buttons). Matches the skills tree
+   leaf so /mcp and /plugins rows sit at the same rhythm. */
+
+.row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  min-height: 48px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-list-radius);
+  cursor: pointer;
+  transition: background var(--motion-medium) var(--ease-standard), color var(--motion-medium) var(--ease-standard);
+}
+.row:hover {
+  background: var(--bg-hover);
+  color: var(--nav-color-hover);
+}
+
+.rowOpen {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.row:has(.rowOpen:focus-visible) {
+  background: var(--bg-hover);
+  color: var(--nav-color-hover);
+}
+
+/* Non-navigating rows (nothing to open) keep the default cursor. */
+.rowStatic {
+  cursor: default;
+}
+
+.rowIcon {
+  width: 16px;
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-secondary);
+}
+
+.rowMain {
+  flex: 1;
+  min-width: 0;
+}
+
+.rowName {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--fs-base);
+  color: var(--nav-color);
+  min-width: 0;
+}
+.row:hover .rowName {
+  color: var(--nav-color-hover);
+}
+
+.rowLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowDesc {
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rowCount {
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.rowActions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.catalogGrid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(260px, 1fr));
+  gap: 10px;
+}
+
+.catalogCard {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 154px;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-list-radius);
+  background: color-mix(in srgb, var(--bg-secondary) 48%, transparent);
+  transition: border-color var(--motion-medium) var(--ease-standard), background var(--motion-medium) var(--ease-standard);
+}
+.catalogCard:hover {
+  border-color: var(--border-light);
+  background: color-mix(in srgb, var(--bg-secondary) 72%, transparent);
+}
+.catalogHeader {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+.catalogTitles { flex: 1; min-width: 0; }
+.catalogTitle {
+  color: var(--text-bright);
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalogSubtitle {
+  margin-top: 2px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  line-height: 1.4;
+  font-family: var(--font-sans);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.catalogStatus { display: flex; gap: 4px; flex-shrink: 0; }
+.catalogDescription {
+  display: -webkit-box;
+  min-height: 36px;
+  margin-top: 10px;
+  color: var(--text-secondary);
+  font-size: var(--fs-sm);
+  line-height: 18px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+.catalogFooter {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  margin-top: auto;
+  padding-top: 12px;
+}
+.catalogMeta {
+  display: flex;
+  align-items: center;
+  flex: 1;
+  min-width: 0;
+  gap: 7px;
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+}
+.catalogActions { display: flex; align-items: center; gap: 6px; flex-shrink: 0; }
+
+/* Group header row — the skills folder row, reusable for any
+   grouping (plugins by source, mcp by state). */
+.groupRow {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 12px;
+  border: 1px solid transparent;
+  border-radius: var(--ui-list-radius);
+  background: color-mix(in srgb, var(--bg-secondary) 50%, transparent);
+  cursor: pointer;
+  user-select: none;
+  transition: background var(--motion-medium) var(--ease-standard), color var(--motion-medium) var(--ease-standard);
+}
+.groupRow:hover {
+  background: var(--bg-hover);
+  color: var(--nav-color-hover);
+}
+
+.groupToggle {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 1;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.groupName {
+  font-size: var(--fs-base);
+  font-weight: 600;
+  color: var(--nav-color);
+}
+.groupRow:hover .groupName {
+  color: var(--nav-color-hover);
+}
+
+/* Small inline badge — one style for source / trust / transport. */
+.badge {
+  display: inline-block;
+  font-size: var(--fs-2xs);
+  line-height: 16px;
+  padding: 0 6px;
+  border-radius: var(--radius-xs);
+  border: 1px solid var(--border);
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.badgeGreen {
+  color: var(--accent-green);
+  border-color: color-mix(in srgb, var(--accent-green) 27%, transparent);
+  background: color-mix(in srgb, var(--accent-green) 7%, transparent);
+}
+.badgeYellow {
+  color: var(--accent-yellow);
+  border-color: color-mix(in srgb, var(--accent-yellow) 27%, transparent);
+  background: color-mix(in srgb, var(--accent-yellow) 7%, transparent);
+}
+.badgeRed {
+  color: var(--danger-soft);
+  border-color: color-mix(in srgb, var(--accent-red) 27%, transparent);
+  background: color-mix(in srgb, var(--accent-red) 7%, transparent);
+}
+
+/* Secondary task bar. It is deliberately quieter than the capability pills
+   above it: text tabs, compact counts, and one task-local primary action. */
+.subnav {
+  display: flex;
+  align-items: center;
+  min-height: 52px;
+  gap: 18px;
+  padding: 0 24px;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.subnavTabs {
+  display: flex;
+  align-items: stretch;
+  align-self: stretch;
+  gap: 24px;
+}
+
+.tabBtn.subnavTab {
+  position: relative;
+  height: 100%;
+  padding: 0;
+  gap: 7px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text-secondary);
+}
+.tabBtn.subnavTab:hover {
+  color: var(--text-primary);
+  background: transparent;
+}
+.tabBtn.subnavTab.active {
+  color: var(--text-bright);
+  border: 0;
+  background: transparent;
+}
+.tabBtn.subnavTab.active::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -1px;
+  height: 2px;
+  border-radius: var(--radius-2xs) var(--radius-2xs) 0 0;
+  background: var(--accent-blue);
+}
+
+.tabCount {
+  min-width: 18px;
+  padding: 1px 5px;
+  border-radius: var(--radius-full);
+  background: var(--bg-tertiary);
+  color: var(--text-secondary);
+  font-size: var(--fs-2xs);
+  line-height: 16px;
+  text-align: center;
+}
+
+.subnavEnd {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-left: auto;
+}
+
+.subnavSummary {
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  white-space: nowrap;
+}
+
+/* At narrow app widths the main sidebar is position:fixed. Reserve its
+   collapsed 49px rail so page chrome is never covered (same rule as the
+   Settings frame); an expanded sidebar stays a temporary overlay. */
+@media (max-width: 900px) {
+  .view { padding-left: var(--rail-collapsed-w); }
+}
+
+@media (max-width: 760px) {
+  .topbar {
+    height: auto;
+    min-height: 64px;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px;
+  }
+  .title { width: 100%; }
+  .tabs .tabIcon { display: none; }
+  .toolbar {
+    order: 3;
+    width: 100%;
+    margin-left: 0;
+    gap: 6px;
+  }
+  .subnav { flex-wrap: wrap; }
+  .subnavTabs { min-height: 48px; overflow-x: auto; }
+  .subnavEnd { width: 100%; margin-left: 0; padding-bottom: 10px; }
+  .subnavSummary { margin-right: auto; white-space: normal; }
+  .body { padding: 14px 16px 16px; }
+  .splitBody { grid-template-columns: minmax(150px, 38%) 1fr; }
+  .catalogGrid { grid-template-columns: 1fr; }
+}

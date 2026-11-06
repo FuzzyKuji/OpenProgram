@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>WebSocket command and interactive-wait lifecycle</title>
+  <style>
+    :root{color-scheme:dark;--bg:#11120f;--panel:#191a16;--line:#34362d;--text:#e8e6dc;--muted:#aaa99f;--ok:#8fca8b;--warn:#e1b36c;--bad:#e98b83}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 ui-sans-serif,system-ui,sans-serif}main{max-width:1040px;margin:auto;padding:48px 24px 72px}h1{font-size:32px;line-height:1.2;margin:.2em 0}h2{margin-top:38px;border-bottom:1px solid var(--line);padding-bottom:8px}h3{margin:0 0 8px}.sub,.muted{color:var(--muted)}.lead,.card,.note{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.table{overflow:auto;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;min-width:720px}th,td{text-align:left;vertical-align:top;padding:10px 12px;border-bottom:1px solid var(--line)}th{color:var(--muted)}code{color:#d7c58f}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}ol,ul{padding-left:22px}.flow{display:grid;grid-template-columns:auto 1fr;gap:8px 12px}.flow b{color:var(--warn)}
+  </style>
+</head>
+<body><main>
+  <p class="sub">OpenProgram / WebUI reliability / implementation handoff</p>
+  <h1>WebSocket command and interactive-wait lifecycle</h1>
+  <p class="sub">This page defines ownership and observable behavior for individual WebSocket command failures, disconnections, and legacy <code>ask_user</code> waits. See Section 07 for implementation status and verification evidence.</p>
+
+  <div class="lead"><b>Resolved design.</b> Isolate individual command exceptions within the receive loop and return sanitized <code>operation_error</code>; the new frontend continues to consume the old server’s <code>action_error</code>. The dispatcher does not clean up reservations acquired by actions, avoiding deletion of another connection’s ownership. On disconnection, send an in-process sentinel to the legacy follow-up queue only if no other connection focuses that session. The waiter returns <code>None</code> upon receiving the sentinel; disconnection must not be interpreted as an empty-string answer.</div>
+
+  <h2>01 · Current implementation and boundaries</h2>
+  <div class="table"><table><thead><tr><th>Entry point</th><th>Current behavior</th><th>Boundary</th></tr></thead><tbody>
+    <tr><td><code>server._websocket_handler</code></td><td>The receive loop separately isolates JSON parsing and individual handler exceptions. A handler failure returns <code>operation_error</code> and then continues receiving subsequent commands.</td><td>Transport disconnection and failure to send an error frame still terminate the connection. The dispatcher does not infer ownership of resources acquired by actions.</td></tr>
+    <tr><td><code>server._handle_ws_command</code></td><td>Unknown actions return <code>operation_error(code=unknown_action)</code>; exceptions from registered handlers propagate to the receive loop, where the same constructor returns <code>handler_error</code>.</td><td>The wire response contains only constrained action, session, and request metadata and registered error categories. Exception details go only to local logs.</td></tr>
+    <tr><td><code>server._web_follow_up</code></td><td>Wait using a session queue; when the last observer disconnects or cancellation occurs, return <code>None</code>; a real empty string remains <code>""</code>.</td><td>The legacy queue remains process-local state and does not provide durable recovery across worker restarts.</td></tr>
+    <tr><td>stop/delete</td><td>Cancellation objects and disconnection sentinels are both treated as non-answers. The owner’s finally block cleans up the queue.</td><td>The generic dispatcher does not clean up reservations by session. The action that acquired a resource must roll back using its own owner token.</td></tr>
+  </tbody></table></div>
+
+  <h2>02 · Reference mechanisms and trade-offs</h2>
+  <div class="grid">
+    <section class="card"><h3>Starlette WebSocket</h3><p>Transport disconnection uses <code>WebSocketDisconnect</code> to terminate the connection. Place connection-level cleanup in <code>finally</code> and handle command-level application exceptions within the receive loop.</p></section>
+    <section class="card"><h3>QuestionRegistry</h3><p>New runtime questions already use a session-scoped, claim-once <code>cancel_session()</code>. Legacy follow-up does not migrate its protocol; it adopts only the same “cancellation is not an answer” semantics.</p></section>
+    <section class="card"><h3>Existing run reservation</h3><p><code>_release_run_reservation(session_id,msg_id)</code> already performs owner-scoped cleanup. Because the dispatcher lacks an owner token, generic exception handling must not clean up by session.</p></section>
+  </div>
+  <p class="note"><b>Adopt: </b>command-level error frames, a sentinel when the last observer disconnects, and owner-scoped action cleanup.<b>Modify: </b>the legacy queue return type to allow <code>None</code>.<b>Reject: </b>cancellation whenever any tab disconnects, dispatcher deletion of reservations by session, closing the connection after an application exception, and passing sentinels to business functions.</p>
+
+  <h2>03 · Target data flow</h2>
+  <div class="flow">
+    <b>1</b><div>Receive text; log sanitized diagnostics for invalid JSON and continue receiving.</div>
+    <b>2</b><div>After parsing an object, execute the action handler. Unknown actions return <code>operation_error</code>, echoing a valid <code>request_id</code>.</div>
+    <b>3</b><div>Log handler exceptions structurally with only action/session/type; return <code>code=handler_error</code> to the same socket, then continue receiving the next command.</div>
+    <b>4</b><div>After transport disconnection, first remove the current socket from the connection set, then check whether another connection still focuses its session.</div>
+    <b>5</b><div>If no other focused connection remains and a legacy follow-up queue exists, enqueue the unique sentinel. The finally block in <code>_web_follow_up</code> still deletes the queue.</div>
+    <b>6</b><div>The waiter converts the sentinel to <code>None</code>; a real empty string remains an empty string, so they are distinguishable.</div>
+  </div>
+
+  <h2>04 · Trust boundaries, failures, and compatibility</h2>
+  <ul>
+    <li>Client payloads are untrusted. Error frames must not echo payloads, exception messages, paths, credentials, or tracebacks.</li>
+    <li>Logs may record action, session_id, and exception type; tracebacks go only to the local logger.</li>
+    <li>After acquiring a reservation or another resource, a handler must roll back using its own owner token. The dispatcher isolates transport handling and does not infer business ownership.</li>
+    <li><code>WebSocketDisconnect</code> and failure to send an error frame still terminate the connection. Socket writes must not retry indefinitely.</li>
+    <li>Multi-window compatibility: closing one tab does not cancel the question while another connection still focuses the same session.</li>
+    <li>legacy <code>follow_up_answer</code> wire shape remains unchanged; ordinary string answers and real empty strings remain valid.</li>
+  </ul>
+
+  <h2>05 · Explicit exclusions</h2>
+  <ul>
+    <li>Do not refactor the legacy global <code>set_ask_user</code> into QuestionRegistry.</li>
+    <li>Do not change runtime.ask, ACP, channel questions, the send queue, or the run reservation protocol.</li>
+    <li>Do not address Windows, system Keychain/keyring, orphan files, or other audit items.</li>
+  </ul>
+
+  <h2>06 · Acceptance matrix</h2>
+  <div class="table"><table><thead><tr><th>Public entry point</th><th>Scenario</th><th>Observable assertion</th></tr></thead><tbody>
+    <tr><td><code>_websocket_handler</code></td><td>The first registered action raises <code>KeyError</code>; the second is ping</td><td>The same connection first receives sanitized <code>operation_error</code>, then pong; the first command did not close the connection.</td></tr>
+    <tr><td><code>_websocket_handler</code></td><td>Invalid JSON</td><td>Ignore the frame and process the next one without echoing the original text.</td></tr>
+    <tr><td><code>_web_follow_up</code> + disconnect</td><td>The only focused connection disconnects</td><td>The waiting thread returns <code>None</code> within the test deadline rather than waiting 300 seconds; the queue is eventually deleted.</td></tr>
+    <tr><td>disconnect</td><td>Another connection still focuses the same session</td><td>Do not enqueue a sentinel; keep waiting. Return the ordinary answer submitted by the other connection.</td></tr>
+    <tr><td><code>follow_up_answer</code></td><td>The user submits an empty string</td><td>Return <code>""</code>; do not interpret it as a disconnection.</td></tr>
+  </tbody></table></div>
+
+  <h2>07 · Implementation files and evidence</h2>
+  <div class="table"><table><thead><tr><th>File</th><th>Responsibility</th></tr></thead><tbody>
+    <tr><td><code>openprogram/interfaces/server/server.py</code></td><td>Command-level exception boundaries, sanitized error frames, connection-observer cleanup, and follow-up sentinel interpretation.</td></tr>
+    <tr><td><code>tests/component/webui/runtime/test_websocket_command_lifecycle.py</code></td><td>Public-entry regression tests for the actual receive loop, disconnection, and waiting threads.</td></tr>
+  </tbody></table></div>
+  <p class="note"><span class="ok">The first implementation slice is complete and has passed independent specification and quality reviews.</span> command-level isolation, sanitized <code>operation_error</code>, frontend compatibility with old frames, and follow-up disconnection semantics are covered by public-entry regressions. Persistent error storage, acknowledgement, and reconnect recovery are outside this page’s implementation scope.</p>
+<section id="interaction-responsiveness"><h2>Interaction responsiveness</h2><p>After a successful socket write, the sender immediately clears only the captured composer draft and renders a locally pending user message in its owning conversation. The pending reservation retains the exact text and attachments until authoritative acknowledgement. The server acknowledgement reconciles the local identity without duplicating messages; rejection preserves a recoverable message without overwriting a newer draft. A pending client message is not proof that model execution started.</p><p>Unrelated resource projection and session/sidebar work must not delay message acceptance or block the server event loop. A resource close targets the exact page and association identities, preserves generation and sequence ordering, and does not scan unrelated execution inputs. Local close feedback remains separate from native close confirmation; failure or a newer resource generation cannot be hidden by an old pending action.</p><p>Controlled tests cover delayed acknowledgement, rejection, session switching, bound composers, queue/steer behavior, resource close ordering, and unrelated event-loop progress. Production latency is not inferred from synthetic timings. This work changes source only: the installed App and running worker are not rebuilt, packaged, restarted or operated.</p><p>Implementation status: source implementation passes independent specification and quality review. Public-entry regression checks cover socket acceptance, acknowledgement reconciliation, recoverable rejection, session-history concurrency, attachment cancellation, and confirmed native closure. Runtime installation is deferred. Backend changes are limited to the identified blocking call paths; no general-purpose protocol replacement or concurrency framework is introduced.</p></section>
+</main></body></html>

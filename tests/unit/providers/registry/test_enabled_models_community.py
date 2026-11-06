@@ -1,0 +1,77 @@
+"""list_enabled_models reads the runtime registry (config spec rows).
+
+Post enabled-models-redesign the chat composer picker no longer iterates
+config ``custom_models`` — it reshapes ``ENABLED_MODELS`` (which is built
+from the user's enabled ``providers.<p>.models`` spec rows) directly. These
+tests pin:
+
+  * a community-only provider (no static enabled_models row) whose enabled
+    spec row lands in the registry is surfaced in the picker;
+  * a provider whose ``enabled`` toggle is off is excluded;
+  * the registry key's provider carries through as the row's provider id.
+"""
+from __future__ import annotations
+
+import pytest
+
+import openprogram.models.providers.catalog.enabled_models as mg
+from openprogram.models.providers.types import Model
+from openprogram.models.listing import listing
+from openprogram.models.providers.settings import storage as st
+from openprogram.models.providers.catalog import metadata as cat
+
+
+def _model(mid, provider, api="anthropic-messages", ctx=200000):
+    return Model.model_validate({
+        "id": mid, "name": mid, "provider": provider, "api": api,
+        "base_url": "https://x/anthropic", "context_window": ctx,
+    })
+
+
+@pytest.fixture
+def stub_labels(monkeypatch):
+    monkeypatch.setattr(cat, "label_for", lambda pid: pid)
+
+
+def test_community_only_enabled_model_is_surfaced(monkeypatch, stub_labels):
+    monkeypatch.setattr(mg, "ENABLED_MODELS", {
+        "foo-coding-plan/Foo-1": _model("Foo-1", "foo-coding-plan"),
+    })
+    monkeypatch.setattr(st, "_read_providers_cfg", lambda: {
+        "foo-coding-plan": {"enabled": True, "models": [{"id": "Foo-1"}]},
+    })
+    out = listing.list_enabled_models()
+    ids = [(m["provider"], m["id"]) for m in out]
+    assert ("foo-coding-plan", "Foo-1") in ids
+    row = next(m for m in out if m["id"] == "Foo-1")
+    assert row["api"] == "anthropic-messages"
+    assert row["context_window"] == 200000
+
+
+def test_disabled_community_provider_not_surfaced(monkeypatch, stub_labels):
+    monkeypatch.setattr(mg, "ENABLED_MODELS", {
+        "foo-coding-plan/Foo-1": _model("Foo-1", "foo-coding-plan"),
+    })
+    monkeypatch.setattr(st, "_read_providers_cfg", lambda: {
+        "foo-coding-plan": {"enabled": False, "models": [{"id": "Foo-1"}]},
+    })
+    out = listing.list_enabled_models()
+    assert all(m["provider"] != "foo-coding-plan" for m in out)
+
+
+def test_disabled_provider_rows_in_registry_absent_from_picker(monkeypatch, stub_labels):
+    """Regression: ENABLED_MODELS loads EVERY provider's spec rows, including a
+    disabled provider's (openai/anthropic in the real config). The picker gate
+    must keep those out — only enabled providers' models reach the composer."""
+    monkeypatch.setattr(mg, "ENABLED_MODELS", {
+        "openai/gpt-x": _model("gpt-x", "openai", api="openai-completions"),
+        "deepseek/deepseek-chat": _model("deepseek-chat", "deepseek"),
+    })
+    monkeypatch.setattr(st, "_read_providers_cfg", lambda: {
+        "openai": {"enabled": False, "models": [{"id": "gpt-x"}]},
+        "deepseek": {"enabled": True, "models": [{"id": "deepseek-chat"}]},
+    })
+    out = listing.list_enabled_models()
+    provs = {m["provider"] for m in out}
+    assert "openai" not in provs          # disabled → hidden
+    assert "deepseek" in provs            # enabled → shown

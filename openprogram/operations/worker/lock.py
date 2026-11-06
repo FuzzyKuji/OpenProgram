@@ -1,0 +1,135 @@
+"""Single-holder file lock for the persistent worker.
+
+Only one worker process can run at a time per profile. Uses
+``fcntl.flock`` (macOS + Linux) through
+:mod:`openprogram.host._platform.locking`, which emulates the same surface
+on Windows via :func:`msvcrt.locking`. The lock file also stores
+the holder PID so peek-style callers (`worker status`) can report
+the owner without trying to acquire.
+"""
+from __future__ import annotations
+
+import os
+import threading
+from pathlib import Path
+from typing import IO, Optional
+
+from openprogram.host._platform import locking
+
+from .paths import lock_path
+
+
+_held_paths: set[str] = set()
+_held_paths_lock = threading.Lock()
+
+
+def _lock_key(path: Path) -> str:
+    return os.path.normcase(os.path.abspath(os.fspath(path)))
+
+
+class WorkerLock:
+    """Exclusive file lock held by the running worker."""
+
+    def __init__(self) -> None:
+        self.path: Path = lock_path()
+        self._fh: Optional[IO[str]] = None
+        self.holder_pid: Optional[int] = None
+
+    def try_acquire(self) -> bool:
+        """Non-blocking acquire. Populates ``holder_pid`` on failure."""
+        fh = open(self.path, "a+", encoding="utf-8")
+        try:
+            locking.flock(fh.fileno(), locking.LOCK_EX | locking.LOCK_NB)
+        except BlockingIOError:
+            if os.name == "nt":
+                # msvcrt denies reads that overlap another handle's locked
+                # byte.  Same-process probes use the registry below; an
+                # external probe reads the separate lifecycle PID file.
+                with _held_paths_lock:
+                    local_holder = _lock_key(self.path) in _held_paths
+                if local_holder:
+                    raw = str(os.getpid())
+                else:
+                    from .paths import pid_path
+
+                    try:
+                        raw = pid_path().read_text(encoding="utf-8").splitlines()[0]
+                    except (OSError, IndexError):
+                        raw = ""
+            else:
+                fh.seek(0)
+                raw = fh.read().strip()
+            try:
+                self.holder_pid = int(raw) if raw else None
+            except ValueError:
+                self.holder_pid = None
+            fh.close()
+            return False
+
+        fh.seek(0)
+        fh.truncate()
+        fh.write(f"{os.getpid()}\n")
+        fh.flush()
+        os.fsync(fh.fileno())
+        self._fh = fh
+        self.holder_pid = os.getpid()
+        with _held_paths_lock:
+            _held_paths.add(_lock_key(self.path))
+        return True
+
+    def release(self) -> None:
+        if self._fh is None:
+            return
+        try:
+            self._fh.seek(0)
+            self._fh.truncate()
+            self._fh.flush()
+        except OSError:
+            pass
+        try:
+            locking.flock(self._fh.fileno(), locking.LOCK_UN)
+        except OSError:
+            pass
+        try:
+            self._fh.close()
+        except OSError:
+            pass
+        with _held_paths_lock:
+            _held_paths.discard(_lock_key(self.path))
+        self._fh = None
+
+
+def held_in_this_process(path: Path) -> bool:
+    """Return whether this process holds the worker lock at ``path``.
+
+    Answers from the in-process registry, without probing the file, so it is
+    cheap and never disturbs another process's lock.
+    """
+    with _held_paths_lock:
+        return _lock_key(path) in _held_paths
+
+
+def read_holder_pid() -> Optional[int]:
+    """Peek at the current lock holder. Returns None if no holder."""
+    p = lock_path()
+    if not p.exists():
+        return None
+    try:
+        raw = p.read_text(encoding="utf-8").strip()
+        pid = int(raw) if raw else None
+        return pid if pid is not None and pid > 0 else None
+    except (OSError, ValueError):
+        return None
+
+
+def is_held_by(pid: int) -> bool:
+    """Return whether ``pid`` owns the live worker lock.
+
+    The PID file alone is not proof because it can survive a crash.  Probe the
+    actual advisory lock first: acquiring it means there is no live holder.
+    """
+    probe = WorkerLock()
+    if probe.try_acquire():
+        probe.release()
+        return False
+    return probe.holder_pid == pid

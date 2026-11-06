@@ -1,0 +1,658 @@
+<div hidden>Web runtime reliability and performance design. The audit baseline confirms P0 issues in error visibility, full-session loading, unbounded WebSocket broadcasting, and EventBus notify, plus P1 issues in static assets and CSP. TASK 3 implements one sender per connection, a 256-frame / 4 MiB queued + in-flight limit, ordinary state/text coalescing, reserved terminal capacity, and recovery after send failure/overflow; specification, quality, and full Python gates PASS. TASK 6 implements local frontend dependencies, compression, and resource budgets and passes specification, quality, full Python, default-App visual acceptance, and five cache-disabled local browser traces. Single-record logging for EventBus gate events is implemented and has passed specification/quality rereview. Remaining error contracts, Job errors, Session projection, EventBus notify execution, and capacity diagnostics await implementation.</div>
+<style>
+    .doc-root {
+      --doc-bg: var(--bg);
+      --doc-panel: var(--bg-card);
+      --doc-panel-2: var(--bg-side);
+      --doc-code: var(--bg-code);
+      --doc-line: var(--bd);
+      --doc-text: var(--tx);
+      --doc-muted: var(--tx-soft);
+      --doc-muted-strong: color-mix(in srgb, var(--tx-soft) 85%, var(--tx));
+      --doc-faint: color-mix(in srgb, var(--tx-soft) 82%, var(--tx));
+      --doc-accent: color-mix(in srgb, var(--acc) 78%, var(--tx));
+      --doc-accent-soft: var(--acc-soft);
+      --doc-info: color-mix(in srgb, #2563a6 52%, var(--tx));
+      --doc-success: color-mix(in srgb, #18794e 58%, var(--tx));
+      --doc-warning: color-mix(in srgb, #9a5b13 58%, var(--tx));
+      --doc-danger: color-mix(in srgb, #b83a2c 58%, var(--tx));
+      --doc-violet: color-mix(in srgb, #6846b7 55%, var(--tx));
+      --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+      --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    }
+    .doc-root, .doc-root * { box-sizing: border-box; }
+    .doc-root { margin: 0; padding: 0; background: transparent; color: var(--doc-text); font: 15px/1.65 var(--sans); }
+    .doc-root a { color: var(--doc-accent); }
+    .doc-root code { padding: 1px 5px; border: 1px solid var(--doc-line); border-radius: 4px; background: var(--doc-code); color: var(--doc-accent); font: .89em var(--mono); }
+    .doc-root pre { margin: 0; overflow: auto; font: 12px/1.65 var(--mono); }
+    .shell { width: min(1180px, 100%); margin: auto; }
+    .rail { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 28px; }
+    .rail strong { display: block; margin-bottom: 12px; color: var(--doc-accent); font: 11px var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+    .rail a { display: block; padding: 6px 9px; border: 1px solid var(--doc-line); border-radius: 6px; color: var(--doc-muted); text-decoration: none; font-size: 12px; }
+    .rail a:hover, .rail a:focus-visible { border-color: var(--doc-accent); color: var(--doc-text); background: var(--doc-accent-soft); outline: none; }
+    .doc-root main { min-width: 0; }
+    .doc-root header { padding-bottom: 32px; border-bottom: 1px solid var(--doc-line); }
+    .eyebrow { color: var(--doc-accent); font: 11px var(--mono); letter-spacing: .09em; text-transform: uppercase; }
+    .doc-root h1 { max-width: 900px; margin: 8px 0 14px; color: var(--doc-text); font-size: clamp(31px, 4vw, 52px); line-height: 1.08; letter-spacing: -.025em; }
+    .doc-root h2 { margin: 0 0 16px; padding: 0; border: 0; color: var(--doc-text); font-size: 25px; line-height: 1.25; }
+    .doc-root h3 { margin: 0 0 8px; color: var(--doc-text); font-size: 16px; }
+    .doc-root p { margin: 8px 0; }
+    .lead { max-width: 940px; color: var(--doc-muted); font-size: 17px; }
+    .meta, .legend { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
+    .tag, .status { min-width: 0; max-width: 100%; overflow-wrap: anywhere; display: inline-flex; align-items: center; gap: 6px; padding: 4px 9px; border: 1px solid var(--doc-line); border-radius: 999px; color: var(--doc-muted); font: 11px var(--mono); }
+    .status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .status.gap { color: var(--doc-danger); }
+    .status.partial { color: var(--doc-warning); }
+    .status.done { color: var(--doc-success); }
+    .status.selected { color: var(--doc-violet); }
+    .doc-root section { margin: 0; padding: 38px 0; border-bottom: 1px solid var(--doc-line); }
+    .section-head { display: flex; align-items: baseline; gap: 12px; }
+    .num { color: var(--doc-accent); font: 11px var(--mono); }
+    .intro { max-width: 940px; color: var(--doc-muted); }
+    .metric-grid { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; margin-top: 22px; }
+    .metric { min-height: 126px; padding: 16px; border: 1px solid var(--doc-line); border-radius: 11px; background: var(--doc-panel); }
+    .metric .k { color: var(--doc-muted); font: 10px var(--mono); letter-spacing: .06em; text-transform: uppercase; }
+    .metric .v { margin: 8px 0 4px; color: var(--doc-text); font-size: 25px; font-weight: 700; }
+    .metric .d { color: var(--doc-muted); font-size: 12px; }
+    .doc-root .callout { margin-top: 18px; padding: 14px 16px; border: 1px solid var(--doc-line); border-left: 3px solid var(--doc-info); border-radius: 0 8px 8px 0; background: color-mix(in srgb, var(--doc-info) 8%, var(--doc-bg)); color: var(--doc-text); }
+    .doc-root .callout.warn { border-left-color: var(--doc-warning); background: color-mix(in srgb, var(--doc-warning) 9%, var(--doc-bg)); }
+    .doc-root .callout.bad { border-left-color: var(--doc-danger); background: color-mix(in srgb, var(--doc-danger) 8%, var(--doc-bg)); }
+    .table-wrap { margin-top: 18px; overflow: auto; border: 1px solid var(--doc-line); border-radius: 11px; }
+    .doc-root table { width: 100%; margin: 0; border-collapse: collapse; min-width: 820px; font-size: 13px; }
+    .doc-root th, .doc-root td { padding: 11px 12px; border: 0; border-bottom: 1px solid var(--doc-line); text-align: left; vertical-align: top; }
+    .doc-root th { background: var(--doc-panel-2); color: var(--doc-muted-strong); font: 11px var(--mono); letter-spacing: .04em; text-transform: uppercase; }
+    .doc-root tr:nth-child(even) td { background: color-mix(in srgb, var(--doc-panel-2) 42%, transparent); }
+    .doc-root tr:last-child td { border-bottom: 0; }
+    .doc-root td p:first-child { margin-top: 0; }
+    .doc-root td p:last-child { margin-bottom: 0; }
+    .p0 { color: var(--doc-danger); font-weight: 700; }
+    .p1 { color: var(--doc-warning); font-weight: 700; }
+    .p2 { color: var(--doc-info); font-weight: 700; }
+    .cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 13px; margin-top: 20px; }
+    .card { padding: 17px; border: 1px solid var(--doc-line); border-radius: 11px; background: var(--doc-panel); }
+    .card p, .card li { color: var(--doc-muted); }
+    .card ul { margin: 8px 0 0; padding-left: 20px; }
+    .path { display: block; margin-bottom: 8px; color: var(--doc-accent); font: 11px var(--mono); word-break: break-all; }
+    .diagram { margin-top: 20px; padding: 20px; overflow: auto; border: 1px solid var(--doc-line); border-radius: 11px; background: var(--doc-panel); }
+    .diagram svg { display: block; min-width: 980px; width: 100%; }
+    .diagram text { font-family: var(--mono); }
+    .caption { margin-top: 10px; color: var(--doc-muted); font-size: 12px; }
+    .timeline { margin-top: 20px; }
+    .phase { display: grid; grid-template-columns: 96px 24px minmax(0, 1fr); }
+    .phase .id { padding-top: 3px; color: var(--doc-accent); font: 11px var(--mono); text-align: right; }
+    .phase .axis { display: flex; flex-direction: column; align-items: center; }
+    .phase .dot { width: 12px; height: 12px; margin-top: 5px; border: 3px solid var(--doc-accent); border-radius: 50%; background: var(--doc-bg); }
+    .phase .line { width: 1px; flex: 1; margin: 5px 0; background: var(--doc-line); }
+    .phase:last-child .line { display: none; }
+    .phase .body { padding: 0 0 28px 16px; }
+    .phase .body p { max-width: 900px; color: var(--doc-muted); }
+    .files { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+    .files a { padding: 3px 7px; border: 1px solid var(--doc-line); border-radius: 5px; text-decoration: none; font: 10px var(--mono); }
+    .doc-root details { border: 1px solid var(--doc-line); border-radius: 9px; background: var(--doc-panel); }
+    .doc-root details + details { margin-top: 9px; }
+    .doc-root summary { cursor: pointer; padding: 12px 14px; color: var(--doc-text); font-weight: 650; }
+    .doc-root details > div { padding: 0 14px 14px; color: var(--doc-muted); }
+    .schema { margin-top: 16px; padding: 16px; border: 1px solid var(--doc-line); border-radius: 10px; background: var(--doc-code); color: var(--doc-text); }
+    .schema .key { color: var(--doc-info); }
+    .schema .str { color: var(--doc-success); }
+    .schema .comment { color: var(--doc-faint); }
+    .refs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 18px; }
+    .ref { padding: 14px; border: 1px solid var(--doc-line); border-radius: 10px; background: var(--doc-panel); }
+    .ref b { display: block; margin-bottom: 5px; }
+    .ref p { color: var(--doc-muted); font-size: 12px; }
+    .related { columns: 2; column-gap: 28px; padding-left: 20px; }
+    .related li { margin: 6px 0; break-inside: avoid; }
+    .foot { padding-top: 24px; color: var(--doc-muted); font-size: 12px; }
+    @media (max-width: 1060px) {
+      .rail strong { width: 100%; }
+      .metric-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 680px) {
+      .doc-root { padding: 20px 14px; }
+      .metric-grid, .cards, .refs { grid-template-columns: 1fr; }
+      .phase { grid-template-columns: 60px 18px minmax(0, 1fr); }
+      .related { columns: 1; }
+      .doc-root h1 { font-size: 34px; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      .doc-root {
+        --doc-bg: #fff;
+        --doc-panel: #fff;
+        --doc-panel-2: #f3f4f6;
+        --doc-code: #f3f4f6;
+        --doc-line: #cfd4dc;
+        --doc-text: #111318;
+        --doc-muted: #4e5865;
+        --doc-muted-strong: #4e5865;
+        --doc-faint: #59636f;
+        --doc-accent: #7f3f0f;
+        --doc-info: #1e4f82;
+        --doc-success: #145c3b;
+        --doc-warning: #75420a;
+        --doc-danger: #8f2c21;
+        --doc-violet: #51348f;
+      }
+      .shell { display: block; width: 100%; }
+      .rail { display: none; }
+      .doc-root main { padding: 0; }
+      .doc-root section, .card, .metric, .table-wrap, .diagram { break-inside: avoid; }
+      .doc-root a { color: inherit; text-decoration: underline; }
+    }
+</style>
+<div class="doc-root">
+<div class="shell">
+  <nav class="rail" aria-label="Contents">
+    <strong>Web runtime review</strong>
+    <a href="#scope">Scope and conclusions</a>
+    <a href="#baseline">Measured baseline</a>
+    <a href="#current-flow">Current data flow</a>
+    <a href="#defects">Issue list</a>
+    <a href="#errors">Error contract</a>
+    <a href="#session-load">Session loading</a>
+    <a href="#websocket">WebSocket reliability</a>
+    <a href="#event-bus">EventBus</a>
+    <a href="#frontend">Frontend and assets</a>
+    <a href="#operations">Runtime data</a>
+    <a href="#plan">Implementation tasks</a>
+    <a href="#acceptance">Acceptance matrix</a>
+    <a href="#risks">Risks and exclusions</a>
+    <a href="#status">Implementation status</a>
+  </nav>
+
+  <main>
+    <header id="scope">
+      <div class="eyebrow">OpenProgram · Runtime / WebUI · engineering design</div>
+      <h1>Web Runtime Reliability and Performance Design</h1>
+      <p class="lead">This document consolidates verified issues in Web refresh, session loading, WebSocket distribution, background-error display, EventBus notifications, asynchronous Job state, static assets, and local state directories, defining compatible target contracts, task boundaries, and quantitative acceptance criteria.</p>
+      <div class="meta">
+        <span class="tag">Audience: Runtime / Server / Web maintainers</span>
+        <span class="tag">Status: TASK 1 partial; TASK 3 complete; TASK 6 complete; remaining tasks pending</span>
+        <span class="tag">Evidence: source audit, real-session measurements, browser measurements, focused tests</span>
+      </div>
+      <div class="callout bad"><b>Main conclusion: </b>Missing durable error state, duplicate full-session refreshes, and potentially blocking/lost EventBus notify remain P0. Command exception isolation and the first management-action migration are complete in two slices; other legacy error/recovery paths remain. TASK 3 resolves unbounded WebSocket broadcasting and passes specification, quality, and full Python gates. TASK 6 completes local dependencies, static compression, lazy surface splitting, and resource budgets with both reviews, full Python, default-App visual acceptance, and local browser traces.</div>
+      <div class="callout warn"><b>Scope boundary: </b>No changes to Agent reasoning, DAG storage semantics, provider protocols, permission models, or multi-user identity. Existing topic documents retain detailed semantics; this page defines their shared Web reliability/performance contracts.</div>
+    </header>
+
+    <section id="baseline">
+      <div class="section-head"><span class="num">01</span><h2>Measured baseline</h2></div>
+      <p class="intro">The following measurements use the current default state directory, largest current session, direct session-load handler execution, and cache-disabled local page loads. They are fixed before/after baselines, not universal machine timings.</p>
+      <div class="metric-grid">
+        <article class="metric"><div class="k">Largest session_loaded</div><div class="v">11.66 MB</div><div class="d">One uncompressed JSON frame; messages approximately 9.75 MB, Graph 1.91 MB.</div></article>
+        <article class="metric"><div class="k">Hydration wall time</div><div class="v">≈313 ms</div><div class="d">One direct execution of <code>handle_load_session</code>; excludes network, browser parsing, and React state writes.</div></article>
+        <article class="metric"><div class="k">Visible / graph rows</div><div class="v">112 / 1,790</div><div class="d">Only 112 messages are displayed, but initial loading still sends the complete Graph.</div></article>
+        <article class="metric"><div class="k">Cold static transfer</div><div class="v">3.42 MB</div><div class="d">66 resources, 43 scripts; responses use neither gzip nor Brotli.</div></article>
+        <article class="metric"><div class="k">Cold navigation</div><div class="v">≈123 ms</div><div class="d">DOMContentLoaded approximately 39 ms; local HTTP itself is not the main wait.</div></article>
+        <article class="metric"><div class="k">Worker resident memory</div><div class="v">≈437 MB</div><div class="d">Short CPU sampling fell from approximately 4.1% to 0.3%; no sustained saturation observed.</div></article>
+        <article class="metric"><div class="k">State directory</div><div class="v">6.3 GB</div><div class="d"><code>chrome-profile</code> approximately 6.1 GB; sessions approximately 8.5 MB.</div></article>
+        <article class="metric"><div class="k">Verification baseline</div><div class="v">80 + 115</div><div class="d">80 focused Python and 115 Web tests pass; existing tests miss the key gaps listed here.</div></article>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Measurement</th><th>Method</th><th>Limitation</th><th>Subsequent use</th></tr></thead>
+        <tbody>
+          <tr><td>Session payload</td><td>Execute the public handler using real SessionDB data and a WebSocket substitute recording sent content.</td><td>Disable cold context stats to exclude independent background refresh from the first frame.</td><td>Before/after on the same session; record bytes for total frames, messages, graph, and context tree separately.</td></tr>
+          <tr><td>Browser loading</td><td>Default-port page, cache disabled, Navigation/Resource Timing and response headers.</td><td>The diagnostic browser lacks default-App owner credentials, so authenticated chat was not exercised.</td><td>Accept static sizes, CSP, compression, and script counts here; use default App for real chat.</td></tr>
+          <tr><td>EventBus logs</td><td>Count types and byte sizes in global and session <code>events.jsonl</code>.</td><td>Log content changes with actual usage.</td><td>Compare event rows, duplicate IDs, large fields, and write latency afterward.</td></tr>
+          <tr><td>Worker resources</td><td>Short process sampling of default worker and state-directory size inventory.</td><td>Not a long-running workload profile.</td><td>Exclude sustained CPU saturation; add event-loop latency and queue metrics after implementation.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="current-flow">
+      <div class="section-head"><span class="num">02</span><h2>Current data flow and failure points</h2></div>
+      <p class="intro">The system currently has browser WebSockets, raw WS frames, EventBus, AgentEvent, SessionDB, and a MessageStore not integrated into production. The diagram shows frontend-to-persistence operations and background-event return paths.</p>
+      <div class="diagram">
+        <svg viewBox="0 0 1120 520" role="img" aria-labelledby="flow-title flow-desc">
+          <title id="flow-title">Current Web runtime data flow</title>
+          <desc id="flow-desc">Browser commands enter WebSocket handlers and invoke session/runtime/job actions. Background events broadcast through EventBus ws.frame subscribers. Red nodes lack error display, backpressure, or incremental recovery.</desc>
+          <defs>
+            <marker id="arr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--doc-faint)"/></marker>
+            <marker id="arr-red" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0L10 5L0 10z" fill="var(--doc-danger)"/></marker>
+          </defs>
+          <g font-size="12" fill="var(--doc-text)">
+            <rect x="25" y="55" width="180" height="72" rx="10" fill="var(--doc-panel)" stroke="var(--doc-accent)"/>
+            <text x="115" y="83" text-anchor="middle" font-weight="700">Web / Electron renderer</text>
+            <text x="115" y="104" text-anchor="middle" fill="var(--doc-muted)">use-ws · session store · UI</text>
+            <rect x="275" y="55" width="180" height="72" rx="10" fill="var(--doc-panel-2)" stroke="var(--doc-danger)"/>
+            <text x="365" y="83" text-anchor="middle" font-weight="700">WebSocket receive loop</text>
+            <text x="365" y="104" text-anchor="middle" fill="var(--doc-danger)">Incomplete error contract</text>
+            <rect x="525" y="20" width="200" height="72" rx="10" fill="var(--doc-panel)" stroke="var(--doc-info)"/>
+            <text x="625" y="48" text-anchor="middle" font-weight="700">WS action handlers</text>
+            <text x="625" y="69" text-anchor="middle" fill="var(--doc-muted)">session · runtime · settings</text>
+            <rect x="525" y="130" width="200" height="72" rx="10" fill="var(--doc-panel)" stroke="var(--doc-violet)"/>
+            <text x="625" y="158" text-anchor="middle" font-weight="700">JobRunner / channels</text>
+            <text x="625" y="179" text-anchor="middle" fill="var(--doc-muted)">worker threads · status events</text>
+            <rect x="805" y="20" width="200" height="72" rx="10" fill="var(--doc-panel-2)" stroke="var(--doc-danger)"/>
+            <text x="905" y="48" text-anchor="middle" font-weight="700">Session hydration</text>
+            <text x="905" y="69" text-anchor="middle" fill="var(--doc-danger)">Synchronous full messages + graph</text>
+            <rect x="805" y="130" width="200" height="72" rx="10" fill="var(--doc-panel-2)" stroke="var(--doc-warning)"/>
+            <text x="905" y="158" text-anchor="middle" font-weight="700">EventBus</text>
+            <text x="905" y="179" text-anchor="middle" fill="var(--doc-warning)">notify synchronous / async may be lost</text>
+            <rect x="525" y="285" width="200" height="72" rx="10" fill="var(--doc-panel)" stroke="var(--doc-info)"/>
+            <text x="625" y="313" text-anchor="middle" font-weight="700">SessionDB / event logs</text>
+            <text x="625" y="334" text-anchor="middle" fill="var(--doc-muted)">durable rows · JSONL</text>
+            <rect x="805" y="285" width="200" height="72" rx="10" fill="var(--doc-panel-2)" stroke="var(--doc-danger)"/>
+            <text x="905" y="313" text-anchor="middle" font-weight="700">Global broadcast</text>
+            <text x="905" y="334" text-anchor="middle" fill="var(--doc-danger)">No bounded queue / Future unchecked</text>
+            <rect x="275" y="285" width="180" height="72" rx="10" fill="var(--doc-panel)" stroke="var(--doc-success)"/>
+            <text x="365" y="313" text-anchor="middle" font-weight="700">Chat streaming reducer</text>
+            <text x="365" y="334" text-anchor="middle" fill="var(--doc-muted)">rAF coalescing · row recycling</text>
+            <rect x="25" y="285" width="180" height="72" rx="10" fill="var(--doc-panel-2)" stroke="var(--doc-danger)"/>
+            <text x="115" y="313" text-anchor="middle" font-weight="700">Generic UI dispatch</text>
+            <text x="115" y="334" text-anchor="middle" fill="var(--doc-danger)">No unified type=error consumer</text>
+            <rect x="805" y="420" width="200" height="64" rx="10" fill="var(--doc-panel-2)" stroke="var(--doc-faint)" stroke-dasharray="5 4"/>
+            <text x="905" y="446" text-anchor="middle" font-weight="700">MessageStore v2</text>
+            <text x="905" y="466" text-anchor="middle" fill="var(--doc-muted)">seq / delta exist but are unintegrated</text>
+          </g>
+          <g fill="none" stroke="var(--doc-faint)" stroke-width="1.6" marker-end="url(#arr)">
+            <path d="M205 91H275"/><path d="M455 91L525 56"/><path d="M455 91L525 166"/>
+            <path d="M725 56H805"/><path d="M725 166H805"/><path d="M625 202V285"/>
+            <path d="M905 202V285"/><path d="M805 321H725"/><path d="M805 321H725"/>
+            <path d="M805 321H455"/><path d="M275 321H205"/><path d="M115 285V127"/>
+          </g>
+          <g fill="none" stroke="var(--doc-danger)" stroke-width="1.6" stroke-dasharray="6 4" marker-end="url(#arr-red)">
+            <path d="M905 357V420"/><path d="M805 452H625V357"/>
+          </g>
+          <g fill="var(--doc-muted)" font-size="10">
+            <text x="232" y="82">command</text><text x="476" y="60">dispatch</text><text x="471" y="146">spawn/status</text>
+            <text x="754" y="47">load_session</text><text x="748" y="157">emit</text><text x="918" y="246">ws.frame</text>
+            <text x="555" y="310">persist/log</text><text x="514" y="312">send_text</text><text x="225" y="312">chat frames</text>
+          </g>
+        </svg>
+        <p class="caption">Red marks verified gaps; yellow marks design/implementation mismatch; green marks existing useful optimizations. MessageStore v2 is a reuse candidate; do not introduce a third incremental protocol.</p>
+      </div>
+    </section>
+
+    <section id="defects">
+      <div class="section-head"><span class="num">03</span><h2>Issues and user impact</h2></div>
+      <p class="intro">Prioritize data loss, invisible errors, event-loop blocking, unbounded resource growth, and ordinary-user trigger probability. Every item cites current source rather than presenting proposals as implemented.</p>
+      <div class="legend"><span class="tag"><b class="p0">P0</b> causes unknown request outcomes, lost critical events, unbounded resources, or cross-session blocking</span><span class="tag"><b class="p1">P1</b> reproducible performance, diagnosis, or compatibility defects</span><span class="tag"><b class="p2">P2</b> capacity and long-term operational concerns, not blockers for the first two categories</span></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>ID</th><th>Priority</th><th>Current behavior</th><th>User-visible impact</th><th>Root cause and evidence</th><th>Target state</th></tr></thead>
+        <tbody>
+          <tr><td>R1</td><td class="p0">P0</td><td>Unhandled storage exceptions from public dispatcher and agent/channel/settings management actions now persist to profile-scoped <code>UserErrorStore</code> before sending final low-sensitivity <code>operation_error</code>; runtime/session top-level <code>type="error"</code>, project empty/embedded errors, channel validation/QR-specific errors, and chat reply error turns remain. Frontend still lacks a durable global error store.</td><td>Migrated management failures are visible and remain recorded server-side after transport failure; other legacy forms still lack consistent display, acknowledgement, and refresh recovery.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/server.py">server.py</a> handles uncaught action exceptions uniformly; <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/user_errors.py">user_errors.py</a> saves bounded low-sensitivity records; <a href="https://github.com/FuzzyKuji/OpenProgram/tree/main/openprogram/interfaces/server/ws_actions">ws_actions/</a> still has forms awaiting migration.</td><td>All user-relevant failures enter one error contract and remain visibly scoped.</td></tr>
+          <tr><td>R2</td><td class="p0">P0</td><td>Public dispatcher unknown-action and handler exceptions now produce final low-sensitivity <code>operation_error</code>, with unique error/correlation IDs, explicit scope, and UTC time. Server supports principal-scoped list, exact-ID acknowledgement, and multi-window recovery; frontend remains compatible with legacy <code>action_error</code>.</td><td>Handler failures are no longer misreported as missing backend handlers; pre-send records support recovery. Unknown/future codes use generic failure text excluding wire message/error content.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/server.py">server.py</a> uses a shared safe builder, records correlation metadata, and closes with <code>state_recovery_required</code> on persistence failure; <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/ws_actions/user_error.py">user_error.py</a> provides strict pagination, acknowledgement binding, and same-principal recovery broadcasts; <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/net/action-error.ts">action-error.ts</a> normalizes old/new envelopes.</td><td>Validation codes, remaining action migration, and frontend hydration/display remain later TASK 1 slices.</td></tr>
+          <tr><td>R3</td><td class="p0">P0</td><td>Agent/channel list, add/delete, binding, and alias storage exceptions no longer become empty arrays or silent success. Public receive loop persists them and returns one low-sensitivity <code>operation_error</code>, without sending normal lists or success notices.</td><td>Protocol distinguishes healthy empty states from these management failures. Pages receive no normal response replacing old data, but degraded markers and refresh recovery remain absent.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/ws_actions/agent.py">agent.py</a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/ws_actions/channel.py">channel.py</a> storage exceptions propagate to public dispatcher; records are isolated by authenticated principal.</td><td>Durable records and log correlation IDs are implemented; degraded markers, acknowledgement, and recovery remain later TASK 1 slices.</td></tr>
+          <tr><td>R4</td><td class="p0">P0</td><td>Job broadcaster already sends <code>error</code>, but Branches state and AttachCard do not retain/display details.</td><td>Background tasks show only <code>errored</code>; after refresh, reason and retryability are unknown.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/jobs/runner.py">runner.py</a> and <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/right-sidebar/branches/index.tsx">branches/index.tsx</a> fields are asymmetric.</td><td>Persist error summaries with Jobs; cards show safe reasons, retryability, and log correlation IDs.</td></tr>
+          <tr><td>R5</td><td class="p0">P0</td><td>Reconnect and session switch send complete <code>session_loaded</code>.</td><td>Large-session refresh transfers/parses over 11 MB, with response time growing with history.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/ws_actions/session/load.py">session/load.py</a> sends messages, graph, and context tree together; client reconnect directly calls <code>load_session</code>.</td><td>Initial manifest + current chain; Graph, context tree, and large fields on demand; reconnect incrementally by revision/seq.</td></tr>
+          <tr><td>R6</td><td class="p1">P1</td><td>Session loading synchronously aggregates, sorts, builds graphs, and JSON-serializes inside the WS event loop.</td><td>Refreshing one large session delays commands on other sockets in the same worker.</td><td><code>_fn_run_siblings</code> repeatedly calls <code>all_msgs.index</code>, without separating computation and sending.</td><td>Compute immutable snapshots in a thread; async layer handles ordered sending and state checks only.</td></tr>
+          <tr><td>R7</td><td class="p0">P0</td><td>TASK 3 routes production connections through one sender with a 256-frame / 4 MiB queued + in-flight cap.</td><td>Concurrent slow-client <code>send_text</code> fell from RED’s 400 to 1; ordinary updates coalesce and terminal events use reserved capacity.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/ws_delivery.py">ws_delivery.py</a> and public-handler slow-client regression.</td><td><code>complete</code>; specification, quality, and full Python gates PASS.</td></tr>
+          <tr><td>R8</td><td class="p1">P1</td><td>Reconnect retries every 2 seconds and reloads the entire session on success.</td><td>Service restarts/network failures synchronize retries across pages and repeat full-state transfers.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/net/ws/use-ws.ts">use-ws.ts</a>.</td><td>Exponential backoff with jitter; send known revision/seq after reconnection, without duplicate UI errors.</td></tr>
+          <tr><td>R9</td><td class="p0">P0</td><td>Ordinary EventBus notify handlers execute synchronously in emitter threads; async handlers are skipped when no event loop exists.</td><td>Slow plugins block Agents; some background events reach no consumer.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/events/bus.py">events/bus.py</a>.</td><td>notify always enters a dedicated queue; gate stays synchronous with an explicit budget.</td></tr>
+          <tr><td>R10</td><td class="p1">P1</td><td>Event logs still write synchronously; duplicate <code>tool.before</code> rows are fixed with both rereviews passed; registry tests still miss multiline emits.</td><td>Frequent tool output still adds synchronous I/O; tests may miss unregistered events.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/events/event_log.py">event_log.py</a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/tests/component/agent/turns/test_event_gate.py">test_event_gate.py</a>.</td><td>Implement asynchronous batched logs, AST registration checks, and large-field summaries.</td></tr>
+          <tr><td>R11</td><td class="p1">P1</td><td>TASK 6 removes runtime CDN resources and bundles marked/KaTeX. Starlette gzip responder negotiates gzip for compressible responses and excludes already-compressed MIME types.</td><td>Source, legacy templates, build output, and public HTTP entries have automated regressions. Browser home no longer auto-fetches Google favicons. Specification, quality, full Python, default App, and local browser traces pass.</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/runtime-bridge/dom/markdown-render.ts">markdown-render.ts</a> and <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/frontend.py">frontend.py</a>.</td><td><code>complete</code>; preserve self-only CSP.</td></tr>
+          <tr><td>R12</td><td class="p2">P2</td><td>Chrome profile lacks capacity display/retention policy; currently approximately 6.1 GB.</td><td>Long-term disk growth has no product-visible attribution or safe cleanup scope.</td><td>Largest directories are browser on-device model, Default profile, and model store.</td><td>Show categorized sizes; provide explicit recoverable cleanup only; never automatically delete login state.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="errors">
+      <div class="section-head"><span class="num">04</span><h2>Unified error contract and frontend display</h2></div>
+      <p class="intro">“Backend errors must appear in frontend” means every failure affecting user requests, durable state, background tasks, or recoverable operations produces an observable error record. It does not mean every internal retry/degradation becomes a Toast, nor permit traceback, file content, or credentials in browsers. This schema is the sole final wire contract. TASK 1 server generates complete fields for public dispatcher/initial management actions, records before sending, and supports principal-scoped list, exact-ID acknowledgement, and multi-window recovery. Frontend hydration/display and other sources remain later slices.</p>
+      <pre class="schema" aria-label="operation_error JSON schema"><span class="comment">// WebSocket envelope; use null for nullable fields; do not omit semantically required fields</span>
+{
+  <span class="key">"type"</span>: <span class="str">"operation_error"</span>,
+  <span class="key">"data"</span>: {
+    <span class="key">"error_id"</span>: <span class="str">"err_opaque_unique_id"</span>,
+    <span class="key">"request_id"</span>: <span class="str">"client_request_id_or_null"</span>,
+    <span class="key">"scope"</span>: <span class="str">"session | job | settings | channel | agent | transport | system"</span>,
+    <span class="key">"code"</span>: <span class="str">"stable_machine_code"</span>,
+    <span class="key">"message"</span>: <span class="str">"safe user-facing summary"</span>,
+    <span class="key">"action"</span>: <span class="str">"safe_action_or_null"</span>,
+    <span class="key">"session_id"</span>: <span class="str">"session_id_or_null"</span>,
+    <span class="key">"operation_id"</span>: <span class="str">"action_job_execution_id_or_null"</span>,
+    <span class="key">"retryable"</span>: false,
+    <span class="key">"severity"</span>: <span class="str">"info | warning | error | fatal"</span>,
+    <span class="key">"correlation_id"</span>: <span class="str">"opaque log lookup id"</span>,
+    <span class="key">"occurred_at"</span>: <span class="str">"ISO-8601 UTC"</span>
+  }
+}</pre>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Error-contract field/state</th><th>Single meaning</th></tr></thead>
+        <tbody>
+          <tr><td><code>request_id</code></td><td>Client-generated for request/response actions; success/failure must echo it and finish pending.<code>operation_id</code> identifies a server entity, not a request ID.</td></tr>
+          <tr><td><code>error_id</code></td><td>Unique per failure. Toast deduplication key is <code>scope + code + session_id + operation_id</code>; display once per identical key within 5 seconds, but preserve individual records.</td></tr>
+          <tr><td><code>UserErrorStore</code></td><td>Use a separate SQLite file in the current profile, isolated by authenticated principal. Retain at most 7 days from creation and 1,000 records per principal. Open records use <code>occurred_at</code>, <code>error_id</code> strict newest-first pagination; acknowledgement closes transactionally and idempotently by principal + exact <code>error_id</code>. Send only after commit. Persistence failure must not send a falsely durable envelope; close the connection and require state recovery.</td></tr>
+          <tr><td>severity</td><td><code>info</code> enters diagnostics only; <code>warning</code> shows local degraded state; <code>error</code> shows a card and one Toast; <code>fatal</code> shows a persistent blocking state and stops automatic retries.</td></tr>
+          <tr><td>Lifecycle</td><td>Request success only ends the matching <code>request_id</code> pending state.<code>acknowledge_user_error</code> sends on the requesting connection, using the same <code>request_id</code>, first <code>user_error_acknowledged</code> and then <code>{type:"operation_recovered", data:{error_ids:[...], scope, operation_id, occurred_at}}</code>; after durable closure, other same-principal windows independently receive the same recovery. No cross-connection order is guaranteed, and a failed requesting connection must not block other windows. Server explicitly lists affected <code>error_id</code>; frontend must not bulk-close by vague codes. Repeated acknowledgement may resend exact-ID recovery for convergence while DB closure stays idempotent. User acknowledgement/entity deletion closes explicit IDs only; unrelated later success cannot clear errors implicitly.</td></tr>
+          <tr><td>Job failure</td><td><code>job_status(status=errored)</code> is the sole Job-state wire event; frontend derives error-store records from it. Do not send a second <code>operation_error</code>.<code>operation_error</code> for the same failure. It is used only when a Job action request itself fails.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Event category</th><th>Frontend behavior</th><th>Persistence</th><th>Must exclude</th></tr></thead>
+        <tbody>
+          <tr><td>Current-session request failure</td><td>Show reason near the relevant card/control; one Toast on first receipt.</td><td>Store in session error records, visible after refresh.</td><td>Traceback, raw environment, unfiltered provider body.</td></tr>
+          <tr><td>Background Job failure</td><td>Session list shows an error marker; AttachCard/Jobs show summary and retryability.</td><td>Persist with the Job.</td><td>Complete subprocess stdout or file bodies.</td></tr>
+          <tr><td>Settings/management failure</td><td>Retain last known state and show operation failure; never interpret failure as an empty list.</td><td>Error center retains until acknowledgement or later success.</td><td>Credential values, tokens, absolute secret paths.</td></tr>
+          <tr><td>Recoverable internal degradation</td><td>No Toast by default; relevant surface shows degraded state, queryable in diagnostics.</td><td>Structured logs and metrics.</td><td>Repeated user-facing notices.</td></tr>
+          <tr><td>Transport disconnection</td><td>Show connection state without repeated identical errors during recovery.</td><td>Enter error center only after recovery budget expires or with unacknowledged operations.</td><td>One Toast for every reconnect attempt.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="cards">
+        <article class="card"><span class="path">Server normalization</span><h3>One safe payload builder</h3><p>The helper generates filtered error data and validates fields, log correlation, and session routing. WS action/channels/system wrap it as <code>operation_error</code>; JobRunner embeds the same data in the sole <code>job_status</code>, without a second error envelope.</p></article>
+        <article class="card"><span class="path">Frontend error store</span><h3>One state entry</h3><p><code>use-ws</code> parses and forwards to the error store only; cards, session markers, and Toasts derive from one record rather than independently interpreting codes.</p></article>
+        <article class="card"><span class="path">Action correlation</span><h3>Explicit request completion</h3><p>Request/response actions use request IDs. Success and failure end pending; no button may load indefinitely.</p></article>
+        <article class="card"><span class="path">Compatibility adapter</span><h3>Incremental legacy-frame migration</h3><p>During migration, frontend adapts existing <code>error</code>, <code>action_error</code> and Job errors into unified records; remove compatibility branches after each backend migration.</p></article>
+      </div>
+    </section>
+
+    <section id="session-load">
+      <div class="section-head"><span class="num">05</span><h2>Session loading and refresh</h2></div>
+      <p class="intro">Initial cost should depend on visible content rather than entire history. SessionDB/DAG remains canonical; Web wire sends only currently needed projections.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Phase</th><th>Returned content</th><th>Trigger</th><th>Cache key</th></tr></thead>
+        <tbody>
+          <tr><td>Session manifest</td><td>Title, status, head, revision, current-chain IDs, counts, feature state, error summary.</td><td>Session switch or missing valid manifest.</td><td><code>session_id + revision</code></td></tr>
+          <tr><td>Viewport messages</td><td>Visible chain tail and required compaction/attach references.</td><td>Initial view or scrolling into unloaded ranges.</td><td><code>session_id + head_id + cursor</code></td></tr>
+          <tr><td>Graph summary</td><td>Node IDs, edges, roles, states, minimal labels; no message bodies/tool results.</td><td>User opens DAG/branch panel.</td><td><code>session_id + graph_revision</code></td></tr>
+          <tr><td>Node/detail</td><td>Single-node context, complete tool output, runtime tree, attachment details.</td><td>User expands/navigates to a node.</td><td><code>session_id + node_id + content_revision</code></td></tr>
+          <tr><td>Reconnect delta</td><td>Durable commits after known revision, and state/terminal events after known seq for each running entity.</td><td>Reconnect while contiguous deltas remain available.</td><td>Client submits <code>known_session_revision</code> with the same <code>known_stream_seqs: {entity_id: seq}</code></td></tr>
+          <tr><td>Full recovery</td><td>New manifest and bounded viewport, not full history.</td><td>Incompatible revision, evicted delta, or invalid client state.</td><td>Reset local session projection</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout"><b>Single source: </b>SessionDB/DAG is the sole durable authority. Existing <code>MessageStore</code> contributes only block, seq, and delta computation, never another durable store. Remove unusable independent persistence/singleton interfaces in TASK 4. All full recovery comes from SessionDB projections.</div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Protocol quantity</th><th>Definition</th><th>Retention and fallback</th></tr></thead>
+        <tbody>
+          <tr><td><code>session_revision</code></td><td>Monotonically increasing integer per session, incremented once per atomic SessionDB/DAG commit. Manifest, message headers, Graph summary, and durable errors carry their read revision.</td><td>Persist permanently with the session. Client revision above server or incompatible schema rejects deltas and returns a new manifest.</td></tr>
+          <tr><td><code>stream_seq</code></td><td>Independently monotonic per running message/job; describes uncommitted text/tree/progress changes only.</td><td>Current worker retains 256 deltas per entity or 15 minutes, whichever first. Restart persists unfinished entities as error/aborted, then clients perform manifest recovery.</td></tr>
+          <tr><td>delta journal</td><td>Durable-commit-generated <code>from_revision → to_revision</code> projection changes, without complete body copies.</td><td>In memory: last 512 commits or 15 minutes. Larger gaps return manifest + bounded viewport.</td></tr>
+          <tr><td>viewport cursor</td><td>Stable pair <code>(created_at, message_id)</code>, paginated backward along current head chain. Initial view is at most 100 messages and 512 KiB uncompressed JSON, whichever first.</td><td>Paginate toward history; head changes yield a new cursor. If one message exceeds remaining budget, return only header, summary, and detail marker.</td></tr>
+          <tr><td>detail cursor</td><td>Single-node/tool-result reads cap at 1 MiB uncompressed; larger content is chunked at UTF-8-safe boundaries with next cursor.</td><td>Reauthorize session/node/caller on every read; cursors cannot cross nodes or sessions.</td></tr>
+        </tbody>
+      </table></div>
+      <details><summary>Separating computation from sending</summary><div><p>A synchronous thread reads an immutable SessionDB snapshot, builds ID indexes, current chain, and Graph summary, returning plain objects. Async handler rechecks revision before sending; concurrent writes cause manifest-plus-delta or a fresh snapshot. Threads never manipulate WebSockets.</p></div></details>
+      <details><summary>Duplicate computation to remove</summary><div><p>Prebuild <code>id → insertion_index</code> instead of sorting with <code>all_msgs.index</code>; group siblings once by predecessor; read the session row once per request; serialize Graph summary separately from message bodies.</p></div></details>
+      <details><summary>Large fields and compatibility</summary><div><p>Preserve current 32 KiB tool-result markers and <code>get_full_tool_output</code> authorization checks. Extend on-demand reads to context trees, runtime blocks, Graph-node content, and attachment metadata. Legacy clients may request old actions, but server payload caps must return upgrade guidance rather than unbounded frames.</p></div></details>
+    </section>
+
+    <section id="websocket">
+      <div class="section-head"><span class="num">06</span><h2>WebSocket queues, ordering, and recovery</h2></div>
+      <p class="intro">Standard browser WebSocket APIs provide no automatic backpressure, so servers must bound send queues. One sender task per connection sends sequentially; producer threads only enqueue thread-safely.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Frame category</th><th>Example</th><th>Queue rule</th><th>Overflow behavior</th></tr></thead>
+        <tbody>
+          <tr><td>Non-droppable terminal</td><td>error, question, chat final, job terminal, ack, permission result</td><td>Preserve order; no overwriting or cross-session merging.</td><td>If queue budget is unavailable, close and require state recovery; never drop silently.</td></tr>
+          <tr><td>Coalescible delta</td><td>text/thinking delta, tree update, progress, context stats</td><td>By <code>session + entity + type</code>, keep newest state or merge adjacent text.</td><td>Remove superseded deltas and increment coalesced counts.</td></tr>
+          <tr><td>Snapshot</td><td>sessions list, branches, settings, graph summary</td><td>Keep only the newest unsent snapshot per key.</td><td>Replace old snapshots without affecting terminal frames.</td></tr>
+          <tr><td>Control</td><td>pong, auth/status, reload required</td><td>Small separate budget prevents large-message starvation.</td><td>Authentication/protocol errors close immediately; stale pong values may be discarded.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="cards">
+        <article class="card"><h3>Queue limits and critical reserve</h3><p>Per connection: 256 frames or 4 MiB, whichever first; reserve 64 frames and 1 MiB for non-droppable terminal events. Before critical enqueue, remove coalescible deltas; do not consume old ordinary snapshot versions.</p></article>
+        <article class="card"><h3>Send ownership</h3><p>Only sender task calls <code>ws.send_text</code>. On disconnect, cancel sender, free queue, and unregister focused session; other threads retain no WebSocket Futures.</p></article>
+        <article class="card"><h3>Reconnect</h3><p>Exponential backoff with jitter; page visibility or explicit retry may trigger earlier. Restore protocol state before session projection.</p></article>
+        <article class="card"><h3>Metrics</h3><p>Record queue_frames, queue_bytes, oldest_age, coalesced, send_failures, disconnect_reason, and recovery_mode without frame bodies.</p></article>
+      </div>
+      <div class="callout warn"><b>Critical-frame recovery contract: </b>Sources persist chat final, Job terminal, user-visible error, question, and permission requests before enqueue. All user-visible errors also enter bounded <code>UserErrorStore</code>, queried by <code>error_id</code>, retaining at most 1,000 records or 7 days. Session manifests include only relevant open IDs; reconnect reads details through <code>list_user_errors(cursor)</code>. Clients derive transport-close state locally from close/timeout, independent of server error frames. Chat ack follows durable user-message storage; other request acks must be idempotently queryable/replayable by <code>request_id</code>. If critical reserve is still full, close the connection and mark <code>state_recovery_required</code>; reconnect restores from manifest, UserErrorStore, pending-question registry, Job store, and request-result queries, not unsent memory frames.</div>
+      <div class="refs">
+        <article class="ref"><b><a href="https://developer.mozilla.org/en-US/docs/Web/API/WebSocket">MDN WebSocket</a></b><p>Standard WebSocket has no automatic backpressure. Retain its broad compatibility while bounding application queues.</p></article>
+        <article class="ref"><b><a href="https://developer.mozilla.org/en-US/docs/Web/API/WebSocket/bufferedAmount">MDN bufferedAmount</a></b><p>Clients can use <code>bufferedAmount</code> to monitor unsent bytes, but it cannot replace server per-connection queues and recovery.</p></article>
+        <article class="ref"><b><a href="https://docs.python.org/3/library/asyncio-queue.html">Python asyncio.Queue</a></b><p>Use a FIFO queue with positive <code>maxsize</code>; cross-thread callers use event-loop thread-safe scheduling, never direct cross-thread Queue manipulation.</p></article>
+      </div>
+    </section>
+
+    <section id="event-bus">
+      <div class="section-head"><span class="num">07</span><h2>EventBus execution and logging</h2></div>
+      <p class="intro">Keep two clear semantics: gate is synchronous decision-making; notify is asynchronous observation. They cannot share direct handler invocation in the emitter thread.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Property</th><th>Gate</th><th>Notify</th></tr></thead>
+        <tbody>
+          <tr><td>Purpose</td><td>Allow or reject before an action.</td><td>Record, update UI, trigger subsequent nonblocking work.</td></tr>
+          <tr><td>Execution location</td><td>Emitter thread; default total budget <code>events.gate_timeout_ms=50</code>.</td><td>EventBus-owned event loop; synchronous consumers use a thread pool, async consumers run on that loop.</td></tr>
+          <tr><td>Failure</td><td>Retain current fail-open with structured warnings and gate results.</td><td>Isolate consumers; retries belong to consumer policy; never skip silently.</td></tr>
+          <tr><td>Ordering</td><td>Registration order.</td><td>Same <code>session + entity</code> stays ordered; different keys may run concurrently.</td></tr>
+          <tr><td>Backpressure</td><td>No queue; budget expiry skips remaining gates and records it.</td><td>Bounded queues; ordinary telemetry cannot fill critical-event capacity.</td></tr>
+          <tr><td>Logging</td><td>Combine event and gate verdict into one record.</td><td>Asynchronous batch writes; large payloads use size, digest, and controlled previews.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Notify queue contract</th><th>Rule</th></tr></thead>
+        <tbody>
+          <tr><td>Ordering key</td><td>Prefer <code>session_id + entity_id</code>; use session if only session exists; otherwise <code>type + origin</code>. Strict FIFO per key, concurrency across keys.</td></tr>
+          <tr><td>Capacity</td><td>Ordinary queue: 4,096 events maximum; critical state queue: 512. Critical types are operation error/recovered, question, Job terminal, turn end, and critical-marked ws.frame.</td></tr>
+          <tr><td>Full queue</td><td>Coalesce/drop keyed telemetry such as progress/context stats with explicit metrics. If critical queue fills, source durable state remains recovery authority; write an emergency loss marker and notify Web connections to recover state. Printing stderr alone must not imply delivery.</td></tr>
+          <tr><td>Shutdown and restart</td><td>Normal shutdown drains at most 2 seconds; remaining notify events get shutdown loss markers. Critical business state persists before emit and recovers from store scans after restart; EventBus is not a durable queue.</td></tr>
+          <tr><td>Gate security boundary</td><td>EventBus gates carry additional plugin/workflow decisions and stay fail-open. Permission, authentication, sandbox, and credential checks do not use this gate; their mandatory boundaries continue rejecting.</td></tr>
+          <tr><td>Log uniqueness</td><td>Choose session or global log according to session presence, never both; one row per event ID per target file. Gate events log once after verdict, not once during notify and again afterward.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="cards">
+        <article class="card"><span class="path">Registry integrity</span><h3>AST registration checks</h3><p>Tests parse Python AST <code>emit_safe</code>, <code>make_event</code> calls and constant event names, including multiline calls. Dynamic names require explicit exceptions and consumers.</p></article>
+        <article class="card"><span class="path">Single record</span><h3>One event record</h3><p><code>tool.before</code> observation and gate share one Event; final logs include gate fields, without a preceding ordinary record.</p></article>
+        <article class="card"><span class="path">Payload policy</span><h3>Summarize high-volume fields</h3><p><code>tool.after.result_text</code> logs byte count, error status, hash, and bounded preview by default. Complete results remain in SessionDB/tool-result storage, not duplicated in event logs.</p></article>
+        <article class="card"><span class="path">UI bridge</span><h3>Errors are not raw forwarding of all events</h3><p>The EventBus-Web adapter forwards registered user-relevant envelopes only. Internal logs correlate with user errors but never expose arbitrary payloads.</p></article>
+      </div>
+    </section>
+
+    <section id="frontend">
+      <div class="section-head"><span class="num">08</span><h2>Frontend rendering, refresh, and static assets</h2></div>
+      <p class="intro">Current stream reducer coalesces per animation frame; MessageRow subscribes by ID and recycles long-list rows. Retain these. Focus on less data entering stores, removing ineffective external dependencies, and bounding initial resources.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Area</th><th>Keep</th><th>Change</th><th>Verification</th></tr></thead>
+        <tbody>
+          <tr><td>Streaming messages</td><td>Coalesce text/thinking per animation frame; per-message selector.</td><td>Flush matching pending deltas before terminal state; atomically update error record and reply state.</td><td>At most one relevant store update per frame under high-frequency deltas; complete terminal content.</td></tr>
+          <tr><td>Long lists</td><td>MessageRow memo, viewport row recycling, stable ID arrays.</td><td>Hydrate viewport data only; Graph panels no longer force complete Graph bodies into chat stores.</td><td>Initial DOM and React commits for 1,000+ nodes do not grow linearly with full history.</td></tr>
+          <tr><td>Error UI</td><td>Existing Toast component and session unread state.</td><td>Add error store, durable cards, background-session markers, and Toast deduplication.</td><td>Automated assertions for current session, background session, and post-refresh.</td></tr>
+          <tr><td>marked / KaTeX</td><td>Markdown/math behavior.</td><td>Import locally from frontend bundle; remove CDN loader and WS initialization wait.</td><td>Zero CSP violations under strict <code>script-src 'self'</code>; works offline.</td></tr>
+          <tr><td>Static responses</td><td>Same-origin static export and cache headers.</td><td>Add gzip for text, JS, CSS, and SVG; optional build-time Brotli later.</td><td>Correct Accept-Encoding negotiation; no recompression of compressed formats; no SSE compression.</td></tr>
+          <tr><td>Code splitting</td><td>Next.js static export.</td><td>Lazy-load noninitial settings, DAG, browser, and programs surfaces.</td><td>Initial transfer/largest chunk meet budgets; interaction-driven loading shows pending.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="refs">
+        <article class="ref"><b><a href="https://starlette.dev/middleware/">Starlette GZipMiddleware</a></b><p>Use official ASGI middleware minimum-size/compression-level settings; exclude SSE and compressed formats.</p></article>
+        <article class="ref"><b><a href="https://developer.mozilla.org/en-US/docs/Web/HTTP/Reference/Headers/Content-Security-Policy/script-src">MDN CSP script-src</a></b><p><code>'self'</code> conflicts with CDN runtime scripts. Choose local dependencies without relaxing CSP or adding <code>unsafe-inline</code>/<code>unsafe-eval</code>.</p></article>
+        <article class="ref"><b>Reject WebSocketStream migration</b><p>Browser support is insufficient, and it does not solve server queues, persistence, errors, or incremental recovery. Keep standard WebSocket with application controls.</p></article>
+      </div>
+    </section>
+
+    <section id="operations">
+      <div class="section-head"><span class="num">09</span><h2>Runtime metrics, capacity, and state directories</h2></div>
+      <p class="intro">Performance changes must remain measurable on the default worker. Record counts, durations, bytes, and correlation IDs only, not prompts, model responses, tool output, or credentials.</p>
+      <div class="cards">
+        <article class="card"><h3>WebSocket</h3><ul><li>Active connections and queue bytes per connection.</li><li>Send latency, failures, coalesced count.</li><li>Reconnect counts, recovery mode, full-recovery reasons.</li></ul></article>
+        <article class="card"><h3>Session hydration</h3><ul><li>Separate manifest/messages/graph bytes.</li><li>DB read, projection, serialization, and send durations.</li><li>Viewport hits, detail fetches, delta fallbacks.</li></ul></article>
+        <article class="card"><h3>EventBus</h3><ul><li>Notify enqueue and handler duration.</li><li>Queue depth, failures, retries, drop reasons.</li><li>Total gate time and budget overruns.</li></ul></article>
+        <article class="card"><h3>Storage</h3><ul><li>Categorized sessions, logs, Chrome cache, models, and IndexedDB sizes.</li><li>Show target and impact before user-triggered cleanup.</li><li>Do not delete cookies, login state, extensions, or sessions by default.</li></ul></article>
+      </div>
+      <div class="callout warn"><b>Cleanup boundary: </b>Browser profiles are user state and must never be auto-deleted by background timers/startup hooks. List rebuildable cache/models separately from identity/extensions/IndexedDB and require explicit category confirmation.</div>
+    </section>
+
+    <section id="plan">
+      <div class="section-head"><span class="num">10</span><h2>Implementation tasks and dependencies</h2></div>
+      <p class="intro">Each task has its own commit, specification review, and quality review. TASK 1 command isolation, first management-action migration, server persistence, and recovery are implemented in slices but remain partial overall. TASK 3 and TASK 6 pass both reviews, full gates, and respective runtime acceptance and are complete. TASK 5 gate single-record logging passed both rereviews, but TASK 5 overall remains incomplete. Later tasks must not depend on unreviewed earlier worktree state.</p>
+      <div class="timeline">
+        <article class="phase"><div class="id">TASK 1</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>Unified error envelope and frontend error state <span class="status partial">partial</span></h3><p>Public dispatcher exception isolation, agent/channel/settings storage-error migration, server <code>UserErrorStore</code>, and list/ack/recovery are implemented. Final envelopes persist by authenticated principal before enqueue, capped at 1,000 records/7 days; persistence failure requires state recovery. Acknowledgement uses exact error IDs, request-ID association, and same-principal recovery broadcasts only. Web supports <code>operation_error/action_error</code>, and TUI consumes both frame types using low-sensitivity text. Current-session cards, background markers, Toast deduplication, reconnect hydration, and other legacy sources remain unimplemented. Preserve chat reply error bubbles; TASK 2 handles Job-entity errors.</p><div class="files"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/server.py">server.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/user_errors.py">user_errors.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/tree/main/openprogram/interfaces/server/ws_actions">ws_actions/</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/net/ws/use-ws.ts">use-ws.ts</a></div></div></article>
+        <article class="phase"><div class="id">TASK 2</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>Complete background Job error display</h3><p>Preserve Job errors from entity through broadcast/list loading to AttachCard/Branches, including after refresh. Use safe summaries; full tracebacks stay in logs.</p><div class="files"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/jobs/runner.py">runner.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/net/ws/ws-events.ts">ws-events.ts</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/cards/attach-card.tsx">attach-card.tsx</a></div></div></article>
+        <article class="phase"><div class="id">TASK 3</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>Bounded per-connection send queue <span class="status done">complete</span></h3><p>Add server-layer <code>ws_delivery.py</code>, sender lifecycle, frame classification, coalescing, terminal guarantees, and disconnect cleanup. All broadcast paths only enqueue. Slow-client, send-failure, cross-thread concurrency, overflow, terminal-reserve, and in-flight capacity regressions pass; no changes to <code>events/bus.py</code>.</p><div class="files"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/server.py">server.py</a><span class="tag">openprogram/interfaces/server/ws_delivery.py</span></div></div></article>
+        <article class="phase"><div class="id">TASK 4</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>Session projection and incremental recovery</h3><p>Fix payload measurement/protocol contracts first, then separate synchronous computation from async sending. Implement manifest, viewport messages, Graph summary, detail fetch, and reconnect deltas. Assess reuse/removal of unintegrated MessageStore.</p><div class="files"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/ws_actions/session/load.py">session/load.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/messages.py">messages.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/net/ws/use-ws.ts">use-ws.ts</a></div></div></article>
+        <article class="phase"><div class="id">TASK 5</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>EventBus notify and logging execution <span class="status partial">single-record slice complete</span></h3><p>Gate observer notifications now defer disk logging until verdict, producing one record containing <code>gate</code> fields; independent specification/quality rereviews pass. Remaining scope: dedicated notify execution, synchronous gates, async batched logs, large-payload summaries, and AST registration checks. Preserve public plugin-hook signatures.</p><div class="files"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/events/bus.py">bus.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/events/event_log.py">event_log.py</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/events/registry.py">registry.py</a></div></div></article>
+        <article class="phase"><div class="id">TASK 6</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>Local frontend dependencies, compression, resource budgets <span class="status done">complete</span></h3><p>Removed CDN runtime loaders/legacy tags; bundle marked/KaTeX locally. Replace CDN icons and automatic browser-home favicon requests with local text markers. Starlette gzip negotiates by weight and excludes compressed MIME types. Noninitial center-tab surfaces dynamically import with pending states. Build budgets, HTTP regressions, full Python, default-App visuals, and five cache-disabled browser traces pass.</p><div class="files"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/lib/runtime-bridge/dom/markdown-render.ts">markdown-render.ts</a><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/frontend.py">frontend.py</a><span class="tag">apps/web/scripts/runtime/check-static-resource-budget.mjs</span></div></div></article>
+        <article class="phase"><div class="id">TASK 7</div><div class="axis"><span class="dot"></span><span class="line"></span></div><div class="body"><h3>Capacity diagnostics and explicit cleanup</h3><p>Add read-only category sizes/diagnostics; design explicit cache/model cleanup. Identity/browser user data remain excluded by default. This does not block error/refresh fixes.</p></div></article>
+      </div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Task</th><th>depends_on</th><th>Parallelism</th><th>Responsibility exclusions</th></tr></thead>
+        <tbody>
+          <tr><td>TASK 1</td><td>None</td><td>May run alongside TASK 3, 6, 7</td><td>Define generic action errors/error store only, not Job-entity states.</td></tr>
+          <tr><td>TASK 2</td><td>TASK 1</td><td>After TASK 1, may run alongside TASK 4</td><td><code>job_status</code> solely carries Job terminal state; reuse error store without a second Job error frame.</td></tr>
+          <tr><td>TASK 3</td><td>None</td><td>May run alongside TASK 1, 6, 7</td><td>Change server queues and ws.frame enqueue adapters only, not <code>events/bus.py</code> notify scheduling.</td></tr>
+          <tr><td>TASK 4</td><td>TASK 3</td><td>May run alongside TASK 2, 5</td><td>SessionDB/DAG is sole durable source; remove unusable MessageStore persistence interfaces.</td></tr>
+          <tr><td>TASK 5</td><td>TASK 1, TASK 3</td><td>No file overlap with TASK 4</td><td>Sole owner of <code>events/bus.py</code>, registry, and event log; Web adapter uses TASK 1 envelopes and TASK 3 enqueue.</td></tr>
+          <tr><td>TASK 6</td><td>None</td><td>May run independently</td><td>Preserve CSP trust boundary and WebSocket protocol.</td></tr>
+          <tr><td>TASK 7</td><td>None</td><td>May run independently</td><td>Read-only diagnostics by default; deletion needs separate interaction design and explicit confirmation.</td></tr>
+        </tbody>
+      </table></div>
+    </section>
+
+    <section id="acceptance">
+      <div class="section-head"><span class="num">11</span><h2>Quantitative acceptance matrix</h2></div>
+      <p class="intro">Targets are implementation contracts, not current achievements. Each needs automated tests or repeatable measurement commands, not observation alone.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Public entry</th><th>Scenario</th><th>Acceptance criterion</th><th>Evidence type</th></tr></thead>
+        <tbody>
+          <tr><td>Any registered WS action</td><td>Handler raises</td><td>Same socket receives safe <code>operation_error</code>; connection survives; UI displays within 250 ms; correlation ID locates logs.</td><td>Server receive-loop component test + Web reducer/UI test.</td></tr>
+          <tr><td>list/delete/settings/channel actions</td><td>Underlying storage failure</td><td>No normal empty result or silent success; retain old data with degraded state or show explicit failure.</td><td>Per-action contract tests.</td></tr>
+          <tr><td>JobRunner</td><td>Refresh after background-task failure</td><td>Job, AttachCard, and session marker show the same safe reason; <code>retryable</code> agrees.</td><td>Persistence + WS + React integration tests.</td></tr>
+          <tr><td>Initial load of largest known session</td><td>No client cache</td><td>First uncompressed wire projection ≤ 1 MiB; server event-loop occupancy ≤ 50 ms; remaining computation in threads.</td><td>Fixed-session fixture payload/time-budget test.</td></tr>
+          <tr><td>Reconnect same session</td><td>Known revision, at most 64 missing deltas</td><td>No full history; recovery frames ≤ 256 KiB; terminal states, errors, and questions preserved.</td><td>Disconnect/recovery protocol tests.</td></tr>
+          <tr><td>Slow WebSocket client</td><td>Continuous stream deltas and terminal events</td><td>Queue ≤ 256 frames or 4 MiB; deltas may coalesce; terminal states not lost; unrecoverable overflow explicitly closes and requires resync.</td><td>Controlled slow-sender component test.</td></tr>
+          <tr><td>EventBus notify</td><td>Slow sync plugin + async subscriber from worker thread</td><td>Emitter enqueue p99 ≤ 1 ms; async subscribers not skipped for missing current loop; failures do not block peers.</td><td>Concurrency benchmark + behavior tests.</td></tr>
+          <tr><td>Event log</td><td>One gated tool.before</td><td>Choose exactly one session/global log target; one row per event ID with gate verdict; no full large-result bodies.</td><td>Real event-file assertions.</td></tr>
+          <tr><td>Initial Web load</td><td>Cache disabled, accepts gzip</td><td>Zero CSP violations/CDN runtime requests; first transfer ≤ 2 MiB; largest compressed JS chunk ≤ 350 KiB.</td><td>Default-App browser trace + HTTP header tests.</td></tr>
+          <tr><td>State-directory diagnostics</td><td>Profile exceeds configured warning size</td><td>Correct categories; no deletion without explicit confirmation; cleanup report lists categories and recoverability.</td><td>Temporary-profile tree tests.</td></tr>
+        </tbody>
+      </table></div>
+      <h3 style="margin-top:28px">Measurement definitions and threshold rationale</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Metric</th><th>Start/end and environment</th><th>Sample</th><th>Threshold rationale</th></tr></thead>
+        <tbody>
+          <tr><td>Session wire bytes</td><td>UTF-8 uncompressed bytes of backend <code>json.dumps</code> output; fixed large anonymized default-profile fixture, cold context stats disabled.</td><td>Five runs per candidate; median/max, with message/graph/detail breakdown.</td><td>1 MiB is the first-stage hard cap from 11.66 MB, bounding local JSON parse/remote transfer; each detail has its own 1 MiB chunk cap.</td></tr>
+          <tr><td>Event-loop occupancy</td><td>Async-handler entry to first await send, measuring only event-loop-thread wall time; thread projection time reported separately.</td><td>20 fixture runs; report p50/p95/max.</td><td>50 ms budgets interactive occupancy of the main loop, not total page completion.</td></tr>
+          <tr><td>Error-UI latency</td><td>Complete WS-frame receipt to error card appearing in DOM, excluding network.</td><td>20 runs, report p95.</td><td>250 ms allows state update/render while staying well below the existing 2-second reconnect interval.</td></tr>
+          <tr><td>Notify enqueue</td><td><code>emit</code> entry to successful enqueue in the bus-owned queue, excluding consumers.</td><td>10,000 calls each single-threaded and with 8 workers; p50/p95/p99.</td><td>p99 ≤ 1 ms prevents ordinary notify from materially extending tool/turn execution.</td></tr>
+          <tr><td>Static transfer</td><td>Default App, cache disabled, no extension injection; sum encodedBodySize for document-origin resources.</td><td>Five cold loads; median/max.</td><td>2 MiB is the first-stage budget from 3.42 MB; 350 KiB caps individual compressed JS chunks to keep lazy surfaces out of the initial bundle.</td></tr>
+          <tr><td>CSP</td><td>Count violations caused by OpenProgram document origin only; report extension/devtool injection separately.</td><td>One cold load, math-message opening, Settings entry, and DAG entry.</td><td>Zero product-origin violations is a security/functionality contract.</td></tr>
+          <tr><td>Capacity categories</td><td>Actual allocated/logical filesystem bytes with classification rules; symlinks do not escape state root.</td><td>Fixed temporary tree and real read-only diagnosis.</td><td>Category sum differs from root by at most 1% or 1 MiB, whichever larger.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout warn"><b>Baseline reproducibility: </b>The 11.66 MB, 313 ms, 123 ms, 437 MB, and test counts came from one worktree audit without committed fixtures, so they are observational baselines only. TASK 1/3/4/5/6 RED first adds fixed fixtures, scripts, or trace configurations; formal before/after reports must use these new entries.</div>
+    </section>
+
+    <section id="risks">
+      <div class="section-head"><span class="num">12</span><h2>Compatibility risks, adoption, and exclusions</h2></div>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Choice</th><th>Disposition</th><th>Reason and boundary</th></tr></thead>
+        <tbody>
+          <tr><td>Standard WebSocket + application-bounded queues</td><td><span class="status selected">Selected design</span></td><td>Stable browser compatibility; server still needs explicit queue, coalescing, and recovery semantics.</td></tr>
+          <tr><td>Existing MessageStore seq/delta</td><td><span class="status selected">Partial reuse</span></td><td>Reuse block/seq/delta computation only. SessionDB/DAG is the sole durable authority; remove independent store interfaces.</td></tr>
+          <tr><td>Unified operation_error</td><td><span class="status selected">Selected design</span></td><td>Frontend needs stable machine codes and safe text; temporary adapters support old error frames.</td></tr>
+          <tr><td>Dedicated EventBus notify execution</td><td><span class="status selected">Selected design</span></td><td>Satisfies nonblocking observation; gates stay synchronous.</td></tr>
+          <tr><td>Locally bundled marked/KaTeX</td><td><span class="status selected">Selected design</span></td><td>Consistent with strict CSP, offline operation, and reproducible builds.</td></tr>
+          <tr><td>Relax CSP for CDNs</td><td><span class="status gap">Reject</span></td><td>Adds remote-script trust/availability dependencies without solving initial-connection waiting.</td></tr>
+          <tr><td>Full WebSocketStream / WebTransport migration</td><td><span class="status gap">Reject</span></td><td>Browser support/complexity exceeds scope and cannot replace durable recovery/error contracts.</td></tr>
+          <tr><td>Global React store/component rewrite</td><td><span class="status gap">Reject</span></td><td>Existing rAF coalescing, per-message subscriptions, and row recycling are not proven bottlenecks.</td></tr>
+          <tr><td>Automatic Chrome-profile deletion</td><td><span class="status gap">Reject</span></td><td>May remove login state, IndexedDB, extensions, or other user data; only explicit categorized cleanup is allowed.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout warn"><b>Migration risk: </b>Session-protocol changes affect refresh ordering, branch switches, running cards, question replay, and send queues. TASK 4 must first capture existing frame order and public-entry RED, then replace layers; never move an entire async handler into <code>to_thread</code>.</div>
+    </section>
+
+    <section id="status">
+      <div class="section-head"><span class="num">13</span><h2>Implementation-status appendix</h2></div>
+      <p class="intro">Separates existing, partial, and unimplemented capabilities. Current status does not weaken target contracts.</p>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Capability</th><th>Status</th><th>Current evidence</th><th>Remaining work</th></tr></thead>
+        <tbody>
+          <tr><td>Unified operation_error and error store</td><td><span class="status partial">Server recovery protocol</span></td><td>Public dispatcher and migrated agent/channel/settings storage failures share final low-sensitivity <code>operation_error</code>; server persists by authenticated principal before send to separate SQLite <code>UserErrorStore</code>, capped at 1,000 records/7 days with concurrent-write protection and correlation IDs; <code>list_user_errors</code> paginates strictly, <code>acknowledge_user_error</code> closes exact IDs idempotently with request association, and same-principal windows receive exact-ID recovery. Web/TUI compatibility consumers exist.</td><td>Implement frontend hydration, scope display/deduplication, and remaining legacy sources.</td></tr>
+          <tr><td>Chat reply error bubble</td><td><span class="status done">Existing</span></td><td>Main chat dispatcher error turns terminate placeholders and use existing rendering.</td><td>Associate with error center without duplicate Toasts.</td></tr>
+          <tr><td>WebSocket command-level exception isolation</td><td><span class="status partial">Four slices</span></td><td>Unknown actions, uncaught handler exceptions, and covered management failures persist first, then return low-sensitivity <code>operation_error</code>; valid <code>request_id/session_id/action/operation_id</code> associates requests, explicit scope/log correlation applies, and list/ack/recovery isolate authenticated principals. Web supports legacy <code>action_error</code>; TUI hides wire message/error and isolates other-session errors.</td><td>Add validation codes; migrate runtime/session/project/channel QR and other paths; implement frontend recovery/display.</td></tr>
+          <tr><td>On-demand tool output</td><td><span class="status done">Existing</span></td><td>Wire truncates tool results over 32 KiB; expansion authorizes session/node/caller reads.</td><td>Include Graph, context tree, and other duplicated large fields in projections.</td></tr>
+          <tr><td>Stream coalescing and long-list recycling</td><td><span class="status done">Existing</span></td><td>text/thinking deltas coalesce by animation frame; MessageRow uses stable selectors; long lists compute live rows.</td><td>Add budgets ensuring new error/delta stores preserve these properties.</td></tr>
+          <tr><td>R6 request-local sibling-navigation indexes</td><td><span class="status done">Partially complete</span></td><td>fn-run enumerates once for stable order; ordinary chat <code>sibling_navigation_index</code> builds request-local ID, target sibling-group, and deepest-leaf-child indexes, sorts only complete groups relevant to the visible chain, and materializes navigation only for that chain. Public <code>handle_load_session</code> regressions enforce linear sibling grouping/child traversal and cover equal timestamps/deep adjacent branches. Pure DAG-helper tests cover duplicate/empty IDs, runtime/tool/code, spawn, dangling predecessors, and cycles. A synthetic 2,000-message/100-visible-node median fell from 134.076 ms to 1.355 ms; 50,000 offscreen siblings remain near 15 ms and 2.75 MiB peak memory. Both independent rereviews pass.</td><td>Remaining R6 compute/send separation, single session-row snapshot, projection/delta recovery, and full event-loop budget are unimplemented; this does not mark R6 complete.</td></tr>
+          <tr><td>Background Job error fields</td><td><span class="status partial">Partial</span></td><td>Runner broadcast and TypeScript types include <code>error</code>.</td><td>State storage, card rendering, refresh recovery, and Toast/error-center association.</td></tr>
+          <tr><td>Incremental session recovery</td><td><span class="status gap">Unintegrated</span></td><td>MessageStore defines seq/delta/full, unused by production server/Web.</td><td>Implement projection recovery from sole SessionDB/DAG authority and remove independent store interfaces.</td></tr>
+          <tr><td>Per-connection WebSocket backpressure</td><td><span class="status done">complete</span></td><td>Each production connection has one sender; queued + in-flight ≤ 256 frames / 4 MiB. Slow-client peak concurrent sends fell from 400 to 1. Specification, quality, and full Python gates PASS.</td><td>None.</td></tr>
+          <tr><td>EventBus gate-log uniqueness</td><td><span class="status done">Partially complete</span></td><td>Registered gates defer disk logging while <code>emit</code> notifies observers. The same Event, after <code>emit_gate</code> completes its verdict, writes one JSONL record containing <code>gate</code> fields. Public regressions ensure observers still receive once; both rereviews PASS. For 1,000 paired <code>tool.before</code>, synchronous logging median fell from 105.15 ms to 58.48 ms and rows from 2,000 to 1,000. This is not full EventBus/end-to-end latency.</td><td>TASK 5 async notify, batched logs, large payloads, and AST registry checks remain unimplemented.</td></tr>
+          <tr><td>Guaranteed async EventBus notify</td><td><span class="status gap">Unimplemented</span></td><td>Ordinary handlers execute synchronously; async handlers without a loop are skipped.</td><td>TASK 5.</td></tr>
+          <tr><td>Local marked/KaTeX and static compression</td><td><span class="status done">complete</span></td><td>Zero product CDN resources in source/legacy templates; local marked/KaTeX; passing JS/CSS/SVG gzip, weighted negotiation, identity, small-response, MIME exclusion, existing-encoding, and SSE regressions. Browser home uses local text icons. Build-budget size: 2,089,594 B; largest built gzip JS chunk: 186,752 B. Five cache-disabled local loads had median/max transfer 1,221,805 B and largest script 187,384 B. Every run had 65 local-origin requests, zero failures, and zero CSP/console errors.</td><td>Remote-deployment browser traces are outside local TASK 6 completion and require deployment-time verification.</td></tr>
+          <tr><td>Profile capacity diagnostics and cleanup</td><td><span class="status gap">Unimplemented</span></td><td>Capacity is inspectable only through the filesystem.</td><td>TASK 7.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3 style="margin-top:28px">TASK 1 long-term contract and slices</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Boundary</th><th>Long-term contract</th><th>Current implementation</th></tr></thead>
+        <tbody>
+          <tr><td>Wire envelope</td><td>Section 04 schema is the sole final contract; nullable fields explicitly use <code>null</code>, never copying exceptions or command payloads to wire.</td><td>Public dispatcher unknown actions, uncaught exceptions, and first management group generate all final fields; chat reply’s own error turn is not duplicated.</td></tr>
+          <tr><td>Correlation identity</td><td><code>request_id</code> is a client-generated per-command correlation value, not authorization/idempotency credentials. Echo only nonempty strings without controls and at most 128 characters.<code>session_id</code> with the same <code>action</code> likewise echoes only safe strings.</td><td>Missing/invalid correlation returns <code>null</code>, never original objects, oversized text, or internal exceptions.</td></tr>
+          <tr><td>Error classification</td><td><code>unknown_action</code> means nonretryable protocol/version mismatch; <code>handler_error</code> means command handling failed, conservatively nonretryable. Later actions use registered codes; unknown frontend codes use generic low-sensitivity text.</td><td>Current public paths classify session, agent, settings, channel, or system; exceptions, tracebacks, paths, credentials, and command payloads stay out of wire/store. Full traceback stays in local structured logs.</td></tr>
+          <tr><td>Compatibility</td><td>New frontend consumes <code>operation_error</code> and legacy <code>action_error</code>; new server sends no duplicate frames. Web assets and worker are one release unit; new-server/old-frontend pairing is not promised.</td><td>Retain <code>actionErrorNotice</code> and <code>consumeActionError</code> export as a source-compatible alias, internally normalized into one notice.</td></tr>
+          <tr><td>Durable recovery</td><td><code>UserErrorStore</code> indexes by <code>error_id</code>, session, and request, isolating authenticated principals. List, acknowledgement, and reconnect recovery use explicit IDs.</td><td>SQLite, 1,000-record/7-day bounds, persist-before-send, strict pagination, exact-ID acknowledgement, request-associated results, and same-principal recovery are implemented. Frontend hydration is not, so refresh recovery is not complete.</td></tr>
+          <tr><td>Display</td><td>Current-session errors, background markers, and Toasts share deduplication keys; existing chat error bubbles retain semantics.</td><td>Dispatcher command failure still displays one Toast; other-session errors cannot enter current-session-only views.</td></tr>
+        </tbody>
+      </table></div>
+      <div class="callout"><b>Slice 1 acceptance: </b>Real <code>_websocket_handler</code> returns <code>operation_error</code> for unknown action/handler exceptions, echoes valid <code>request_id</code>, rejects invalid metadata, and continues handling ping. Frontend normalizes old/new frames to identical safe notices; unknown codes hide wire <code>message/error</code>.</div>
+      <div class="callout"><b>Slice 2 acceptance: </b>Agent list/add/delete/set-default, channel account/binding/session-alias list/add/remove/attach/detach, and settings get/set storage exceptions use real <code>_websocket_handler</code> to produce exactly one safe <code>operation_error</code>, no normal empty/success response, and continue ping. TUI consumes both command-error frame types without rendering wire <code>message/error</code>; valid other-session errors stay out of current transcript, and only current-session chat failures end the corresponding turn.</div>
+      <div class="callout"><b>Slice 3 acceptance: </b>Public dispatcher creates and strictly validates final 12-field data per failure, commits to profile-scoped SQLite under a valid authenticated owner principal, then enqueues. Send failure preserves records; persistence failure sends no falsely durable frame and closes with <code>state_recovery_required</code>. Store tests cover reopen, principal isolation, thread/process first-write races, cross-principal expiry, capacity, 7-day bounds, and low-sensitivity wire/store.</div>
+      <div class="callout"><b>Slice 4 acceptance: </b><code>list_user_errors</code> returns only the authenticated principal’s open records with strict newest-first pagination; <code>acknowledge_user_error</code> sends acknowledgement then exact-ID recovery on the requesting connection and independently notifies same-principal peers only, even if requester sending fails. Duplicate/unknown exact IDs are idempotent without errors. Invalid fields, malformed JSON, and nonobject JSON produce safe <code>invalid_request</code>, and the connection continues. 35 store/component/protocol regressions pass.</div>
+
+      <h3 style="margin-top:28px">TASK 3 brief and implementation evidence</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Evidence item</th><th>Verified content</th></tr></thead>
+        <tbody>
+          <tr><td>Approved source</td><td>This page’s WebSocket queue, TASK 3, and quantitative acceptance clauses; task began from the then-current <code>main</code> baseline.</td></tr>
+          <tr><td>Production files</td><td><code>server.py</code>, <code>ws_delivery.py</code>, <code>ws_actions/webtab.py</code>, <code>routes/misc.py</code>.</td></tr>
+          <tr><td>Test files</td><td><code>test_websocket_delivery.py</code>, <code>test_websocket_command_lifecycle.py</code>, <code>test_webtab_control.py</code>, <code>test_web_owner_auth.py</code>.</td></tr>
+          <tr><td>Required behavior</td><td>One sender; cross-thread enqueue only; bounded queued + in-flight; text/state coalescing; critical terminal reserve; overflow/send failure require state recovery; disconnect completes all waiters.</td></tr>
+          <tr><td>Compatibility and exclusions</td><td>Retain <code>_ws_connections</code>, <code>await ws.send_text</code> and existing exact-socket control semantics; no EventBus, Session projection, frontend reconnect, or error-contract changes.</td></tr>
+          <tr><td>RED</td><td>Inject 400 updates through real <code>_websocket_handler</code> with the same <code>_broadcast</code>; old implementation peak concurrent <code>send_text</code> was 400, expected 1.</td></tr>
+          <tr><td>GREEN and affected verification</td><td>37 focused tests passed; expanded WebUI/web-use: 448 passed, 1 skipped, plus 1 reproduced baseline failure.</td></tr>
+          <tr><td>Reviews</td><td>Specification PASS; quality PASS. Confirmed waiter, failure-semantic, terminal-classification, and in-flight-capacity findings have focused regressions.</td></tr>
+          <tr><td>Full gate</td><td>Ruff PASS. After deterministic baseline fixes and independent review, full Python: 6,243 passed, 19 skipped, 7 deselected, 1 xfailed, zero failures/errors.</td></tr>
+          <tr><td>Delivery status</td><td><code>complete</code>. Specification, quality, and full Python PASS; integrated into an isolated branch, not yet merged into <code>main</code> or pushed.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3 style="margin-top:28px">TASK 6 brief and implementation evidence</h3>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Evidence item</th><th>Verified content</th></tr></thead>
+        <tbody>
+          <tr><td>Approved source</td><td>This page’s frontend/resource contract, TASK 6, first-load acceptance, and static-transfer definitions; isolated worktree created from TASK 3 baseline commit.</td></tr>
+          <tr><td>Production files</td><td><code>openprogram/interfaces/server/frontend.py</code>; <code>apps/web/app/layout.tsx</code>; <code>components/app-shell.tsx</code>, <code>components/chat/messages/bubbles/markdown.ts</code>, <code>components/settings/providers/icons/provider-icon.tsx</code>; <code>lib/format-utils/markdown.tsx</code>, <code>lib/global.d.ts</code>, <code>lib/net/ws/use-ws.ts</code>, <code>lib/runtime-bridge/session/conversations.ts</code>, <code>lib/runtime-bridge/dom/markdown-render.ts</code>; <code>public/html/index.html</code>; <code>apps/web/package.json</code> and root <code>package-lock.json</code>. Delete <code>lib/external-libs.ts</code> with the same <code>lib/cdn-globals.d.ts</code>.</td></tr>
+          <tr><td>Verification files</td><td><code>tests/component/webui/runtime/test_webui_frontend.py</code>; <code>apps/web/scripts/runtime/check-local-runtime-assets.mjs</code>, <code>check-static-resource-budget.mjs</code>; synchronize <code>check-chat-ui.mjs</code>, <code>check-markdown-sanitize.mjs</code> with the same <code>check-socket-access.mjs</code>.</td></tr>
+          <tr><td>Required behavior</td><td>All product runtime assets local; marked/KaTeX never wait on external loaders; browser home never auto-fetches external favicons; CSP stays self-only. JS/CSS/SVG use Starlette gzip with case-insensitive, q-weight-aware <code>Accept-Encoding</code>; small responses, already-compressed MIME, SSE, and existing <code>Content-Encoding</code> are not compressed/recompressed. Noninitial center-tab surfaces load on demand with pending states. Build artifacts meet fixed 2 MiB / 350 KiB budgets.</td></tr>
+          <tr><td>Compatibility and exclusions</td><td>No changes to WebSocket, Session projection, EventBus, or error contracts; <code>useMarkdownReady</code> keeps compatibility exports; OwnerAuth CSP is not relaxed.</td></tr>
+          <tr><td>RED</td><td>Initial public-HTTP fixture lacked <code>Content-Encoding</code> on large static JS: 1 failed / 13 passed. Local-runtime script failed on CDN loader; budget script failed without production output. Specification-repair RED reproduced PNG/WOFF2 double gzip: 2 failed / 16 passed. Quality-repair RED added extensionless API MIME/q-weight paths: 6 failed / 19 passed; browser-component check failed on Google favicon helper.</td></tr>
+          <tr><td>GREEN and affected verification</td><td>After repair, all 25 frontend tests pass, covering gzip, identity, small responses, static/extensionless MIME exclusions, case/q weights, SSE, and existing encoding; combined OwnerAuth/CSP: 67 passed. Web 115 unit tests, browser/bookmarks/local-runtime source checks, TypeScript, and production build pass.</td></tr>
+          <tr><td>Resource budgets</td><td><code>chat.html</code> conservative artifact check counts 110 initial/CSS-referenced resources totaling 2,089,594 B at gzip level 6, largest compressed JS 186,752 B, both under budget.</td></tr>
+          <tr><td>Reviews and repairs</td><td>Specification review confirmed extension-based exclusions missed extensionless responses; repair retained Starlette responder. Quality review found three issues: exclusions must use response MIME, Accept-Encoding must handle case/q weights, and browser home must not auto-fetch Google favicons. Repairs added MIME-aware responder, negotiation preferring explicit gzip over wildcard, and local DOM text icons. Final scoped specification and quality rereviews PASS.</td></tr>
+          <tr><td>Full gate</td><td>Deterministic baseline issues were separately fixed and independently reviewed. Full Python then reported 6,243 passed, 19 skipped, 7 deselected, 1 xfailed, zero failures/errors. Prior intermittent models.dev failures/background-thread errors did not recur.</td></tr>
+          <tr><td>Delivery status</td><td><code>complete</code>. Specification, quality, full Python, default-App refresh/visual acceptance PASS. Five local cache-disabled traces meet 2 MiB / 350 KiB with no external requests, failures, or CSP/console errors. Remote-server traces and push were not performed.</td></tr>
+        </tbody>
+      </table></div>
+
+      <h3 style="margin-top:28px">Current audit verification entries</h3>
+      <pre class="schema" aria-label="Current audit verification commands">.venv/bin/python -m pytest \
+  tests/component/agent/turns/test_event_bus.py \
+  tests/component/agent/turns/test_event_gate.py \
+  tests/unit/agent/behavior/test_event_bridges.py \
+  tests/unit/agent/dispatcher/test_error_turn_finalized.py \
+  tests/component/agent/jobs/test_async_job_recovery.py \
+  tests/component/webui/chat/test_session_tool_output_transport.py -q
+
+cd apps/web &amp;&amp; npm test
+cd apps/web &amp;&amp; npx tsc --noEmit
+python3 -m scripts.docs_site.build
+python3 -m scripts.docs_site.checklinks</pre>
+      <p class="intro">These entries show existing supported paths survive documentation changes, not that target behavior is implemented. Each TASK must first add corresponding error-UI, slow-client, projection, queue, EventBus-concurrency, or resource-budget RED.</p>
+
+      <h3 style="margin-top:28px">Related authoritative documents</h3>
+      <ul class="related">
+        <li><a href="../../error-handling.html">Error Handling — Discipline and Gate</a></li>
+        <li><a href="../../proactive/event-layer.html">Event Layer</a></li>
+        <li><a href="../../proactive/framework-evolution.html">Framework Signal Routing</a></li>
+        <li><a href="../../ui/invariants.html">Cross-module UI invariants</a></li>
+        <li><a href="../../ui/interaction-feedback.html">Interaction feedback</a></li>
+        <li><a href="../../ui/turn-lifecycle/websocket-command-lifecycle.html">WebSocket command lifecycle</a></li>
+        <li><a href="../operations/streaming-resume.html">Persisting in-flight state / reconnect recovery</a></li>
+        <li><a href="../execution/async-job-lifecycle.html">Async task lifecycle</a></li>
+        <li><a href="../session/README.html">Session subsystem</a></li>
+      </ul>
+      <p class="foot">Update implementation evidence only after the task passes specification review, quality review, and full verification. This page keeps no dates or commit history; Git preserves evolution.</p>
+    </section>
+  </main>
+</div>
+</div>
+<section id="bounded-session-history"><h2>Bounded session history</h2>
+<p>Session loading separates the latest transcript page from older history. Pages retain their captured branch head and a stable oldest-message cursor. A page contains complete display rows and their caller descendants, with at most 50 top-level rows and a 512 KiB target serialized budget. One indivisible larger row is returned alone. Paging never edits stored history or model context. Historical reads do not change focus, live session head, execution state, or question replay.</p>
+<p>Codex separates thread metadata, turns and items through paginated history APIs. DeepSeek Harness exposes message-aligned pages and sequence cursors. This implementation adopts stable branch snapshots, backward paging and incremental live updates; it retains OpenProgram's existing branch graph and execution recovery contracts. It does not introduce another session store or change model compaction.</p>
+<p>Duplicate promoted fields are omitted from the wire-only extra object. Existing tool-output previews retain their authorized full-output expansion. Logical history and graph responses larger than the transport frame budget are sent as ordered, awaited fragments; the client reconstructs a complete response before dispatch, preserving first-fragment order with subsequent live notifications. Deferred responses share a per-connection budget of 64 million UTF-16 code units, eight incomplete transfers and 1,024 logical responses. This handles a single large row without silently dropping data or increasing the 4 MiB sender queue. Ordinary live updates continue independently. Fragment buffers belong to one connection and are discarded on disconnect. Reconnect loads a fresh recent page and uses existing execution recovery.</p>
+<p>The client prepends older rows by stable identity without replacing newer live content or moving the selected conversation. Page requests capture the current load generation and are ignored after a reload, branch switch or socket replacement. An unavailable cursor produces an explicit retryable error instead of a reconnect loop. Scroll position remains anchored when older messages are inserted. The graph remains complete for existing branch and compaction controls; server-side history projection still scans the captured session. Storage indexing and lazy graph rendering are separate optimizations, not claimed here.</p>
+<p>Acceptance: the copied failing session opens without queue overflow; every logical page retains exact content and caller ownership; page frames stay bounded, including Unicode and a single oversized row; cursor exhaustion loses or duplicates no messages; stale responses cannot overwrite live/newer state; disconnection releases partial buffers; branch, compaction, tool expansion and execution recovery remain functional. Implementation status: implemented and independently reviewed. The combined verification passes 8,591 Python tests, 635 Web tests, four browser tests and 190 CLI tests, together with Desktop, static, type, build and documentation checks. The installed App retrieves all 26 original display rows in five pages without duplicates, reordering or disconnects; the largest observed transport frame is 51,564 bytes. Reload and heartbeat remain operational.</p>
+<p>References: <a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/src/request_processors/thread_processor.rs">Codex history protocol</a>; <a href="https://github.com/deepseek-ai/deepseek-harness/blob/main/packages/api/session-controller/src/history.ts">DeepSeek Harness history</a>.</p></section>
+<section id="long-session-layout"><h2>Long-session layout and loading</h2>
+<p>The bounded history protocol separates transport size from transcript length. Long sessions also require stack-safe graph construction: the depth pass previously followed every ancestor for every node and recursively visited the conversation chain. A 1,500-node linear conversation exceeds Python's recursion limit before its first page can be delivered.</p>
+<p>Graph depth now uses a memoized parent-chain classification followed by iterative preorder traversal. Nodes whose parent path enters a cycle remain independent roots, preserving the existing defensive behavior. Forks, retries, spawned branches and call children retain their current row order and offsets. Parent classification visits each node once; traversal does not depend on the Python call stack. Follow-up normalization indexes replies once. Lane column placement maintains per-lane widths and the largest occupied column rather than rescanning previously placed nodes.</p>
+<p>Session message aggregation and byte-budget page preparation execute outside the event loop, while awaited WebSocket sends remain on the owning loop. Branch graph construction also executes outside that loop. Snapshot and incremental event ordering remain unchanged. The existing in-memory session index remains authoritative for reads; this change introduces no persistent cache, schema migration or history deletion.</p>
+<p>Acceptance uses the public graph builder and session-loading handler with long chains, wide fork sets and invalid cycles. Small-graph output must match existing layout contracts, and a 10,000-node transcript must load a bounded recent page without recursion failures. Full graphs and initial store indexing remain proportional to session size; this work does not claim constant-memory storage or indexed transcript projection. The Codex and DeepSeek references in the bounded-history section continue to define the paging comparison.</p>
+<p>Implementation status: implemented and independently reviewed. Public layout and session-loading tests cover a 10,000-node chain, wide forks and invalid cycles; complete graph output and bounded transcript pages are preserved. The combined verification and installed-App long-history replay pass. Initial graph and store memory still grow with session size.</p></section>

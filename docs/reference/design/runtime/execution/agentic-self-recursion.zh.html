@@ -1,0 +1,81 @@
+<style>
+.runtime-doc { max-width: 100%; }
+.runtime-doc .lead, .runtime-doc .toc { background: var(--bg-code); border: 1px solid var(--bd); border-radius: 8px; padding: 14px 18px; margin: 18px 0; }
+.runtime-doc .doc-intro { border-left: 3px solid var(--acc); padding: 4px 0 4px 18px; margin: 18px 0 28px; }
+.runtime-doc .doc-scroll { max-width: 100%; overflow-x: auto; margin: 16px 0; }
+.runtime-doc .doc-scroll:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+.runtime-doc table { min-width: 720px; }
+.runtime-doc code { overflow-wrap: anywhere; word-break: break-word; }
+.runtime-doc h2 { scroll-margin-top: 16px; }
+.runtime-doc blockquote { border-left: 3px solid var(--bd); padding: 8px 16px; margin: 16px 0; }
+@media (max-width: 680px) {
+  .runtime-doc table { min-width: 640px; font-size: 13px; }
+  .runtime-doc h1 { font-size: 26px; }
+}
+</style>
+<div class="runtime-doc">
+<h1>Agentic 自递归保护</h1>
+<div class="lead">
+<strong>当前行为：</strong> agentic 函数在用户轮次中接收情境引导，同时保留按函数计数的递归深度上限作为确定性保护。
+<br>事实来源： <code>openprogram/runtime/agent/call_state.py</code> 和 <code>openprogram/runtime/agent/runtime.py</code>.
+<br>测试： <code>tests/unit/programs/runtime/test_self_recursion_guard.py</code>.
+</div>
+
+<div class="toc">
+<a href="#s1">1 · 问题</a>
+<a href="#s2">2 · 引导</a>
+<a href="#s3">3 · 深度上限</a>
+<a href="#s4">4 · 源码符号</a>
+<a href="#s5">5 · 行为合同</a>
+<a href="#s6">6 · 边界</a>
+</div>
+
+<h2 id="s1">1. 问题</h2>
+<p>agentic 函数运行内部 Agent 循环。工具列表可能包含该函数自身，匹配的 docstring 会导致内部模型再次调用它。如果不加限制，重复直接调用可能造成无限同名递归。</p>
+
+<h2 id="s2">2. 情境引导</h2>
+<p><code>openprogram/runtime/agent/runtime.py::_situational_prefix</code> 生成英文用户轮次前缀，说明当前函数名，解释调用它会重新进入当前执行，并引导模型使用较低层工具。</p>
+<ul>
+<li>常规执行路径将前缀注入用户内容块的开头。</li>
+<li>独立执行的 fallback 从递归上下文取得最深层函数名，并应用相同前缀。</li>
+<li>system prompt 保持独立。当前函数不会通过 self-deny 项隐藏；引导有明确主体，由模型决定不调用自身。</li>
+</ul>
+
+<h2 id="s3">3. 深度上限</h2>
+<ul>
+<li><code>openprogram/runtime/agent/call_state.py::_MAX_AGENTIC_RECURSION_DEPTH</code> 为 5。</li>
+<li><code>_recursion_depth</code> 是以函数名为键的上下文本地映射。</li>
+<li>同步与异步包装器增加当前函数的深度，超过限制时抛出 <code>RecursionError</code> ，并在以下代码块中重置上下文值： <code>finally</code>.</li>
+<li>深度上限对每个函数名独立计数。它防止直接 A → A 递归；A → B → A 等跨函数循环是已记录的剩余限制。</li>
+</ul>
+
+<h2 id="s4">4. 源码符号</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="自递归证据表"><table>
+<tr><th>机制</th><th>当前源码符号</th></tr>
+<tr><td>深度上限</td><td><code>openprogram/runtime/agent/call_state.py::_MAX_AGENTIC_RECURSION_DEPTH</code></td></tr>
+<tr><td>深度上下文</td><td><code>openprogram/runtime/agent/call_state.py::_recursion_depth</code></td></tr>
+<tr><td>同步与异步包装器</td><td><code>openprogram/runtime/agent/call_state.py</code></td></tr>
+<tr><td>情境前缀</td><td><code>openprogram/runtime/agent/runtime.py::_situational_prefix</code></td></tr>
+<tr><td>常规注入</td><td><code>openprogram/runtime/agent/runtime.py</code> frame 前缀构造与用户内容组装</td></tr>
+<tr><td>独立执行 fallback</td><td><code>openprogram/runtime/agent/runtime.py</code> 递归上下文 fallback</td></tr>
+<tr><td>工具策略</td><td><code>openprogram/runtime/agent/runtime.py</code> 保留 source/allow/toolset 及无关 deny 处理</td></tr>
+</table></div>
+
+<h2 id="s5">5. 行为合同</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="自递归证据表"><table>
+<tr><th>合同</th><th>证据</th></tr>
+<tr><td>引导说明当前函数名、禁止调用自身并解释递归。</td><td><code>test_situational_prefix_warns_against_self_call</code></td></tr>
+<tr><td>空 docstring 不添加无关的函数任务后缀。</td><td><code>test_situational_prefix_handles_empty_doc</code></td></tr>
+<tr><td>调用期间不把当前函数名加入 self-deny。</td><td><code>test_self_name_NOT_denied_during_call</code></td></tr>
+<tr><td>调用期间深度递增，返回或异常后重置。</td><td><code>test_depth_increments_during_call</code>, <code>test_depth_restored_after_return</code>, <code>test_depth_restored_after_exception</code></td></tr>
+<tr><td>直接同名递归在配置上限处抛出异常；不同子调用不会被连带拒绝。</td><td><code>test_depth_backstop_raises_past_limit</code>, <code>test_distinct_subcalls_not_collateral_damage</code></td></tr>
+</table></div>
+
+<h2 id="s6">6. 边界与剩余工作</h2>
+<ul>
+<li>引导不保证能力较弱的模型一定会在到达上限前停止。</li>
+<li>本机制未实现跨函数循环检测。</li>
+<li>保护不改变工具授权、session DAG 语义或统一 system-prefix 合同。</li>
+<li>本页使用源码符号与仓库路径，而不是固定行号或历史 commit 标识，避免源码移动后证据悄然过期。</li>
+</ul>
+</div>

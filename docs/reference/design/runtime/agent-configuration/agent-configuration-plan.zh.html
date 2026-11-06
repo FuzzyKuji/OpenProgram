@@ -1,0 +1,417 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Agent 配置实施计划 — OpenProgram</title>
+<style>
+.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
+</style>
+</head>
+<body>
+<main class="ad">
+<header>
+<div class="eyebrow">OpenProgram · Agents</div>
+<h1>Agent 配置实施计划</h1>
+<p class="lead">可复用配置、可选长期记忆、统一执行语义。</p>
+<a href="agent-configuration-plan.html">English</a>
+<div class="status">部分已实现 · Agents 页面、带 revision 的保存配置和记忆策略已经实现；仍属目标设计的部分见文末实现状态。链接的原型只用示例数据，不修改真实配置。</div>
+<nav aria-label="设计文档">
+<a href="agent-configuration-ui.zh.html">配置契约</a>
+<a href="agent-core-configuration-ui.zh.html">页面与基础配置</a>
+<a href="agent-capability-configuration-ui.zh.html">能力配置</a>
+<a href="agent-tool-configuration-ui.zh.html">Programs 选择器</a>
+<a href="agent-configuration-plan.zh.html">实施计划</a>
+</nav>
+<nav class="toc" aria-label="本页目录">
+<a href="#scope">交付范围与已定方案</a>
+<a href="#stages">阶段、依赖与公开入口证据</a>
+<a href="#files">源码责任与修改位置</a>
+<a href="#migration">迁移、旧客户端与回退</a>
+<a href="#scenarios">按失败行为设计的验收场景</a>
+<a href="#brief">首个有明确范围的实施 brief：P0</a>
+<a href="#gates">验证与发布证据</a>
+<a href="#routing">可选选择策略：扩展接口与约束</a>
+<a href="#risks">集成风险与明确限制</a>
+<a href="#status">实现状态</a>
+</nav>
+</header>
+<section id="scope">
+<h2>交付范围与已定方案</h2>
+<p>本计划实现关联配置契约。首个功能版本包含保存/临时配置、原子保存、统一解析、可选记忆和页面。自动选择单独安排后续阶段，不作为手动逐调用选模型的前置条件。</p>
+<ul>
+<li>AgentSpec 仍是唯一持久注册表，AgentConfig 是类型化配置值。复用 Runtime.exec、MemoryBackend、Context Engine、能力目录与资源管理。</li>
+<li>新保存或匿名配置默认关闭记忆；旧配置明确迁移并保留生效行为，不静默移动历史或记忆存储。</li>
+<li>模型在执行准入时选择，不在响应中途换模型，也不换模型重放已有副作用。</li>
+<li>只解析一个基础配置，不创建命名 Agent 继承树，不要求职责，不自动创建保存 Agent，不新建 worker 或编排引擎。</li>
+</ul>
+</section>
+<section id="stages">
+<h2>阶段、依赖与公开入口证据</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>阶段 / 依赖</th>
+<th>变更责任</th>
+<th>完成证据</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0 · 首先</td>
+<td>AgentConfig 类型投影、格式 2 迁移、整份配置 revision/CAS、可恢复的多文件生命周期写入</td>
+<td>A01/A02/A11：同 revision 不能同时保存成功；重启只见旧配置或完整新配置；迁移语义差异为空</td>
+</tr>
+<tr>
+<td>P1 · P0</td>
+<td>统一纯解析器、只读预览、规范能力语义、错误和来源</td>
+<td>A03/A07：等价输入得到等价结果；selected 空始终为空；明确拒绝调用失败</td>
+</tr>
+<tr>
+<td>P2 · P1</td>
+<td>逐执行记忆策略、空间绑定、写入资格传播与 policy epoch 复查</td>
+<td>A05：读写、延迟提取、压缩、排队提交均遵守策略；可选故障明确降级</td>
+</tr>
+<tr>
+<td>P3 · P1 + P2</td>
+<td>接入 Python agent()/llm()、聊天、CLI、委派、scheduler；不可变执行快照与历史过滤</td>
+<td>A03/A04/A06/A08/A12：入口一致；并发/失败/取消不泄漏配置；恢复保持原意图</td>
+</tr>
+<tr>
+<td>P4 · P0 + P1，完成依赖 P2/P3</td>
+<td>八分区 UI、统一草稿、目录模型选择器、能力选择器与生效预览</td>
+<td>A01/A02/A07/A10：真实页面操作、冲突恢复、失效引用、响应式与键盘验收</td>
+</tr>
+<tr>
+<td>P5 · P0–P4</td>
+<td>可移植导入导出、复制删除预览、兼容预检、产品文档与发布验证</td>
+<td>A09/A11/A12：仅处理自有资源；旧调用行为保持；最终审查候选通过完整验证</td>
+</tr>
+<tr>
+<td>P6 · P5 后可选</td>
+<td>显式启用的 Agent/模型选择策略，仅对合格候选生效</td>
+<td>通过下文路由验收；未配置策略时手动行为不变</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>先完成格式与兼容性，再接入消费者。P1 后可用 fixture 开展布局，但原型不能作为 P4 完成证据。P2 的全部记忆输入输出入口受控之前，不发布记忆开关。每个有明确范围的阶段完成审查后再标记完成。</p>
+</section>
+<section id="files">
+<h2>源码责任与修改位置</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>范围</th>
+<th>已有责任位置</th>
+<th>计划修改</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>持久化</td>
+<td>
+<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent_registry/manager.py">openprogram/runtime/agent_registry/manager.py</a>；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent_registry/workspace.py">openprogram/runtime/agent_registry/workspace.py</a>
+</td>
+<td>保留 AgentSpec 和存储责任；可同目录新增 configuration.py/resolution.py 分离类型与纯逻辑，两个文件名均为拟新增</td>
+</tr>
+<tr>
+<td>API</td>
+<td>
+<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/routes/catalog/agents.py">openprogram/interfaces/server/routes/catalog/agents.py</a>
+</td>
+<td>调用一次原子 manager 操作，提供类型化预览、revision 和就绪结果；不在路由重复合并或二次保存 tools</td>
+</tr>
+<tr>
+<td>函数调用</td>
+<td>
+<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/agent_function.py">openprogram/runtime/agent/agent_function.py</a>；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/llm.py">openprogram/runtime/agent/llm.py</a>；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/runtime/execution.py">openprogram/runtime/agent/runtime/execution.py</a>
+</td>
+<td>统一规范新旧参数，不可变作用域配置，保留返回、校验、llm 无 Program/MCP 工具循环及显式授权原生搜索语义</td>
+</tr>
+<tr>
+<td>持久委派</td>
+<td>
+<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/tools/agents/agent/agent/agent.py">openprogram/programs/tools/agents/agent/agent/agent.py</a>；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/conversation/sub_agent_run.py">openprogram/runtime/conversation/sub_agent_run.py</a>
+</td>
+<td>复用现有派发和任务生命周期，通过真实 run/DAG 存储保存快照和来源</td>
+</tr>
+<tr>
+<td>记忆</td>
+<td>
+<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/state/memory/backend.py">openprogram/state/memory/backend.py</a>；<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/state/memory/management/config.py">openprogram/state/memory/management/config.py</a>
+</td>
+<td>backend 上方强制策略，backend 内执行空间与提交契约；验收前跟踪所有调用方</td>
+</tr>
+<tr>
+<td>页面</td>
+<td>
+<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/agents/agents-page.tsx">apps/web/components/agents/agents-page.tsx</a>
+</td>
+<td>复用组件，实现类型化草稿与原子保存，在实际导入位置扩展 API 和类型层</td>
+</tr>
+<tr>
+<td>文档</td>
+<td>
+<a href="agent-configuration-ui.zh.html">配置契约</a>；<a href="agent-core-configuration-ui.zh.html">页面</a>；<a href="agent-capability-configuration-ui.zh.html">能力</a>；<a href="agent-tool-configuration-ui.zh.html">Programs</a>
+</td>
+<td>持续更新这些唯一正文与中英版本，产品使用文档随真实实现更新</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>每阶段实施 brief 开始时，按当前调用图定位实际聊天、scheduler、CLI 消费者和持久 schema，记录具体文件。本表给出已核对的责任位置，不虚构完整修改清单。不开展无关前端、provider 或记忆引擎重构。</p>
+</section>
+<section id="migration">
+<h2>迁移、旧客户端与回退</h2>
+<ul>
+<li>预检在配置写锁下读取所有 Agent、默认指针和原全局生效设置。dry-run 报告列 ID、格式版本、失效引用与语义差异，不含密钥或记忆正文。未知格式或损坏记录阻止该 profile 迁移，不能静默替换为 main。</li>
+<li>缺少版本的旧格式视为 1，规范化为格式 2、初始 revision 1。未知扩展数据在专门迁移备份中保留；尚未理解的执行字段禁止启用。明确保留旧记忆绑定与生效行为，不把旧 Agent 换成空 self 空间。旧全局继承作为命名兼容来源保留，直到用户选择具体模式。</li>
+<li>首写前按现有受限权限备份自有配置文件和 index。多文件修改使用日志与重启恢复；规范化校验通过才提交该 profile，中断可幂等继续。不修改外部目录、凭据、session、DAG 或已学习记忆内容。</li>
+<li>新 UI/API 写入要求 expected_revision。仍提供 updated_at 的旧客户端通过临时适配层：在同一写锁内比较时间戳，取得当前 revision，再完成一次原子写入。两者都缺少返回 428，页面保留草稿并提示重新加载，不能为兼容而接受无条件覆盖。</li>
+<li>未指定选择参数的 Python 调用保持原模型、历史、记忆和返回类型。新增参数仅限关键字。明确 agent_id/config 默认 clean，明确 inherit 仍受可见范围约束；重复别名冲突报校验错。现有持久委派 start_from 与 to 语义不变。</li>
+<li>回退代码必须使用能读格式 2 的版本，或停写后执行明确且已验证的降级。不支持的新字段阻止无损降级。恢复备份只适用于迁移后尚无修改，或已另行导出并处理后续修改的情况，不能覆盖用户新修改。旧二进制不得静默重写格式 2。</li>
+<li>只有第一方客户端更新并经过文档约定的弃用期，才移除适配层。先部署双格式读取 backend，再更新客户端、开启迁移，最后移除旧写入适配；不可先发布严格写入前置条件导致所有旧客户端失效。</li>
+</ul>
+</section>
+<section id="scenarios">
+<h2>按失败行为设计的验收场景</h2>
+<p>P3 同时包含<a href="../collaboration/agent-collaboration.zh.md">协作契约 §6–7</a>的 C1–C10：保留真实 execution_id/job_id 接口，接入自动完成回送与异步归档，恢复消息预算耗尽后的授权结果查询，统一历史可见性、结果限长与精确 attach 跳转。已有 helper 或直接测试 helper 不作为公开入口完成证据。</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>编号</th>
+<th>输入与操作</th>
+<th>必须断言</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>A01/A03</td>
+<td>仅名称创建；保存配置和等价匿名字段分别调用 agent 与 llm</td>
+<td>不要求职责；匿名不落盘；除身份和来源外生效字段等价；llm 无 Program/MCP 循环；web_search=False 不搜索，显式且获授权的 True 保留原生搜索</td>
+</tr>
+<tr>
+<td>A02</td>
+<td>两进程同 revision 修改 model + tools；在 replace 前注入失败</td>
+<td>一个 200、一个 409；文件是完整旧版或新版；读取无混合字段；错误后草稿保留</td>
+</tr>
+<tr>
+<td>A04</td>
+<td>两个嵌套并发调用使用不同模型和记忆，其中一个在 await 时取消</td>
+<td>provider 请求各用各的配置，finally 恢复父作用域，取消正常传播</td>
+</tr>
+<tr>
+<td>A05</td>
+<td>记忆和关闭/只读执行输出放不同标记；强制检索、压缩和会话结束 writer</td>
+<td>禁止标记不会经受限路径进入请求或存储；派生摘要保留写入限制</td>
+</tr>
+<tr>
+<td>A05/A08</td>
+<td>暂停排队检索/写入，撤销权限后放行并重启 worker</td>
+<td>迟到检索被丢弃，提交前禁止写入，重试/恢复不能扩大授权</td>
+</tr>
+<tr>
+<td>A06</td>
+<td>用 clean、inherit、selected 切换保存 Agent，并请求无权节点</td>
+<td>仅授权且选中的上下文可见，无隐式转移；无权节点在推理前报错</td>
+</tr>
+<tr>
+<td>A07</td>
+<td>selected=[]、明确被拒工具、缺失必需 MCP、llm 选/不选 Agent 的原生搜索</td>
+<td>发现和调用一致，预检成功前无 provider/工具副作用</td>
+</tr>
+<tr>
+<td>A08/A12</td>
+<td>任务入队后编辑 Agent 再恢复，随后触发下一次计划</td>
+<td>恢复保留快照并应用当前撤销；新触发解析最新 revision</td>
+</tr>
+<tr>
+<td>A09</td>
+<td>self/共享记忆、活跃 run、外部 cwd 下复制、导出、导入、删除</td>
+<td>不复制记忆/历史/凭据/计划，共享和外部资源保留，活跃删除拒绝</td>
+</tr>
+<tr>
+<td>A10</td>
+<td>桌面/窄屏键盘操作全部分区，两客户端制造保存冲突</td>
+<td>不丢草稿、不虚假成功、不整页溢出、页签可达；冲突可重新加载或明确重新应用</td>
+</tr>
+<tr>
+<td>A11</td>
+<td>迁移全局记忆继承、空允许列表、名称与类别同时指定、无类别项、默认 Agent 等旧 fixture</td>
+<td>迁移前后模型、能力、记忆、默认选择等价，再次迁移无变化</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="brief">
+<h2>首个有明确范围的实施 brief：P0</h2>
+<p>首先实现持久化格式与原子更新边界。修改 Agent 管理类型/存储、Agent routes、相关现有测试及涉及的双语产品/设计文档。类型和格式独立后更清晰时，才增加最小配置模块。本 brief 不修改函数执行、记忆行为、页面布局或已安装 App。</p>
+<p>公开入口 RED：并发提交相同前置版本、同时改变 model 和 tools 的 PATCH，再读取保存结果。现有路由检查与分次写入不能建立整份事务；测试必须复现丢失更新或混合写入，而不是只检查方法名称。公开并发/生命周期测试扩展 tests/component/webui/abilities/test_agent_tools_routes.py，纯迁移 fixture 在核对现有位置后放入同属 Agent 管理的测试。针对性命令为 uv run --locked --extra dev python -m pytest -q tests/component/webui/abilities/test_agent_tools_routes.py。序列化修改前补旧格式 fixture，证明预期兼容语义。</p>
+<p>GREEN：一次经过校验的 manager 事务在跨进程写锁内比较 revision，原子替换完整文件；routes 不再单独保存 tools。保留读取兼容、明确类型错误和时间戳适配。在实施台账记录实际公开入口命令、失败/通过证据、修改文件与提交。先独立规格审查，再由新的审查执行质量检查，两者通过前 P0 未完成，不能根据本计划标记运行能力已实现。</p>
+</section>
+<section id="gates">
+<h2>验证与发布证据</h2>
+<p>每个 brief 从当前测试集中选择有针对性的 RED/GREEN，优先扩展已有责任位置，不另造测试层级。已确认相关测试包括 tests/component/webui/abilities/test_agent_tools_routes.py、tests/unit/agent/workflows/test_agentic_programming_agent.py、tests/component/agent/workflows/test_goal_role_configuration.py、tests/component/webui/settings/test_memory_settings_routes.py、tests/unit/memory/test_memory_runtime_config.py、tests/unit/config/test_docs_information_architecture.py。这些是修改起点，不表示目标场景已有覆盖。</p>
+<pre>
+<code># 仅文档交付，在设计 checkout 执行。
+uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.build
+uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.checklinks
+uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.checklang
+uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.check_landing
+uv run --locked --extra dev --with markdown-it-py --with mdit-py-plugins --with pygments python -m pytest -q tests/unit/config/test_docs_information_architecture.py
+
+# 运行实现：先针对性验证，再在最终候选上执行完整分层测试。
+uv run --locked --extra dev python -m pytest -q tests/contracts tests/unit tests/component tests/integration
+# Web 命令在 apps/web 中按仓库约定安装依赖后执行。
+cd apps/web
+npm test
+npx tsc --noEmit
+npm run check
+npm run build
+cd ../..
+uv run --locked --extra dev --extra browser python -m pytest -q -m browser tests/e2e/web</code>
+</pre>
+<p>实施时对照 tests/README.md 和 CONTRIBUTING 核对命令，补充它们要求的其他完整验证。浏览器证据必须操作构建后的产品页面。最终 App 验收使用 /Applications/OpenProgram.app、默认 profile、18100 和 ~/.openprogram。完整功能提交后，从最终 checkout 统一运行一次 scripts/refresh-local-app.sh，不从旧 worktree 重启，不另起开发 profile。</p>
+<p>源码、测试、本地提交、远端推送、已安装 App、线上部署分别记录证据。文档构建不等于运行或 App 验收。本次规划任务不提交、不推送、不迁移、不重启、不发布 App。</p>
+</section>
+<section id="routing">
+<h2>可选选择策略：扩展接口与约束</h2>
+<p>P6 明确启用，在现有解析器之前执行。调用方提供已有选择策略引用，与 agent_id/config 互斥。候选是保存 Agent ID 或带 provider 的模型引用，不是自动生成的任意可执行配置。只选模型时保留调用方非模型字段；选择 Agent 时更换基础配置并使用常规历史规则。策略必须声明选择对象，避免选模型同时静默改变记忆和指令。</p>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>决策</th>
+<th>契约</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>资格筛选</td>
+<td>排序前排除不可用 provider/账户/模型，以及不满足模态、结构化输出/工具、上下文长度、授权或剩余额度的候选</td>
+</tr>
+<tr>
+<td>排序</td>
+<td>使用版本化、有序、确定性规则，读取明确任务标签、必需能力与调用方偏好；模型辅助排序另行启用</td>
+</tr>
+<tr>
+<td>无匹配 / 不可用</td>
+<td>返回无合格候选类型错误，或在推理开始前使用明确配置且仍合格的 fallback，不扩大权限</td>
+</tr>
+<tr>
+<td>记录</td>
+<td>保存策略版本、合格候选 ID、排除原因、选中 ID 与规则 ID，不保存原始用户内容，不编造成本或延迟</td>
+</tr>
+<tr>
+<td>稳定性</td>
+<td>重试/恢复固定选择，新调用可重新选择，不自动更换已开始工具循环的模型</td>
+</tr>
+<tr>
+<td>评估</td>
+<td>固定 fixture 覆盖选中正确性、无匹配、拒绝候选、未知价格、确定性重放；质量/成本/延迟主张必须有获准语料上的实测</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>一个 Agent 类型策略的所有结果都为保存 Agent ID：标签 classify 且要求结构化输出时，选择第一个合格且配置了指定小模型的保存 Agent；标签 code-edit 且要求工具时，选择指定的保存编程 Agent；其他情况选择明确的保存默认 Agent。另一个独立的模型类型策略只返回模型引用，并保留非模型字段。具体候选 ID 和阈值来自用户选择的可用目录，不内置产品排名。没有价格/延迟元数据表示未知，不代表免费或快速。</p>
+</section>
+<section id="risks">
+<h2>集成风险与明确限制</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>风险</th>
+<th>处理要求</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>受限内容间接进入派生历史</td>
+<td>沿上下文依赖与生成摘要传播写入限制；测试跨 Agent 转交，而非只检查原节点</td>
+</tr>
+<tr>
+<td>插件不能强制空间隔离</td>
+<td>明确显示不支持，阻止所请求的空间绑定，不声称提示词隔离</td>
+</tr>
+<tr>
+<td>多文件与默认 index 并发</td>
+<td>日志、恢复、幂等，由一个 manager 拥有修改权限</td>
+</tr>
+<tr>
+<td>旧客户端覆盖新类型字段</td>
+<td>双格式读取、条件写兼容与明确报错，不静默降级</td>
+</tr>
+<tr>
+<td>配置快照含私人指令</td>
+<td>沿用执行存储权限与保留策略，诊断只显示散列/引用，不显示 prompt 正文</td>
+</tr>
+<tr>
+<td>页面字段先于运行支持</td>
+<td>可用状态取决于 backend 验证，原型始终明确标记</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>开始 P0 不需要再等待产品决策。消费者精确文件位置与不同 backend 撤销支持是实施定位事项，上文已指定不满足时阻止执行的行为。不能满足的 backend 保持不支持，不能为了实现方便静默降低契约。</p>
+</section>
+<section id="status">
+<h2>实现状态</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>阶段</th>
+<th>设计</th>
+<th>实现 / 验收</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>P0</td>
+<td>已定义</td>
+<td>已实现 revision/CAS 与兼容读取；schema 2 迁移和多文件生命周期事务待实现</td>
+</tr>
+<tr>
+<td>P1</td>
+<td>已定义</td>
+<td>复用现有执行解析和能力策略；统一解析器与有效配置预览待实现</td>
+</tr>
+<tr>
+<td>P2</td>
+<td>已定义</td>
+<td>已接入执行、后台提取、派生资格和恢复策略；仅支持 self 与 legacy_global</td>
+</tr>
+<tr>
+<td>P3</td>
+<td>已定义</td>
+<td>Web 保存配置与试运行快照已接入；完整 Python/CLI/调度入口一致性待实现</td>
+</tr>
+<tr>
+<td>P4</td>
+<td>已定义</td>
+<td>八分区、共享草稿、模型选择、冲突比较已实现；内嵌试运行与有效配置预览待实现</td>
+</tr>
+<tr>
+<td>P5</td>
+<td>已定义</td>
+<td>复制/删除配置和产品文档已接入；便携导入导出待实现，交付验收单独记录</td>
+</tr>
+<tr>
+<td>P6（可选）</td>
+<td>已定义</td>
+<td>未实现</td>
+</tr>
+</tbody>
+</table>
+</div>
+<p>经审查的实现合入后更新本附录；日期与提交历史由 Git 保存。</p>
+</section>
+</main>
+</body>
+</html>

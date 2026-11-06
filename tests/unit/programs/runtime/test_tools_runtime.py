@@ -1,0 +1,1464 @@
+"""Coverage for the @tool decorator + runtime layer.
+
+Verifies the parts that govern how every future tool will behave:
+schema generation, sync/async wrap, error wrap, char cap + persist,
+approval gate evaluation, cache, cancel/on_update injection, and
+registry filtering.
+"""
+from __future__ import annotations
+
+from openprogram.runtime.agent import Agent
+
+import asyncio
+import importlib
+import json
+import time
+from pathlib import Path
+from typing import Optional
+
+import pytest
+from mcp.types import CallToolResult, TextContent as MCPTextContent
+
+from openprogram.models.providers.types import AgentToolResult
+from openprogram.host.backend import RunResult
+from openprogram.programs._host import runtime as R
+from openprogram.programs._host.runtime import (
+    MIN_KEEP_CHARS,
+    ToolReturn,
+    _build_parameters_schema,
+    _parse_docstring,
+    filter_for,
+    get,
+    reset_registry,
+    restore_registry,
+    snapshot_registry,
+    function,
+    tool_requires_approval,
+)
+from openprogram.programs._host.execution import _cap_result_text
+from openprogram.extensions.mcp.adapter import convert_call_result
+from openprogram.models.providers.types import ImageContent, TextContent
+
+
+@pytest.fixture(autouse=True)
+def _isolate_registry():
+    """Each test gets a fresh registry so @tool registrations don't leak.
+
+    Snapshot the real (fully-populated) registry first, wipe it for the
+    test's own registrations, then RESTORE it afterwards. A bare
+    reset_registry() in teardown would leave the shared process-wide
+    registry empty — and because the real tool modules are already imported
+    (cached in sys.modules) their @function decorators won't re-fire — so
+    every later-running test (e.g. test_session_config_tools_intent) would
+    see an empty registry. Collection order is filesystem-dependent, so that
+    only bit on Linux CI, not macOS. Restore keeps the isolation local."""
+    saved = snapshot_registry()
+    R._cache.clear()
+    reset_registry()
+    yield
+    restore_registry(saved)
+    R._cache.clear()
+
+
+def _run(coro):
+    """Run a coroutine to completion in a fresh event loop.
+
+    Each test gets an isolated loop — using ``asyncio.get_event_loop``
+    is deprecated in 3.10+ when no loop is running, and hits
+    "Event loop is closed" once a previous test's loop got cleaned up.
+    """
+    loop = asyncio.new_event_loop()
+    try:
+        return loop.run_until_complete(coro)
+    finally:
+        loop.close()
+
+
+# ---------------------------------------------------------------------------
+# Docstring parsing
+# ---------------------------------------------------------------------------
+
+def test_parse_docstring_description_and_args() -> None:
+    doc = """Run a shell command.
+
+    Returns combined stdout/stderr/exit_code.
+
+    Args:
+        command: Shell command to execute.
+        timeout: Max seconds before kill.
+    """
+    desc, args = _parse_docstring(doc)
+    assert desc == "Run a shell command."
+    assert args["command"] == "Shell command to execute."
+    assert args["timeout"] == "Max seconds before kill."
+
+
+def test_parse_docstring_no_args_section() -> None:
+    desc, args = _parse_docstring("Just a sentence.")
+    assert desc == "Just a sentence."
+    assert args == {}
+
+
+# ---------------------------------------------------------------------------
+# Schema generation
+# ---------------------------------------------------------------------------
+
+def test_schema_basic_types() -> None:
+    def fn(name: str, count: int = 5, enabled: bool = True) -> str:
+        """Demo.
+
+        Args:
+            name: The name.
+            count: How many.
+            enabled: Whether on.
+        """
+        return ""
+    schema = _build_parameters_schema(fn)
+    assert schema["type"] == "object"
+    assert schema["properties"]["name"] == {"type": "string", "description": "The name."}
+    assert schema["properties"]["count"] == {"type": "integer", "description": "How many."}
+    assert schema["properties"]["enabled"] == {"type": "boolean", "description": "Whether on."}
+    assert schema["required"] == ["name"]
+
+
+def test_schema_optional_strips_none() -> None:
+    def fn(x: Optional[int] = None) -> str:
+        return ""
+    schema = _build_parameters_schema(fn)
+    assert schema["properties"]["x"] == {"type": "integer"}
+    assert "required" not in schema or "x" not in schema["required"]
+
+
+def test_schema_skips_framework_kwargs() -> None:
+    def fn(query: str, *, on_update=None, cancel=None) -> str:
+        return ""
+    schema = _build_parameters_schema(fn)
+    assert set(schema["properties"].keys()) == {"query"}
+
+
+# ---------------------------------------------------------------------------
+# Result truncation
+# ---------------------------------------------------------------------------
+
+def test_cap_short_text_unchanged() -> None:
+    assert _cap_result_text("hi", 100) == "hi"
+
+
+def test_cap_long_text_head_tail() -> None:
+    text = "A" * 1500 + "B" * 1500
+    capped = _cap_result_text(text, max_chars=200, head_ratio=0.5)
+    assert capped.startswith("A" * 1000 + "\n\n[...")
+    assert capped.endswith("\n\n" + "B" * 1000)
+    assert "1,000 chars elided of 3,000 total" in capped
+
+
+def test_cap_respects_min_floor() -> None:
+    text = "X" * 10_000
+    capped = _cap_result_text(text, max_chars=100)
+    assert len(capped) >= MIN_KEEP_CHARS
+    assert "elided" in capped
+    assert capped.startswith("X")
+    assert capped.endswith("X")
+
+
+# ---------------------------------------------------------------------------
+# Decorator: schema + name + description
+# ---------------------------------------------------------------------------
+
+def test_decorator_extracts_name_description_schema() -> None:
+    @function
+    def echo(message: str, repeat: int = 1) -> str:
+        """Repeat `message` `repeat` times.
+
+        Args:
+            message: The text to echo.
+            repeat: Number of repetitions.
+        """
+        return message * repeat
+
+    assert echo.name == "echo"
+    assert "Repeat" in echo.description
+    assert echo.parameters["properties"]["message"]["description"] == "The text to echo."
+    assert "message" in echo.parameters["required"]
+    assert get("echo") is echo
+
+
+def test_decorator_with_overrides() -> None:
+    @function(name="custom", description="overridden", toolset=["core"])
+    def fn(x: int) -> str:
+        return str(x)
+    assert fn.name == "custom"
+    assert fn.description == "overridden"
+    # Toolset filter sees it
+    assert fn in filter_for(toolset="core")
+
+
+# ---------------------------------------------------------------------------
+# Sync vs async + error wrap
+# ---------------------------------------------------------------------------
+
+def test_sync_function_invoked_correctly() -> None:
+    @function
+    def add(a: int, b: int) -> str:
+        """Add two ints."""
+        return str(a + b)
+
+    result = _run(add.execute("call_1", {"a": 2, "b": 3}, None, None))
+    assert result.content[0].text == "5"
+
+
+def test_async_function_invoked_correctly() -> None:
+    @function
+    async def slow_add(a: int, b: int) -> str:
+        """Add two ints, async."""
+        await asyncio.sleep(0)
+        return str(a + b)
+
+    result = _run(slow_add.execute("call_1", {"a": 7, "b": 8}, None, None))
+    assert result.content[0].text == "15"
+
+
+def test_exception_caught_and_wrapped() -> None:
+    @function
+    def bad(x: int) -> str:
+        """Fails."""
+        raise RuntimeError("boom")
+
+    result = _run(bad.execute("call_1", {"x": 1}, None, None))
+    assert result.is_error is True
+    assert result.details and "is_error" not in result.details
+    assert "boom" in result.content[0].text
+
+
+def test_agent_tool_result_bridges_legacy_details_error_bit() -> None:
+    result = AgentToolResult(
+        content=[TextContent(text="legacy")],
+        details={"is_error": True, "reason_code": "LEGACY"},
+    )
+
+    assert result.is_error is True
+    assert result.details == {"is_error": True, "reason_code": "LEGACY"}
+
+
+# ---------------------------------------------------------------------------
+# Char cap + persist-to-disk
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("length", [1000, MIN_KEEP_CHARS])
+@pytest.mark.parametrize("persist_full", [False, True])
+def test_result_within_minimum_cap_is_preserved(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, length: int, persist_full: bool,
+) -> None:
+    monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
+    original = "A" * (length // 2) + "B" * (length - length // 2)
+
+    @function(max_result_chars=200, persist_full=persist_full)
+    def small_result() -> str:
+        return original
+
+    result = _run(small_result.execute("small-cap", {}, None, None))
+    assert result.content[0].text == original
+    assert list(tmp_path.iterdir()) == []
+
+
+@pytest.mark.parametrize("head_ratio", [0.0, 1.0])
+def test_result_cap_endpoint_keeps_only_requested_portion(head_ratio: float) -> None:
+    @function(max_result_chars=200, persist_full=False, head_ratio=head_ratio)
+    def long_result() -> str:
+        return "A" * 3000 + "B" * 3000
+
+    result = _run(long_result.execute("endpoint-cap", {}, None, None))
+    text = result.content[0].text
+    assert "4,000 chars elided of 6,000 total" in text
+    assert text.count("A") == (MIN_KEEP_CHARS if head_ratio == 1.0 else 0)
+    assert text.count("B") == (MIN_KEEP_CHARS if head_ratio == 0.0 else 0)
+
+
+def test_long_result_truncates(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
+
+    @function(max_result_chars=200, persist_full=False)
+    def big() -> str:
+        """Huge."""
+        return "Z" * 50_000
+
+    result = _run(big.execute("c1", {}, None, None))
+    text = result.content[0].text
+    assert len(text) >= MIN_KEEP_CHARS
+    assert "elided" in text
+
+
+def test_persist_full_writes_file(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(R, "_tool_results_dir", lambda: tmp_path)
+
+    @function(max_result_chars=100, persist_full=True)
+    def big() -> str:
+        """Persist everything."""
+        return "Q" * 50_000
+
+    result = _run(big.execute("c123", {}, None, None))
+    text = result.content[0].text
+    assert "saved at" in text
+    persisted, = tmp_path.glob("*.txt")
+    assert str(persisted) in text
+    assert persisted.exists()
+    assert persisted.read_text() == "Q" * 50_000
+
+
+# ---------------------------------------------------------------------------
+# ToolReturn structured output
+# ---------------------------------------------------------------------------
+
+def test_tool_return_struct() -> None:
+    @function
+    def info() -> ToolReturn:
+        """Returns mixed content."""
+        return ToolReturn(text="hello", json_data={"x": 1})
+
+    result = _run(info.execute("c1", {}, None, None))
+    assert result.content[0].text == "hello"
+    assert result.details["json"] == {"x": 1}
+
+
+def test_tool_return_png_bytes_are_typed_as_provider_image_content() -> None:
+    @function
+    def screenshot() -> ToolReturn:
+        """Returns a viewport image."""
+        return ToolReturn(images=[b"\x89PNG fake"])
+
+    result = _run(screenshot.execute("c1", {}, None, None))
+
+    assert isinstance(result.content[0], ImageContent)
+    assert result.content[0].mime_type == "image/png"
+
+
+def test_tool_return_error_flag() -> None:
+    @function
+    def failing() -> ToolReturn:
+        """Marks itself as error without raising."""
+        return ToolReturn(text="oops", is_error=True)
+
+    result = _run(failing.execute("c1", {}, None, None))
+    assert result.is_error is True
+    assert result.details is None or "is_error" not in result.details
+
+
+def test_remote_mcp_error_flag_is_typed_not_stored_in_details() -> None:
+    result = convert_call_result(
+        CallToolResult(
+            content=[MCPTextContent(type="text", text="remote failed")],
+            isError=True,
+        ),
+        server="remote",
+        tool_name="probe",
+    )
+
+    assert result.is_error is True
+    assert result.details == {"mcp_server": "remote", "mcp_tool": "probe"}
+
+
+# ---------------------------------------------------------------------------
+# Approval gate
+# ---------------------------------------------------------------------------
+
+def test_approval_static_true() -> None:
+    @function(requires_approval=True)
+    def dangerous() -> str:
+        """Always asks."""
+        return "ok"
+
+    needs, reason = tool_requires_approval(dangerous, {})
+    assert needs is True
+    assert reason is None
+
+
+def test_approval_callable_returns_string_reason() -> None:
+    def gate(command: str) -> Optional[str]:
+        if "rm" in command:
+            return f"Destructive: {command}"
+        return None
+
+    @function(requires_approval=gate)
+    def shell(command: str) -> str:
+        """Run cmd."""
+        return ""
+
+    needs, reason = tool_requires_approval(shell, {"command": "ls"})
+    assert needs is False
+    needs, reason = tool_requires_approval(shell, {"command": "rm -rf /"})
+    assert needs is True
+    assert "Destructive" in reason
+
+
+def test_approval_callable_exception_defaults_to_require() -> None:
+    def angry_gate(**_):
+        raise ValueError("oops")
+
+    @function(requires_approval=angry_gate)
+    def stuff() -> str:
+        return ""
+
+    needs, reason = tool_requires_approval(stuff, {})
+    assert needs is True
+
+
+# ---------------------------------------------------------------------------
+# Cache
+# ---------------------------------------------------------------------------
+
+def test_cache_hits() -> None:
+    counter = {"n": 0}
+
+    @function(cache=True, cache_ttl=60)
+    def expensive(x: int) -> str:
+        """Counts calls."""
+        counter["n"] += 1
+        return str(x * 2)
+
+    _run(expensive.execute("c1", {"x": 5}, None, None))
+    _run(expensive.execute("c2", {"x": 5}, None, None))
+    _run(expensive.execute("c3", {"x": 6}, None, None))
+    # 5 hit, 5 hit again (cache), 6 fresh = 2 actual invocations
+    assert counter["n"] == 2
+
+
+def test_cache_skips_errors() -> None:
+    counter = {"n": 0}
+
+    @function(cache=True, cache_ttl=60)
+    def maybe_fails(x: int) -> str:
+        """Fails on x=1."""
+        counter["n"] += 1
+        if x == 1:
+            raise RuntimeError("nope")
+        return "ok"
+
+    _run(maybe_fails.execute("c1", {"x": 1}, None, None))
+    _run(maybe_fails.execute("c2", {"x": 1}, None, None))
+    # Both calls invoke fn (errors not cached)
+    assert counter["n"] == 2
+
+
+def test_cache_skips_typed_errors_without_details() -> None:
+    counter = {"n": 0}
+
+    @function(cache=True, cache_ttl=60)
+    def typed_failure() -> AgentToolResult:
+        counter["n"] += 1
+        return AgentToolResult(
+            content=[TextContent(text="failed")],
+            is_error=True,
+        )
+
+    _run(typed_failure.execute("c1", {}, None, None))
+    _run(typed_failure.execute("c2", {}, None, None))
+
+    assert counter["n"] == 2
+
+
+# ---------------------------------------------------------------------------
+# Cancel + on_update injection
+# ---------------------------------------------------------------------------
+
+def test_on_update_callback_received() -> None:
+    seen = []
+
+    @function
+    def chatty(msg: str, *, on_update=None) -> str:
+        """Emits progress."""
+        on_update(f"working on {msg}")
+        return "done"
+
+    _run(chatty.execute(
+        "c1", {"msg": "hi"}, None, lambda t: seen.append(t)))
+    assert seen == ["working on hi"]
+
+
+def test_cancel_event_threaded_in() -> None:
+    @function
+    def watcher(*, cancel=None) -> str:
+        """Reads cancel flag."""
+        return f"set={cancel.is_set()}" if cancel else "no_cancel"
+
+    ev = asyncio.Event()
+    ev.set()
+    result = _run(watcher.execute("c1", {}, ev, None))
+    assert result.content[0].text == "set=True"
+
+
+# ---------------------------------------------------------------------------
+# Timeout
+# ---------------------------------------------------------------------------
+
+def test_timeout_kills_long_tool() -> None:
+    @function(timeout=0.05)
+    async def slow() -> str:
+        """Hangs."""
+        await asyncio.Event().wait()
+        return "never"
+
+    result = _run(slow.execute("c1", {}, None, None))
+    assert result.is_error is True
+    assert result.details and result.details.get("timeout")
+    assert "is_error" not in result.details
+
+
+def test_governed_async_tool_uses_task_deadline_and_records_activity(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Removing either governance call lets a strict task exceed its budget."""
+    activity: list[str] = []
+
+    def bounded(timeout, *, preemptibility):
+        assert timeout is None
+        assert preemptibility == "async"
+        return 0.01
+
+    monkeypatch.setattr(
+        "openprogram.runtime.jobs.runner.current_job_operation_timeout", bounded,
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.jobs.runner.record_current_job_activity",
+        lambda kind: activity.append(kind) or True,
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.jobs.runner.current_job_operation_timeout_reason",
+        lambda _timeout: "budget.runtime_exhausted",
+    )
+
+    @function
+    async def progress(on_update=None) -> str:
+        on_update("working")
+        await asyncio.Event().wait()
+        return "late"
+
+    result = _run(progress.execute("governed", {}, None, None))
+
+    assert result.is_error is True
+    assert result.details == {
+        "timeout": True,
+        "reason_code": "budget.runtime_exhausted",
+    }
+    assert activity == ["operation_start", "tool_progress"]
+
+
+def test_governed_sync_tool_without_process_boundary_is_rejected(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A wait_for timeout cannot terminate the executor thread of a sync tool."""
+    from openprogram.runtime.jobs.runner import NonPreemptibleOperation
+
+    def reject(_timeout, *, preemptibility):
+        assert preemptibility == "none"
+        raise NonPreemptibleOperation("error.nonpreemptible_operation")
+
+    monkeypatch.setattr(
+        "openprogram.runtime.jobs.runner.current_job_operation_timeout", reject,
+    )
+
+    @function
+    def blocking() -> str:
+        return "must not run"
+
+    result = _run(blocking.execute("sync-governed", {}, None, None))
+
+    assert result.is_error is True
+    assert result.details == {"reason_code": "error.nonpreemptible_operation"}
+    assert "error.nonpreemptible_operation" in result.content[0].text
+
+
+def test_bash_sandbox_denial_uses_typed_error(monkeypatch) -> None:
+    bash_module = importlib.import_module(
+        "openprogram.programs.tools.files.bash.bash"
+    )
+
+    class DeniedBackend:
+        backend_id = "local"
+
+        def run(self, command, timeout, cwd=None):
+            return RunResult(
+                exit_code=1,
+                stdout="",
+                stderr="denied",
+                sandbox_error="denied",
+            )
+
+    monkeypatch.setattr(bash_module, "get_active_backend", DeniedBackend)
+    result = _run(
+        bash_module.bash.execute(
+            "bash-denied", {"command": "blocked"}, None, None
+        )
+    )
+
+    assert result.is_error is True
+    assert result.details["sandbox"]["kind"] == "denied"
+    assert "is_error" not in result.details
+
+
+@pytest.mark.parametrize(
+    ("run_result", "detail_key"),
+    [
+        (RunResult(exit_code=7, stdout="", stderr="failed"), "exit_code"),
+        (
+            RunResult(
+                exit_code=-1,
+                stdout="partial",
+                stderr="timed out",
+                timed_out=True,
+            ),
+            "timeout",
+        ),
+    ],
+)
+def test_bash_execution_failures_use_typed_error(
+    monkeypatch, run_result, detail_key
+) -> None:
+    bash_module = importlib.import_module(
+        "openprogram.programs.tools.files.bash.bash"
+    )
+
+    class FailedBackend:
+        backend_id = "local"
+
+        def run(self, command, timeout, cwd=None):
+            return run_result
+
+    monkeypatch.setattr(bash_module, "get_active_backend", FailedBackend)
+    result = _run(
+        bash_module.bash.execute("bash-failed", {"command": "false"}, None, None)
+    )
+
+    assert result.is_error is True
+    assert detail_key in result.details
+    assert "is_error" not in result.details
+
+
+@pytest.mark.parametrize(
+    ("subprocess_result", "expected_text", "expected_reason"),
+    [
+        (
+            {"error": "subprocess failed"},
+            "subprocess failed",
+            "agentic_subprocess_error",
+        ),
+        (
+            {
+                "error": "subprocess died without writing result",
+                "killed": True,
+                "signal": 11,
+            },
+            "subprocess died without writing result",
+            "agentic_subprocess_error",
+        ),
+        (
+            {"killed": True, "signal": 9},
+            "[cancelled by user]",
+            "agentic_subprocess_cancelled",
+        ),
+        (
+            {
+                "error": "agentic subprocess timed out after 90 seconds",
+                "killed": True,
+                "timed_out": True,
+                "progress": {"events": 2, "steps": ["plan: completed"]},
+            },
+            "agentic subprocess timed out after 90 seconds",
+            "agentic_subprocess_timeout",
+        ),
+    ],
+)
+def test_agentic_subprocess_failure_reaches_agent_loop_as_typed_error(
+    monkeypatch, subprocess_result, expected_text, expected_reason
+) -> None:
+    from contextlib import nullcontext
+
+    import openprogram.runtime.conversation.process_runner as process_runner
+    import openprogram.runtime.context.session_db as session_db
+    import openprogram.runtime.execution.dag as exec_dag
+    from openprogram.runtime.agent.loop.session import AgentSession
+    from openprogram.runtime.conversation.turn_runtime.runtime_attach import (
+        _wrap_agentic_runtime_block,
+    )
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.models.providers.types import AgentTool
+    from openprogram.models.providers.types import (
+        AssistantMessage,
+        EventDone,
+        EventStart,
+        Model,
+        ToolCall,
+        ToolResultMessage,
+    )
+
+    class FakeDB:
+        def invalidate_cache(self, session_id):
+            pass
+
+    async def original_execute(call_id, args, cancel, on_update):
+        return AgentToolResult(content=[TextContent(text="original")])
+
+    tool = AgentTool(
+        name="agentic_probe",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        label="probe",
+        execute=original_execute,
+    )
+    setattr(tool, "_is_agent_method", True)
+    monkeypatch.setattr(
+        process_runner,
+        "run_agent_method_in_subprocess",
+        lambda **kwargs: subprocess_result,
+    )
+    monkeypatch.setattr(session_db, "default_db", lambda: FakeDB())
+    monkeypatch.setattr(exec_dag, "live_progress", lambda *a, **kw: nullcontext())
+    monkeypatch.setattr(exec_dag, "build_exec_dag", lambda *a, **kw: None)
+
+    wrapped = _wrap_agentic_runtime_block(
+        tool,
+        TurnRequest(
+            session_id="typed-error",
+            user_text="",
+            agent_id="main",
+            source="web",
+        ),
+        lambda event: None,
+        "assistant-1",
+    )
+
+    def assistant(content, stop_reason):
+        return AssistantMessage(
+            content=content,
+            api="openai-completions",
+            provider="openai",
+            model="fake",
+            stop_reason=stop_reason,
+            timestamp=int(time.time() * 1000),
+        )
+
+    replies = [
+        assistant(
+            [ToolCall(id="call-1", name="agentic_probe", arguments={})],
+            "toolUse",
+        ),
+        assistant([TextContent(text="done")], "stop"),
+    ]
+    call_index = 0
+
+    def stream_fn(model, context, options):
+        nonlocal call_index
+        reply = replies[min(call_index, len(replies) - 1)]
+        call_index += 1
+
+        async def generate():
+            yield EventStart(partial=reply)
+            yield EventDone(reason=reply.stop_reason, message=reply)
+
+        return generate()
+
+    session = AgentSession(
+        model=Model(
+            id="fake",
+            name="fake",
+            api="openai-completions",
+            provider="openai",
+            base_url="https://example.invalid/v1",
+        ),
+        tools=[wrapped],
+    )
+    session._agent.stream_fn = stream_fn
+    _run(session.run("go"))
+
+    results = [
+        message
+        for message in session._agent.state.messages
+        if isinstance(message, ToolResultMessage)
+    ]
+    assert len(results) == 1
+    assert results[0].content[0].text == expected_text
+    assert results[0].is_error is True
+    assert results[0].details["reason_code"] == expected_reason
+    if subprocess_result.get("killed"):
+        assert results[0].details["killed"] is True
+    if subprocess_result.get("signal") is not None:
+        assert results[0].details["signal"] == subprocess_result["signal"]
+    if subprocess_result.get("timed_out"):
+        assert results[0].details["timed_out"] is True
+        assert results[0].details["progress"] == subprocess_result["progress"]
+
+
+def test_worker_resident_agentic_tool_does_not_spawn(monkeypatch) -> None:
+    from contextlib import nullcontext
+
+    import openprogram.runtime.conversation.process_runner as process_runner
+    import openprogram.runtime.context.session_db as session_db
+    import openprogram.runtime.execution.dag as exec_dag
+    from openprogram.runtime.conversation.turn_runtime.runtime_attach import (
+        _wrap_agentic_runtime_block,
+    )
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.models.providers.types import AgentTool
+
+    class FakeDB:
+        def invalidate_cache(self, session_id):
+            pass
+
+    calls = []
+
+    async def original_execute(call_id, args, cancel, on_update):
+        calls.append((call_id, args))
+        return AgentToolResult(content=[TextContent(text="worker")])
+
+    tool = AgentTool(
+        name="worker_probe",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        label="probe",
+        execute=original_execute,
+    )
+    setattr(tool, "_is_agent_method", True)
+    setattr(tool, "_run_in_worker", True)
+    monkeypatch.setattr(
+        process_runner,
+        "run_agent_method_in_subprocess",
+        lambda **_kwargs: (_ for _ in ()).throw(AssertionError("spawned")),
+    )
+    monkeypatch.setattr(session_db, "default_db", lambda: FakeDB())
+    monkeypatch.setattr(exec_dag, "live_progress", lambda *a, **kw: nullcontext())
+    monkeypatch.setattr(exec_dag, "build_exec_dag", lambda *a, **kw: None)
+
+    wrapped = _wrap_agentic_runtime_block(
+        tool,
+        TurnRequest(
+            session_id="worker-resident",
+            user_text="",
+            agent_id="main",
+            source="web",
+        ),
+        lambda event: None,
+        "assistant-1",
+    )
+    result = _run(wrapped.execute("call-1", {}, None, None))
+
+    assert result.content[0].text == "worker"
+    assert calls == [("call-1", {})]
+
+
+@pytest.mark.parametrize("reports_runtime_id", [True, False])
+@pytest.mark.parametrize(
+    ("initial_status", "subprocess_out", "expected_status"),
+    [
+        ("running", {}, "completed"),
+        ("running", {"error": "child failed"}, "error"),
+        ("running", {"killed": True}, "interrupted"),
+        ("cancelling", {"killed": True}, "cancelled"),
+        ("completed", {"error": "late failure"}, "completed"),
+        ("error", {}, "error"),
+        ("interrupted", {}, "interrupted"),
+        ("cancelled", {}, "cancelled"),
+    ],
+)
+def test_gui_agent_parent_cleanup_failure_reaches_message_result(
+    monkeypatch,
+    tmp_path,
+    reports_runtime_id,
+    initial_status,
+    subprocess_out,
+    expected_status,
+) -> None:
+    from contextlib import nullcontext
+
+    import openprogram.runtime.conversation.process_runner as process_runner
+    import openprogram.runtime.context.session_db as session_db
+    import openprogram.runtime.execution.dag as exec_dag
+    from openprogram.runtime.conversation.turn_runtime.runtime_attach import (
+        _wrap_agentic_runtime_block,
+    )
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.models.providers.types import AgentTool
+    from openprogram.runtime.agent.call_state import create_pending_call_node
+    from openprogram.state.store import SessionNodeWriter, SessionStore
+
+    store = SessionStore(tmp_path / "sessions-git")
+    store.create_session("gui-cleanup", "main", title="t")
+    writer = SessionNodeWriter(store, "gui-cleanup")
+
+    async def original_execute(call_id, args, cancel, on_update):
+        raise AssertionError("gui_agent should run in the subprocess")
+
+    tool = AgentTool(
+        name="gui_agent",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        label="probe",
+        execute=original_execute,
+    )
+    setattr(tool, "_is_agent_method", True)
+    cleanup_result = {
+        "status": "infeasible",
+        "success": False,
+        "infeasible_declared": True,
+        "reason_code": "page_cleanup_failed",
+        "summary": (
+            "The agent-created background Page could not be confirmed closed."
+        ),
+        "handoff_instruction": "Close the remaining background Page.",
+    }
+
+    def run_subprocess(**kwargs):
+        node = create_pending_call_node(
+            pending_id="gui-call",
+            function_name="gui_agent",
+            arguments={"task": "inspect", "surface": "browser"},
+            expose="io",
+            caller="assistant-1",
+            store=writer,
+        )
+        assert node is not None
+        writer.append(node)
+        original_result = {"status": "succeeded", "success": True}
+        original_metadata = {"status": initial_status}
+        if initial_status in {"cancelling", "cancelled"}:
+            original_metadata["reason_code"] = "cancel.user"
+        if initial_status == "error":
+            original_metadata["error"] = "original failure"
+        if initial_status in {"completed", "error", "interrupted", "cancelled"}:
+            original_metadata["finished_at"] = 123.0
+        writer.update(
+            "gui-call",
+            output=original_result,
+            metadata=original_metadata,
+        )
+        child_result = {
+            "page_cleanup_failed": True,
+            "page_cleanup_result": cleanup_result,
+            **subprocess_out,
+        }
+        if reports_runtime_id:
+            child_result.update({
+                "ok": True,
+                "runtime_msg_id": "gui-call",
+                "text": json.dumps({"status": "succeeded", "success": True}),
+            })
+        return child_result
+
+    monkeypatch.setattr(
+        process_runner,
+        "run_agent_method_in_subprocess",
+        run_subprocess,
+    )
+    monkeypatch.setattr(session_db, "default_db", lambda: store)
+    monkeypatch.setattr(exec_dag, "live_progress", lambda *a, **kw: nullcontext())
+    monkeypatch.setattr(exec_dag, "build_exec_dag", lambda *a, **kw: None)
+
+    wrapped = _wrap_agentic_runtime_block(
+        tool,
+        TurnRequest(
+            session_id="gui-cleanup",
+            user_text="",
+            agent_id="main",
+            source="web",
+        ),
+        lambda event: None,
+        "assistant-1",
+    )
+    result = _run(wrapped.execute(
+        "call-1",
+        {"task": "inspect", "surface": "browser"},
+        None,
+        None,
+    ))
+
+    assert json.loads(result.content[0].text) == cleanup_result
+    assert result.details == cleanup_result
+    assert result.is_error is False
+    persisted = next(
+        item for item in store.get_nodes("gui-cleanup") if item.id == "gui-call"
+    )
+    assert persisted.metadata["status"] == expected_status
+    assert persisted.output == cleanup_result
+    if initial_status in {"cancelling", "cancelled"}:
+        assert persisted.metadata["reason_code"] == "cancel.user"
+    if initial_status == "error":
+        assert persisted.metadata["error"] == "original failure"
+    if initial_status in {"completed", "error", "interrupted", "cancelled"}:
+        assert persisted.metadata["finished_at"] == 123.0
+    else:
+        assert persisted.metadata["finished_at"] > 0
+
+
+def test_approval_wrapper_preserves_worker_resident_marker() -> None:
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.runtime.permissions.approval import wrap_with_approval
+    from openprogram.models.providers.types import AgentTool
+
+    async def execute(call_id, args, cancel, on_update):
+        return AgentToolResult(content=[TextContent(text="worker")])
+
+    tool = AgentTool(
+        name="worker_probe",
+        description="probe",
+        parameters={"type": "object", "properties": {}},
+        label="probe",
+        execute=execute,
+    )
+    setattr(tool, "_is_agent_method", True)
+    setattr(tool, "_run_in_worker", True)
+
+    wrapped = wrap_with_approval(
+        tool,
+        TurnRequest(
+            session_id="worker-resident",
+            user_text="",
+            agent_id="main",
+            source="web",
+        ),
+        lambda event: None,
+    )
+
+    assert getattr(wrapped, "_run_in_worker", False) is True
+
+
+# ---------------------------------------------------------------------------
+# Registry + toolset + unsafe_in
+# ---------------------------------------------------------------------------
+
+def test_registry_filter_by_toolset_and_source() -> None:
+    @function(toolset=["core"])
+    def safe() -> str:
+        """OK in any channel."""
+        return ""
+
+    @function(toolset=["core"], unsafe_in=["wechat"])
+    def bash_like() -> str:
+        """Hidden in wechat."""
+        return ""
+
+    core = filter_for(toolset="core")
+    assert {t.name for t in core} == {"safe", "bash_like"}
+
+    in_wechat = filter_for(toolset="core", source="wechat")
+    assert {t.name for t in in_wechat} == {"safe"}
+
+
+def test_registry_filter_by_explicit_names() -> None:
+    @function
+    def a() -> str:
+        return ""
+
+    @function
+    def b() -> str:
+        return ""
+
+    @function
+    def c() -> str:
+        return ""
+
+    picked = filter_for(names=["a", "c", "missing"])
+    assert {t.name for t in picked} == {"a", "c"}
+
+
+
+
+# ---------------------------------------------------------------------------
+# Layer 1 — available_if (Claude Code "conditional import" equivalent)
+# ---------------------------------------------------------------------------
+
+def test_available_if_false_skips_registration() -> None:
+    """A function decorated with ``available_if=lambda: False`` is
+    never registered. ``get(name)`` returns None for the rest of the
+    process, mirroring Claude Code's ``feature(...) ? require(...) : []``
+    pattern."""
+    @function(name="ant_only", available_if=lambda: False)
+    def ant_only() -> str:
+        return "x"
+    assert get("ant_only") is None
+
+
+def test_available_if_true_registers_normally() -> None:
+    @function(name="generally_available", available_if=lambda: True)
+    def fn() -> str:
+        """Always on."""
+        return "x"
+    assert get("generally_available") is not None
+
+
+def test_available_if_exception_treats_as_false() -> None:
+    """If the predicate raises, we fail closed — skip registration so
+    a misconfigured feature doesn't expose its tool by accident."""
+    @function(name="broken_gate", available_if=lambda: 1 / 0)
+    def fn() -> str:
+        return "x"
+    assert get("broken_gate") is None
+
+
+# ---------------------------------------------------------------------------
+# Layer 6 — defer + tool_search (Claude Code "shouldDefer" equivalent)
+# ---------------------------------------------------------------------------
+
+def test_defer_sidecar_set() -> None:
+    @function(name="rare", defer=True)
+    def rare() -> str:
+        """A deferred tool."""
+        return "x"
+    t = get("rare")
+    assert t is not None
+    assert getattr(t, "_defer") is True
+
+
+def test_split_partitions_provider_vs_catalog() -> None:
+    from openprogram.programs._host.runtime import (
+        split_tools_for_dispatch, install_loaded_deferred,
+    )
+
+    @function(name="common")
+    def common() -> str:
+        """Always shipped with full schema."""
+        return "x"
+
+    @function(name="rare2", defer=True)
+    def rare() -> str:
+        """Only loaded on demand."""
+        return "x"
+
+    install_loaded_deferred()
+    provider, catalog = split_tools_for_dispatch([get("common"), get("rare2")])
+    assert [t.name for t in provider] == ["common"]
+    assert catalog == [("rare2", "Only loaded on demand.")]
+
+
+def test_tool_search_promotes_deferred_into_provider_list() -> None:
+    from openprogram.programs._host.runtime import (
+        split_tools_for_dispatch, install_loaded_deferred,
+        tool_search,
+    )
+
+    @function(name="lazy_tool", defer=True)
+    def lazy() -> str:
+        """Loaded only when asked."""
+        return "x"
+
+    install_loaded_deferred()
+    result = _run(tool_search.execute(
+        "c1", {"select": "select:lazy_tool"}, None, None
+    ))
+    assert "Loaded 1 deferred tool" in result.content[0].text
+
+    provider, catalog = split_tools_for_dispatch([get("lazy_tool")])
+    assert [t.name for t in provider] == ["lazy_tool"]
+    assert catalog == []
+
+
+def test_tool_search_handles_unknown_names() -> None:
+    from openprogram.programs._host.runtime import (
+        install_loaded_deferred, tool_search,
+    )
+    install_loaded_deferred()
+    result = _run(tool_search.execute(
+        "c1", {"select": "select:no_such_tool"}, None, None
+    ))
+    text = result.content[0].text
+    assert "Loaded 0" in text
+    assert "no_such_tool" in text
+
+
+def test_tool_search_capitalized_names_use_only_current_scope() -> None:
+    from openprogram.programs._host import runtime
+    from openprogram.programs._host.runtime import install_allowed_tool_names, tool_search
+
+    @function(name="bash")
+    def bash() -> str:
+        return "ok"
+
+    @function(name="read")
+    def read() -> str:
+        return "ok"
+
+    token = install_allowed_tool_names({"tool_search", "bash", "read"})
+    try:
+        text = _run(tool_search.execute(
+            "c1", {"select": "select:Bash,Read,Write"}, None, None
+        )).content[0].text
+    finally:
+        runtime._allowed_tool_names.reset(token)
+
+    assert "Tool 'bash' is already loaded" in text
+    assert "Tool 'read' is already loaded" in text
+    assert "Write" in text and "Tool 'write'" not in text
+
+
+def test_tool_search_cannot_load_program_outside_resolved_scope() -> None:
+    from openprogram.programs._host.runtime import (
+        install_allowed_tool_names,
+        install_loaded_deferred,
+        tool_search,
+    )
+
+    @function(name="allowed_report", defer=True)
+    def allowed_report() -> str:
+        return "allowed"
+
+    @function(name="private_report", defer=True)
+    def private_report() -> str:
+        return "private"
+
+    install_loaded_deferred()
+    token = install_allowed_tool_names({"tool_search", "allowed_report"})
+    try:
+        explicit = _run(tool_search.execute(
+            "c1", {"select": "select:private_report"}, None, None
+        )).content[0].text
+        keyword = _run(tool_search.execute(
+            "c2", {"select": "report", "max_results": 5}, None, None
+        )).content[0].text
+    finally:
+        R._allowed_tool_names.reset(token)
+
+    assert "Loaded 0" in explicit
+    assert "private_report" not in keyword
+    assert "allowed_report" in keyword
+
+
+def test_deferred_catalog_text_format() -> None:
+    """Turn-start context names the deferred tools, without descriptions."""
+    from openprogram.programs._host.runtime import deferred_catalog_text
+    block = deferred_catalog_text([("CronCreate", "Create a cron job"),
+                                    ("WebFetch",   "Fetch a URL")])
+    assert "deferred tools" in block
+    assert "tool_search" in block, "must name the actual registered tool"
+    assert "2" in block
+    assert "CronCreate, WebFetch" in block
+    assert "Create a cron job" not in block
+    assert "keyword" in block.lower()
+
+    # Empty input → empty string (so callers can unconditionally concat).
+    assert deferred_catalog_text([]) == ""
+
+
+# ---------------------------------------------------------------------------
+# Agent method bridge — shared registry
+# ---------------------------------------------------------------------------
+
+def test_agent_method_registers_into_shared_registry() -> None:
+    """An Agent method should produce an AgentTool entry in
+    ``openprogram.programs._host.runtime._registry`` so the dispatcher
+    treats it identically to @function-decorated tools (toolset
+    membership, 6 gating layers, deferred loading)."""
+    from openprogram.runtime.agent import Agent
+
+    class _MyAgenticToolAgent(Agent):
+        method_options = {'my_agentic_tool': {'toolset': ["core"], 'description': "Test agentic function registered as a tool.", 'tool': True, 'expose': 'io', 'capture_io': True, 'name': 'my_agentic_tool'}}
+
+        def my_agentic_tool(self, question: str) -> str:
+            """One-line description for the LLM."""
+            return f"answered: {question}"
+
+    _MyAgenticToolAgent().my_agentic_tool
+
+    t = get("my_agentic_tool")
+    assert t is not None, "agent_method should appear in _registry"
+    assert t.description.startswith("Test agentic"), \
+        "description override should win over docstring"
+    # Sidecar attrs forwarded from agentic kwargs
+    assert getattr(t, "_check_fn", None) is None
+    assert getattr(t, "_defer", False) is False
+    # Toolset membership picked up by Hermes-style filter
+    assert t in filter_for(toolset="core")
+
+
+def test_agent_method_as_tool_false_skips_registration() -> None:
+    """``as_tool=False`` keeps the agentic semantics (DAG, inner agent
+    loop) but does NOT expose the function to the LLM."""
+    from openprogram.runtime.agent import Agent
+
+    class _PrivateHelperAgent(Agent):
+        method_options = {'private_helper': {'name': "private_helper", 'tool': False, 'expose': 'io', 'capture_io': True}}
+
+        def private_helper(self, x: str) -> str:
+            """Should NOT appear in tool registry."""
+            return x
+
+    _PrivateHelperAgent().private_helper
+
+    assert get("private_helper") is None
+
+
+def test_agent_method_register_globally_false() -> None:
+    """``register_globally=False`` skips the shared AgentTool registry
+    but still attaches the wrapper to the instance (so Python-direct
+    invoke still works). Mirror of @function's ``register_globally`` kwarg."""
+    from openprogram.runtime.agent import Agent
+
+    class _OffGridAgent(Agent):
+        method_options = {'off_grid': {'register_globally': False, 'name': "off_grid", 'tool': True, 'expose': 'io', 'capture_io': True}}
+
+        def off_grid(self, x: str) -> str:
+            """Should not appear in shared _registry."""
+            return f"local-{x}"
+
+    off_grid = _OffGridAgent().off_grid
+
+    # Not in the shared registry — dispatcher can't find it
+    assert get("off_grid") is None
+    # …but still callable as Python and the sidecar AgentTool exists
+    # (in case some local caller wants to drive it manually)
+    assert off_grid._agent_tool is not None
+    assert off_grid._agent_tool.name == "off_grid"
+
+
+def test_agent_method_tool_visible_false_registers_unexposed() -> None:
+    """``tool_visible=False`` wires Layer-2 exposure through the
+    decorator: the tool registers (Python-callable, in _registry) but
+    stays out of ``exposed_names()`` — the "user-visible, agent-tool
+    invisible" contract auto_workflow needs."""
+    from openprogram.runtime.agent import Agent
+    from openprogram.programs._host.runtime import exposed_names
+
+    class _UserOnlyProbeAgent(Agent):
+        method_options = {'user_only_probe': {'tool_visible': False, 'name': "user_only_probe", 'tool': True, 'expose': 'io', 'capture_io': True}}
+
+        def user_only_probe(self, x: str) -> str:
+            return x
+
+    _UserOnlyProbeAgent().user_only_probe
+
+    assert get("user_only_probe") is not None
+    assert "user_only_probe" not in exposed_names()
+
+    class _DefaultVisibleProbeAgent(Agent):
+        method_options = {'default_visible_probe': {'name': "default_visible_probe", 'tool': True, 'expose': 'io', 'capture_io': True}}
+
+        def default_visible_probe(self, x: str) -> str:
+            return x
+
+    _DefaultVisibleProbeAgent().default_visible_probe
+
+    assert "default_visible_probe" in exposed_names()
+
+
+def test_agent_method_available_if_false_remains_callable_without_registration() -> None:
+    """An unavailable method remains callable and does not register a tool."""
+    from openprogram.runtime.agent import Agent
+
+    class _GatedAgent(Agent):
+        method_options = {'gated': {'available_if': lambda: False, 'name': "gated_agentic", 'tool': True, 'expose': 'io', 'capture_io': True}}
+
+        def gated(self, x: str) -> str:
+            return x
+
+    gated = _GatedAgent().gated
+
+    assert gated('value') == 'value'
+    assert get("gated_agentic") is None
+
+
+# ---------------------------------------------------------------------------
+# Layer 2 — exposure (registration-driven, opt out with expose=False)
+# ---------------------------------------------------------------------------
+
+def test_exposure_is_registration_driven() -> None:
+    """Layer 2 is registration-driven: a normally-registered tool is
+    exposed without any whitelist edit; ``expose=False`` hides it from
+    every LLM-facing query (agent_tools / get_agent_tool /
+    list_registered_agent_tools) while keeping it in the registry."""
+    import openprogram.programs as F
+
+    @function(name="exposed_probe")
+    def p1() -> str:
+        return "x"
+
+    @function(name="hidden_probe", expose=False)
+    def p2() -> str:
+        return "x"
+
+    # Exposed by registration; hidden by expose=False — no TOOLSETS edit.
+    names = [t.name for t in F.agent_tools(names=["exposed_probe", "hidden_probe"])]
+    assert names == ["exposed_probe"]
+    assert F.get_agent_tool("exposed_probe") is not None
+    assert F.get_agent_tool("hidden_probe") is None
+    listed = F.list_registered_agent_tools()
+    assert "exposed_probe" in listed
+    assert "hidden_probe" not in listed
+
+
+def test_full_preset_is_exactly_the_exposed_universe() -> None:
+    """``full`` is computed, not written down: it resolves to exactly
+    ``exposed_names()``, so a freshly registered tool is in it with no
+    edit to any list."""
+    import openprogram.programs as F
+    from openprogram.programs._host.runtime import exposed_names
+
+    @function(name="full_preset_probe")
+    def p() -> str:
+        return "x"
+
+    resolved = {t.name for t in F.agent_tools(toolset="full",
+                                              include_disabled=True)}
+    assert resolved == exposed_names()
+    assert "full_preset_probe" in resolved
+
+
+def test_full_preset_leaks_no_private_helper(monkeypatch) -> None:
+    """Private helpers stay out of ``full``: leaf tools opt out with
+    ``expose=False``, and internal Agent methods with
+    ``as_tool=False`` never enter the shared registry at all. Deleting
+    the hand-written whitelist must not let either reach the LLM."""
+    import openprogram.programs as F
+
+    class _FullPresetAgenticPrivateProbeAgent(Agent):
+        method_options = {'full_preset_agentic_private_probe': {'tool': False, 'expose': 'io', 'capture_io': True, 'name': 'full_preset_agentic_private_probe'}}
+
+        def full_preset_agentic_private_probe(self, ) -> str:
+            return "private"
+
+    full_preset_agentic_private_probe = _FullPresetAgenticPrivateProbeAgent().full_preset_agentic_private_probe
+
+    @function(name="full_preset_private_probe", expose=False)
+    def p() -> str:
+        return "x"
+
+    resolved = {t.name for t in F.agent_tools(toolset="full",
+                                              include_disabled=True)}
+    assert "full_preset_private_probe" not in resolved
+    assert full_preset_agentic_private_probe() == 'private'
+    assert 'full_preset_agentic_private_probe' not in resolved
+    assert get('full_preset_agentic_private_probe') is None
+
+
+def test_exposure_disabled_via_monkeypatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Setting ``_exposed_set`` to return ``None`` disables the exposure
+    filter entirely (a test-harness escape hatch)."""
+    import openprogram.programs as F
+
+    @function(name="probe_hidden_expose_false", expose=False)
+    def p() -> str:
+        return "x"
+
+    # expose=False → hidden by default.
+    assert F.get_agent_tool("probe_hidden_expose_false") is None
+
+    monkeypatch.setattr(F, "_exposed_set", lambda: None)
+    # Filter disabled → even an expose=False tool resolves.
+    assert F.get_agent_tool("probe_hidden_expose_false") is not None
+
+
+@pytest.mark.parametrize("expose", ["hidden", "io", "llm", "full"])
+@pytest.mark.parametrize("live_permission", [True, False])
+def test_dispatcher_wrappers_preserve_tool_dag_exposure(expose, live_permission):
+    from openprogram.runtime.conversation.turn_runtime.runtime_attach import _wrap_agentic_runtime_block
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.runtime.permissions.approval import wrap_with_approval
+    from openprogram.models.providers.types import AgentTool
+
+    async def execute(call_id, args, cancel, on_update):
+        raise AssertionError("Wrapping must not execute the tool")
+
+    tool = AgentTool(name="private_probe", description="probe", label="probe",
+                     parameters={"type": "object", "properties": {}}, execute=execute)
+    tool._is_agent_method = True
+    tool._dag_expose = expose
+    request = TurnRequest(session_id="exposure", user_text="", agent_id="main", source="web")
+    approved = wrap_with_approval(tool, request, lambda event: None, _live=live_permission)
+    wrapped = _wrap_agentic_runtime_block(approved, request, lambda event: None, "assistant")
+    assert getattr(approved, "_dag_expose", None) == expose
+    assert getattr(wrapped, "_dag_expose", None) == expose

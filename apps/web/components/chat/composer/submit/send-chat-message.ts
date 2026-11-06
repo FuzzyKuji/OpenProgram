@@ -1,0 +1,404 @@
+"use client";
+
+import type { PastedTextElement } from "@/lib/chat/send/paste-elements";
+import { traceThemeEvent } from "@/lib/prefs/appearance/theme-pref";
+import { surfaceOriginForChat } from "@/lib/desktop/desktop-bridge";
+import { getSocket, runtimeState } from "@/lib/runtime-bridge/state";
+import { setWelcomeVisible } from "@/lib/runtime-bridge/helpers";
+import { setRunning } from "@/lib/runtime-bridge/ui";
+import { useSessionStore } from "@/lib/session-store";
+import {
+  registerChatSender,
+  rememberSendSettings,
+} from "@/lib/chat/send/send-queue";
+import { appendLocalUserTurn } from "@/lib/net/ws/chat-stream";
+import { defaultScrollerKey, noteTakeLatest } from "@/lib/chat/history/chat-scroll";
+import {
+  draftChannelChoiceFor,
+  draftChannelChoiceHost,
+} from "@/lib/runtime-bridge/actions/draft-channel-choice";
+import {
+  clearPendingFirstAck,
+  clearPendingUserText,
+  getPendingUserTimestamp,
+  getPendingUserText,
+  getPendingUserAck,
+  getPendingUserMessageId,
+  getPendingUserReject,
+  getPendingUserRequestId,
+  hasPendingFirstAck,
+  hasPendingUserText,
+  pendingUserHasAttachments,
+  setPendingFirstAck,
+  setPendingUserText,
+} from "@/lib/chat/send/pending-user-text";
+
+/**
+ * Chat send path — owned by the React composer.
+ *
+ * Slice F: this used to delegate to the legacy `window.sendMessage`
+ * (chat.js), which built the user bubble / assistant placeholder DOM
+ * before writing the socket. Those bubbles are now rendered by the
+ * React message store — the chat-stream reducer's `handleAck` builds
+ * the user turn from the per-session pending-text map. So this just writes
+ * the WS payload directly and flips the visible run state.
+ *
+ * What still rides `window.*`:
+ *   - `setWelcomeVisible(false)` — hides the React <WelcomeScreen />
+ *     immediately (before the ack round-trip).
+ *   - `setRunning(true)` — legacy run flag (runtime-bridge/ui.ts).
+ *
+ * The ack-pairing reservations live in `lib/chat/send/pending-user-text` (also
+ * read by `lib/net/ws/chat-stream.ts` and `lib/runtime-bridge/session/chat-handlers.ts`),
+ * and the first-message channel attach reads `draftChannelChoiceHost`
+ * (lib/runtime-bridge/actions/draft-channel-choice) — neither rides `window`.
+ */
+
+/** One inline binary attachment delivered alongside the user message.
+ *  ``data`` is raw base64 (no ``data:image/...;base64,`` prefix) so the
+ *  WS payload matches what ``TurnRequest.attachments`` expects on the
+ *  Python side (see ``openprogram/runtime/conversation/turn_runtime.py``). */
+export interface ChatAttachment {
+  /** "image" → inlined as an ImageContent block for the model;
+   *  "document" → saved to the session workdir by the backend so the
+   *  agent's file tools can read it (the path is injected into the
+   *  message text). */
+  type: "image" | "document";
+  data: string;
+  media_type: string;
+  filename?: string;
+  /** Internal provenance used by the web backend's path-marker rewrite. */
+  source_path?: string;
+  /** Original bytes/type when the displayed model image was resized. */
+  original_data?: string;
+  original_media_type?: string;
+}
+
+interface SendMessageBridgeArgs {
+  text: string;
+  /** Pasted spans to show collapsed (lib/chat/send/paste-elements.ts). */
+  textElements?: PastedTextElement[];
+  /** Real or provisional chat key. Drafts send their local_* key so the
+   *  existing server protocol can acknowledge the correct tab. */
+  sessionId: string | null;
+  thinking: string;
+  webSearchEnabled: boolean;
+  /** Per-turn speed tier — "priority" (Fast) or undefined (provider
+   *  default). Sent as ``service_tier`` so the backend forwards it to
+   *  the provider request body. */
+  serviceTier?: string;
+  attachments?: ChatAttachment[];
+  /** A finished demonstration recording; the server adds its steps and
+   *  screenshots to the message (the workflow_recording application). */
+  recording?: string;
+  /** Set when the turn targets a session that is NOT the focused one
+   *  (a split-view peer pane). The WS payload is identical — only the
+   *  focused-shell side effects are skipped, since `setWelcomeVisible`
+   *  and `setRunning` are singletons belonging to the focused chat and
+   *  flipping them from a background send would corrupt its UI. */
+  background?: boolean;
+  /** Cleanup runs only after the backend emits chat_ack for this turn. */
+  onAck?: () => void;
+  /** Draft-only cleanup after the socket accepts the frame. */
+  onSent?: () => void;
+  /** Restore the captured draft after a pre-ACK backend rejection. */
+  onReject?: () => void;
+  hasAttachments?: boolean;
+  /** Submitting scroller. Defaults from sessionId + background. Drain must not pass live activeChatKey. */
+  scrollerKey?: string;
+}
+
+function reservePendingChatSend(
+  sessionId: string | null,
+  text: string,
+  requestId: string,
+  onAck?: () => void,
+  onReject?: () => void,
+  hasAttachments = false,
+): (() => void) | null {
+  if (!sessionId) return () => {};
+  if (sessionId.startsWith("local_") && hasPendingFirstAck(sessionId)) {
+    return null;
+  }
+  const previousText = getPendingUserText(sessionId);
+  const previousTimestamp = getPendingUserTimestamp(sessionId);
+  const hadPreviousText = hasPendingUserText(sessionId);
+  const previousAck = getPendingUserAck(sessionId);
+  const previousReject = getPendingUserReject(sessionId);
+  const previousHasAttachments = pendingUserHasAttachments(sessionId);
+  const messageId = `pending_${crypto.randomUUID()}`;
+  const previousMessageId = getPendingUserMessageId(sessionId);
+  const previousRequestId = getPendingUserRequestId(sessionId);
+  setPendingUserText(sessionId, text, Date.now(), { onAck, onReject, hasAttachments, messageId, requestId });
+  if (sessionId.startsWith("local_")) {
+    setPendingFirstAck(sessionId);
+  }
+  return () => {
+    if (getPendingUserText(sessionId) === text) {
+      if (hadPreviousText && previousText !== undefined) {
+        setPendingUserText(sessionId, previousText, previousTimestamp ?? Date.now(), {
+          onAck: previousAck,
+          hasAttachments: previousHasAttachments,
+          messageId: previousMessageId,
+          onReject: previousReject,
+          requestId: previousRequestId,
+        });
+      } else {
+        clearPendingUserText(sessionId);
+      }
+    }
+    if (sessionId.startsWith("local_")) {
+      clearPendingFirstAck(sessionId);
+      useSessionStore.getState().setRunningTaskFor(sessionId, null);
+    }
+  };
+}
+
+/**
+ * Write a `chat` turn to the WebSocket. Returns `true` if the socket
+ * was open and the payload was sent; `false` otherwise (caller keeps
+ * the user's text so it isn't lost).
+ */
+export function sendChatMessage({
+  text,
+  textElements,
+  sessionId,
+  thinking,
+  webSearchEnabled,
+  serviceTier,
+  attachments,
+  recording,
+  background = false,
+  onAck,
+  onSent,
+  onReject,
+  hasAttachments = Boolean(attachments?.length),
+  scrollerKey,
+}: SendMessageBridgeArgs): boolean {
+  const ws = getSocket();
+  if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+  // `background` captures the submitting pane, not the focus at drain time.
+  // Re-read ownership at each shell write: queue drain, async preparation,
+  // or onSent can run after the user has switched to a different chat.
+  const ownsFocusedShell = () => {
+    const focused = useSessionStore.getState();
+    return !background && sessionId === (
+      focused.activeChatKey ?? focused.currentSessionId
+      ?? runtimeState.currentSessionId ?? null
+    );
+  };
+  // Remember the knobs this turn rode out under, so a `run_active`
+  // rejection (which echoes only the text back) can be re-queued with
+  // the same settings instead of guessed defaults.
+  if (sessionId) {
+    rememberSendSettings(sessionId, {
+      thinking, webSearchEnabled, serviceTier, background,
+    });
+  }
+  // Names this turn on the wire: the server echoes it on chat_ack and on an
+  // error before the ACK, so a reply is matched to the exact send.
+  const requestId = crypto.randomUUID();
+  const rollbackPendingSend = reservePendingChatSend(
+    sessionId,
+    text,
+    requestId,
+    onAck,
+    onReject,
+    hasAttachments,
+  );
+  if (!rollbackPendingSend) {
+    // A second browser event before the first ACK is already represented by
+    // the in-flight provisional send. Treat it as handled without writing a
+    // second turn or replacing the text paired with that ACK.
+    return true;
+  }
+
+  // Hide the welcome panel right away — before the ack round-trip.
+  // Skipped for background sends: the welcome panel belongs to the
+  // focused chat shell, not to the peer session being written to.
+  if (ownsFocusedShell()) setWelcomeVisible(false, true);
+
+  // Exact registered `name(...)` input is intercepted by useChatSubmit and
+  // never reaches this chat bridge. The removed legacy `run ...` syntax is
+  // ordinary chat text; there is no execution override here.
+  // Project picked on a not-yet-created chat: ride the first message so
+  // the backend can create the session repo INSIDE the project directory
+  // (the post-ack set_session_project arrives after the repo already
+  // exists at the home root, too late to relocate it). Not consumed
+  // here — wsHandleChatAck still sends set_session_project as the
+  // idempotent meta/reverse-index bind and clears the pending entry.
+  const pendingProjectId = sessionId
+    ? useSessionStore.getState().pendingProjectsByChat[sessionId]
+    : null;
+
+  // A composer with no chat key keeps its settings under "__new__", like
+  // the sandbox and environment choices below.
+  const draftSettings = useSessionStore.getState().composerSettingsBySession[
+    sessionId ?? "__new__"
+  ];
+  const storedMode = draftSettings?.permission_mode;
+  const permissionMode =
+    storedMode === "ask"
+    || storedMode === "acceptEdits"
+    || storedMode === "plan"
+    || storedMode === "auto"
+    || storedMode === "bypass"
+      ? storedMode
+      : "inherit";
+
+  const payload: Record<string, unknown> = {
+    action: "chat",
+    text,
+    ...(textElements?.length ? { text_elements: textElements } : {}),
+    session_id: sessionId,
+    client_request_id: requestId,
+    thinking_effort: thinking,
+    exec_thinking_effort: runtimeState._execThinkingEffort ?? undefined,
+    web_search: webSearchEnabled,
+    permission_mode: permissionMode,
+  };
+  const invocation = draftSettings?.agentInvocation;
+  if (invocation) {
+    payload.agent_id = invocation.agentId;
+    if (invocation.trial) {
+      payload.agent_trial = true;
+      payload.agent_config = invocation.config;
+    }
+    if (invocation.model || invocation.thinkingEffort !== undefined) {
+      payload.agent_overrides = {
+        ...(invocation.model ? { model: invocation.model } : {}),
+        ...(invocation.thinkingEffort !== undefined ? { thinking_effort: invocation.thinkingEffort } : {}),
+      };
+    }
+  }
+  const sandbox = useSessionStore.getState().composerSettingsBySession[
+    sessionId ?? "__new__"
+  ]?.sandbox;
+  if (typeof sandbox === "boolean") {
+    payload.sandbox_enabled = sandbox;
+  }
+  const surface = surfaceOriginForChat(sessionId);
+  if (surface) payload.surface = surface;
+  if (serviceTier) {
+    payload.service_tier = serviceTier;
+  }
+  if (pendingProjectId) {
+    payload.project_id = pendingProjectId;
+  }
+  // Additional working directories picked before the session exists ride
+  // the chat frame (backend persists them via save_session_run_config on
+  // session create). Harmless on existing sessions — same list the
+  // backend has. Keyed by the same chat key as pendingProjects:
+  // drafts use their local_* key, which the backend adopts as the id.
+  const additionalWorkingDirs = sessionId
+    ? useSessionStore.getState().additionalWorkingDirsBySession[sessionId]
+    : null;
+  if (additionalWorkingDirs != null) {
+    payload.additional_working_dirs = additionalWorkingDirs;
+  }
+  if (recording) payload.recording = recording;
+  if (attachments && attachments.length > 0) {
+    // Backend (ws_actions/chat/turn.py) reads ``attachments`` and dispatcher
+    // (TurnRequest.attachments) folds them into the user message as
+    // ImageContent blocks. Strip any data-URL prefix the caller might
+    // have left behind — backend expects pure base64.
+    payload.attachments = attachments.map((a) => ({
+      type: a.type,
+      data: a.data.replace(/^data:[^;]+;base64,/, ""),
+      media_type: a.media_type,
+      ...(a.filename ? { filename: a.filename } : {}),
+      ...(a.source_path ? { source_path: a.source_path } : {}),
+      ...(a.original_data !== undefined ? { original_data: a.original_data } : {}),
+      ...(a.original_media_type !== undefined
+        ? { original_media_type: a.original_media_type }
+        : {}),
+    }));
+  }
+  // First message of a brand-new conversation: attach the channel
+  // choice from the welcome-screen picker, if any. Ignored by the
+  // backend for existing convs.
+  const channelChoice = sessionId
+    ? draftChannelChoiceFor(draftChannelChoiceHost, sessionId)
+    : (draftChannelChoiceHost._pendingChannelChoice ?? null);
+  const pendingFirstTurn = sessionId
+    ? sessionId !== runtimeState.currentSessionId
+    : !runtimeState.currentSessionId;
+  if (pendingFirstTurn && channelChoice?.channel) {
+    payload.channel = channelChoice.channel;
+    payload.account_id = channelChoice.account_id || "";
+  }
+  // Environment picked on a draft: the first message pins it. The worker
+  // ignores it for a conversation that already has history.
+  const environmentChoice = useSessionStore.getState().composerSettingsBySession[
+    sessionId ?? "__new__"
+  ]?.environment;
+  if (environmentChoice) {
+    payload.environment_id = environmentChoice;
+  }
+
+  try {
+    ws.send(JSON.stringify(payload));
+    if (ws.readyState !== WebSocket.OPEN) {
+      rollbackPendingSend();
+      return false;
+    }
+  } catch (error) {
+    rollbackPendingSend();
+    console.error("[sendChatMessage] WebSocket send failed:", error);
+    return false;
+  }
+  traceThemeEvent("message-send");
+  const acceptedAt = Date.now();
+  const optimisticMessageId = getPendingUserMessageId(sessionId ?? "");
+  if (sessionId && optimisticMessageId) {
+    appendLocalUserTurn(sessionId, optimisticMessageId, text, undefined, acceptedAt, "pending", textElements);
+    noteTakeLatest({
+      sessionId,
+      scrollerKey: scrollerKey ?? defaultScrollerKey(sessionId, background),
+      turnSeed: optimisticMessageId,
+    });
+  }
+  onSent?.();
+  if (sessionId) {
+    setPendingUserText(sessionId, text, acceptedAt, {
+      onAck,
+      onReject,
+      hasAttachments,
+      messageId: optimisticMessageId,
+      requestId,
+    });
+  }
+  // Close the clear→ACK race for every session, not only provisional
+  // drafts. A queued send is already in flight once the socket accepted
+  // the frame; marking that session busy now prevents a repeated
+  // running_task_clear from draining the next queue entry before chat_ack.
+  if (sessionId) {
+    // 占位只在槽位为空时写入。run_active 竞态下旧回合还在跑，覆盖会
+    // 丢掉它的 execution_id，之后停止发不出 execution.cancel。
+    const store = useSessionStore.getState();
+    const existing = store.runningTasks[sessionId];
+    if (!existing || (!existing.msg_id && !existing.execution_id)) {
+      store.setRunningTaskFor(sessionId, {
+        session_id: sessionId,
+        msg_id: "",
+        started_at: acceptedAt / 1000,
+      });
+    }
+  }
+  // `setRunning` is the focused shell's global run flag (drives its send/stop
+  // button). A background turn must not flip it — the focused chat isn't the
+  // one running. Per-session run state still lands via the store's
+  // `setRunningTaskFor` on chat_ack, which is what the peer pane reads.
+  // The legacy setter also writes the runtime's focused session. During a
+  // focus hand-off it can lag the React key; the keyed task above is enough
+  // until those identities agree, and must never create a task in another chat.
+  if (ownsFocusedShell() && (
+    !runtimeState.currentSessionId || runtimeState.currentSessionId === sessionId
+  )) setRunning(true);
+  return true;
+}
+
+// The send queue drains through this exact function; registering the
+// reference here (rather than importing it there) keeps the store free
+// of a dependency on the composer tree.
+registerChatSender(sendChatMessage);

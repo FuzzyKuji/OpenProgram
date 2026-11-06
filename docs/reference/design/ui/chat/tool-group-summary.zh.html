@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>工具组摘要</title>
+<style>
+:root{
+  color-scheme:light;
+  --page:#faf9f5; --surface:#fff; --line:rgba(36,36,32,.12);
+  --text-primary:#3d3d3a; --text-secondary:#5e5d59; --text-muted:#91908c;
+  --accent-green:#3f7a4e; --accent-red:#c24e42; --accent-orange:#b4532a;
+  --fs-chat:15px;
+  --mono:"SF Mono",Menlo,monospace;
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--page);color:var(--text-primary);
+  font:15px/1.65 -apple-system,"PingFang SC","Helvetica Neue",system-ui,sans-serif}
+main{max-width:880px;margin:0 auto;padding:40px 16px 96px}
+h1{font-size:24px;line-height:1.3;margin:0 0 6px}
+h2{font-size:18px;margin:36px 0 8px;line-height:1.35}
+h3{font-size:15px;margin:22px 0 6px}
+p,li{color:var(--text-secondary)}
+code{font-family:var(--mono);font-size:12.5px;background:rgba(36,36,32,.06);padding:1px 5px;border-radius:4px}
+table{width:100%;border-collapse:collapse;font-size:13.5px;margin:8px 0 4px}
+th,td{text-align:left;vertical-align:top;padding:7px 10px;border-bottom:1px solid var(--line)}
+th{color:var(--text-muted);font-weight:500}
+td code{white-space:nowrap}
+.lede{color:var(--text-secondary);margin:0 0 20px}
+.card{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px 18px 10px;margin:12px 0}
+.pair{display:grid;grid-template-columns:72px 1fr;align-items:center;column-gap:12px;min-height:40px;border-bottom:1px dashed var(--line)}
+.pair:last-child{border-bottom:0}
+.case{font-size:12px;color:var(--text-muted);margin:12px 0 0;font-weight:500}
+.tag{font-size:11px;font-weight:600;letter-spacing:.04em;text-transform:uppercase;color:var(--text-muted)}
+.tag.after{color:var(--accent-orange)}
+/* The collapsed row, as in app/styles/chat/execution/execution-strip.css */
+.tl-toggle{display:inline-flex;align-items:center;gap:8px;height:28px;max-width:100%;min-width:0;
+  color:var(--text-muted);font-size:var(--fs-chat);cursor:pointer;user-select:none;border:0;background:none;padding:0;font-family:inherit}
+.tl-toggle:hover{color:var(--text-secondary)}
+.tl-label{min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.tl-chev{font-size:11px;flex:none}
+.tl-fail{flex:none;font-size:13px;color:var(--accent-red)}
+.diff{--git-added:light-dark(#1e9e3c,#32d74b);--git-removed:light-dark(#cd2054,#ff2c56);display:inline-flex;height:18px;border-radius:4.5px;overflow:hidden;flex:none;font:500 11px/14px ui-sans-serif,-apple-system,sans-serif;font-variant-numeric:tabular-nums lining-nums}
+.diff>span{display:flex;align-items:center;gap:1px;padding:0 6px}
+.diff .add{color:var(--git-added);background:color-mix(in srgb,var(--git-added) 20%,transparent)}
+.diff .del{color:var(--git-removed);background:color-mix(in srgb,var(--git-removed) 20%,transparent)}
+.shimmer{background:linear-gradient(90deg,var(--text-muted) 35%,var(--text-primary) 50%,var(--text-muted) 65%);
+  background-size:200% 100%;-webkit-background-clip:text;background-clip:text;color:transparent;
+  animation:sweep 1.6s linear infinite}
+@keyframes sweep{from{background-position:100% 0}to{background-position:-100% 0}}
+@media (prefers-reduced-motion:reduce){.shimmer{animation:none}}
+.narrow{max-width:420px}
+@media (max-width:560px){.pair{grid-template-columns:1fr;row-gap:2px;padding:6px 0}}
+</style>
+</head>
+<body>
+<main>
+
+<h1>工具组摘要</h1>
+<p class="lede">对话记录里，一串连续的工具调用折叠成一行。本页规定这一行写什么：用一句短话说明这些调用做了什么，由客户端根据记录里已有的工具调用生成；如果这串调用改了文件，就带一个 <code>+N −M</code> 徽标。本页也评估是否值得为整轮加一行摘要。</p>
+
+<h2>这一行从哪来</h2>
+<p><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/bubbles/assistant-bubble.tsx">assistant-bubble.tsx</a> 把一轮的有序 <code>blocks</code> 切成段：每个文本块单独成段，每串连续的思考和工具块合成一个 <code>ExecutionStrip</code>（<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/execution-strip.tsx">execution-strip.tsx</a>），标题由 <code>summarizeToolGroup()</code> 生成。没有有序 blocks 的旧记录走 <code>LegacyRuntimeTrace</code>，它把调用交给同一个函数。折叠行是一行 28px，见<a href="chat-turn-visual-spec.zh.html">聊天轮次视觉规范</a>。</p>
+
+<h2>每个调用带的数据</h2>
+<table>
+<tr><th>字段</th><th>来源</th><th>用途</th></tr>
+<tr><td><code>tool</code></td><td>block</td><td>通过 <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/tool-presentation.ts">tool-presentation.ts</a> 的 <code>presentTool()</code> 归类，和时间线行用同一套分类。</td></tr>
+<tr><td><code>input</code></td><td>block，调用参数的完整 JSON</td><td>路径（<code>file_path</code>、<code>path</code>）、命令、搜索模式、URL。<code>edit</code> 带 <code>old_string</code>/<code>new_string</code>，<code>write</code> 带 <code>content</code>，<code>apply_patch</code> 带整个补丁。</td></tr>
+<tr><td><code>result</code>、<code>is_error</code>、<code>outcome</code></td><td>block</td><td>成功或失败。<code>edit</code> 的结果写 <code>(N replacements)</code>；<code>apply_patch</code> 的结果写 <code>Added</code>、<code>Updated</code> 或 <code>Deleted</code>。</td></tr>
+<tr><td>运行中</td><td><code>msg.tools[].status</code></td><td>哪个调用正在跑。</td></tr>
+<tr><td><code>turnFiles</code></td><td>助手消息，结束时从变更日志写入</td><td>整轮权威的逐文件 <code>op</code>（<code>create</code>/<code>modify</code>/<code>delete</code>）和 <code>added</code>/<code>removed</code>。按路径聚合，没有工具调用 id，只在本轮结束后才有。</td></tr>
+</table>
+<p>所以一轮里两个组改了同一个文件时，不能直接从 <code>turnFiles</code> 读每组的统计。统计从参数推导，缺的部分用 <code>turnFiles</code> 补。</p>
+
+<h2>摘要语法</h2>
+<h3>短语</h3>
+<p>组内调用按类型分桶，每桶一个短语，放在该桶第一次出现的位置，读起来就是事情发生的顺序。短语之间用"，"连接（英文用 ", "，首字母大写）。思考只在组里没有别的内容时写"思考"，否则省略，因为每轮都会思考。</p>
+<table>
+<tr><th>类型（工具）</th><th>一个</th><th>多个</th><th>进行中</th></tr>
+<tr><td>命令（<code>bash</code>、<code>process</code>、<code>terminal_use</code>、<code>execute_code</code>）</td><td>运行了 1 条命令</td><td>运行了 3 条命令</td><td>正在运行命令…</td></tr>
+<tr><td>新建文件（<code>write</code> 新路径、<code>apply_patch</code> Add File）</td><td>创建了 pill-shadow.html</td><td>创建了 2 个文件</td><td>正在创建 pill-shadow.html…</td></tr>
+<tr><td>修改文件（<code>edit</code>、覆盖已有文件的 <code>write</code>、<code>apply_patch</code> Update）</td><td>修改了 app.tsx</td><td>修改了 4 个文件</td><td>正在修改 app.tsx…</td></tr>
+<tr><td>删除文件（<code>apply_patch</code> Delete File）</td><td>删除了 old.css</td><td>删除了 2 个文件</td><td>正在删除 old.css…</td></tr>
+<tr><td>读取（<code>read</code>、<code>pdf</code>）</td><td>读取了 package.json</td><td>读取了 3 个文件</td><td>正在读取 package.json…</td></tr>
+<tr><td>列目录（<code>list</code>）</td><td>列出了 1 个目录</td><td>列出了 2 个目录</td><td>正在列出目录…</td></tr>
+<tr><td>代码搜索（<code>grep</code>、<code>glob</code>、<code>semble_*</code>、<code>lsp_*</code>）</td><td>搜索了"tl-toggle"</td><td>搜索了 3 次</td><td>正在搜索"tl-toggle"…</td></tr>
+<tr><td>网页搜索（<code>web_search</code>）</td><td>搜索了网页</td><td>搜索了 2 次网页</td><td>正在搜索网页…</td></tr>
+<tr><td>抓取（<code>web_fetch</code>）</td><td>抓取了 docs.anthropic.com</td><td>抓取了 3 个网页</td><td>正在抓取 docs.anthropic.com…</td></tr>
+<tr><td>浏览器（<code>web_use</code>；<code>agent_browser</code>、<code>playwright_browser</code> 和 <code>browser_use</code> 是已删除的工具，这些名字只用于显示旧对话）</td><td colspan="2">操作了浏览器</td><td>正在操作浏览器…</td></tr>
+<tr><td>子代理（<code>agent</code>、<code>task</code>、<code>send_message</code>）</td><td>运行了子代理 Reviewer</td><td>运行了 2 个子代理</td><td>正在运行子代理 Reviewer…</td></tr>
+<tr><td>图片（<code>image_generate</code> / <code>image_analyze</code>）</td><td>生成了 1 张图片</td><td>生成了 2 张图片</td><td>正在生成图片…</td></tr>
+<tr><td>待办（<code>todo_*</code>）</td><td colspan="2">更新了待办</td><td>正在更新待办…</td></tr>
+<tr><td>提问（<code>ask_user_question</code>）</td><td colspan="2">提了 1 个问题</td><td>正在提问…</td></tr>
+<tr><td>记忆（<code>memory_*</code>）</td><td colspan="2">读写了记忆</td><td>正在读写记忆…</td></tr>
+<tr><td>程序 / 技能</td><td>运行了程序 deploy、使用了技能 pdf</td><td>运行了 2 个程序</td><td>正在运行程序 deploy…</td></tr>
+<tr><td>其他（MCP、自定义）</td><td>使用了 linear_search（两次时加" 2 次"）</td><td>使用了 linear_search 和 jira_create；使用了 3 个工具</td><td>正在使用 linear_search…</td></tr>
+</table>
+<p>命名：只有一个文件时写文件名（basename）。命令从不写进标题，因为命令很长，展开后的行里已经有。搜索模式加引号，截到 24 个字符。抓取只写主机名。一个桶只在它恰好有一个目标时才写出目标名，所以出现第二个文件后，"读取了 a.ts"就变成"读取了 2 个文件"。同一文件的重复调用只算一次。</p>
+<p>数字：英文单数用 "a"/"an"，两个及以上用数字。中文一律用数字加量词（1 条命令、3 个文件、2 次）。</p>
+<p>失败：组里任何调用失败时，标题后面跟一个淡红色的"· 1 个失败"。失败的调用仍计入所属的桶；写文件失败不计入徽标。</p>
+
+<h3>进行中</h3>
+<p>当这个组是流式中这一轮的最新部分时，已完成的桶保持过去时，正在执行的调用所属的桶改成进行时并以"…"结尾，并移到行尾（最新一步在眼睛预期的位置），例如"读取了 2 个文件，正在运行命令…"。扫光效果保留。调用完成后，短语回到过去时，放回它第一次出现的位置。组里目前只有思考时，标题是"思考中…"。</p>
+
+<h3>截断</h3>
+<p>屏幕上标题只占一行：标题 span 设 <code>min-width:0</code> 和 CSS 省略号，失败提示、徽标和箭头设 <code>flex:none</code>，永远不会被挤掉。不设字符上限，同一个标题在窄侧栏和宽窗口都能正确显示。这一行不带任何悬停提示：它是对话内容，不是需要解释用途的按钮，展开后就能看到每一次调用。</p>
+
+<h3>改动徽标</h3>
+<p>组里至少有一个写文件调用成功，并且所有成功的写文件调用统计都已知时，才显示徽标。徽标把这些统计加起来，0 也显示（<code>+16 −0</code>），复用本轮文件卡片的 <code>.turn-files-diff</code> 样式。每个调用的统计来源：</p>
+<ul>
+<li><code>apply_patch</code>：数补丁正文里的 <code>+</code> 行和 <code>-</code> 行，结果精确。</li>
+<li><code>edit</code>：对 <code>old_string</code> 和 <code>new_string</code> 做行级 diff，再乘以结果里的替换次数。任一侧超过 2,000 行时退化为直接比较行数。</li>
+<li><code>write</code>：<code>turnFiles</code> 把该路径标为 <code>create</code> 时，统计是 <code>+行数(content) −0</code>；标为 <code>modify</code> 且本轮对该路径的所有写入都在这个组内时，取 <code>turnFiles</code> 的数值；其余情况统计未知，徽标先不显示。流式期间这通常意味着徽标在本轮结束时出现。</li>
+</ul>
+<p><code>write</code> 算"创建"还是"修改"也按这个规则：<code>turnFiles</code> 出现前，本轮之前没读过、没改过该路径的 <code>write</code> 才算"创建"；<code>turnFiles</code> 标为 <code>modify</code> 后改成"修改"。</p>
+
+<h3>文案</h3>
+<p>所有短语都走 <code>useTranslation()</code> 现有的 <code>text(en, zh)</code>。每个桶一条：过去时和进行时两种形式，每种又分单目标和计数两种写法。中文过去时用"了"，进行时用"正在"："运行了 1 条命令，创建了 pill-shadow.html"、"读取了 2 个文件，正在运行命令…"。</p>
+
+<h3>在哪生成</h3>
+<p>全部由客户端根据结构化工具数据生成，是 <code>tool-presentation.ts</code> 旁边的一个纯函数。不需要模型调用，也不需要改后端。可选的后端改进有一项：在每条变更日志记录上写入工具调用 id，并随工具结果下发该调用的 <code>{path, op, added, removed}</code>。这样流式期间 <code>write</code> 的统计也精确，两个组改同一文件时每组的统计也精确。</p>
+
+<h2>预览</h2>
+<p>每组对比同一批调用的按类别计数标题和本设计的标题。都是 15px 的折叠行，和对话记录一致。</p>
+<div class="card">
+  <div class="case">运行命令，然后新建文件</div>
+  <div class="pair"><span class="tag">计数</span><button class="tl-toggle"><span class="tl-label">思考，修改 1 个文件，运行 1 条命令</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label">运行了 1 条命令，创建了 pill-shadow.html</span><span class="diff"><span class="add">+16</span><span class="del">−0</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">排查后修一个文件</div>
+  <div class="pair"><span class="tag">计数</span><button class="tl-toggle"><span class="tl-label">思考，修改 1 个文件，读取 3 个文件，搜索 1 次</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label">读取了 3 个文件，搜索了"tl-toggle"，修改了 execution-strip.tsx</span><span class="diff"><span class="add">+12</span><span class="del">−4</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">网页调研</div>
+  <div class="pair"><span class="tag">计数</span><button class="tl-toggle"><span class="tl-label">浏览网页 3 次</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label">搜索了 2 次网页，抓取了 docs.anthropic.com</span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">MCP 和自定义工具</div>
+  <div class="pair"><span class="tag">计数</span><button class="tl-toggle"><span class="tl-label">运行 1 条命令，调用 2 个函数</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label">使用了 linear_search 2 次，运行了 1 条命令</span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">有命令失败</div>
+  <div class="pair"><span class="tag">计数</span><button class="tl-toggle"><span class="tl-label">修改 1 个文件，运行 2 条命令</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label">修改了 app.tsx，运行了 2 条命令</span><span class="tl-fail">· 1 个失败</span><span class="diff"><span class="add">+3</span><span class="del">−3</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">进行中（流式）</div>
+  <div class="pair"><span class="tag">计数</span><button class="tl-toggle"><span class="tl-label shimmer">思考，读取 2 个文件，运行 1 条命令</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label shimmer">读取了 2 个文件，正在运行命令…</span><span class="tl-chev">›</span></button></div>
+  <div class="pair"><span class="tag after">摘要</span><button class="tl-toggle"><span class="tl-label shimmer">运行了 2 条命令，正在修改 turn-files-chips.tsx…</span><span class="diff"><span class="add">+8</span><span class="del">−2</span></span><span class="tl-chev">›</span></button></div>
+
+  <div class="case">窄面板里的长组（悬停显示完整标题）</div>
+  <div class="pair"><span class="tag">计数</span><div class="narrow"><button class="tl-toggle"><span class="tl-label">思考，修改 4 个文件，运行 5 条命令，读取 6 个文件，搜索 3 次，浏览网页 1 次</span><span class="tl-chev">›</span></button></div></div>
+  <div class="pair"><span class="tag after">摘要</span><div class="narrow"><button class="tl-toggle"><span class="tl-label">读取了 6 个文件，搜索了 3 次，修改了 4 个文件，运行了 5 条命令，抓取了 github.com</span><span class="diff"><span class="add">+210</span><span class="del">−88</span></span><span class="tl-chev">›</span></button></div></div>
+</div>
+
+<h2>整轮摘要</h2>
+<p>评估过在一轮顶部加一行，例如"读取了 9 个文件，修改了 3 个文件，运行了 6 条命令 · +40 −12"。</p>
+<ul>
+<li><b>确定性版本</b>没有额外成本：用同一个函数遍历整轮的工具块即可。但每轮结尾已经有文件卡片的整轮统计，每个组也已经有自己的标题，回复正文又是模型自己对这一轮的说明。顶部一行会和这两者重复。</li>
+<li><b>模型生成版本</b>（"修好了胶囊阴影并验证了构建"）每轮要多一次调用，走<a href="../sidebar/session-auto-rename.html">会话自动命名</a>用的标题模型。它要花 token 和时间，只能在本轮结束后出现，还要把本轮内容再发给模型一次。它最可能说的也就是回复里已有的话。</li>
+</ul>
+<p>不做整轮摘要行。别处需要把一轮压成一行时（消息导航、悬停预览、父轮次里的子代理行），由那个界面调用确定性的汇总函数。</p>
+
+<h2>实现</h2>
+<ul>
+<li><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/chat/messages/execution/tool-group-summary.ts">tool-group-summary.ts</a> 是纯函数模块。<code>summarizeToolGroup(blocks, {text, active, runningIds, spawnNames, turnFiles, turnBlocks})</code> 返回 <code>{label, failed, added, removed}</code>；没有徽标时 <code>added</code> 和 <code>removed</code> 都是 <code>null</code>。<code>SPAWNING_TOOL_NAMES</code> 定义在这里；没有专门分桶的工具沿用 <code>presentTool()</code> 的分类；同时导出 <code>lineDiff()</code>（去掉首尾相同行后做行级 LCS，上限 <code>LINE_DIFF_CAP</code> = 2,000 行）和 <code>parsePatch()</code>。</li>
+<li><code>ExecutionStrip</code> 接收 <code>label: string | ToolGroupSummary</code>。工作流运行卡片和调试面板传的纯字符串照旧渲染，不带失败提示和徽标。这一行渲染带省略号的标题、红色失败提示、徽标（本轮文件卡片的 <code>.turn-files-diff</code> / <code>.turn-files-stat</code> 胶囊）、箭头和悬停提示。</li>
+<li><code>AssistantBubble</code> 给每一段传入该段的 blocks、整轮 blocks、<code>msg.turnFiles</code>、运行中调用 id，以及该段是否是正在进行的末段。</li>
+<li>旧记录走同一个函数。<code>LegacyRuntimeTrace</code>（没有有序 blocks 的 agent 调用）把每个调用转成以函数名命名的工具块，标题读作"使用了 extract_tables"而不是"调用 1 个函数"，调用进行中也会显示扫光。没有工具块的旧子代理条只传子代理名称。</li>
+<li><code>app/styles/chat/execution/execution-strip.css</code>：<code>.tl-label</code> 省略号、<code>.tl-fail</code>，以及 <code>.tl-diff</code> 和 <code>.tl-chev</code> 的 <code>flex:none</code>。</li>
+<li>测试：<code>apps/web/tests/chat/messages/tool-group-summary.test.mjs</code> 覆盖每个桶的语法、中英文复数、顺序、进行时、失败、徽标来源和未知统计、apply_patch 解析和带上限的行级 diff。</li>
+</ul>
+
+<h2>实现状态</h2>
+<p>已按本文实现。可选的后端改进（变更日志记录带工具调用 id）没有做，所以覆盖已有文件的 <code>write</code> 要等本轮结束后才显示徽标。</p>
+</main>
+</body>
+</html>

@@ -1,0 +1,452 @@
+"""Tests for ``openprogram.runtime.context.git.dag``.
+
+Pure-function tests — no DB, no server. These lock down the semantics
+that retry / edit / checkout rely on.
+"""
+from __future__ import annotations
+
+from openprogram.runtime.context.git import (
+    advance_head,
+    children,
+    deepest_leaf,
+    head_or_tip,
+    is_ancestor,
+    linear_history,
+    normalize_parent_pointers,
+    sibling_index,
+    sibling_navigation_index,
+    siblings,
+)
+
+
+def _msg(id_: str, parent: str | None, *, ts: int = 0) -> dict:
+    return {"id": id_, "predecessor": parent, "created_at": ts}
+
+
+# ---- siblings / sibling_index -------------------------------------------
+
+def test_siblings_includes_self_and_same_parent():
+    msgs = [
+        _msg("u1", None, ts=1),
+        _msg("a1", "u1", ts=2),
+        _msg("a2", "u1", ts=3),   # retry of assistant reply
+        _msg("a3", "u1", ts=4),   # another retry
+    ]
+    sibs = siblings(msgs, "a2")
+    assert [s["id"] for s in sibs] == ["a1", "a2", "a3"]
+
+
+def test_siblings_sorted_by_created_at():
+    msgs = [
+        _msg("u1", None),
+        _msg("a2", "u1", ts=20),
+        _msg("a1", "u1", ts=10),
+        _msg("a3", "u1", ts=30),
+    ]
+    assert [s["id"] for s in siblings(msgs, "a2")] == ["a1", "a2", "a3"]
+
+
+def test_sibling_index_is_1_based():
+    msgs = [
+        _msg("u1", None),
+        _msg("a1", "u1", ts=1),
+        _msg("a2", "u1", ts=2),
+        _msg("a3", "u1", ts=3),
+    ]
+    assert sibling_index(msgs, "a1") == (1, 3)
+    assert sibling_index(msgs, "a2") == (2, 3)
+    assert sibling_index(msgs, "a3") == (3, 3)
+
+
+def test_sibling_index_unknown_message():
+    assert sibling_index([_msg("u1", None)], "bogus") == (0, 0)
+
+
+def test_root_messages_are_all_siblings():
+    # Messages with predecessor = None share the "root" bucket.
+    msgs = [_msg("u1", None, ts=1), _msg("u2", None, ts=2)]
+    assert [s["id"] for s in siblings(msgs, "u1")] == ["u1", "u2"]
+
+
+# ---- siblings: spawn-branch grouping (commit 1d1fe016) ------------------
+# These nail the "1/6 branches on a fresh 你好" fix: siblings() must group
+# by fork point (predecessor, falling back to caller), keep only the chat
+# lane, and never mix agent-spawned roots or runtime cards with organic
+# turns. Regressing any of these resurrects the phantom sibling nav.
+
+def test_siblings_excludes_tool_and_code_rows():
+    # A sub-call tool/code row shares no predecessor with the user turn;
+    # it must not join the root sibling set. Its own nav is fn-run scoped,
+    # so siblings() returns just itself.
+    msgs = [
+        _msg("u1", None, ts=1),
+        {"id": "t1", "predecessor": None, "role": "tool", "created_at": 2},
+        {"id": "c1", "predecessor": None, "role": "code", "created_at": 3},
+    ]
+    assert [s["id"] for s in siblings(msgs, "u1")] == ["u1"]
+    assert [s["id"] for s in siblings(msgs, "t1")] == ["t1"]
+    assert [s["id"] for s in siblings(msgs, "c1")] == ["c1"]
+
+
+def test_siblings_agent_spawn_root_not_mixed_with_organic_turns():
+    # A spawned-branch root (source=agent_spawn, no predecessor) is a
+    # branch the AGENT opened — not an alternative the user can page to.
+    # It must not share the root user turn's sibling set.
+    msgs = [
+        _msg("u1", None, ts=1),
+        {"id": "sp1", "predecessor": None, "source": "agent_spawn",
+         "created_at": 2},
+    ]
+    assert [s["id"] for s in siblings(msgs, "u1")] == ["u1"]
+    assert [s["id"] for s in siblings(msgs, "sp1")] == ["sp1"]
+
+
+def test_siblings_excludes_runtime_cards():
+    # display=runtime cards (fn-run / attach pointers) never join chat nav.
+    msgs = [
+        _msg("u1", None, ts=1),
+        {"id": "rt1", "predecessor": None, "display": "runtime",
+         "created_at": 2},
+    ]
+    assert [s["id"] for s in siblings(msgs, "u1")] == ["u1"]
+    assert [s["id"] for s in siblings(msgs, "rt1")] == ["rt1"]
+
+
+def test_siblings_fall_back_to_caller_when_no_predecessor():
+    # A predecessor-less spawned branch expresses its fork point via caller.
+    # Two spawned turns forked off the same caller are siblings of each
+    # other (but not of a user turn forked elsewhere).
+    msgs = [
+        {"id": "b1", "predecessor": None, "caller": "a1", "created_at": 1},
+        {"id": "b2", "predecessor": None, "caller": "a1", "created_at": 2},
+        _msg("other", None, ts=3),
+    ]
+    assert [s["id"] for s in siblings(msgs, "b1")] == ["b1", "b2"]
+    assert "other" not in [s["id"] for s in siblings(msgs, "b1")]
+
+
+def test_siblings_caller_root_normalized_to_none():
+    # caller="ROOT" is normalized to None so a caller=ROOT branch groups
+    # with genuine root turns rather than forming a phantom "ROOT" bucket.
+    msgs = [
+        _msg("u1", None, ts=1),
+        {"id": "b1", "predecessor": None, "caller": "ROOT", "created_at": 2},
+    ]
+    assert [s["id"] for s in siblings(msgs, "u1")] == ["u1", "b1"]
+
+
+def test_siblings_same_predecessor_user_turns_still_group():
+    # Regression guard: the ordinary retry case (same predecessor user
+    # turns) must keep working — the fix must not narrow legit sibling sets.
+    msgs = [
+        _msg("u1", None, ts=1),
+        _msg("a1", "u1", ts=2),
+        _msg("a2", "u1", ts=3),
+        _msg("a3", "u1", ts=4),
+    ]
+    assert [s["id"] for s in siblings(msgs, "a2")] == ["a1", "a2", "a3"]
+
+
+def test_siblings_stable_sort_does_not_search_source_positions():
+    class EqualityCountingMessage(dict):
+        comparisons = 0
+
+        def __eq__(self, other):
+            type(self).comparisons += 1
+            return super().__eq__(other)
+
+    msgs = [
+        EqualityCountingMessage(
+            id=f"a{i}", predecessor="u1", created_at=10,
+        )
+        for i in range(64)
+    ]
+
+    ordered = siblings(msgs, "a63")
+
+    # Equal timestamps retain source order, without a quadratic list.index
+    # search for each sort key.
+    assert [m["id"] for m in ordered] == [f"a{i}" for i in range(64)]
+    assert EqualityCountingMessage.comparisons <= len(msgs) * 4, (
+        "stable sibling ordering must carry source positions instead of "
+        f"searching the list: {EqualityCountingMessage.comparisons} "
+        f"comparisons for {len(msgs)} messages"
+    )
+
+
+def test_sibling_navigation_index_only_sorts_requested_groups():
+    class CreatedAtCountingMessage(dict):
+        reads = 0
+
+        def get(self, key, default=None):
+            if key == "created_at":
+                type(self).reads += 1
+            return super().get(key, default)
+
+    msgs = [
+        CreatedAtCountingMessage(
+            id="active", role="assistant", predecessor="active-parent",
+            created_at=1,
+        ),
+        *[
+            CreatedAtCountingMessage(
+                id=f"offscreen-{i}", role="assistant",
+                predecessor="offscreen-parent", created_at=i,
+            )
+            for i in range(64)
+        ],
+    ]
+
+    navigation = sibling_navigation_index(msgs, target_ids={"active"})
+
+    assert navigation == {"active": (1, 1, None, None)}
+    assert CreatedAtCountingMessage.reads <= 4, (
+        "request-local navigation must not sort unrelated sibling groups: "
+        f"created_at was read {CreatedAtCountingMessage.reads} times"
+    )
+
+
+def test_sibling_navigation_index_matches_existing_edge_case_contracts():
+    msgs = [
+        {"id": "root", "role": "user", "predecessor": None, "created_at": 0},
+        {"id": "retry-a", "role": "assistant", "predecessor": "root",
+         "created_at": 1},
+        {"id": "retry-b", "role": "assistant", "predecessor": "root",
+         "created_at": 2},
+        {"id": "retry-b", "role": "assistant", "predecessor": "root",
+         "created_at": 3},
+        {"id": "left", "role": "assistant", "predecessor": "cycle-root",
+         "created_at": 1},
+        {"id": "cycle-a", "role": "assistant", "predecessor": "cycle-root",
+         "created_at": 2},
+        {"id": "cycle-b", "role": "assistant", "predecessor": "cycle-a",
+         "created_at": 3},
+        {"id": "cycle-a", "role": "assistant", "predecessor": "cycle-b",
+         "created_at": 4},
+        {"id": "spawn-a", "role": "user", "predecessor": None,
+         "caller": "root", "source": "agent_spawn", "created_at": 5},
+        {"id": "spawn-b", "role": "user", "predecessor": None,
+         "caller": "root", "source": "agent_spawn", "created_at": 6},
+        {"id": "runtime", "role": "assistant", "predecessor": None,
+         "display": "runtime", "created_at": 7},
+        {"id": "tool", "role": "tool", "predecessor": None,
+         "created_at": 8},
+        {"id": "code", "role": "code", "predecessor": None,
+         "created_at": 9},
+        {"id": "dangling", "role": "assistant", "predecessor": "missing",
+         "created_at": 10},
+        {"id": None, "role": "tool", "predecessor": None,
+         "created_at": 11},
+    ]
+    target_ids = {message.get("id") for message in msgs if message.get("id")}
+
+    navigation = sibling_navigation_index(msgs, target_ids=target_ids)
+
+    for message_id in target_ids:
+        group_ids = [message["id"] for message in siblings(msgs, message_id)]
+        position = group_ids.index(message_id)
+        index, total = sibling_index(msgs, message_id)
+        expected = (
+            index,
+            total,
+            deepest_leaf(msgs, group_ids[position - 1]) if position > 0 else None,
+            deepest_leaf(msgs, group_ids[position + 1])
+            if position < len(group_ids) - 1 else None,
+        )
+        assert navigation[message_id] == expected
+
+    assert navigation["runtime"] == (1, 1, None, None)
+    assert navigation["tool"] == (1, 1, None, None)
+    assert navigation["code"] == (1, 1, None, None)
+    assert None not in navigation
+
+
+# ---- children ------------------------------------------------------------
+
+def test_children_returns_all_children_ordered():
+    msgs = [
+        _msg("u1", None),
+        _msg("a1", "u1", ts=1),
+        _msg("a2", "u1", ts=2),
+        _msg("unrelated", None),
+    ]
+    kids = children(msgs, "u1")
+    assert [k["id"] for k in kids] == ["a1", "a2"]
+
+
+# ---- linear_history ------------------------------------------------------
+
+def test_linear_history_walks_parent_chain():
+    msgs = [
+        _msg("u1", None),
+        _msg("a1", "u1"),
+        _msg("u2", "a1"),
+        _msg("a2", "u2"),
+        # Sibling branch — should not appear when head is "a2":
+        _msg("a1_retry", "u1"),
+    ]
+    hist = linear_history(msgs, "a2")
+    assert [h["id"] for h in hist] == ["u1", "a1", "u2", "a2"]
+
+
+def test_linear_history_follows_retry_branch():
+    msgs = [
+        _msg("u1", None),
+        _msg("a1_old", "u1"),
+        _msg("a1_new", "u1"),     # a retry — head now points here
+        _msg("u2", "a1_new"),
+        _msg("a2", "u2"),
+    ]
+    # Head on a2 → history goes through a1_new, not a1_old.
+    assert [h["id"] for h in linear_history(msgs, "a2")] == \
+        ["u1", "a1_new", "u2", "a2"]
+
+
+def test_linear_history_unknown_head_is_empty():
+    assert linear_history([_msg("u1", None)], "bogus") == []
+
+
+def test_linear_history_survives_cycles():
+    # Malformed data: u1 → u2 → u1. Should terminate, not loop.
+    msgs = [{"id": "u1", "predecessor": "u2"}, {"id": "u2", "predecessor": "u1"}]
+    hist = linear_history(msgs, "u1")
+    # We don't guarantee the exact chain for malformed input, just
+    # that it terminates. Length is bounded by node count.
+    assert len(hist) <= 2
+
+
+# ---- is_ancestor ---------------------------------------------------------
+
+def test_is_ancestor_true_on_parent_chain():
+    msgs = [_msg("u1", None), _msg("a1", "u1"), _msg("u2", "a1")]
+    assert is_ancestor(msgs, "u1", "u2")
+    assert is_ancestor(msgs, "a1", "u2")
+
+
+def test_is_ancestor_false_on_sibling_branch():
+    msgs = [
+        _msg("u1", None),
+        _msg("a1", "u1"),
+        _msg("a1_retry", "u1"),  # a1 and a1_retry are siblings
+    ]
+    assert not is_ancestor(msgs, "a1", "a1_retry")
+    assert not is_ancestor(msgs, "a1_retry", "a1")
+
+
+def test_is_ancestor_self_true():
+    msgs = [_msg("u1", None)]
+    assert is_ancestor(msgs, "u1", "u1")
+
+
+# ---- normalize_parent_pointers ------------------------------------------
+
+def test_normalize_fills_in_missing_parent():
+    # Legacy messages: no predecessor.
+    msgs = [{"id": "u1"}, {"id": "a1"}, {"id": "u2"}]
+    normalize_parent_pointers(msgs)
+    assert msgs[0]["predecessor"] is None
+    assert msgs[1]["predecessor"] == "u1"
+    assert msgs[2]["predecessor"] == "a1"
+
+
+def test_normalize_is_idempotent():
+    msgs = [
+        {"id": "u1", "predecessor": None},
+        {"id": "a1", "predecessor": "u1"},
+    ]
+    before = [dict(m) for m in msgs]
+    normalize_parent_pointers(msgs)
+    assert msgs == before
+
+
+def test_normalize_preserves_explicit_retry_links():
+    # Simulated partial migration: a1 and a1_new share parent "u1".
+    # normalize shouldn't overwrite them with the prev-in-list chain.
+    msgs = [
+        {"id": "u1", "predecessor": None},
+        {"id": "a1", "predecessor": "u1"},
+        {"id": "a1_new", "predecessor": "u1"},
+    ]
+    normalize_parent_pointers(msgs)
+    assert msgs[2]["predecessor"] == "u1"  # NOT a1
+
+
+# ---- head_or_tip --------------------------------------------------------
+
+def test_head_or_tip_prefers_explicit_head():
+    msgs = [_msg("u1", None), _msg("a1", "u1")]
+    conv = {"head_id": "u1"}
+    assert head_or_tip(conv, msgs) == "u1"
+
+
+def test_head_or_tip_falls_back_to_last_message():
+    msgs = [_msg("u1", None), _msg("a1", "u1")]
+    assert head_or_tip({}, msgs) == "a1"
+
+
+def test_head_or_tip_empty_conv_returns_none():
+    assert head_or_tip({}, []) is None
+
+
+# ---- advance_head -------------------------------------------------------
+
+def test_advance_head_missing_parent_inherits_head():
+    conv = {"head_id": "u1", "messages": [_msg("u1", None)]}
+    advance_head(conv, {"id": "a1", "role": "assistant"})
+    assert conv["messages"][-1]["predecessor"] == "u1"
+    assert conv["head_id"] == "a1"
+
+
+def test_advance_head_explicit_none_is_preserved():
+    # Regression: retry of a root user message forks at predecessor=None.
+    # advance_head must NOT rewrite that to the current HEAD — doing so
+    # collapses the fork into a linear append and breaks the DAG.
+    conv = {"head_id": "a1", "messages": [
+        _msg("u1", None),
+        _msg("a1", "u1"),
+    ]}
+    advance_head(conv, {"id": "u2", "role": "user", "predecessor": None})
+    assert conv["messages"][-1]["predecessor"] is None
+    assert conv["head_id"] == "u2"
+    # u1 and u2 are now siblings at the root.
+    assert [s["id"] for s in siblings(conv["messages"], "u2")] == ["u1", "u2"]
+
+
+def test_advance_head_explicit_parent_is_preserved():
+    conv = {"head_id": "a2", "messages": [
+        _msg("u1", None), _msg("a1", "u1"), _msg("a2", "u1"),
+    ]}
+    advance_head(conv, {"id": "u2", "role": "user", "predecessor": "u1"})
+    assert conv["messages"][-1]["predecessor"] == "u1"
+
+
+# ---- deepest_leaf -------------------------------------------------------
+
+def test_deepest_leaf_single_chain():
+    msgs = [_msg("u1", None), _msg("a1", "u1"), _msg("u2", "a1"), _msg("a2", "u2")]
+    assert deepest_leaf(msgs, "u1") == "a2"
+
+
+def test_deepest_leaf_on_leaf_is_itself():
+    msgs = [_msg("u1", None), _msg("a1", "u1")]
+    assert deepest_leaf(msgs, "a1") == "a1"
+
+
+def test_deepest_leaf_picks_latest_when_multiple_children():
+    # u1 has two assistant replies (a retry). deepest_leaf should walk
+    # down the most recent branch.
+    msgs = [
+        _msg("u1", None),
+        _msg("a_old", "u1", ts=1),
+        _msg("a_new", "u1", ts=2),
+        _msg("u_old", "a_old", ts=3),
+        _msg("u_new", "a_new", ts=4),
+    ]
+    assert deepest_leaf(msgs, "u1") == "u_new"
+
+
+def test_deepest_leaf_handles_cycles():
+    msgs = [{"id": "a", "predecessor": "b"}, {"id": "b", "predecessor": "a"}]
+    # Malformed — function must terminate rather than loop.
+    leaf = deepest_leaf(msgs, "a")
+    assert leaf in {"a", "b"}

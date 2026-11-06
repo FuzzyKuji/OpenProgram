@@ -1,0 +1,569 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Agent Resource Quotas and Task Lifecycle Governance</title>
+<style>
+  :root {
+    --bg:#15140f; --panel:#1d1c14; --panel2:#12110b; --line:#343126;
+    --text:#d1cdbb; --muted:#918c7c; --white:#f3f0e7; --blue:#6ba3ff;
+    --green:#68ba60; --orange:#e19a55; --purple:#b48aee; --red:#ec6a75;
+  }
+  * { box-sizing:border-box; }
+  html { scroll-behavior:smooth; }
+  body {
+    margin:0; padding:36px 22px 88px; background:var(--bg); color:var(--text);
+    font:16px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif;
+  }
+  main { max-width:1160px; margin:0 auto; }
+  h1 { margin:0 0 8px; color:var(--white); font-size:30px; line-height:1.28; }
+  h2 { margin:44px 0 10px; color:var(--orange); font-size:22px; scroll-margin-top:16px; }
+  h3 { margin:30px 0 8px; color:var(--white); font-size:18px; scroll-margin-top:16px; }
+  h4 { margin:18px 0 6px; color:var(--white); font-size:16px; }
+  p { margin:8px 0 14px; max-width:92ch; }
+  a { color:var(--blue); }
+  code { overflow-wrap:anywhere; background:var(--panel2); color:#edb378; border-radius:4px; padding:1px 5px; font:13px/1.5 Menlo,Consolas,monospace; }
+  pre { margin:10px 0 16px; padding:14px 16px; overflow-x:auto; background:var(--panel2); border:1px solid var(--line); border-radius:10px; color:#bbb6a4; font:13px/1.65 Menlo,Consolas,monospace; }
+  .subtitle { margin:0 0 18px; color:var(--muted); max-width:88ch; }
+  .status { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; margin:20px 0; }
+  .status > div { padding:14px 16px; background:var(--panel); border:1px solid var(--line); border-radius:10px; }
+  .status .k { display:block; color:var(--muted); font-size:12px; letter-spacing:.1em; }
+  .status b { color:var(--white); font-size:17px; }
+  nav { display:flex; flex-wrap:wrap; gap:7px; margin:22px 0 30px; }
+  nav a { padding:5px 11px; border:1px solid var(--line); border-radius:999px; color:var(--text); text-decoration:none; font-size:13px; }
+  nav a:hover { border-color:var(--orange); color:var(--white); }
+  .note { max-width:94ch; margin:14px 0; padding:10px 14px; border-left:4px solid var(--blue); background:#19202c; color:#b9c9e2; }
+  .note.warn { border-left-color:var(--orange); background:#251e16; color:#d9c2a8; }
+  .note.stop { border-left-color:var(--red); background:#29191b; color:#e1b9bd; }
+  .note.good { border-left-color:var(--green); background:#172318; color:#bdd8b9; }
+  .table-wrap { overflow-x:auto; margin:12px 0 18px; border:1px solid var(--line); border-radius:11px; background:var(--panel); }
+  table { width:100%; min-width:820px; border-collapse:collapse; font-size:14px; }
+  table.wide { min-width:1100px; }
+  .table-wrap code { overflow-wrap:normal; }
+  th { padding:10px 12px; text-align:left; color:var(--muted); font-size:12px; letter-spacing:.06em; border-bottom:1px solid var(--line); vertical-align:bottom; }
+  td { padding:10px 12px; border-bottom:1px solid #29271e; vertical-align:top; }
+  tr:last-child td { border-bottom:0; }
+  td:first-child { color:var(--white); font-weight:600; }
+  .yes { color:var(--green); } .partial { color:var(--orange); } .no { color:var(--red); }
+  .source { display:block; margin-top:4px; color:#777263; font:11px/1.55 Menlo,Consolas,monospace; word-break:break-word; }
+  .flow { display:grid; grid-template-columns:repeat(8,minmax(115px,1fr)); gap:8px; min-width:1040px; padding:14px; }
+  .flow > div { min-height:100px; padding:11px; background:var(--panel2); border:1px solid var(--line); border-top:3px solid var(--purple); border-radius:8px; }
+  .flow .n { color:var(--purple); font:12px Menlo,monospace; }
+  .flow b { display:block; color:var(--white); margin:3px 0 5px; }
+  .flow span { color:var(--muted); font-size:12px; }
+  .state { display:flex; flex-wrap:wrap; align-items:center; gap:8px; padding:14px; }
+  .state .box { padding:8px 12px; background:var(--panel2); border:1px solid var(--line); border-radius:7px; color:var(--white); }
+  .state .arrow { color:var(--muted); }
+  .grid2 { display:grid; grid-template-columns:1fr 1fr; gap:14px; margin:12px 0 18px; }
+  .card { padding:15px 17px; background:var(--panel); border:1px solid var(--line); border-radius:11px; }
+  .card h3, .card h4 { margin-top:0; }
+  .phase { margin:20px 0 28px; padding:18px; border:1px solid var(--line); border-radius:12px; background:#191812; }
+  .phase > h3 { margin-top:0; color:var(--purple); }
+  .phase dl { display:grid; grid-template-columns:112px 1fr; gap:7px 14px; margin:12px 0; }
+  .phase dt { color:var(--muted); font-weight:600; }
+  .phase dd { margin:0; }
+  ul, ol { margin:8px 0 14px; padding-left:24px; }
+  li { margin:4px 0; }
+  .tag { display:inline-block; margin:0 4px 4px 0; padding:2px 8px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:12px; }
+  footer { margin-top:44px; color:var(--muted); font-size:13px; }
+  @media (max-width:820px) {
+    body { padding:24px 14px 64px; font-size:16px; }
+    h1 { font-size:25px; }
+    .status, .grid2 { grid-template-columns:1fr; }
+    .phase { padding:14px; }
+    .phase dl { grid-template-columns:1fr; gap:2px; }
+    .phase dd { margin-bottom:10px; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <h1>Agent Resource Quotas and Task Lifecycle Governance</h1>
+  <p class="subtitle">Follows the complete user flow from configuration, creation, queueing, and execution to terminal-state diagnosis, describing current OpenProgram capabilities, resource limits in reference implementations, and the unified governance contract still required.</p>
+
+  <div class="status">
+    <div><span class="k">Document status</span><b>Design and implementation partially complete; execution paths still have gaps</b></div>
+    <div><span class="k">Product boundary</span><b>Single user, local machine, persistent worker</b></div>
+    <div><span class="k">Acceptance status</span><b>Primitives and some entry points implemented; complete acceptance pending</b></div>
+  </div>
+
+  <div class="note"><b>Implementation-status boundary.</b>Job, ResourceGovernor, admission, resource projection, and time boundaries already exist. This does not mean all providers, runtime/idle paths, Web/TUI/CLI/model entry points, and recovery paths are uniformly integrated. The evidence below is limited to source and currently visible protocols; incomplete execution paths and user surfaces are listed separately.</div>
+
+  <nav aria-label="Contents">
+    <a href="#scope">00 Scope and conclusions</a>
+    <a href="#collaboration-limits">Collaboration counts and resource limits</a>
+    <a href="#current">01 Current implementation</a>
+    <a href="#references">02 Other projects</a>
+    <a href="#journey">03 User flow</a>
+    <a href="#configure">04 Configuration</a>
+    <a href="#admission">05 Admission</a>
+    <a href="#queue">06 Queueing and execution</a>
+    <a href="#inheritance">07 Parent-child budgets</a>
+    <a href="#enforcement">08 Metering and enforcement</a>
+    <a href="#release">09 Terminal release</a>
+    <a href="#recovery">10 Recovery and concurrency</a>
+    <a href="#visibility">11 User-visible state</a>
+    <a href="#schema">12 Schema</a>
+    <a href="#migration">13 Implementation and migration</a>
+    <a href="#tests">14 Test matrix</a>
+    <a href="#gate">15 Filled-circle gate</a>
+    <a href="#implementation">16 Implementation records</a>
+  </nav>
+
+  <h2 id="scope">00 Scope and final decisions</h2>
+  <p>This design governs agent/Job eligibility, per-session queue and execution capacity, parent-child budgets, actual usage, termination, and recovery. Existing <code>agent.max_spawn_depth</code>, <code>agent.max_spawn_fanout</code>, <code>agent.max_messages</code> continue governing call topology and cycles, without reinterpretation as resource budgets.</p>
+
+  <div class="table-wrap">
+  <table>
+    <tr><th>Decision</th><th>Conclusion</th><th>Reason</th></tr>
+    <tr><td><code>max_live_global</code></td><td class="no">Do not add</td><td>The existing process-level <code>ThreadPoolExecutor</code> already uses <code>OPENPROGRAM_JOB_WORKERS</code> to control global execution capacity, default 4. Another equivalent setting would create conflicting global limits. The UI displays effective worker capacity read-only.</td></tr>
+    <tr><td><code>max_live_per_session</code></td><td class="yes">Add</td><td>Prevent one session from consuming every worker; count only tasks actually executing whose stop has not yet been confirmed.</td></tr>
+    <tr><td><code>max_queued_per_session</code></td><td class="yes">Add</td><td>Limit admitted but not running tasks to prevent an unbounded persistent queue. Queued tasks consume no live slot.</td></tr>
+    <tr><td><code>max_jobs_per_session</code></td><td class="yes">Add</td><td>Limit cumulative successful admissions over the session lifecycle; terminal tasks do not return this quota.</td></tr>
+    <tr><td>token / cost / runtime / idle</td><td class="yes">Include all, with different enforcement conditions</td><td>Tokens and time are enforceable with safe upper bounds and cancellable boundaries; costs are enforceable in advance only when prices are known. Unknown cost must not be treated as zero.</td></tr>
+    <tr><td>Factual ledger</td><td class="yes">Reuse usage ledger</td><td>Actual provider usage remains recorded only in <code>usage_events</code>. Admissions and unsettled reservations are execution state, not a second actual-usage ledger.</td></tr>
+  </table>
+  </div>
+
+  <p><span class="tag">Outside this design</span>Background-session UI, MCP server, purchases or top-ups, organization billing, and multi-machine cluster scheduling. These systems may later reuse shared DTOs, reason codes, budget scopes, and reservation protocols; their product interactions are not assumed here.</p>
+
+
+  <h3 id="collaboration-limits">Collaboration counts and resource limits measure different operations</h3>
+  <p>The <a href="../collaboration/agent-collaboration.md">Agent collaboration design §5</a> specifies collaboration operations, message counts, and spawn counts; this page specifies durable execution admission, capacity, and resource budgets. <code>max_jobs_per_session</code> is not another name for spawn depth or per-turn fan-out. A current Job's <code>id</code> is also its canonical <code>execution_id</code>; <code>job_output(job_id=...)</code> retains its parameter name and accepts that same identity.</p>
+  <div class="table-wrap"><table>
+    <tr><th>Limit</th><th>Scope and counted operation</th><th>Behavior at the limit</th></tr>
+    <tr><td><code>agent.max_spawn_depth</code></td><td>Generation count in the execution context; only <code>agent(...)</code> creating a new branch increments the child's generation. Dispatch onto an existing branch does not.</td><td>Refuse this new branch; existing branches may still receive work within the other limits.</td></tr>
+    <tr><td><code>agent.max_messages</code></td><td>A path-local message count: spawn, <code>agent(to=...)</code>, and <code>send_message</code> set the target count to sender plus one. Automatic follow-up reuses the completed Job's count without another increment; parallel calls in the same sender turn do not share a cumulative counter.</td><td>Refuse new collaboration deliveries; do not cancel existing Jobs or stop other tools in the current turn.</td></tr>
+    <tr><td><code>agent.max_spawn_fanout</code></td><td>New branches with <code>creates_agent=true</code>, counted by caller <code>(session_id, turn_id)</code>; deliveries onto existing branches do not count.</td><td>Refuse more branches in that turn; child completion does not return this per-turn count.</td></tr>
+    <tr><td><code>max_jobs_per_session</code></td><td>Cumulative successful admissions for the execution target session (Job <code>parent_session_id</code>), including new Jobs on new or existing branches. Cross-session caller provenance is recorded separately.</td><td>Refuse new admission with <code>quota.jobs_exhausted</code>, <code>retryable=false</code>; admitted Job termination does not return the cumulative count.</td></tr>
+    <tr><td><code>max_queued_per_session</code></td><td>Target-session admissions in <code>preparing</code> or <code>queued</code>.</td><td>Refuse new admission with <code>quota.queue_full</code>, <code>retryable=true</code>; rejection creates no new Job.</td></tr>
+    <tr><td><code>max_live_per_session</code> / <code>scheduler_capacity</code></td><td>Session / global claims in <code>live</code> or <code>stopping</code>; work not yet confirmed stopped still occupies capacity.</td><td>Keep admitted Jobs queued until a live claim is available; capacity waiting is not execution failure.</td></tr>
+  </table></div>
+  <p>For the three collaboration limits, <code>0</code> disables that limit check; message and generation values may still propagate through execution contexts. Resource limits use a different schema: <code>null</code> means unset/inherit, every non-null value must be positive, and <code>0</code> is invalid. Queued/cumulative/token/cost/runtime/idle limits remaining unset after inheritance are disabled; the effective live default is still scheduler capacity.</p>
+  <p><code>agent(to=...)</code> creates no branch but creates a new execution, so it checks the message limit and requests target-session admission. <code>send_message</code> also creates no branch; its current idle-target path calls <code>run_agent_turn_async</code> to create a <code>creates_agent=false</code> Job, consuming target-session cumulative admission. Ordinary busy-target inbox receipt precedes creation of that execution: queued delivery does not mean Job admission succeeded, and a later refusal must be reported to the sender. Messaging is not exempt from resource limits.</p>
+  <div class="note warn"><b>Target contract for observation and cancellation.</b>The message limit constrains new collaboration deliveries only; result retrieval, resource observation, and cancellation of existing executions remain available after ownership and permission checks. Current <code>job_output</code> still has <code>can_use=delegation_budget_left</code> and is hidden when the message budget is exhausted; this interface behavior remains to be corrected. The registered agent tools are <code>agent</code>, <code>list_jobs</code>, and <code>job_output</code>; there is no standalone <code>job_stop</code> tool. Cancellation reuses canonical execution control and the internal <code>JobRunner.cancel_execution</code> method; an internal method name is not a callable model tool.</div>
+
+  <h2 id="current">01 Current implementation: admission, resource accounting, and execution control integrated, with explicit gaps</h2>
+  <p>The current worktree integrates Job, ResourceGovernor, durable admission, owner lease/reconcile, execution-time boundaries, and resource views into major execution paths. Source confirms these capabilities. Product tests were not rerun in this round; historical results remain in Git. Below, source-confirmed implementations, source-confirmed gaps, and unverified scope are distinguished.</p>
+
+  <div class="table-wrap">
+  <table class="wide">
+    <tr><th>Existing mechanism</th><th>Confirmed behavior</th><th>Governance gap</th><th>Evidence</th></tr>
+    <tr><td>Global execution pool and admission</td><td><code>OPENPROGRAM_JOB_WORKERS</code> remains the sole global capacity; runner and synchronous agent entry points call <code>ResourceGovernor.admit_job()</code>, and SQLite protects counts with <code>BEGIN IMMEDIATE</code>.</td><td>JobRunner starts a durable dispatcher, reconciler, and budget loop; the whole-product gate was not rerun in this round.</td><td><span class="source">openprogram/runtime/jobs/runner/ · admit_job_entity / spawn_job / _run_one<br>openprogram/runtime/jobs/resource_governance/ · admit_job / try_start</span></td></tr>
+    <tr><td>Persistent task and resource state</td><td>Job already has <code>budget_scope_id</code>, <code>effective_limits</code>, <code>reason_code</code>; the usage DB has admissions, budget scopes, and reservations.</td><td>Job, canonical execution store, ResourceSaga, and startup recovery source exist; the crash/concurrency matrix was not reverified in this round.</td><td><span class="source">openprogram/runtime/jobs/types.py<br>openprogram/models/usage/ledger.py<br>openprogram/runtime/jobs/resource_governance/</span></td></tr>
+    <tr><td>Session limits</td><td><code>max_live_per_session</code>, <code>max_queued_per_session</code>, <code>max_jobs_per_session</code> are in the config schema and checked atomically by the governor.</td><td>Current source includes JobResourceView and Web/CLI/TUI/model surfaces; entry-point consistency and fairness regressions were not rerun.</td><td><span class="source">openprogram/state/settings.py<br>openprogram/runtime/jobs/resource_governance/ · resolve_resource_limits / _capacity</span></td></tr>
+    <tr><td>Cancellation and recovery</td><td>Cancellation continues cascading through parent-child relationships; running tasks use cancel/kill/watchdog, and the governor has lease, stopping, and release primitives.</td><td>Current source includes RuntimeControlService, terminal recovery, lease reconciliation, and stopping/release paths; cross-process concurrency evidence was not reverified.</td><td><span class="source">openprogram/runtime/jobs/runner/ · cancel_execution / _run_one<br>openprogram/runtime/jobs/resource_governance/ · renew_lease / request_stop / release_task</span></td></tr>
+    <tr><td>token / cost</td><td>BudgetedRequest connects the shared provider stream entry points to reserve_provider_request before credentials/network access; output caps are clamped and terminal usage settles the reservation. The usage ledger retains unknown-cost provenance.</td><td>The production path uses reserve_provider_request rather than the standalone reserve_tokens/reserve_cost methods. Accounting checks and unknown-price refusal under a cost ceiling exist in source; provider coverage and failure-injection gates were not rerun in this review.</td><td><span class="source">openprogram/models/providers/streaming/stream.py · stream_simple / stream<br>openprogram/models/providers/streaming/budget.py · BudgetedRequest<br>openprogram/runtime/jobs/resource_governance/ · reserve_provider_request</span></td></tr>
+    <tr><td>runtime / idle</td><td>Configuration and budget scopes can store <code>max_runtime_seconds</code>, <code>idle_timeout_seconds</code>; existing provider/tool timeouts remain independent.</td><td>The current runner includes a budget loop, time limits, bounded_operation_timeout, and a non-preemptible guard; per-operation regressions were not reverified.</td><td><span class="source">openprogram/state/settings.py<br>openprogram/models/providers/utils/deadline.py<br>openprogram/runtime/jobs/runner/</span></td></tr>
+    <tr><td>User state</td><td>Web and runtime control provide execution observation/cancellation and state broadcasts; model tools expose list_jobs/job_output; <code>JobResourceView</code> can generate the basic structure.</td><td>Current source includes JobResourceView, job_status resource projection, and Web/CLI/TUI/model read surfaces; cross-interface consistency tests were not rerun.</td><td><span class="source">openprogram/runtime/jobs/resource_governance/ · JobResourceView / build_task_resource_view<br>openprogram/interfaces/server/ws_actions/job.py<br>openprogram/programs/tools/agents/agent/list_jobs/</span></td></tr>
+  </table>
+  </div>
+
+  <div class="note warn"><b>Creation-entry audit.</b>The initial batch connected runner and synchronous agents to the governor, but the complete gate still requires matching admission evidence for WebSocket, busy-target inbox, internal retries, and later entry points, verifying that rejected Job creation leaves no new Job, branch, Job-bound inbox entry, or execution-accepted broadcast. Ordinary message receipts follow the separate rule in §05.</div>
+
+  <h2 id="references">02 Other projects: compare counting units, rejection timing, persistence, cancellation, and visibility</h2>
+  <p>Reference values explain counting units and execution models; they do not determine OpenProgram defaults. Full collaboration evidence is in <a href="../collaboration/agent-collab-comparison.html">Agent collaboration implementation comparison</a>, with existing internal designs in <a href="../collaboration/agent-collaboration.md">Agent collaboration design</a>and<a href="../execution/async-job-lifecycle.md">Async Job lifecycle</a>.</p>
+
+  <div class="table-wrap">
+  <table class="wide">
+    <tr><th>Project</th><th>Actual counting units and limits</th><th>Rejection/blocking point</th><th>Persistence and cancellation</th><th>User visibility</th><th>Relevance to this design</th></tr>
+    <tr><td>Claude Code</td><td>Binary snapshot: spawn depth 3, concurrency 20, inbox 50; matrix evidence separately records per-session cumulative spawn counts.</td><td>Depth/concurrency checks occur during creation; fork paths differ on retaining tools but rejecting at call time.</td><td>Traceable agentId; cascading cancellation confirmed. The binary and leaked source tree are different implementations.</td><td>list/output/stop and agent state.</td><td>Live and cumulative counts must be separate, and evidence versions explicit; do not adopt its values.</td></tr>
+    <tr><td>Codex CLI</td><td>Global concurrency 6; V2 per-session 4; V1 depth 1; V2 calculates depth without enforcing it.</td><td>The execution controller checks concurrency before starting.</td><td>ThreadId; list/wait/interrupt; complete V2 interrupt cascading is unconfirmed.</td><td>The model can query and interrupt.</td><td>Supports separating per-session live limits from global scheduler capacity; depth and concurrency cannot substitute for each other.</td></tr>
+    <tr><td>OpenClaw</td><td>Default depth 1, 5 live children per parent, concurrency pools 8/4, plus message-cycle limits.</td><td>Spawn rechecks depth, children, and concurrency.</td><td>runId/session key; host-maintained run; child cancellation cascading confirmed.</td><td>list and host state.</td><td>Adopt submission-time rechecks and cascading, not overlapping children/global settings.</td></tr>
+    <tr><td>OpenCode</td><td>Permission shape implies depth 1; no numeric concurrency limit confirmed.</td><td>Tool permissions constrain child-session creation/calls.</td><td>Child session id and background metadata; host cascading cancellation.</td><td>Background-task state is visible, but model queries are limited.</td><td>Permission constraints are not resource quotas; state should be exposed independently.</td></tr>
+    <tr><td>Hermes</td><td>Default depth 1 (configurable to 3), child concurrency 3, 50 iterations per child, caller timeout 600 seconds, and heartbeat.</td><td>Limited at thread-pool submission and caller wait.</td><td>Synchronous wait; no stable model-facing job id; host can cascade cancellation.</td><td>Visible to dashboard/host; limited model control surface.</td><td>Adopt runtime/idle signals; caller wait timeout is not proof of execution termination.</td></tr>
+    <tr><td>CodeBuddy</td><td>Official local-package docs specify at most 16 concurrent workflow agents and 1000 agents per run.</td><td>Workflow orchestrator enforces phase/run limits.</td><td>Resumable in the same session; agent-team docs also state teams are not restored by <code>/resume</code>.</td><td>Workflow UI shows phase agent counts, tokens, elapsed time, and abort.</td><td>Separate concurrency, cumulative counts, and visible usage; do not adopt 16/1000 or extend resume claims to teams.</td></tr>
+    <tr><td>pi-mono</td><td>Example extension: batch 8, concurrency 4, 50KB output per task.</td><td>The extension limits batch/concurrency before spawning subprocesses.</td><td>No durable job id/query; single-level process cancellation may leave deeper descendants.</td><td>Primarily call results.</td><td>Extension-local semaphores cannot cover persistent tasks and cascading recovery.</td></tr>
+  </table>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h3>Adopt</h3><ul><li>Separate global scheduler capacity and per-session live limits.</li><li>Count live, queued, and cumulative tasks separately.</li><li>Stable job ids, cascading cancellation, and user-queryable state.</li><li>Show tokens, elapsed time, and reason together in task views.</li></ul></div>
+    <div class="card"><h3>Adapt or reject</h3><ul><li>Reject direct adoption of competitor values.</li><li>Reject depth, fan-out, or tool permissions as substitutes for resource admission.</li><li>Reject process-local semaphores alone; admission must be durable and atomic across processes.</li><li>Do not describe caller timeout or a terminal marker as execution termination.</li></ul></div>
+  </div>
+
+  <h2 id="journey">03 Planned user flow: establish one governance boundary</h2>
+  <div class="table-wrap" aria-label="Eight-stage flow from configuration to diagnosis">
+    <div class="flow">
+      <div><span class="n">01</span><b>Inspect and configure</b><span>Global defaults, session overrides, effective values</span></div>
+      <div><span class="n">02</span><b>Request creation</b><span>Unified admission, atomic reservation</span></div>
+      <div><span class="n">03</span><b>Queue and execute</b><span>Separate queued and live</span></div>
+      <div><span class="n">04</span><b>Parent-child budgets</b><span>Tighten only, shared remaining pool</span></div>
+      <div><span class="n">05</span><b>Meter and stop</b><span>token, cost, runtime, idle</span></div>
+      <div><span class="n">06</span><b>Terminal release</b><span>Return slots, retain cumulative counts</span></div>
+      <div><span class="n">07</span><b>Restart recovery</b><span>Intent, lease, cross-process concurrency</span></div>
+      <div><span class="n">08</span><b>User diagnosis</b><span>One DTO for Web/TUI/CLI</span></div>
+    </div>
+  </div>
+
+  <section class="phase" id="configure">
+    <h3>04 Inspect and configure global defaults and session overrides</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>The config schema includes collaboration limits and agent.resource_limits; the resolver handles global/session/parent/job sources, and environment configuration controls worker capacity.</dd>
+      <dt>User impact</dt><dd>Configuration presence does not establish verified enforcement at every entry point or UI. Show configured values, sources, and effective values without presenting incomplete enforcement as complete.</dd>
+      <dt>Gap</dt><dd>Multiple equivalent global, parent, and child settings make precedence difficult to explain; using 0 for both unlimited and disabled perpetuates ambiguity.</dd>
+      <dt>Target behavior</dt><dd>One minimal <code>agent.resource_limits</code> object holds global defaults; session metadata overrides matching fields. APIs always return source, configured, and effective values. Tasks may only tighten effective session limits.</dd>
+    </dl>
+
+    <pre>agent.resource_limits:
+  max_live_per_session: integer | null
+  max_queued_per_session: integer | null
+  max_jobs_per_session: integer | null
+  max_total_tokens: integer | null
+  max_cost_usd: decimal-string | null
+  max_runtime_seconds: integer | null
+  idle_timeout_seconds: integer | null</pre>
+
+    <p>All non-null values must exceed 0; <code>null</code> means unset/inherit. For compatibility, queued, cumulative, and the four budget types are disabled by default.<code>max_live_per_session</code> defaults to current scheduler capacity when unset; otherwise its effective value is the lesser of configuration and scheduler capacity.<code>OPENPROGRAM_JOB_WORKERS</code> remains the sole source of global execution capacity, exposed through the read-only <code>scheduler_capacity</code> field.</p>
+    <p>Only the owner may change global defaults and session overrides. Agent/task requests may supply only stricter token/cost/runtime/idle budgets, without changing live, queued, cumulative limits or increasing any owner limit. Extend existing config get/set with these fields and reuse session metadata; do not create a second quota configuration service.</p>
+    <p><code>max_total_tokens</code> and <code>max_cost_usd</code> count governed agent/Job invocations carrying <code>job_id</code> within the session; ordinary foreground main conversations are excluded.<code>max_runtime_seconds</code> and <code>idle_timeout_seconds</code> is a time ceiling for each Job and its ancestor scopes. Changes to live/queued/cumulative limits do not terminate existing live/queued work, but immediately constrain new admission or <code>queued → live</code>; token/cost changes apply the new session ceiling at the next reservation. Runtime/idle defaults affect only subsequently admitted Jobs, avoiding retroactive deadlines.</p>
+  </section>
+
+  <section class="phase" id="admission">
+    <h3>05 Admission and atomic reservation when an agent creates a task</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>Synchronous/asynchronous agent tools and busy-target dispatch call runner/governor admission. The governor checks depth, fan-out, queue, and cumulative counts transactionally; the model tool retains a process-local fan-out precheck. Ordinary busy-target messages enter the inbox before Job creation on delivery.</dd>
+      <dt>User impact</dt><dd>Identical requests can differ by entry point; concurrent frontends/processes may pass non-atomic checks simultaneously; failed creation may leave Job, branch, inbox, or count residue.</dd>
+      <dt>Gap</dt><dd>Unified admission, cross-process transactions, and idempotent identity exist in source. Rejection without Job-creation side effects and notification of admission refusal after ordinary message queueing still require entry-point verification.</dd>
+      <dt>Target behavior</dt><dd>Every execution-task creation path must call <code>ResourceGovernor.admit_job</code>. Perform pure validation first, atomically check depth/fan-out and resource limits and reserve in SQLite, then create the Job, any new branch, and Job-bound inbox entry and publish execution-accepted events only on success. Rejection creates no Job. An independently authorized ordinary message receipt may precede admission.</dd>
+    </dl>
+
+    <div class="note"><b>Receipt versus execution admission.</b>An ordinary busy-target <code>send_message</code> may persist a message receipt before a Job exists, subject to message authorization and inbox limits. This is distinct from a Job-bound inbox entry created by <code>agent(to=...)</code>. If admission later fails, mark that receipt failed and notify its sender with the admission reason; do not claim an execution was accepted. The transaction below governs Job creation, not the earlier receipt.</div>
+
+    <h4>Unified coverage</h4>
+    <ul>
+      <li>Synchronous and asynchronous <code>agent()</code>; <code>agent(to=...)</code> busy-target precreation; <code>run_agent_turn_async</code>.</li>
+      <li>WebSocket/API spawn; model tools; any future direct <code>JobRunner.spawn_job</code> entry point.</li>
+      <li>Retries with the same <code>job_id</code> and request fingerprint are idempotent reads and cannot increase fan-out, cumulative counts, or queue reservation again; differing content returns <code>quota.admission_conflict</code>.</li>
+      <li><code>send_message</code> creates no Agent branch, but a new Job it triggers requires admission and counts against the execution target session’s cumulative jobs and resource budgets. Ordinary inbox receipt has not yet created a Job and must not claim execution admission succeeded.</li>
+    </ul>
+
+    <h4>Durable intent across SQLite and jobs.json</h4>
+    <ol>
+      <li>Generate <code>job_id</code>, <code>admission_id</code> and request fingerprint; validate arguments, target, and permissions without mutation.</li>
+      <li>In the usage DB’s first <code>BEGIN IMMEDIATE</code> transaction, check depth, per-turn fan-out, and session/parent remaining capacity, insert a <code>preparing</code> admission, reserve one queue slot plus provisional fan-out and cumulative increments, then commit.<code>preparing</code> must be durable before jobs.json writes; every concurrent admission check includes its provisional occupancy to prevent cross-process overallocation.</li>
+      <li>Use <code>openprogram.host._platform.locking.flock</code> to protect per-session task-file read-modify-write and persist the Job. Do not broadcast or create other irreversible side effects yet.</li>
+      <li>In a second <code>BEGIN IMMEDIATE</code> transaction, change admission from <code>preparing</code> to <code>queued</code>, finalize provisional fan-out/cumulative counts, and commit; only then create the branch and Job-bound inbox entry and broadcast execution-accepted status. An existing ordinary message receipt is linked to the admitted Job at delivery.</li>
+      <li>Any failure triggers idempotent compensation. On restart, a durable <code>preparing</code> with a matching Job is finalized in the second transaction; without one, release queue and provisional counts transactionally. SQLite transactions must not span jobs.json file I/O.</li>
+    </ol>
+
+    <div class="note">Rejections use the stable structure: <code>{accepted:false, job_id:null, reason_code, retryable, effective_limits, usage, capacity}</code>. A full queue is usually retryable; exhausted cumulative or parent budgets are not, unless the owner raises limits or creates a new session.</div>
+  </section>
+
+  <section class="phase" id="queue">
+    <h3>06 Queueing and live concurrency</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>The runner uses durable admissions and a dispatcher. The governor checks session/global live capacity before claiming queued work; queued work has no live claim.</dd>
+      <dt>User impact</dt><dd>Queue/cumulative configuration and live claims exist, but complete cross-entry enforcement, fairness and queue diagnostics still require verified evidence.</dd>
+      <dt>Gap</dt><dd>A durable dispatcher and atomic resource claims exist in source; fairness, worker-loss recovery and cross-process admission/release require the full acceptance gate.</dd>
+      <dt>Target behavior</dt><dd>Admission first enters a durable queue. The dispatcher submits only when global worker and session live capacity are available, releasing queue and acquiring live in one transaction. Queued work consumes no live slot.</dd>
+    </dl>
+
+    <div class="table-wrap">
+      <div class="state" aria-label="Resource state machine">
+        <span class="box">preparing</span><span class="arrow">→</span>
+        <span class="box">queued</span><span class="arrow">→ atomic exchange</span>
+        <span class="box">live</span><span class="arrow">→ cancel/timeout</span>
+        <span class="box">stopping</span><span class="arrow">→ confirmed exit</span>
+        <span class="box">released</span>
+      </div>
+    </div>
+
+    <p>Compatible Job states remain <code>pending/queued/running/completed/cancelled/errored</code>; resource state persists separately.<code>stopping</code> is especially important: a Job may display cancelled, but its live lease cannot return until worker/thread/runtime termination is confirmed. This prevents overallocation when the 30-second watchdog only changes status.</p>
+    <p>The dispatcher selects the earliest globally ordered <code>admitted_seq</code> task whose session currently has live capacity, skipping temporarily ineligible sessions so their head task cannot block others. The global worker pool still determines total execution capacity.</p>
+    <p>Only the single execution process holding the existing worker lock may call <code>queued → live</code> and submit to the executor. Web/TUI/CLI/API processes only admit and durably enqueue, preserving the single-worker topology and preventing separate global thread pools per process. Multiple execution workers would require a separate scheduling design.</p>
+  </section>
+
+  <section class="phase" id="inheritance">
+    <h3>07 Parent-child budget allocation and tightening-only inheritance</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>Jobs carry budget_scope_id and effective_limits. The governor creates parent-linked scopes, resolves ancestor limits, and checks ancestor balances transactionally during provider reservations; §01 records provider integration status.</dd>
+      <dt>User impact</dt><dd>The scope model supports shared parent ceilings rather than independent child allowances. Users need the effective ceiling and shared_remaining to distinguish a local limit from currently available shared capacity.</dd>
+      <dt>Gap</dt><dd>The primitives and production reservation path exist; explicit-child allocation, sibling contention, and all entry-point propagation still require the full acceptance matrix.</dd>
+      <dt>Target behavior</dt><dd>A task request may carry one <code>limits</code> object containing only token/cost/runtime/idle budgets. Explicit child limits cannot exceed effective session limits, parent-task limits, or current parent-scope remaining capacity.</dd>
+    </dl>
+
+    <h4>Deterministic rule without explicit child allocation</h4>
+    <p>Do not divide the parent budget equally in advance or predict future work from fan-out. Children join the shared parent budget scope. Every provider/tool reservation atomically checks the task’s own ceiling, every ancestor scope, and session scope; the first successful durable reservation acquires capacity. This avoids idle static shares and does not misrepresent current remaining capacity as a guaranteed child allotment.</p>
+    <p>The UI labels <code>shared_remaining</code> as a shared live balance, not an allotment. Explicit child budgets create stricter local ceilings without permanently deducting from the parent in advance; actual reservations consume parent balance.</p>
+  </section>
+
+  <section class="phase" id="enforcement">
+    <h3>08 Metering and enforced stopping for tokens, cost, wall-clock, and idle</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>Governed provider calls reserve through BudgetedRequest before credentials or network access, clamp output, and settle terminal usage. The runner has a budget loop and bounded-operation checks; ungoverned legacy paths retain best-effort usage recording.</dd>
+      <dt>User impact</dt><dd>Protection depends on Job attribution and an audited provider/operation boundary. Unknown cost must remain distinguishable from zero, and a timeout result alone does not prove a synchronous thread stopped.</dd>
+      <dt>Gap</dt><dd>Reservation, attribution, unknown-cost handling, activity tracking, and operation boundaries exist in source. Adapter coverage, late settlement, and operation-specific stop confirmation require runtime acceptance; those gates were not rerun here.</dd>
+      <dt>Target behavior</dt><dd>The existing usage ledger alone records actual usage; add reservation state in the same DB. Atomically reserve before model/tool calls, settle using final provider usage afterward. Active timers and boundary checks jointly trigger existing cascading cancellation.</dd>
+    </dl>
+
+    <div class="table-wrap">
+    <table class="wide">
+      <tr><th>Budget</th><th>Unit and factual source</th><th>Pre-call enforcement</th><th>During/after the call</th><th>When reliable enforcement is impossible</th></tr>
+      <tr><td>token</td><td>Provider-authoritative input + output; cache reads/writes are separate diagnostics, not added twice.</td><td>Reserve <code>input_upper_bound + max_output_tokens</code>, and reduce the provider output cap to remaining capacity.</td><td>Settle with final usage events and release the difference; concurrent requests include open reservations.</td><td>Under a strict token budget, reject a new model request if no tokenizer or safe upper bound is available: <code>quota.accounting_unavailable</code>.</td></tr>
+      <tr><td>cost</td><td>Known provider/model/rate and actual tokens; retain <code>cost_source</code>.</td><td>Reserve a micro-USD upper bound only when all required prices are known.</td><td>Settle using actual tokens/rates; aggregation also returns <code>cost_known</code> and <code>unknown_cost_events</code>.</td><td>With a cost budget, unknown current-call pricing or existing unknown-cost events in the scope reject new LLM calls: <code>quota.cost_unavailable</code>. Without a cost budget, execution is allowed but cost displays as unknown, never $0; do not rewrite historical actual costs using later catalog prices.</td></tr>
+      <tr><td>runtime</td><td>Monotonic wall-clock from entering resource state <code>live</code>; queue wait is excluded.</td><td>Each provider/tool timeout is the minimum of the operation limit and task time remaining.</td><td>Timer expiry sets cancellation and cascades through existing parent-child relationships.</td><td>Tools unable to exit reliably within remaining time cannot enter strict-budget tasks; return <code>error.nonpreemptible_operation</code>.</td></tr>
+      <tr><td>idle</td><td>Monotonic time since the last meaningful activity.</td><td>Record the call-start boundary; while waiting for children, link their activity.</td><td>Provider data, tool progress, and child progress/terminal events update activity; transport keepalives do not.</td><td>A tool with neither progress nor bounded timeout is non-preemptible.</td></tr>
+    </table>
+    </div>
+
+    <h4>Explicit bound for non-preemptible operations</h4>
+    <p>Enforce exhaustion at model-request/tool-call boundaries, with active timers triggering cancellation promptly. Do not describe an executing operation as instantly terminated. Its maximum non-preemptible interval must equal the minimum of declared operation timeout, remaining task runtime, and system cancel grace. Synchronous in-process operations that cannot meet this must move to terminable subprocesses or be rejected for strict-budget tasks; <code>asyncio.wait_for</code> returning does not mean the executor thread has ended.</p>
+
+    <h4>Accounting delay and crashes</h4>
+    <ul>
+      <li>Reservation states are <code>reserved → started → settled</code>, or, before provider I/O begins, <code>reserved → released</code>. Release not-yet-started reservations if credential resolution, request configuration, or provider-generator creation fails; after successful <code>start</code>, cancellation, transport errors, or missing terminal usage retain conservative exposure for late settlement of the same reservation. Absence of a first stream event does not prove the provider never received the request.</li>
+      <li>If a request started but final usage is unavailable, retain conservative unsettled exposure; do not fabricate actual tokens/cost or release immediately and allow repeated overspending.</li>
+      <li>Budgeted tasks fail closed if the accounting DB is inaccessible before calling. Post-call settlement failure marks the task errored, stops further calls, and retains the reservation for reconciliation.</li>
+      <li>Existing best-effort recording may remain for non-budgeted legacy paths; governed calls require acknowledged reserve/settle protocols.</li>
+    </ul>
+  </section>
+
+  <section class="phase" id="release">
+    <h3>09 Slot release and cumulative semantics after cancellation, failure, timeout, and completion</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>Job terminal state and resource admission/lease state are separate. The governor retains cumulative admissions and supports stopping and confirmed release; runner completion and recovery use these primitives.</dd>
+      <dt>User impact</dt><dd>A cancelled Job can still occupy live capacity while its execution is stopping. The UI must distinguish requested cancellation from confirmed exit and quota release.</dd>
+      <dt>Gap</dt><dd>The state separation and cumulative-retention rules are defined in code. Watchdog, late completion, and crash interleavings still need full-matrix verification; absence of this review evidence is not absence of the primitives.</dd>
+      <dt>Target behavior</dt><dd>Release queue/live only when execution termination is confirmed or lease-recovery rules hold. Increase cumulative count once on successful admission and never return it for any terminal state.</dd>
+    </dl>
+
+    <div class="table-wrap">
+    <table>
+      <tr><th>Event</th><th>Queue slot</th><th>Live slot</th><th>Cumulative tasks</th><th>Terminal Job state</th></tr>
+      <tr><td>Admission rejected</td><td>Not occupied</td><td>Not occupied</td><td>No increment</td><td>No Job created</td></tr>
+      <tr><td>Preparing rollback</td><td>Release</td><td>Not occupied</td><td>No increment</td><td>No Job or restored consistency</td></tr>
+      <tr><td>User cancels after queued</td><td>Release immediately</td><td>Not occupied</td><td>Retain</td><td>cancelled</td></tr>
+      <tr><td>Cancellation/budget exhaustion after running</td><td>Already released</td><td>Enter stopping; release after confirmed exit</td><td>Retain</td><td>cancelled</td></tr>
+      <tr><td>Execution error/completion</td><td>Already released</td><td>Release after worker finally confirms</td><td>Retain</td><td>errored/completed</td></tr>
+      <tr><td>Retry identical job_id</td><td>No duplicate occupancy</td><td>No duplicate occupancy</td><td>No duplicate increment</td><td>Return original task/conflict reason</td></tr>
+    </table>
+    </div>
+
+    <p>Cumulative counts last for the session lifecycle. There is no implicit reset, and session archiving does not return quota. Users can create a new session or have the owner explicitly raise its override. Lowering limits cannot delete existing tasks; usage above the new limit only rejects later admissions.</p>
+  </section>
+
+  <section class="phase" id="recovery">
+    <h3>10 Restart recovery, cross-process concurrency, and diagnosis</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>Job storage uses cross-process flock. Runner startup and its reconcile loop use durable admissions, owner leases, and ResourceSaga recovery; legacy unlinked Jobs follow the existing orphan policy. The worker lock keeps execution on one worker.</dd>
+      <dt>User impact</dt><dd>Admission and recovery span SQLite, Job files, and runtime ownership. Diagnosis must distinguish restored queued work, worker loss, and released resources while retaining the original execution identity.</dd>
+      <dt>Gap</dt><dd>Owner/lease, preparing reconciliation, file locking, and structured reason primitives exist. Process-death timing, simultaneous frontend writes, and repeated recovery still require the acceptance matrix; this review did not rerun it.</dd>
+      <dt>Target behavior</dt><dd>Single-worker execution remains supported; multiple UI/API processes compete through SQLite admission transactions. Each live admission carries owner/lease; reconciliation uses intent, Job, and lease facts to prevent permanent quota leaks.</dd>
+    </dl>
+
+    <h4>Recovery rules</h4>
+    <ul>
+      <li><code>preparing + Job exists</code>: validate admission/job ids, then finalize as queued;<code>preparing + no Job</code>: roll back queue and provisional cumulative delta.</li>
+      <li><code>queued</code> re-enters the durable dispatcher after restart without consuming live capacity.</li>
+      <li><code>live/stopping</code> with an absent owner and expired lease: first mark the Job errored under the existing orphan policy with reason <code>error.worker_lost</code>, then release live; another instance cannot claim an unexpired lease. Initially renew every 10 seconds with a 30-second TTL, persisted using UTC wall-clock. If the original owner still holds the worker lock, an apparently expired wall-clock lease must not be released. These are not user quota settings.</li>
+      <li>A lease proves worker ownership, not rollback of external side effects. Preserve worker-lost diagnosis in Job output.</li>
+      <li>All jobs.json read-modify-writes use cross-process <code>flock</code>; SQLite uses WAL, <code>BEGIN IMMEDIATE</code>, and unique keys for idempotent admission/reservation.</li>
+    </ul>
+
+    <p>This design adds no cluster consensus or remote scheduler. If multiple workers are later allowed, the same <code>job_admissions</code> lease/owner contract may extend, but leader election, clock assumptions, and external-runtime fencing require a separate design.</p>
+  </section>
+
+  <section class="phase" id="visibility">
+    <h3>11 User-visible state and reason codes in Web, TUI, and CLI</h3>
+    <dl>
+      <dt>Current behavior</dt><dd>JobResourceView and stable resource reasons exist, with Web subscriptions, terminal/CLI adapters, and list_jobs/job_output projections. Cancellation uses canonical execution control.</dd>
+      <dt>User impact</dt><dd>Users need the same queue, cumulative, cost-known, and stopping explanations across surfaces. Data projection alone does not establish that every field is correctly displayed in every state.</dd>
+      <dt>Gap</dt><dd>The shared DTO exists; cross-interface field/reason parity, legacy records, unknown-cost display, and recovery states still require runtime and visual acceptance. No standalone Tasks panel is claimed.</dd>
+      <dt>Target behavior</dt><dd>Web, TUI, CLI, and model tools consume the same <code>JobResourceView</code>; wording may vary by interface, but fields and reason codes must match.</dd>
+    </dl>
+
+    <div class="table-wrap">
+    <table class="wide">
+      <tr><th>View</th><th>Required display</th><th>Interaction</th><th>Compatibility</th></tr>
+      <tr><td>Web</td><td>Job status + resource state, queue position, session live/queued/cumulative, four remaining budgets, known/unknown cost, and reason.</td><td>Reuse existing task/branch cards and cancel; do not add background-session UI.</td><td>Existing <code>job_status</code> events gain optional resource fields.</td></tr>
+      <tr><td>TUI</td><td>Compact session capacity, selected-task remaining budgets, and stop reason.</td><td>Reuse task list/details/stop; no new full-screen product surface required.</td><td>Missing fields render as legacy tasks, not guessed zeros.</td></tr>
+      <tr><td>CLI</td><td>Human-readable tables and stable JSON: effective limits, usage, reservations, reason, retryable.</td><td>Reuse task-query and cancellation commands; JSON supports automated diagnosis.</td><td>New fields remain backward-compatible; the Job state enum stays unchanged.</td></tr>
+      <tr><td>Model tools</td><td><code>list_jobs</code>, <code>job_output</code>, and canonical execution control return the same reason and simplified remaining budgets; <code>JobRunner.cancel_execution</code> is an internal method.</td><td>Admission rejection is a structured tool result, without fabricating a Job record.</td><td>Keep original text results and add machine-readable fields.</td></tr>
+    </table>
+    </div>
+
+    <h4>Stable reason code</h4>
+    <div class="table-wrap">
+    <table>
+      <tr><th>Phase</th><th>reason_code</th><th>Meaning</th></tr>
+      <tr><td>admission</td><td><code>quota.queue_full</code></td><td>The session’s durable queue is full; retry after capacity is released.</td></tr>
+      <tr><td>admission</td><td><code>quota.jobs_exhausted</code></td><td>Session cumulative task count reached its limit.</td></tr>
+      <tr><td>admission</td><td><code>quota.parent_budget_exhausted</code></td><td>Parent-scope remaining capacity cannot accept the child limit.</td></tr>
+      <tr><td>admission</td><td><code>quota.token_exhausted</code> / <code>quota.cost_exhausted</code></td><td>Insufficient reservation capacity before the request.</td></tr>
+      <tr><td>admission</td><td><code>quota.cost_unavailable</code></td><td>A cost budget is set, but provider/model pricing is unknown.</td></tr>
+      <tr><td>admission</td><td><code>quota.invalid_limits</code></td><td>Invalid value or child limit looser than parent/session limit.</td></tr>
+      <tr><td>admission</td><td><code>quota.accounting_unavailable</code> / <code>quota.admission_conflict</code></td><td>Accounting is unsafe, or an idempotency key conflicts with existing request content.</td></tr>
+      <tr><td>terminal</td><td><code>cancel.user</code> / <code>cancel.parent</code> / <code>cancel.session</code></td><td>Explicit cancellation source.</td></tr>
+      <tr><td>terminal</td><td><code>budget.token_exhausted</code> / <code>budget.cost_exhausted</code> / <code>budget.runtime_exhausted</code> / <code>budget.idle_exhausted</code></td><td>A running task reached a budget boundary; Job becomes cancelled and cancellation cascades to descendants.</td></tr>
+      <tr><td>terminal</td><td><code>error.worker_lost</code> / <code>error.accounting_unavailable</code> / <code>error.nonpreemptible_operation</code></td><td>Execution safeguards failed; Job becomes errored.</td></tr>
+      <tr><td>terminal</td><td><code>completed</code></td><td>Normal completion.</td></tr>
+    </table>
+    </div>
+  </section>
+
+  <h2 id="schema">12 Stable schema and state contract</h2>
+  <p>Actual usage retains <code>usage_events</code> as its sole source of truth. Admission/reservation tables below represent only occupied resources and unsettled exposure, never fabricated actual provider tokens/cost.</p>
+
+  <pre>job_admissions(
+  admission_id PRIMARY KEY,
+  job_id UNIQUE NOT NULL,
+  session_id NOT NULL,
+  parent_job_id,
+  caller_turn_id,
+  creates_agent BOOLEAN NOT NULL,
+  request_fingerprint NOT NULL,
+  budget_scope_id NOT NULL,
+  state CHECK state IN ('preparing','queued','live','stopping','released'),
+  admitted_seq NOT NULL,
+  owner_instance_id,
+  lease_expires_at,
+  created_at, started_at, last_activity_at, released_at,
+  reason_code
+)
+
+budget_scopes(
+  budget_scope_id PRIMARY KEY,
+  scope_kind CHECK scope_kind IN ('session','task'),
+  session_id NOT NULL,
+  job_id UNIQUE,
+  parent_scope_id,
+  max_total_tokens,
+  max_cost_microusd,
+  max_runtime_seconds,
+  idle_timeout_seconds,
+  created_at
+)
+
+usage_reservations(
+  reservation_id PRIMARY KEY,
+  job_id NOT NULL,
+  budget_scope_id NOT NULL,
+  kind CHECK kind IN ('token','cost'),
+  state CHECK state IN ('reserved','started','settled','released'),
+  reserved_tokens,
+  reserved_cost_microusd,
+  request_started_at,
+  settled_event_id,
+  expires_at
+)
+
+usage_events + optional columns:
+  job_id, budget_scope_id, reservation_id
+
+Job JSON + optional fields:
+  admission_id, budget_scope_id, effective_limits, reason_code</pre>
+
+  <p><code>effective_limits</code> is an audit snapshot at task start; configuration queries separately return each field’s <code>configured</code>, <code>effective</code> and <code>source</code>. Actual shared availability is computed live from the ledger and open reservations; <code>shared_remaining</code> explicitly denotes current ancestor/session shared-pool balances, not guaranteed Job allotments. Job JSON does not copy cumulative actual usage. Configure money as decimal fixed-point strings; store and compare integer micro-USD to avoid floating-point boundary differences.</p>
+
+  <h3>JobResourceView</h3>
+  <pre>{
+  "job_id": "...",
+  "status": "running",
+  "resource_state": "live",
+  "reason_code": null,
+  "retryable": false,
+  "capacity": {
+    "scheduler_capacity": 4,
+    "session_live": {"used": 2, "limit": 3},
+    "session_queued": {"used": 1, "limit": 8},
+    "session_jobs": {"used": 17, "limit": 100},
+    "queue_position": null
+  },
+  "budget": {
+    "scope": "task_with_shared_ancestors",
+    "tokens": {"actual": 12000, "reserved": 4000, "limit": 50000},
+    "cost_usd": {"actual": "0.38", "reserved": "0.12", "limit": "2.00",
+                 "known": true, "unknown_events": 0},
+    "runtime_seconds": {"used": 91, "limit": 600},
+    "idle_seconds": {"used": 4, "limit": 120},
+    "shared_remaining": {"tokens": 34000, "cost_usd": "1.50"}
+  }
+}</pre>
+
+  <h2 id="migration">13 Compatibility, migration, and implementation batches</h2>
+  <h3>Compatibility principles</h3>
+  <ul>
+    <li>Mark old Jobs missing new fields as <code>legacy/unmetered</code>; missing does not mean zero, and historical jobs.json is not rewritten.</li>
+    <li>Existing Job status enums, job ids, broadcasts, and cascading-cancel APIs remain compatible; resource state and reason are optional additions.</li>
+    <li>Existing depth/messages/fanout settings and semantics remain unchanged. They guard topology/cycles and do not count quota.</li>
+    <li>Existing <code>OPENPROGRAM_JOB_WORKERS</code> remains the sole global worker capacity. No new <code>max_live_global</code>.</li>
+    <li>Old-database migration adds only nullable columns/tables/indexes; usage events remain append-only.</li>
+  </ul>
+
+  <div class="table-wrap">
+  <table class="wide">
+    <tr><th>Batch</th><th>Implementation scope</th><th>Enablement conditions</th><th>Source status; acceptance not rerun</th></tr>
+    <tr><td>1 Accounting foundation</td><td>Schema migration, task/budget attribution, unknown-cost aggregation, read-only effective limits/diagnostics.</td><td>Old-database upgrade/rollback, unknown-cost, and existing usage-query compatibility tests pass.</td><td class="y">Migration and DTO source exist; compatibility gates not rerun</td></tr>
+    <tr><td>2 Admission and queue</td><td>Unified creation entries, durable intent, per-session live/queued/cumulative, dispatcher, cross-process file lock.</td><td>All entries covered; no overallocation across processes; every terminal state and crash point recoverable.</td><td class="y">Admission, dispatcher, and recovery source exist; complete entry-point and concurrency gates not rerun</td></tr>
+    <tr><td>3 Tokens and cost</td><td>Shared parent-child scopes, reserve/settle, provider output cap, unknown-price fail-closed.</td><td>Concurrent requests, late usage, settlement failure, and price-change tests pass.</td><td class="y">Shared provider call path is connected; coverage and fault-injection gates not rerun</td></tr>
+    <tr><td>4 Runtime and idle</td><td>Active timer, activity contract, deadline clamp, bounded-operation contract, cascading stop.</td><td>Model, tool, synchronous thread/subprocess, and stopping-lease tests pass.</td><td class="y">Runtime/idle loops and bounded-operation checks exist; operation-specific gates not rerun</td></tr>
+    <tr><td>5 User surfaces and gate</td><td>One DTO across Web/TUI/CLI/model tools, reason wording, compatibility docs, and mechanical checks.</td><td>Cross-interface contract tests and all gates on this page pass.</td><td class="y">Shared resource DTO and surface adapters exist; cross-interface gates not rerun</td></tr>
+  </table>
+  </div>
+
+  <h2 id="tests">14 Test matrix</h2>
+  <div class="table-wrap">
+  <table class="wide">
+    <tr><th>Test area</th><th>Minimum cases</th><th>Meaning of failure</th></tr>
+    <tr><td>Configuration</td><td>Global defaults, session overrides, parent/task tightening only; null/positive integer/decimal validation; read-only worker environment display.</td><td>Unpredictable effective values or overlapping global limits.</td></tr>
+    <tr><td>Collaboration/resource interaction</td><td>Depth exhausted still permits existing-target dispatch within message/admission limits; messages exhausted denies new delivery while authorized observation/cancel remains; send_message-created Jobs count in target-session admission; topology 0 and resource null remain distinct.</td><td>Resource limits can be bypassed or existing work cannot be observed/stopped.</td></tr>
+    <tr><td>Creation entries</td><td>Sync/async agents, target inbox, Web/API, runner internals, and future registered entries; rejected Job creation leaves no new Job, branch, or Job-bound inbox entry; an earlier ordinary message receipt becomes failed and notifies its sender if later admission fails.</td><td>A quota bypass exists.</td></tr>
+    <tr><td>Atomic admission</td><td>20+ concurrent threads/processes; unique job ids; limit boundaries; fault injection before/after preparing.</td><td>Overallocation, duplicate cumulative counts, or permanent leaks.</td></tr>
+    <tr><td>Queue/live</td><td>Queue consumes no live slot; atomic queued→live exchange; oldest eligible across sessions; full queue; stopping retains live.</td><td>Session starvation, premature release, or unbounded executor queue.</td></tr>
+    <tr><td>Cumulative count</td><td>No return for completed/cancelled/errored; preparing rollback does not count; same-job-id retry does not duplicate; lowering limits.</td><td>Terminal-state-dependent cumulative semantics or retry bypass.</td></tr>
+    <tr><td>Parent-child budgets</td><td>Reject explicit child limits above parent remaining capacity; shared scope without explicit budget; concurrent sibling reservations; multi-level ancestor checks.</td><td>Children can expand budgets or overspend concurrently.</td></tr>
+    <tr><td>Token/cost</td><td>Safe token bounds, provider output cap, no duplicate cache tokens; known/unknown prices; late/missing usage; settlement DB failure.</td><td>Budgets are only observable afterward, or unknown costs become zero.</td></tr>
+    <tr><td>Runtime/idle</td><td>Exclude queue wait; provider data/tool progress/child activity count; keepalive does not reset; deadline clamp; reject non-preemptible tools.</td><td>Time budgets are unenforceable or incorrectly terminate active tasks.</td></tr>
+    <tr><td>Cancellation and recovery</td><td>User/parent/session/budget cascading; thread survives watchdog; worker crash at each transaction point; lease expiry; idempotent reconciliation.</td><td>Premature release, surviving descendants, or permanent occupancy after restart.</td></tr>
+    <tr><td>User visibility</td><td>Web/TUI/CLI/model DTO contract; queue position, shared remaining, unknown cost, reason/retryable; legacy task.</td><td>Interfaces disagree or display unknown as zero.</td></tr>
+  </table>
+  </div>
+
+  <h2 id="gate">15 Feature-matrix filled-circle mechanical gate</h2>
+  <p>The feature-matrix row “concurrency and per-session cumulative spawn limits” at the foundational baseline <code>current worktree baseline</code> has not satisfied the following mechanical gates. Whether the current worktree satisfies them requires item-by-item source and verification evidence, not candidate-branch records:</p>
+  <ol>
+    <li>Stable configuration schema implemented; global defaults, session overrides, and effective values visible through Web/TUI/CLI.</li>
+    <li>All agent/Job creation entries use unified admission, with no Web, synchronous-agent, target-inbox, or direct-runner bypass.</li>
+    <li>Per-session live and cumulative admission are atomic across competing processes without overallocation or double counting.</li>
+    <li>Queue/live occupancy, cumulative return, and stopping/live retention follow this page’s semantics.</li>
+    <li>Completion, failure, cancellation, timeout, worker crash, and mid-admission crash release eligible queue/live capacity without permanent leaks.</li>
+    <li>Web/TUI/CLI show effective limits, usage, queue/live/cumulative, and stable reason codes.</li>
+    <li>Compatibility migration, concurrency/crash tests, documentation links, and feature-matrix scoring checks all pass.</li>
+  </ol>
+
+  <div class="note good"><b>Scoring boundary.</b>This row accepts only concurrency and per-session cumulative spawn limits; completing all token/cost/runtime/idle budgets is not required to change it. If those become separate capability rows, each needs its own complete gate. Conversely, UI, schema, or a single-process semaphore alone cannot justify a filled circle.</div>
+
+  <h2 id="implementation">16 Current implementation and verification boundaries</h2>
+<p>This section records implementations directly locatable in the current worktree and remaining acceptance boundaries. It excludes dates, commit SHAs, and migration history; consult Git for evolution.</p>
+<div class="table-wrap">
+<table class="wide">
+<tr><th>Scope</th><th>Current source evidence</th><th>Current status</th><th>Gaps requiring confirmation</th></tr>
+<tr><td>Job entity and state</td><td>openprogram/runtime/jobs/types.py: Job, JobStatus, legal transitions, and worktree_id; openprogram/runtime/jobs/store.py: persistence and state updates.</td><td class="yes">Implemented</td><td>Crash recovery, terminal idempotence, and cross-process concurrency still require complete-matrix acceptance.</td></tr>
+<tr><td>Runner and admission</td><td>openprogram/runtime/jobs/runner/: JobRunner, durable dispatcher, reconciler, budget loop, spawn_job, cancel_execution, list_jobs, await_job; ResourceGovernor is used during runner initialization and execution.</td><td class="yes">Implemented and integrated into major execution paths</td><td>Whole-product gate, cross-process concurrency, and worker-loss evidence were not rerun in this round.</td></tr>
+<tr><td>Job WebSocket and model tools</td><td>openprogram/interfaces/server/ws_actions/job.py: spawn/list/get; openprogram/programs/tools/agents/agent/list_jobs/, job_output/; runner provides cancellation.</td><td class="yes">Major entry points implemented</td><td>Cancellation-entry consistency and DTO/reason/retryable regressions were not rerun; a standalone Tasks panel is outside the current implementation.</td></tr>
+<tr><td>Web state</td><td>apps/web/lib/net/ws/use-ws.ts: job_status, spawn_job_result; apps/web/components/right-sidebar/branches/index.tsx and attach-card.tsx: state/resource subscriptions.</td><td class="yes">Major user surfaces implemented</td><td>A standalone Tasks panel is outside current implementation; remaining resources, queue position, unknown cost, and recovery-state regressions were not rerun.</td></tr>
+<tr><td>ResourceGovernor admission/lease/reconcile</td><td>openprogram/runtime/jobs/resource_governance/: admit_job, claim_next, renew_lease, reconcile, scope, and resource view; integrated with runner.</td><td class="yes">Primitives and major execution integration implemented</td><td>The token/cost provider boundary still needs adapter-by-adapter confirmation; full verification was not rerun.</td></tr>
+<tr><td>Verification boundary</td><td>Current documentation and source sampling provide path/symbol evidence; historical verification remains in Git.</td><td class="partial">Not reverified</td><td>Documentation build and checks are separate from product execution acceptance. This review did not rerun product runtime gates; that does not establish missing implementation.</td></tr>
+</table>
+</div>
+<p class="note warn"><b>Status rule.</b>“Primitive exists,” “entry returns state,” and “complete execution path passed acceptance” are distinct states. Future updates must record each separately, using current worktree evidence rather than historical reviews or candidate-branch records.</p>
+
+<h2>Evidence index</h2>
+  <div class="table-wrap">
+  <table>
+    <tr><th>Topic</th><th>Repository evidence</th></tr>
+    <tr><td>JobRunner, single worker, cancellation, and orphan recovery</td><td><code>openprogram/runtime/jobs/runner/</code>; <code>openprogram/runtime/jobs/store.py</code>; <code>openprogram/runtime/jobs/types.py</code>; <code>openprogram/operations/worker/paths.py</code></td></tr>
+    <tr><td>Spawn and message budgets</td><td><code>openprogram/programs/tools/agents/agent/agent/agent.py</code>; <code>openprogram/programs/tools/agents/send_message/send_message/depth.py</code>; <code>openprogram/state/settings.py</code></td></tr>
+    <tr><td>Usage and provider recording</td><td><code>openprogram/models/usage/event.py</code>; <code>openprogram/models/usage/ledger.py</code>; <code>openprogram/models/usage/recorder.py</code>; <code>openprogram/models/providers/streaming/stream.py</code></td></tr>
+    <tr><td>Deadline and function timeout</td><td><code>openprogram/models/providers/utils/deadline.py</code>; <code>openprogram/programs/_host/runtime.py</code></td></tr>
+    <tr><td>Task UI and protocol</td><td><code>openprogram/interfaces/server/ws_actions/job.py</code>, Web branch/task cards, <code>openprogram/programs/tools/agents/agent/list_jobs/</code>, <code>job_output/</code>, JobRunner.cancel_execution</td></tr>
+    <tr><td>Competitors and existing designs</td><td><a href="../collaboration/agent-collab-comparison.html">agent-collab-comparison.html</a>; <a href="../collaboration/agent-collaboration.md">Agent collaboration design</a>; <a href="../execution/async-job-lifecycle.md">Async Job lifecycle</a>; <a href="../../usage-metering.md">Usage metering</a></td></tr>
+  </table>
+  </div>
+
+  <footer>Scope is fixed to OpenProgram’s current single-user, local-machine, persistent-worker product model. Recheck each current-state claim against the implementation worktree, without changing current implementation status based on future plans.</footer>
+</main>
+</body>
+</html>

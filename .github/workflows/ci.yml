@@ -1,0 +1,391 @@
+name: CI
+
+# Runs only when started by hand: pushes, pull requests and schedules start
+# nothing, so publishing a version does not set off CI runs.
+on:
+  workflow_dispatch:
+
+# Superseded checks must not hold scarce Windows ARM64 runners ahead of HEAD.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  quality:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - name: Ruff
+        run: uv run --locked --extra dev ruff check openprogram tests scripts
+      - name: Release shell syntax
+        run: |
+          bash -n scripts/release/*.sh
+          dash -n scripts/install-release.sh scripts/release/install-release.sh
+          shellcheck --shell=bash \
+            scripts/release/archive-product-runtime.sh \
+            scripts/release/build-product-runtime.sh \
+            scripts/release/smoke-linux-runtime-baseline.sh
+          shellcheck --shell=sh \
+            scripts/install-release.sh \
+            scripts/release/install-release.sh
+      - name: Repository contracts
+        run: uv run --locked --extra dev python -m pytest -q tests/contracts
+      - name: Verify generated systemd user unit
+        run: |
+          unit_home="$(mktemp -d)"
+          export HOME="$unit_home"
+          export XDG_CONFIG_HOME="$unit_home/.config"
+          unit_path="$XDG_CONFIG_HOME/systemd/user/openprogram-worker.service"
+          uv run --locked --extra dev python - "$unit_path" <<'PY'
+          import sys
+          from pathlib import Path
+
+          from openprogram.operations.worker.services.systemd import _build_unit
+
+          path = Path(sys.argv[1])
+          path.parent.mkdir(parents=True, exist_ok=True)
+          path.write_text(_build_unit(), encoding="utf-8")
+          PY
+          systemd-analyze verify "$unit_path"
+      - name: Build docs site
+        run: uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.build
+      - name: Check docs landing page
+        run: uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.check_landing
+      - name: Check docs links
+        run: uv run --locked --with markdown-it-py --with mdit-py-plugins --with pygments python -m scripts.docs_site.checklinks
+  unit:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - name: Unit tests
+        run: uv run --locked --extra dev python -m pytest -q tests/unit
+
+  component:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install and enable bubblewrap
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq bubblewrap
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install fixture build dependencies without launching Desktop
+        run: npm ci --ignore-scripts
+      - name: Component tests
+        run: uv run --locked --extra dev python -m pytest -q tests/component
+
+  macos-desktop-install:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - name: macOS desktop installation tests
+        run: >-
+          uv run --locked --extra dev python -m pytest -q -m macos
+          tests/component/config/test_distribution_release
+
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install fixture build dependencies without launching Desktop
+        run: npm ci --ignore-scripts
+      - name: Integration tests
+        run: uv run --locked --extra dev python -m pytest -q tests/integration
+
+  macos-native-verification:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --ignore-scripts
+      - name: Exercise the actual sandbox-exec verifier backend
+        run: uv run --locked --extra dev python -m pytest -q tests/component/self_update tests/integration/runtime/test_self_update_native_processes.py
+
+  e2e:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev --extra browser
+      - name: Non-browser end-to-end tests
+        run: uv run --locked --extra dev --extra browser python -m pytest -q -m "not browser" tests/e2e
+
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - name: Collect unit coverage
+        run: uv run --locked --extra dev coverage run --branch --source=openprogram -m pytest -q tests/unit
+      - name: Generate unit coverage artifact
+        run: uv run --locked --extra dev coverage xml -o coverage.xml
+      - uses: actions/upload-artifact@v4
+        with:
+          name: unit-coverage
+          path: coverage.xml
+      - name: Enforce unit coverage floor
+        run: uv run --locked --extra dev coverage report --show-missing --precision=6 --fail-under=40
+
+  windows-core:
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-vs2026-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    env:
+      PYTHONUTF8: "1"
+      PYTHONUNBUFFERED: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - name: Prepare native ARM64 OpenSSL
+        if: matrix.arch == 'arm64'
+        run: ./scripts/release/prepare-windows-native-deps.ps1 -Architecture arm64
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev
+      - name: Windows platform contracts
+        run: >-
+          uv run --locked --extra dev python -m pytest -q
+          tests/component/config/test_windows_install_contract.py
+          tests/component/config/test_conversational_update_capability.py
+          tests/component/config/test_windows_cli_launchers.py
+          tests/component/config/test_windows_release_transaction.py
+          tests/component/runtime/test_windows_process.py
+          tests/component/config/test_windows_release.py
+          tests/component/config/test_windows_runtime_preparation.py
+          tests/component/config/test_windows_refresh_publication.py
+          tests/component/config/test_windows_build_environment.py
+          tests/component/config/test_windows_release_version.py
+          tests/component/runtime/test_process_liveness.py
+          tests/component/runtime/test_local_backend_process_tree.py
+          tests/component/runtime/test_git_bash_source_transport.py
+          tests/component/agent/jobs/test_job_cancel_projection_race.py
+          tests/component/store/test_session_store_close.py
+          tests/unit/core/test_windows_worker_service.py
+          tests/component/security/test_sandbox.py
+          tests/component/config/test_formal_release_updates.py
+          tests/unit/dag
+          tests/unit/agent/dispatcher/test_finalize_shadow_git.py
+          tests/unit/permissions/test_approval_file_state.py
+          tests/integration/config/test_windows_entrypoints.py::test_dispatcher_import_does_not_require_unix_fcntl
+          tests/component/webui/files/test_project_files.py
+          tests/component/webui/files/test_turn_files_ws.py
+          tests/component/config/test_upgrade_cmd.py
+          tests/component/store/test_backup_command.py
+          tests/component/store/test_backup_staged_restore.py
+      - name: Complete Windows unit regression
+        timeout-minutes: 25
+        run: >-
+          uv run --locked --extra dev python -u -c
+          "import faulthandler, pytest; trace = open('windows-unit-traceback.txt', 'w'); faulthandler.dump_traceback_later(1380, file=trace, exit=True); raise SystemExit(pytest.main(['-p', 'no:faulthandler', '-n', '4', '-vv', 'tests/unit']))"
+          > windows-unit.log 2>&1
+      - name: Upload Windows regression diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-regression-${{ matrix.arch }}
+          path: |
+            windows-unit.log
+            windows-unit-traceback.txt
+          if-no-files-found: ignore
+
+  windows-desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-2025
+            arch: x64
+          - runner: windows-11-vs2026-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install Desktop and Web dependencies with native modules
+        run: npm ci --workspace apps/desktop --workspace apps/web --include-workspace-root
+      - name: Windows Desktop checks
+        run: npm run check --workspace apps/desktop
+      - name: Windows Web unit tests
+        run: npm test --workspace apps/web
+
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace apps/web --include-workspace-root --ignore-scripts
+      - name: Unit tests
+        run: npm test
+        working-directory: apps/web
+      - name: Typecheck
+        run: npx tsc --noEmit
+        working-directory: apps/web
+      - name: Source contracts
+        run: npm run check
+        working-directory: apps/web
+      - name: Build frontend
+        run: npm run build
+        working-directory: apps/web
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+
+  cli:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace apps/cli --include-workspace-root --ignore-scripts
+      - run: npm run typecheck
+        working-directory: apps/cli
+      - run: npm test
+        working-directory: apps/cli
+      - run: npm run build
+        working-directory: apps/cli
+      - name: Build standalone TUI
+        run: npm run build:standalone
+        working-directory: apps/cli
+      - name: Exercise standalone TUI in a real PTY
+        run: python3 ../../scripts/release/smoke-ink-tui-pty.py node dist/index-standalone.cjs
+        working-directory: apps/cli
+
+  desktop:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - run: npm ci --workspace apps/desktop --include-workspace-root
+      - run: npm run check
+        working-directory: apps/desktop
+
+  browser:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+      - uses: actions/setup-node@v5
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: package-lock.json
+      - name: Install locked Python dependencies
+        run: uv sync --locked --extra dev --extra browser
+      - name: Install managed Chromium
+        run: uv run --locked --extra dev --extra browser playwright install --with-deps chromium
+      - run: npm ci --workspace apps/web --include-workspace-root --ignore-scripts
+      - run: npm run build
+        working-directory: apps/web
+        env:
+          NEXT_TELEMETRY_DISABLED: "1"
+      - name: Built Web and browser tests
+        run: uv run --locked --extra dev --extra browser python -m pytest -q -m browser tests/e2e/web

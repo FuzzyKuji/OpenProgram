@@ -1,0 +1,142 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenProgram · Responsive Composer controls</title>
+<style>
+  :root { color-scheme:dark; --bg:#11141a; --panel:#181d26; --line:#303a4a;
+    --text:#dce3ec; --muted:#96a1b1; --blue:#72a8ff; --green:#55d69c;
+    --amber:#f0c562; --mono:ui-monospace,SFMono-Regular,Menlo,monospace }
+  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif }
+  main { max-width:1040px; margin:auto; padding:42px 28px 80px }
+  h1 { margin:0 0 8px; font-size:29px } h2 { margin:38px 0 12px; padding-top:15px;
+    border-top:1px solid var(--line); font-size:20px } h3 { margin:0 0 6px; font-size:15px }
+  p { margin:8px 0 } code { padding:1px 5px; border:1px solid #2b3544;
+    border-radius:5px; background:#0d1015; font-family:var(--mono); font-size:.91em }
+  a { color:var(--blue) } .sub { color:var(--muted) } .lead,.card,.table-wrap,.demo {
+    border:1px solid var(--line); border-radius:11px; background:var(--panel) }
+  .lead { margin-top:20px; padding:15px 17px; border-left:4px solid var(--blue) }
+  .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px }
+  .card { padding:14px 15px } ul,ol { margin:6px 0; padding-left:20px }
+  .table-wrap { max-width:100%; overflow:auto; overscroll-behavior-x:contain }
+  table { width:100%; border-collapse:collapse }
+  th,td { padding:9px 11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
+  th { color:#cbd5e3 } tr:last-child td { border-bottom:0 }
+  .demo { display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:12px; padding:14px; max-width:100%; overflow-x:auto; overscroll-behavior-x:contain }
+  .cluster { display:flex; align-items:center; gap:8px; min-width:0 }
+  .cluster:last-child { justify-content:flex-end; gap:12px }
+  .control { display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 6px;
+    border-radius:5px; background:#232a35; white-space:nowrap }
+  .icon { display:inline-grid; place-items:center; width:16px; height:16px; color:var(--blue) }
+  .compact .label { display:none } .compact .control { width:24px; padding:0; justify-content:center }
+  .table-wrap:focus-visible,.demo:focus-visible { outline:2px solid var(--blue); outline-offset:3px }
+  .ok { color:var(--green) } .pending { color:var(--amber) }
+  @media(max-width:760px) { main { padding:28px 20px 60px } .grid { grid-template-columns:1fr } .demo { grid-template-columns:1fr }
+    code { overflow-wrap:anywhere }
+    .cluster:last-child { justify-content:flex-start } }
+</style>
+</head>
+<body><main>
+  <h1>Responsive Composer controls</h1>
+  <p class="sub">Scope: environment chips above the chat input, and permission, more, active tools, chat model, execution model, effort and context controls below it.</p>
+  <div class="lead">Each control row responds to its own available width. The bottom row retains existing settings; the top row squeezes in four levels. Full labels first; then long names cap at about 12 characters with an ellipsis and the Local chip turns icon-only; then git branch names hide, leaving the branch icon and diff badge; finally every label (status, surface, project, directory, DAG Fit, zoom percentage, Legend) hides and the diff badge becomes a half-green, half-red dot. The row steps back up as space returns. One transition animation governs each step; menus, values, keyboard operation, tooltips and accessible names remain unchanged.</div>
+
+  <h2>Current implementation and gaps</h2>
+  <p><code>.composer-bottom-row</code> has no fixed breakpoint either: its need depends on which tool toggles are on and how long the model names are. <code>use-compact-controls-row.ts</code> measures a hidden copy of the row placed beside it at max-content width, with flex shrinking and transitions off (<code>data-measuring</code>). It sums the copy's clusters and the gap, removes the copy before paint, and sets <code>data-compact</code> when that exceeds the row width. The live row is never toggled to measure it: its Buttons transition every property, so a row that just left compact mode would still report compact widths. The row re-measures on resize, on content or class changes and when web fonts finish loading; the permission, model and effort labels then collapse to their role icons. Expanding again needs 12px of slack. <code>.envChips</code> No fixed breakpoint: chat and DAG pages have different numbers of controls and therefore different space requirements at the same width. It picks the first level whose chips fit in its <code>clientWidth</code>, measuring the right edge of the last chip with the right-aligned chips' auto margins zeroed (<code>scrollWidth</code> cannot be used: that auto margin makes the content always fill the row, so a squeezed row would never expand again): it lays the row out at each level with transitions off (<code>data-measuring</code>), then animates to the chosen <code>data-squeeze</code> level; level 3 also sets <code>data-compact</code>, which hides all labels. Stepping back to a roomier level needs 12px of slack. Single-page and split-pane layouts use exactly the same measurement logic.</p>
+  <p>Existing components already provide four distinct icons: Shield for permission, Message for chat model, Terminal for execution model and Biceps for effort. Every trigger already has a Popover/Menu, tooltip or accessible name, so no new icon components or menus are added. The effort trigger opens the effort picker card; its header, dot-matrix track and Recommended caption are specified in <a href="effort-picker.html">effort-picker.html</a>.</p>
+
+  <h2>Component boundaries</h2>
+  <p>Composer directories follow interaction responsibilities: input editing belongs in <code>input/</code>, submission in <code>submit/</code>, mode dispatch in <code>modes/</code>, session settings in <code>state/</code>, while attachments, paste, slash and controls retain their directories. The environment bar separates overall layout from individual chips; ProjectBadge, WorkingDirChips and GoalChip stay in shared business modules. The DAG module owns its HUD and supplies it through EnvironmentRow's generic trailing-content slot; EnvironmentRow contains no DAG names, DOM ids or control logic.</p>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable component-boundary table" data-scroll-region tabindex="0"><table><thead><tr><th>Directory or file</th><th>Sole responsibility</th><th>Not responsible for</th></tr></thead><tbody>
+    <tr><td><code>composer/environment-row/environment-row.tsx</code></td><td>Compose environment-bar subcomponents and render caller-supplied trailing content.</td><td>No DAG names, portal ids, chat submission or project state.</td></tr>
+    <tr><td><code>composer/environment-row/use-compact-environment-row.ts</code></td><td>Measure actual environment-bar width and maintain the compact attribute.</td><td>Does not render components or define visual styles.</td></tr>
+    <tr><td><code>composer/environment-row/environment-row.module.css</code></td><td>Environment-bar layout, pill surfaces, four-level squeeze animation and DAG-slot styling.</td><td>No input, bottom controls or other Composer modes.</td></tr>
+    <tr><td><code>composer/environment-row/chips/connection-status-chip.tsx</code>, <code>web-surface-chip.tsx</code></td><td>Connection-status entry and current-web-surface entry, respectively.</td><td>Do not control the environment bar's overall responsive state.</td></tr>
+    <tr><td><code>composer/input/</code></td><td>Textarea, keyboard events and history callbacks.</td><td>Does not send messages or switch Composer mode.</td></tr>
+    <tr><td><code>composer/attach/</code>, <code>paste/</code>, <code>modes/question/</code></td><td>Keep component implementation and dedicated CSS Module in the same responsibility directory.</td><td>Do not leave component-specific selectors in the root <code>composer.module.css</code>.</td></tr>
+    <tr><td><code>composer/submit/</code></td><td>Construct and submit chat messages and maintain submission side effects.</td><td>Does not render the input area.</td></tr>
+    <tr><td><code>composer/modes/composer-body.tsx</code></td><td>Select ordinary input, function form or question form from the derived mode.</td><td>Does not own input, attachment or session state.</td></tr>
+    <tr><td><code>composer/state/use-composer-settings.ts</code></td><td>Read and update Composer settings for the current SessionScope.</td><td>No global focused-session fallback.</td></tr>
+    <tr><td><code>composer/controls/use-*.ts</code></td><td>Manage model availability, tool profiles, unattended state and existing controls, respectively.</td><td>Do not request or synchronize these states directly in the Composer root.</td></tr>
+    <tr><td><code>composer/index.tsx</code></td><td>Pass session, tools and toggle arguments and render one EnvironmentRow.</td><td>Does not hold environment-bar refs, observers or internal JSX.</td></tr>
+    <tr><td><code>scripts/chat/check-composer-environment-row.mjs</code></td><td>Check only environment-bar component boundaries and responsive contracts.</td><td>Do not accumulate unrelated chat-UI checks.</td></tr>
+  </tbody></table></div>
+
+  <h2>References and choices</h2>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable references-and-choices table" data-scroll-region tabindex="0"><table><thead><tr><th>Reference</th><th>Applicable capability</th><th>Adoption</th></tr></thead><tbody>
+    <tr><td><a href="https://www.w3.org/TR/css-contain-3/">W3C CSS Containment Level 3</a></td><td><code>@container</code> Control descendant styles from component-container size rather than viewport size.</td><td class="ok">Kept only for the context ring label and the effort card width; the label collapse is measured instead, because the row's need is not a function of its width alone.</td></tr>
+    <tr><td><a href="https://www.w3.org/WAI/ARIA/apg/practices/names-and-descriptions/">WAI accessible names</a></td><td>Interactive controls must retain computable names when visible labels are hidden.</td><td class="ok">Reuse existing tooltips, Popover triggers and labels; visual hiding does not remove DOM semantics.</td></tr>
+    <tr><td>Horizontal scrolling</td><td>Preserves arbitrary-length text, but moves some settings entries outside the visible area.</td><td>Retain as a fallback for extremely narrow widths, not the primary responsive behavior.</td></tr>
+    <tr><td>Wrap into two rows</td><td>Keeps all text visible, but changes composer height and transcript-bottom spacing.</td><td>Rejected; this task preserves one row.</td></tr>
+  </tbody></table></div>
+
+  <h2>Target presentation</h2>
+  <div class="demo" role="region" aria-label="Horizontally scrollable normal-width illustration" data-scroll-region tabindex="0">
+    <div class="cluster"><span class="control"><span class="icon">◇</span><span class="label">Ask permissions</span></span><span class="control">＋</span></div>
+    <div class="cluster"><span class="control"><span class="icon">◯</span><span class="label">Chat model</span></span><span class="control"><span class="icon">〉_</span><span class="label">Execution model</span></span><span class="control"><span class="icon">⌁</span><span class="label">Medium</span></span><span class="control">◌</span></div>
+  </div>
+  <div class="demo compact" role="region" aria-label="Horizontally scrollable narrow-width illustration" data-scroll-region tabindex="0">
+    <div class="cluster"><span class="control"><span class="icon">◇</span><span class="label">Ask permissions</span></span><span class="control">＋</span></div>
+    <div class="cluster"><span class="control"><span class="icon">◯</span><span class="label">Chat model</span></span><span class="control"><span class="icon">〉_</span><span class="label">Execution model</span></span><span class="control"><span class="icon">⌁</span><span class="label">Medium</span></span><span class="control">◌</span></div>
+  </div>
+
+  <h2>Control-button surface hierarchy</h2>
+  <p>Top environment chips use fill and edge hierarchy, while bottom controls are only 20px high. Bottom permission, more, active tools, chat model, execution model, effort and context controls reuse only theme-level <code>--chip-bg</code> for an always-visible subtle fill. Resting surfaces add no border, inset stroke or outer shadow, preserving internal visual space in small controls. Existing hover foreground colors and keyboard <code>focus-visible</code>  indicators remain unchanged.</p>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable control-button surface table" data-scroll-region tabindex="0"><table><thead><tr><th>State</th><th>surface</th><th>Unchanged</th></tr></thead><tbody>
+    <tr><td>Resting</td><td><code>background:var(--chip-bg)</code>; computed border is 0 and shadow is none</td><td>20px height, 5px radius, icon and label colors</td></tr>
+    <tr><td>hover / open</td><td>Mix 8% of <code>--chip-bg</code>  into <code>--text-bright</code></td><td>Existing menus, tooltips, animations, hover foreground and effort-level colors</td></tr>
+    <tr><td>Narrow</td><td>Same surface as resting state; visually hiding labels does not change it</td><td>Four core triggers remain 20px icon buttons</td></tr>
+  </tbody></table></div>
+
+  <h2>Context-statistics popover timing</h2>
+  <p><code>ContextBreakdownPanel</code> Unmounts when closed. If every mount clears existing results and enters <code>loading</code>, reopening the same session and DAG branch first shows a card containing only Loading…, followed by statistics. Even a short network request makes this whole-card replacement visible.</p>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable Context-statistics timing table" data-scroll-region tabindex="0"><table><thead><tr><th>Scenario</th><th>Immediate display</th><th>Background behavior</th></tr></thead><tbody>
+    <tr><td>Reopen the same session and branch</td><td>Last successfully retrieved complete statistics</td><td>Request again and update in place without whole-card loading</td></tr>
+    <tr><td>First opening or no cache</td><td>Existing loading empty state</td><td>Request current statistics and cache on success</td></tr>
+    <tr><td>Switch session or DAG branch</td><td>Read only the cache for the new <code>sessionId + headId</code>  key</td><td>Cancel the old request; old responses must not overwrite the current panel</td></tr>
+    <tr><td>Request fails with an existing cache</td><td>Keep cached content</td><td>A failed refresh must not replace usable statistics with an error page</td></tr>
+  </tbody></table></div>
+  <p>Cache exists only in the current frontend process, retaining 32 session branches in least-recently-used order. No persistence, periodic refresh or new dependency. For concurrent refreshes of one key, only the newest request may update the cache. The server remains the sole source of statistics; caching only removes the transitional screen on reopening.</p>
+
+  <div class="grid">
+    <section class="card"><h3>Compaction rules</h3><ol><li>Environment-chip labels do not participate in flex shrinking; a capped name ends in an ellipsis, never a cut-off fragment.</li><li>When content overflows, the row moves one level tighter until it fits: capped names, then hidden branch names, then hidden labels with the diff dot; it moves back as space returns.</li><li>Icon triggers preserve size, order and operation.</li></ol></section>
+    <section class="card"><h3>Interaction and accessibility</h3><ul><li>Clicking an icon opens its original menu.</li><li>Chat and execution use distinct icons.</li><li>Effort-icon color continues to indicate the current level.</li><li>Focus, tooltips and accessible names remain when labels are hidden.</li></ul></section>
+    <section class="card"><h3>Boundaries</h3><ul><li>Do not change model, permission or effort state.</li><li>Use native ResizeObserver and MutationObserver without new dependencies.</li><li>No wrapping and no hiding entire controls.</li><li>Do not change composer height or splitRatio.</li></ul></section>
+  </div>
+
+  <h2>Implementation brief and acceptance</h2>
+  <p>Top-row implementation is confined to <code>apps/web/components/chat/composer/environment-row/</code>: component, measurement hook, styles and two dedicated chips are separated by responsibility.<code>composer/index.tsx</code>  only renders EnvironmentRow. The Context-cache batch is limited to <code>apps/web/components/chat/badges/context-badge.tsx</code>, <code>context-breakdown-panel.tsx</code>  and <code>apps/web/lib/chat/context-breakdown-cache.ts</code>. Independent checks are provided by <code>apps/web/scripts/chat/check-composer-environment-row.mjs</code>  and included in <code>npm --prefix apps/web run check:chat-ui</code>. These batches do not change Popover, Menu, providers, session store or submission logic.</p>
+  <ol>
+    <li>Public-entry checks must establish that actual overflow squeezes environment chips through the <code>data-squeeze</code> levels, ending in <code>data-compact</code>, with no fixed-width special cases or label-level <code>flex-shrink:1</code>.</li>
+    <li>Status, surface, project, directory, Fit, zoom percentage and Legend share one animation rule; do not use <code>display:none</code>  or collapse only some labels.</li>
+    <li>In the default installed App, dragging the split-pane divider left past the threshold keeps all four right settings entries and left permission/more controls visible without overlap.</li>
+    <li>Click permission, chat model, execution model and effort icons separately; original menus or panels open normally.</li>
+    <li>Widen the pane until full content fits and all labels return together; reselecting split, switching chat/DAG and refreshing preserve this behavior.</li>
+    <li>Every visible bottom control has a nontransparent <code>--chip-bg</code>  surface without hover, computed border 0 and shadow none; hover or open menus must have a stronger background. Keyboard <code>focus-visible</code>  indicators are not resting borders and remain available.</li>
+    <li>After Context statistics load successfully once, closing and reopening the same session and branch immediately reuses cache; background completion updates cache and ring statistics.</li>
+    <li>Context cache is isolated by session and branch; rapid switches cancel stale requests, and failed refreshes cannot overwrite existing cache.</li>
+  </ol>
+
+  <h2>Implementation status</h2>
+  <div class="table-wrap" role="region" aria-label="Horizontally scrollable implementation-status table" data-scroll-region tabindex="0"><table><thead><tr><th>Item</th><th>State</th></tr></thead><tbody>
+    <tr><td>Design and task boundaries</td><td class="ok">Complete</td></tr>
+    <tr><td>public-entry RED / GREEN</td><td class="ok">Complete: the static entry check first failed for the missing narrow-state effort icon, then passed after implementation; real App E2E covers 700px and 360px containers.</td></tr>
+    <tr><td>specification review / quality review</td><td class="ok">Complete: specification review and independent quality review after repairs both passed.</td></tr>
+    <tr><td>Full checks and default installed-App visible acceptance</td><td class="ok">Complete: all Web checks, TypeScript, build, desktop webtab/transfer, unit tests and default installed-App CDP acceptance passed.</td></tr>
+    <tr><td>Bottom-control resting surface</td><td class="ok">Complete: resting state uses only <code>--chip-bg</code>  fill without borders or inset strokes; real App computed styles verify border 0 and shadow none, while hover/open only strengthen the background.</td></tr>
+    <tr><td>Composer responsibility directories</td><td class="ok">Complete: input, submission, mode, session state, attachments and environment chips have separate responsibility directories; input, paste, image attachments and question panels use colocated CSS Modules. EnvironmentRow accepts generic trailing content only, with no DAG ids or control logic.</td></tr>
+    <tr><td>Repeated Context-statistics opening</td><td class="ok">Implemented: session/branch-isolated cache immediately displays previous results on reopening and refreshes in the background.<code>check:chat-ui</code>  executably verifies cache isolation, late-request cancellation, reverse-order responses for one key, retention on refresh failure and 32-entry eviction, and requires synchronous panel recreation by session/branch key.</td></tr>
+  </tbody></table></div>
+  <p class="sub">Visible acceptance uses the actual <code>/Applications/OpenProgram.app</code>, default <code>18100</code>  page and <code>9223</code>  CDP. Tests operate real permission, more, active tool, chat model, execution model, effort and context triggers, checking borderless resting states, stronger hover/open backgrounds, no narrow-state overlap and working menus, then close menus and restore focus and original page styles.</p>
+<script>
+document.querySelectorAll('[data-scroll-region]').forEach(region=>region.addEventListener('keydown',event=>{
+  const step=Math.max(80,Math.round(region.clientWidth*.75));
+  if(event.key==='ArrowRight'){event.preventDefault();region.scrollLeft+=step}
+  else if(event.key==='ArrowLeft'){event.preventDefault();region.scrollLeft-=step}
+  else if(event.key==='Home'){event.preventDefault();region.scrollLeft=0}
+  else if(event.key==='End'){event.preventDefault();region.scrollLeft=region.scrollWidth}
+}));
+</script>
+</main></body></html>

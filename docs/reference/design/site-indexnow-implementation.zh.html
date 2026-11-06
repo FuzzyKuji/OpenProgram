@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>IndexNow 实施记录</title>
+</head>
+<body>
+  <main>
+    <h1>IndexNow 实施记录</h1>
+
+    <h2>任务说明</h2>
+    <dl>
+      <dt>已批准设计</dt><dd><a href="site-indexnow-discovery.zh.html">IndexNow 部署发现</a></dd>
+      <dt>基线提交</dt><dd><code>8f888e37590fa4083e8f266c5f26e7cf2ef3a293</code></dd>
+      <dt>生产文件</dt><dd><code>scripts/docs_site/indexnow.py</code>, <code>.github/workflows/docs-pages.yml</code></dd>
+      <dt>测试文件</dt><dd><code>tests/unit/config/test_docs_publish_indexnow.py</code></dd>
+      <dt>要求行为</dt><dd>从精确匹配的 sitemap 元素生成已验证、去重的 IndexNow 批次；在站点仓库发布操作后提交全部批次，前面批次失败后仍提交后续批次；通知失败不得阻止发布。</dd>
+      <dt>公开入口 RED</dt><dd>单元测试调用 payload 构建器，工作流测试读取实际发布工作流。</dd>
+      <dt>安全与错误边界</dt><dd>仅接受精确匹配 sitemap 0.9 URL 元素且主机精确匹配的 HTTPS URL；不暴露凭证；限制端点请求并重试；尝试全部批次；通知失败不阻止发布。</dd>
+      <dt>兼容性</dt><dd>使用现有 Python 3.12 runner 和标准库；保留当前 sitemap、验证与部署输出。</dd>
+      <dt>排除范围</dt><dd>不保证排名，不使用 Google 索引 API，不轮询下游 Pages 工作流，不新增依赖。</dd>
+      <dt>干净工作树要求</dt><dd>仅从隔离且干净的 checkout 提交指定的五个任务文件。</dd>
+    </dl>
+
+    <h2>计划</h2>
+    <ol>
+      <li>记录协议、信任边界、失败策略和排除范围。</li>
+      <li>新增公开 payload 构建器 RED 测试，覆盖协议字段、验证、去重和分批。</li>
+      <li>使用标准库实现最小构建器与部署步骤。</li>
+      <li>运行受影响的文档与工作流检查。</li>
+      <li>通过独立规格与质量审查后运行完整检查。</li>
+    </ol>
+
+    <h2>完整检查清单</h2>
+    <ul>
+      <li><code>uv sync --extra dev</code></li>
+      <li><code>uv pip install markdown-it-py mdit-py-plugins pygments</code> （与发布工作流安装的文档依赖相同）</li>
+      <li><code>uv run pytest -q tests/unit/config/test_docs_publish_indexnow.py</code></li>
+      <li><code>uv run python -m scripts.docs_site.build</code></li>
+      <li><code>uv run python -m scripts.docs_site.check_landing</code></li>
+      <li><code>uv run python -m scripts.docs_site.checklinks</code></li>
+      <li><code>uv run ruff check scripts/docs_site/indexnow.py tests/unit/config/test_docs_publish_indexnow.py</code></li>
+      <li>使用 PyYAML 解析 <code>.github/workflows/docs-pages.yml</code>。</li>
+      <li><code>git diff --check</code>，并在完成经审查的提交后确认工作树干净。</li>
+    </ul>
+
+    <h2>记录</h2>
+    <table>
+      <thead><tr><th>证据</th><th>结果</th></tr></thead>
+      <tbody>
+        <tr><td>首次 RED</td><td><code>uv run pytest -q tests/unit/config/test_docs_publish_indexnow.py</code>：1 项失败，原因是工作流缺少通知步骤。</td></tr>
+        <tr><td>首次 GREEN</td><td>1 项通过；后被规格审查判定无效，因为它只断言工作流字符串。</td></tr>
+        <tr><td>手动端点验证</td><td>向官方端点提交了 499 个已验证的线上 sitemap URL；返回 HTTP 200。</td></tr>
+        <tr><td>规格审查</td><td><code>CHANGES_REQUIRED</code>：明确发布边界，在测试中执行 payload 行为，对超过 10,000 个 URL 分批，并补充要求的证据记录。</td></tr>
+        <tr><td>规格修复</td><td><code>PASS</code>：四项发现全部修复；针对性测试 5 项通过，diff 检查通过。</td></tr>
+        <tr><td>质量审查</td><td><code>CHANGES_REQUIRED</code>：批次失败后继续，移除过期批次文件，并要求 sitemap 标签精确匹配。</td></tr>
+        <tr><td>质量修复</td><td><code>PASS</code>：三项发现全部修复；针对性测试 8 项通过，Ruff 和 diff 检查通过。</td></tr>
+        <tr><td>实现提交</td><td><code>f458791e8c245e642b563a5ffc9074c9758683ab</code></td></tr>
+        <tr><td>完整检查</td><td>首次运行在 8 项测试通过后停止，因为清单遗漏了发布工作流单独安装的 <code>mdit-py-plugins</code>。修正清单后完整重跑通过：8 项测试、500 页构建、入口页检查、零死链、Ruff、工作流 YAML 解析以及 diff 检查。</td></tr>
+      </tbody>
+    </table>
+  </main>
+</body>
+</html>

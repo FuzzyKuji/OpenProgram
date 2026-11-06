@@ -1,0 +1,334 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenProgram · Error and timeout mechanisms (current state)</title>
+<style>
+  :root{
+    --bg:#0f1117; --panel:#171a23; --panel2:#1d2130; --ink:#e7e9ee; --muted:#9aa3b2;
+    --line:#2a2f3d; --accent:#6ea8fe; --accent2:#8b9cf0;
+    --ok:#3ddc97; --okbg:#10241c; --warn:#ffce6b; --warnbg:#2a2310; --bad:#ff6b6b; --badbg:#2a1414;
+    --mono:'SF Mono',ui-monospace,'JetBrains Mono',Menlo,Consolas,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--ink);
+    font:15px/1.6 -apple-system,BlinkMacSystemFont,'Segoe UI','PingFang SC','Microsoft YaHei',sans-serif;
+    -webkit-font-smoothing:antialiased}
+  .wrap{max-width:1080px;margin:0 auto;padding:40px 28px 96px}
+  h1{font-size:30px;letter-spacing:.2px;margin:0 0 6px}
+  h2{font-size:21px;margin:46px 0 14px;padding-top:14px;border-top:1px solid var(--line);display:flex;align-items:center;gap:10px}
+  h2 .n{font:600 13px/1 var(--mono);color:#0f1117;background:var(--accent);border-radius:6px;padding:6px 8px}
+  h3{font-size:16px;margin:26px 0 10px;color:#cfd5e1}
+  p{margin:10px 0}
+  .sub{color:var(--muted);margin:0 0 4px}
+  code,.mono{font-family:var(--mono);font-size:.9em}
+  code{background:#0b0d13;border:1px solid var(--line);border-radius:5px;padding:1px 6px;color:#d7def0}
+  .cite{color:var(--accent);font-family:var(--mono);font-size:.82em;white-space:normal;overflow-wrap:anywhere}
+  a{color:var(--accent)}
+  .grid{display:grid;gap:14px}
+  .g3{grid-template-columns:repeat(3,1fr)}
+  .g2{grid-template-columns:repeat(2,1fr)}
+  @media(max-width:760px){.g3,.g2{grid-template-columns:1fr}}
+  .card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px 18px}
+  .card h4{margin:0 0 6px;font-size:15px;display:flex;align-items:center;gap:8px}
+  .card .role{font-size:12.5px;color:var(--muted)}
+  .lead{background:linear-gradient(180deg,#191d2a,#141722);border:1px solid var(--line);
+    border-left:4px solid var(--accent);border-radius:12px;padding:18px 20px;margin:18px 0 4px}
+  .pill{display:inline-block;font:600 11px/1 var(--mono);padding:5px 8px;border-radius:999px;border:1px solid}
+  .p-ok{color:var(--ok);background:var(--okbg);border-color:#1f5c44}
+  .p-warn{color:var(--warn);background:var(--warnbg);border-color:#5c4a1f}
+  .p-bad{color:var(--bad);background:var(--badbg);border-color:#5c2424}
+  table{border-collapse:collapse;width:100%;margin:12px 0;font-size:13.5px}
+  th,td{border:1px solid var(--line);padding:8px 11px;text-align:left;vertical-align:top}
+  th{background:var(--panel2);font-weight:600;color:#cfd5e1}
+  tr:nth-child(even) td{background:#13161f}
+  td.c,th.c{text-align:center;white-space:nowrap}
+  /* call stack diagram */
+  .stack{display:flex;flex-direction:column;gap:0;margin:14px 0}
+  .layer{position:relative;border:1px solid var(--line);border-radius:10px;padding:12px 14px;margin:0 0 26px;background:var(--panel)}
+  .layer:last-child{margin-bottom:0}
+  .layer::after{content:"▼";position:absolute;left:50%;bottom:-23px;transform:translateX(-50%);color:#454c5e;font-size:14px}
+  .layer:last-child::after{content:""}
+  .layer .t{font:600 14px/1.3 var(--mono);color:#cfe0ff}
+  .layer .d{font-size:13px;color:var(--muted);margin-top:4px}
+  .layer.ok{border-color:#1f5c44}
+  .layer.warn{border-color:#5c4a1f}
+  .layer.bad{border-color:#5c2424}
+  .tagrow{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+  pre{background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:14px 16px;overflow:auto;
+    font-family:var(--mono);font-size:12.5px;line-height:1.55;color:#d7def0;margin:12px 0}
+  pre .k{color:#ff9d6b}.pre .s{color:#9be39b}
+  .cmt{color:#6b7488}
+  .num{color:#ffce6b}
+  .seq{border:1px solid var(--line);border-radius:12px;overflow:hidden;margin:14px 0}
+  .seq .row{display:grid;grid-template-columns:34px 1fr;border-top:1px solid var(--line)}
+  .seq .row:first-child{border-top:0}
+  .seq .ix{display:flex;align-items:center;justify-content:center;background:var(--panel2);font:600 13px/1 var(--mono);color:var(--accent)}
+  .seq .bd{padding:10px 14px}
+  .seq .bd b{color:#cfe0ff;font-weight:600}
+  .seq .bd .meta{color:var(--muted);font-size:12.5px}
+  .seq .row.bad .ix{color:var(--bad)}
+  .seq .row.bad .bd b{color:#ffb0b0}
+  .callout{border-radius:10px;padding:12px 15px;margin:12px 0;font-size:13.5px}
+  .co-bad{background:var(--badbg);border:1px solid #5c2424}
+  .co-warn{background:var(--warnbg);border:1px solid #5c4a1f}
+  .co-ok{background:var(--okbg);border:1px solid #1f5c44}
+  ul{margin:8px 0 8px 2px;padding-left:20px}li{margin:5px 0}
+  .small{font-size:12.5px;color:var(--muted)}
+  .kbd{font:600 11px/1 var(--mono);background:#0b0d13;border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:3px 6px;color:#cdd6e6}
+  .foot{margin-top:50px;padding-top:18px;border-top:1px solid var(--line);color:var(--muted);font-size:12.5px}
+  .arith{font-family:var(--mono);font-size:12.5px;background:#0b0d13;border:1px solid var(--line);border-radius:10px;padding:14px 16px;margin:12px 0;white-space:pre;overflow:auto;color:#d7def0}
+</style>
+</head>
+<body>
+<div class="wrap">
+<section id="unbounded-answer">
+<h2>Total response duration and interaction count</h2>
+<p>Default chat responses have neither a tool-interaction limit nor a total processing-duration limit. HTTP model streams that keep producing data are not interrupted merely for running a long time. OPENPROGRAM_SSE_TOTAL_TIMEOUT_S defaults to 0, meaning no total-duration limit; positive values remain explicit deployment deadlines for one stream. An unset limit uses a positive-infinity deadline. Existing HTTP URL, redirect and response-size checks remain unchanged.</p>
+<p>Connection establishment, writes, pool waits, no-data and no-effective-data checks remain distinct from total response duration. User cancellation always applies. Explicit runtime.exec deadlines, program call-round parameters and declared budgets of standalone GUI/browser tools are not overridden by chat defaults.</p>
+<p>Acceptance uses public boundaries: an actual AgentSession exceeding the former 200 interactions, a managed HTTP stream returning content beyond the former 7200 seconds, and continued termination under explicit deadlines. Tests neither wait for real long periods nor modify real sessions.</p>
+<h3>Implementation status</h3><p>Chat interaction loops and individual HTTP streams now default to unlimited counts and total duration. Regressions cover more than 200 tool interactions, continuous responses beyond the former duration, Google synchronous/asynchronous transport, and explicit total-duration configuration.</p>
+</section>
+
+
+  <p class="sub">OpenProgram · Design document</p>
+  <h1>Error and timeout mechanisms (current-state inventory)</h1>
+  <p class="small">Scope: the complete path of one <code>runtime.exec()</code> from initiation to failure/timeout: retries, backoff, connection/stream timeouts, error classification and outer watchdog.
+  Purpose: <b>document current behavior before optimizing</b>. Optimization items are listed separately in §8 with implementation state and corresponding commits. Companion documents: <code>docs/design/llm-fault-tolerance.md</code>(cross-framework comparison), <code>error-retry.md</code>.</p>
+
+  <div class="lead">
+    <p style="margin-top:0"><b>Summary.</b> The provider-layer connection/stream timeout infrastructure is <span class="pill p-ok">mature</span>: mid-stream stalls after connection are actively bounded by SSE idle/data-stall/total budgets. Long periods with no new output instead result from
+    <span class="pill p-bad">multiplication of three retry loops</span> +
+    <span class="pill p-bad">deadlines not propagating</span> +
+    <span class="pill p-bad">outer watchdog exceptions being caught</span>. Together, one persistent <code>ConnectError</code> can run for hundreds to over a thousand seconds.</p>
+  </div>
+
+  <div class="callout co-ok" style="margin-top:16px">
+    <b>Implementation status — delivered (2026-06-01).</b> Items #1–#4 (framework) and #5 (harness) in §8 are implemented and verified; #6 was evaluated and deferred. Sections §2–§7 describe<u>pre-fix</u>behavior to explain the causes. Sections §5/§6 mark fixes, and §8 records each status with symbols/environment variables.
+    <div style="margin-top:10px;font-family:var(--mono);font-size:12px;line-height:1.8">
+      <span class="pill p-ok">Framework</span> OpenProgram <code>4e64ac95</code> — deadline propagation + <code>ExecInterrupt</code> + no cross-layer retries + <code>OPENPROGRAM_EXEC_TIMEOUT_S</code><br>
+      <span class="pill p-ok">harness</span> <code>74bfd06</code> — <code>SampleTimeoutError(ExecInterrupt)</code> + <code>--exec-timeout-s</code> + classification by <code>LLMError.reason</code> + abort on auth + <code>reraise_if_fatal</code><br>
+      <span class="small">Documentation updates were committed later in this repository; the two above are <b>implementation</b> commits. Line numbers remain snapshots from authoring.</span>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">1</span> Three timeout responsibilities</h2>
+  <p>The system has three semantically different timeouts, owned by different layers and code. Confusing them causes most misunderstandings.</p>
+  <div class="grid g3">
+    <div class="card">
+      <h4>① call-level <span class="pill p-ok">Covered</span></h4>
+      <div class="role">Owner: provider transport</div>
+      <p class="small" style="margin-bottom:0">Maximum wait for one HTTP request/SSE stream and maximum interval between chunks, enforced jointly by httpx timeouts, TCP keepalive and codex SSE parsing budgets.</p>
+    </div>
+    <div class="card">
+      <h4>② exec-level <span class="pill p-warn">Partial</span></h4>
+      <div class="role">Owner: <code>runtime.exec(timeout_s=)</code></div>
+      <p class="small" style="margin-bottom:0">Wall-clock limit for an entire exec, including all retry sleeps. Currently a soft deadline between attempts; it <b>does not propagate</b> into inner stream retries, and defaults to <code>None</code>=unbounded.</p>
+    </div>
+    <div class="card">
+      <h4>③ task-level <span class="pill p-bad">Unreliable</span></h4>
+      <div class="role">Owner: caller (runner / dispatcher)</div>
+      <p class="small" style="margin-bottom:0">Total budget for one benchmark sample/Agent turn: OCR, multiple crops, gates, review and retries. Only the caller knows it. ScreenSpot currently uses <code>signal.alarm</code>, which the framework catches.</p>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">2</span> Complete call stack</h2>
+  <p>From benchmark to network I/O. Each layer’s lower-right corner lists <b>its own</b> timeout/retry controls. There are <span class="pill p-bad">three independent retry loops</span>(locator, exec, stream_retry), without a shared wall-clock budget.</p>
+
+  <div class="stack">
+    <div class="layer">
+      <div class="t">ScreenSpot runner · run_one()</div>
+      <div class="d">Outer <code>signal.alarm(sample_timeout_s)</code> soft interrupt; locator also has its own multiround retries.<span class="cite">Benchmark side (outside this repository)</span></div>
+      <div class="tagrow"><span class="pill p-bad">Retry loop #1 (locator rounds)</span><span class="pill p-bad">signal.alarm watchdog</span></div>
+    </div>
+
+    <div class="layer warn">
+      <div class="t">Runtime.exec(content, …, timeout_s=None)</div>
+      <div class="d"><code>for attempt in range(max_retries)</code> wraps <code>except Exception</code>; the deadline is checked only <i>between attempts</i>and does not interrupt an executing <code>_call</code>.<span class="cite">runtime.py:750 / :780 / :754</span></div>
+      <div class="tagrow"><span class="pill p-bad">retry loop #2 (max_retries=6)</span><span class="pill p-warn">Soft deadline (caller must pass timeout_s)</span></div>
+    </div>
+
+    <div class="layer">
+      <div class="t">Runtime._call(content, model, response_format)</div>
+      <div class="d"><b>Synchronous</b> method;<u>accepts no timeout parameter</u>. Delegates to <code>_call_via_providers</code> → <code>_run_async()</code>.<span class="cite">runtime.py:771 / :981 / :1007</span></div>
+      <div class="tagrow"><span class="pill p-bad">No timeout argument</span></div>
+    </div>
+
+    <div class="layer warn">
+      <div class="t">_run_async(coro) · async-to-sync adapter</div>
+      <div class="d">No running loop → <code>asyncio.run(coro)</code> runs on <b>the current thread</b>(main thread for CLI/benchmark); existing loop (web/worker) → offload to <b>a thread-pool worker</b>.<span class="cite">runtime.py:1248–1261</span></div>
+      <div class="tagrow"><span class="pill p-warn">Main thread: signal.alarm can arrive</span><span class="pill p-bad">Worker thread: signals cannot arrive</span></div>
+    </div>
+
+    <div class="layer">
+      <div class="t">openai_codex · _run() → retry_stream(_attempt)</div>
+      <div class="d">One complete codex-provider call internally orchestrates stream retries.<span class="cite">openai_codex.py:134 / :210</span></div>
+    </div>
+
+    <div class="layer bad">
+      <div class="t">retry_stream(attempt_fn, max_attempts=3)</div>
+      <div class="d"><code>for attempt in range(max_attempts)</code> wraps <code>except Exception</code>; <code>ConnectError</code> Checks <code>retryable=True</code>.<b>Count-based only, with no knowledge of any deadline.</b><span class="cite">stream_retry.py:230 / :238 / :51</span></div>
+      <div class="tagrow"><span class="pill p-bad">retry loop #3 (max_attempts=3)</span><span class="pill p-bad">No wall-clock awareness</span></div>
+    </div>
+
+    <div class="layer ok">
+      <div class="t">httpx.AsyncClient.stream(...) · get_shared_async_client("openai-codex")</div>
+      <div class="d">Hardened shared client: connect/write/pool=30s, TCP keepalive detecting dead connections at ~60s, force-IPv4 fallback and proxy.<span class="cite">http_client.py:107 / :48–104 / openai_codex.py:223</span></div>
+      <div class="tagrow"><span class="pill p-ok">connect 30s</span><span class="pill p-ok">keepalive ~60s</span></div>
+    </div>
+
+    <div class="layer ok">
+      <div class="t">_parse_sse_stream(response) · line-by-line SSE</div>
+      <div class="d"><code>await asyncio.wait_for(line_iter.__anext__(), timeout=wait)</code>, <code>wait = min(idle_left, stall_left, total−now)</code>.<b>Mid-stream stalls are actively bounded here.</b><span class="cite">openai_codex.py:407 / :447 / :449 / :424</span></div>
+      <div class="tagrow"><span class="pill p-ok">idle 1800s</span><span class="pill p-ok">data-stall 900s</span><span class="pill p-ok">total 7200s</span></div>
+    </div>
+  </div>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">3</span> Existing timeout defenses (active)</h2>
+  <p>These are all <b>already active</b>; environment variables can override every default. Defined centrally in <code>providers/utils/timeouts.py</code> and <code>http_client.py</code>.</p>
+  <table>
+    <thead><tr><th>Defense</th><th>Default</th><th>Environment override</th><th>Enforcement point</th><th class="c">Status</th></tr></thead>
+    <tbody>
+      <tr><td>Connect timeout</td><td class="c">30s</td><td><code>OPENPROGRAM_HTTPX_CONNECT_TIMEOUT_S</code></td><td class="cite">timeouts.py:39</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>Write / pool timeout</td><td class="c">30s</td><td><code>…_WRITE_/_POOL_…</code></td><td class="cite">timeouts.py:40–41</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>TCP keepalive dead-connection detection</td><td class="c">~60s<br><span class="small">(30+10×3)</span></td><td><code>OPENPROGRAM_TCP_KEEPALIVE</code></td><td class="cite">http_client.py:48–79</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>SSE idle (no bytes)</td><td class="c">1800s</td><td><code>OPENPROGRAM_SSE_IDLE_TIMEOUT_S</code></td><td class="cite">timeouts.py:45 / codex:449</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>SSE data-stall (no actual data)</td><td class="c">900s</td><td><code>OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S</code></td><td class="cite">timeouts.py:47 / codex:447</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>SSE single-stream total limit</td><td class="c">7200s</td><td><code>OPENPROGRAM_SSE_TOTAL_TIMEOUT_S</code></td><td class="cite">timeouts.py:49 / codex:424</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>httpx read backstop</td><td class="c">1860s<br><span class="small">(idle+60)</span></td><td><code>OPENPROGRAM_HTTPX_READ_TIMEOUT_S</code></td><td class="cite">timeouts.py:52–60</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>Large-prompt budget scaling</td><td class="c">×1.25–2.0</td><td class="small">Tiered by context_tokens</td><td class="cite">timeouts.py:65–89</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+      <tr><td>Force-IPv4 / proxy fallback</td><td class="c">Off / automatic</td><td><code>OPENPROGRAM_FORCE_IPV4</code>, <code>HTTP(S)_PROXY</code></td><td class="cite">http_client.py:92–101</td><td class="c"><span class="pill p-ok">on</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout co-ok"><b>Meaning.</b> The typical stall where a connected server stops producing tokens is already constrained by codex <code>_parse_sse_stream</code> using <code>asyncio.wait_for</code> to idle/data-stall/total budgets:<u>protection is present</u>. Therefore claiming that the codex provider lacks a read timeout <b>is incorrect</b>.</div>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">4</span> Exec retry state machine</h2>
+  <p>Retry logic within one <code>exec()</code> . Key point: <b>the deadline is checked only between two <code>_call</code> between attempts</b>(dashed box), so it cannot interrupt the currently running <code>_call</code>.</p>
+  <pre><span class="cmt"># runtime.py:746–818 (abridged)</span>
+_deadline = start + timeout_s   <span class="cmt"># timeout_s=None ⇒ _deadline=None ⇒ entire block inactive</span>
+<span class="num">for</span> attempt <span class="num">in</span> range(max_retries):          <span class="cmt"># default 6 (_default_max_retries, :58)</span>
+
+    <span class="cmt">┌── Soft deadline check (between attempts only) ─────────────┐</span>
+    <span class="num">if</span> _deadline <span class="num">and</span> now() &gt;= _deadline:           <span class="cmt"># :754</span>
+        <span class="num">raise</span> LLMError(reason=TIMEOUT, retryable=False)
+    <span class="cmt">└──────────────────────────────────────────────────┘</span>
+
+    <span class="num">try</span>:
+        reply = self._call(...)      <span class="cmt"># :771 synchronous blocking, no timeout argument; a stall here prevents the check above</span>
+        <span class="num">break</span>
+    <span class="num">except</span> (TypeError, NotImplementedError):
+        <span class="num">raise</span>                       <span class="cmt"># Programming error: do not retry</span>
+    <span class="num">except</span> Exception <span class="num">as</span> e:           <span class="cmt"># :780 catches everything, including an external TimeoutError</span>
+        permanent = _is_permanent_error(e)   <span class="cmt"># :782 matches image/auth markers only</span>
+        <span class="num">if</span> permanent <span class="num">or</span> attempt == max_retries-1:
+            <span class="num">raise</span> _build_llm_error(...)   <span class="cmt"># → LLMError(reason, retryable, cause, …)</span>
+        sleep_s = _retry_sleep_seconds(attempt)  <span class="cmt"># 1.5·2^n, ±25% jitter; attempt5 ≈ 48s (:81)</span>
+        <span class="num">if</span> _deadline <span class="num">and</span> now()+sleep_s &gt;= _deadline:  <span class="cmt"># :801 report TIMEOUT early if backoff would exceed the deadline</span>
+            <span class="num">raise</span> LLMError(reason=TIMEOUT, retryable=False)
+        time.sleep(sleep_s)          <span class="cmt"># :818</span></pre>
+
+  <h3><code>_is_permanent_error</code> Recognizes only two classes <span class="cite">runtime.py:104–120</span></h3>
+  <p>The marker list contains only: <code>not a valid image</code> / <code>invalid image</code> / <code>image data is not</code> / <code>login expired</code> / <code>login failed</code> / <code>re-auth</code> / <code>unauthorized</code> / <code>invalid api key</code>. Any <b>timeout-class</b> exception misses these → <code>permanent=False</code> → <b>it is retried</b>. This directly explains why the outer <code>SampleTimeoutError</code> is treated as transient.</p>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">5</span> Core defect: three retry loops multiply with no wall-clock cap</h2>
+  <p>With persistent <code>ConnectError</code>(dead route, VPN packet loss or unreachable proxy; logs show <code>openai-codex stream retry … ConnectError</code>), the three loops multiply, and <b>no layer caps wall-clock time</b>: </p>
+
+  <table>
+    <thead><tr><th>Loop</th><th>Location</th><th class="c">Count</th><th>Cost per attempt</th><th>Backoff</th><th class="c">Deadline awareness</th></tr></thead>
+    <tbody>
+      <tr><td>#3 Inner stream</td><td class="cite">stream_retry.py:230</td><td class="c">max_attempts=3</td><td>connect ≤30s</td><td>1→2s (capped at 30s)</td><td class="c"><span class="pill p-bad">None</span></td></tr>
+      <tr><td>#2 Middle exec</td><td class="cite">runtime.py:750</td><td class="c">max_retries=6</td><td>= one complete inner loop</td><td>1.5→48s</td><td class="c"><span class="pill p-warn">Soft / requires timeout_s</span></td></tr>
+      <tr><td>#1 Outer locator</td><td class="cite">Benchmark side</td><td class="c">Multiple rounds</td><td>= one complete middle loop</td><td>—</td><td class="c"><span class="pill p-bad">None</span></td></tr>
+    </tbody>
+  </table>
+
+  <div class="arith">When connect encounters <b>timeouts</b>(packet loss, not refusal, consuming 30s each), worst-case wall-clock time:
+
+  Inner ≈ 3 × 30s (connect) + (1+2)s (backoff)            ≈  <span class="num">93s</span>
+  Middle ≈ 6 × 93s + (1.5+3+6+12+24)s (backoff)            ≈ <span class="num">605s</span>   ← one exec()
+  Outer ≈ locator multiplies by N rounds                              ≈ <span class="num">&gt;900s</span>
+
+  Total transport connect attempts = 3 × 6 (× locator rounds) = <span class="num">18+</span> attempts</div>
+
+  <div class="callout co-bad"><b>Duplicate retries at two layers (design issue).</b> <code>ConnectError</code> The inner layer already classifies <code>retryable=True</code> and retries it three times before raising <code>ProviderStreamError(retryable=True)</code>; once it reaches exec, <code>_is_permanent_error</code> does not match → exec <b>again</b> retries the same transport error with a fresh 6× budget.<u>The same transport error is independently retried at two layers</u>, turning a ~90s problem into 600s+.</div>
+
+  <div class="callout co-ok"><b>Fixed <code>4e64ac95</code>.</b> Exec propagates one deadline into <code>stream_retry</code>(checked before each attempt and backoff), and <code>stream_retry</code> marks budget-exhausted exceptions with <code>transport_exhausted</code> ; exec then<u>does not retry with a new budget</u> , reducing 18 attempts (3×6) to the three inner attempts.<code>_parse_sse_stream</code> SSE waits in <code>min(budget, remaining deadline)</code> are also clamped, so individual streams cannot exceed the budget.</div>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">6</span> Timeline of a swallowed watchdog</h2>
+  <p>ScreenSpot uses <code>signal.alarm</code> to stop at the sample deadline, but its exception reaches the two layers’ <code>except Exception</code>.</p>
+  <div class="seq">
+    <div class="row"><div class="ix">1</div><div class="bd"><b>signal.alarm(900)</b> Starts a one-shot alarm.<span class="meta">Outside benchmark run_one()</span></div></div>
+    <div class="row"><div class="ix">2</div><div class="bd">Enters <b>exec → _call → _run_async → asyncio.run</b> on the main thread and stalls in nested retries for persistent ConnectError.</div></div>
+    <div class="row bad"><div class="ix">3</div><div class="bd"><b>At 900s, SIGALRM fires</b>, and the handler at the next main-thread bytecode boundary <code>raise SampleTimeoutError</code>(inherits <code>TimeoutError → Exception</code>).</div></div>
+    <div class="row bad"><div class="ix">4</div><div class="bd">The exception propagates to <b>stream_retry’s <code>except Exception</code></b>(:238), or <b>exec’s <code>except Exception</code></b>(:780), and is treated as an ordinary call failure.</div></div>
+    <div class="row bad"><div class="ix">5</div><div class="bd"><code>_is_permanent_error</code> Does not match → <code>permanent=False</code> → <b>retry continues</b>. The sample meaning (“this entire sample timed out and must stop”) is<u>lost</u>.</div></div>
+    <div class="row bad"><div class="ix">6</div><div class="bd"><code>signal.alarm</code> is one-shot and has been consumed; the outer <code>finally: alarm(0)</code> runs only after run_one() returns, but it is still blocked.<b>No further hard protection remains, so execution continues.</b></div></div>
+  </div>
+  <div class="callout co-warn"><b>Web/worker contexts are worse.</b> With a running event loop, <code>_run_async</code> takes <code>asyncio.run</code> and offloads it to <b>a thread-pool worker</b>(runtime.py:1260). Python delivers signals only to the main thread, so <code>signal.alarm</code> in this context<u>cannot reach</u>the running <code>_call</code> : the soft watchdog is ineffective.</div>
+
+  <div class="callout co-ok"><b>Fixed in framework <code>4e64ac95</code> + harness <code>74bfd06</code>.</b> <code>SampleTimeoutError</code> now inherits <code>ExecInterrupt(BaseException)</code>, which neither <code>except Exception</code> can catch. It crosses the OpenProgram retry layers and is caught by <code>run_one()</code> at the sample boundary to record <code>sample_timeout</code>(steps 4/5 no longer occur). Signals never reach worker threads; instead, <code>--exec-timeout-s</code> → <code>OPENPROGRAM_EXEC_TIMEOUT_S</code> provides a signal-independent call-level deadline, and <code>_run_async</code> now propagates the deadline ContextVar into the worker thread.</div>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">7</span> Error classification and retryability</h2>
+  <p>When exec gives up, it raises structured <code>LLMError</code> (<span class="cite">errors.py:62</span>), <b>already</b> containing enough fields for precise caller-side scoring; callers should not label everything <code>wrong_format</code>.</p>
+  <div class="grid g2">
+    <div class="card">
+      <h4><code>ErrorReason</code> Enumeration <span class="cite">errors.py:31</span></h4>
+      <p class="small" style="margin-bottom:0"><code>TRANSPORT</code> · <code>RATE_LIMIT</code> · <code>PROVIDER_INTERNAL</code> · <code>AUTHENTICATION</code> · <code>AUTHORIZATION</code> · <code>INVALID_REQUEST</code> · <code>CONTEXT_LENGTH</code> · <code>CONTENT_POLICY</code> · <code>TIMEOUT</code> · <code>UNKNOWN</code></p>
+    </div>
+    <div class="card">
+      <h4><code>LLMError</code> Fields <span class="cite">errors.py:62–85</span></h4>
+      <p class="small" style="margin-bottom:0"><code>reason</code> · <code>retryable</code> · <code>http_status</code> · <code>retry_after_s</code> · <code>attempts</code> · <code>elapsed_s</code> · <code>had_image</code> · <code>provider</code> · <code>model</code> · <code>last_error_type</code> · <code>cause</code></p>
+    </div>
+  </div>
+  <h3><code>classify_error</code> Classification order <span class="cite">errors.py:191–258</span></h3>
+  <table>
+    <thead><tr><th class="c">Priority</th><th>Basis</th><th>Classification</th><th class="c">retryable</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>HTTP 429</td><td>RATE_LIMIT</td><td class="c"><span class="pill p-ok">Yes</span></td></tr>
+      <tr><td class="c">1</td><td>HTTP 500/502/503/504</td><td>PROVIDER_INTERNAL</td><td class="c"><span class="pill p-ok">Yes</span></td></tr>
+      <tr><td class="c">1</td><td>HTTP 401 / 403</td><td>AUTHENTICATION / AUTHORIZATION</td><td class="c"><span class="pill p-bad">No</span></td></tr>
+      <tr><td class="c">1</td><td>HTTP 400 (+context/policy marker)</td><td>INVALID_REQUEST / CONTEXT_LENGTH / CONTENT_POLICY</td><td class="c"><span class="pill p-bad">No</span></td></tr>
+      <tr><td class="c">2</td><td>Exception type name belongs to the transport set<br><span class="small">ConnectError / ReadTimeout / … (stream_retry.py:72)</span></td><td>TRANSPORT</td><td class="c"><span class="pill p-ok">Yes</span></td></tr>
+      <tr><td class="c">3</td><td>Message-substring fallback (auth / invalid / context / policy / rate-limit / transport name)</td><td>Corresponding reason</td><td class="c"><span class="pill p-warn">Depends on class</span></td></tr>
+      <tr><td class="c">—</td><td>No match</td><td>UNKNOWN</td><td class="c"><span class="pill p-bad">No</span></td></tr>
+    </tbody>
+  </table>
+  <p class="small">Note: <code>override_reason=TIMEOUT</code> deadline hits always use <code>retryable=False</code> (<span class="cite">runtime.py:170–176</span>); other exhausted budgets whose error type could be retried retain <code>retryable=True</code>, meaning “retry with a new budget”, not “retry immediately”.</p>
+
+  <!-- ============================================================= -->
+  <h2><span class="n">8</span> Optimization items (implementation status)</h2>
+  <p class="small">Two parallel areas with different responsibilities: framework #1–#4 prevent<u>any</u>caller (channel worker, web turn, benchmark) from excessive nested retries; harness #5 handles sample-level scoring and a reliable watchdog. Subprocesses do not replace framework fixes, and framework fixes do not remove runner watchdog obligations.<b>#1–#4 delivered in framework <code>4e64ac95</code> , #5 in harness <code>74bfd06</code> (subprocess isolation deferred); #6 deferred.</b></p>
+  <table>
+    <thead><tr><th class="c">#</th><th>Fix</th><th>Reason</th><th class="c">Value</th><th>Status</th></tr></thead>
+    <tbody>
+      <tr><td class="c">1</td><td>Propagate a single deadline from <code>exec</code> to <code>_call</code> → codex <code>_run</code> → <code>stream_retry</code>(SSE waits use <code>min(budget, remaining)</code>)</td><td>Currently <code>exec(timeout_s)</code> controls only the middle layer and requires caller input; inner stream_retry and SSE budgets do not know it. Propagation makes the deadline end-to-end, with overshoot bounded by one connect attempt.</td><td class="c"><span class="pill p-bad">Highest</span></td><td><span class="pill p-ok">Implemented <code>4e64ac95</code></span><br><span class="small">New <code>providers/utils/deadline.py</code> (ContextVar); exec/async_exec set+reset; stream_retry & Codex reads</span></td></tr>
+      <tr><td class="c">2</td><td>Do not repeat transport retries across layers</td><td>After stream_retry exhausts three attempts for <code>ProviderStreamError</code> , exec retries six more times, totaling 18. Exec should recognize the provider’s exhausted transport budget and practically avoid retrying.</td><td class="c"><span class="pill p-bad">High</span></td><td><span class="pill p-ok">Implemented <code>4e64ac95</code></span><br><span class="small"><code>stream_retry</code> Set the <code>transport_exhausted</code> flag; exec stops retrying while honestly retaining TRANSPORT/retryable as the reason</span></td></tr>
+      <tr><td class="c">3</td><td>Introduce a <code>ExecInterrupt(BaseException)</code> hard-interrupt contract</td><td><code>exec</code> and <code>stream_retry</code> <b>Both</b> include <code>except Exception</code>; <code>BaseException</code> so it passes through both layers and immediately exits on an external watchdog interrupt.</td><td class="c"><span class="pill p-bad">High</span></td><td><span class="pill p-ok">Implemented <code>4e64ac95</code></span><br><span class="small"><code>errors.ExecInterrupt</code>; both layers explicitly <code>except ExecInterrupt: raise</code></span></td></tr>
+      <tr><td class="c">4</td><td><code>exec(timeout_s)</code> Provide a default / require it at entry</td><td>Current default <code>None</code>=unbounded. Any dispatcher/worker/benchmark caller that does not configure it lacks this protection.</td><td class="c"><span class="pill p-warn">Medium</span></td><td><span class="pill p-ok">Implemented <code>4e64ac95</code></span><br><span class="small"><code>OPENPROGRAM_EXEC_TIMEOUT_S</code> Process-level default; 0=unbounded (opt-in, preserving behavior)</span></td></tr>
+      <tr><td class="c">5</td><td>ScreenSpot: reliable watchdog + scoring by <code>LLMError.reason</code> (+ subprocess isolation)</td><td>Only the runner knows the total sample budget. Authentication stops the run; timeout and transport failures have separate categories and do not contaminate wrong_format.</td><td class="c"><span class="pill p-warn">Harness side</span></td><td><span class="pill p-warn">Partial <code>74bfd06</code></span><br><span class="small"><code>SampleTimeoutError(ExecInterrupt)</code>, <code>--exec-timeout-s</code>, reason classification + <code>provider_auth</code>, auth aborts the run, <code>reraise_if_fatal</code> implemented; <b>hard subprocess isolation deferred</b>(watchdog reliability and call-level deadlines reduce its priority)</span></td></tr>
+      <tr><td class="c">6</td><td>Synchronous <code>_call</code> Hard thread-future limit (last resort)</td><td>Only protects against one <code>_call</code> hanging indefinitely. SSE budgets already bound stalls, making this an additional safeguard.</td><td class="c"><span class="pill p-ok">Last resort</span></td><td><span class="pill p-bad">Deferred</span><br><span class="small">See side effects below; #1 bounds stalls/connects, leaving little scope for an individual _call to hang indefinitely</span></td></tr>
+    </tbody>
+  </table>
+  <div class="callout co-warn"><b>Side effects of thread-future fallback (#6).</b> Python cannot safely kill a thread: the caller returns on timeout, but the <code>_call</code> thread keeps running in the background<u>until the socket itself fails</u>; meanwhile it may append model-call nodes or write store/DAG state, causing contamination. Thus #6 is only a last resort and must rely on #1 read timeouts to bound the leak. Ideally providers expose async and exec uses <code>asyncio.wait_for</code>(cancellation reaches await points with no leaked threads); synchronous threads remain a fallback only when async is unavailable.</div>
+
+  <div class="foot">
+    Current-state analysis is based on read-only inspection of these files:
+    <code>agent/runtime.py</code> (exec/retry/bridge),
+    <code>providers/utils/timeouts.py</code>, <code>providers/utils/http_client.py</code>,
+    <code>providers/utils/stream_retry.py</code>, <code>providers/utils/errors.py</code>,
+    <code>providers/adapters/openai_codex/openai_codex.py</code>.
+    Line numbers are snapshots from authoring and must be updated after implementation. Companion comparison: <code>llm-fault-tolerance.md</code>.
+  </div>
+
+</div>
+<section><h2>Nested Codex authentication and terminal error contract</h2><p>Codex Runtime uses the provider active account by default, matching direct chat credentials; an explicit profile pins its own account. CredentialProvider refresh remains authoritative. Both synchronous and asynchronous Runtime calls preserve the provider terminal reason, retry verdict and Retry-After through AgentSession. A rejected OAuth token or any explicit non-retryable provider failure makes exactly one provider request; transient failures retain bounded recovery. Public fake-provider acceptance covers active versus pinned accounts, HTTP status classification and terminal failure propagation without external credentials or requests.</p><p>An arbitrary exception without an explicit retry verdict can be classified UNKNOWN/non-retryable for display. AssistantMessage retains that classification and marks error_retryable_inferred. Runtime preserves its existing bounded fallback only for UNKNOWN/non-retryable messages with this inferred marker; an explicit provider verdict (both true and false), known taxonomy or exhausted transport budget remains authoritative. taxonomy_fields retains an original boolean retryable value; only an omitted verdict receives the inferred marker. The marker defaults to false for existing producers and serialized messages and survives message/event serialization.</p></section><section><h2>DNS failures at the policy transport boundary</h2><p>A DNS_ERROR caused by socket.gaierror is an operational connection failure. The shared HTTP transport records the policy diagnostic and raises httpx.ConnectError, allowing existing bounded provider transport recovery to apply before response commitment. Every attempt still resolves and validates every address and pins the connection to approved addresses. Empty or malformed resolver answers and denied origins or private addresses remain policy failures. Proxy resolution follows the same rule. No DNS fallback, private-address exception or unbounded retry is added.</p><p>Implementation status: static review and release build only for this change; automated regression suites are not run at the user's request.</p></section><section><h2>Transport allowance and waiting for the network</h2><p>The invocation-local recovery state holds two allowances. Structured, length and repetitive-output repairs share <code>limit</code>; transport retries (<code>reserve("transport")</code>) use a separate <code>transport_limit</code>, <code>OPENPROGRAM_PROVIDER_STREAM_RETRIES</code> minus the first attempt (default 4). A dropped connection says nothing about the model's output, so it never spends a repair, and spent repairs never block a reconnect. A request that succeeds after transport retries refunds them, so the transport allowance is bounded per request. An explicit limit of 0 disables both.</p><p>When a request's transport retries are spent on failures that cannot reach the endpoint at all (httpx <code>ConnectError</code>/<code>ConnectTimeout</code>, <code>ConnectionRefusedError</code>, DNS resolution failures, or an SDK <code>APIConnectionError</code> caused by one) and nothing was committed, <code>retry_stream</code> and the openai-completions retry loop wait for the network instead of failing the turn. They re-try the same request every 5, 10, 20, then 30 seconds and emit a <code>retry</code> event with reason <code>network_wait</code>, which the chat shows as "Waiting for the network". A success continues the turn and refunds the outage's retries; a different retryable failure once the network answers starts a fresh retry budget; a non-retryable one is raised. The wait ends, raising the last failure flagged <code>transport_exhausted</code>, at <code>OPENPROGRAM_NETWORK_WAIT_MAX_S</code> (default 1800 s, 0 disables it) or the caller's deadline, and immediately on cancel. A single-attempt request policy or a recovery limit of 0 never waits. Server errors (HTTP 5xx, 429) and committed output never wait: they mean the network is up or a resend would duplicate output.</p><p>SDK wrappers report a dropped network as <code>APIConnectionError("Connection error.")</code>; <code>classify_error</code> treats <code>APIConnectionError</code>, <code>APITimeoutError</code> and any exception caused by a transport error as retryable <code>TRANSPORT</code>.</p><p>Implementation status: implemented for openai-codex (<code>retry_stream</code>) and openai-completions. Anthropic relies on its SDK's own retries and does not wait for the network.</p></section>
+</body>
+</html>

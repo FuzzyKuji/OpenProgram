@@ -1,0 +1,52 @@
+<style>
+.doc-intro { border-left: 3px solid var(--acc); padding: 4px 0 4px 18px; margin: 18px 0 28px; }
+.doc-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
+.doc-flow > div { padding: 16px; background: var(--bg-code); border-radius: 8px; min-width: 0; }
+.doc-flow strong { display: block; color: var(--tx); }
+.doc-flow p { margin: 8px 0 0; font-size: 14px; }
+.doc-scroll { max-width: 100%; overflow-x: auto; }
+.doc-scroll:focus-visible, summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+code { overflow-wrap: anywhere; }
+details { padding: 12px 0; border-bottom: 1px solid var(--bd); }
+summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 680px) { .doc-flow { grid-template-columns: 1fr; } }
+</style>
+
+<h1>OpenProgram 实现导航</h1>
+<p>通过本页查找设计当前负责的源码位置及实现证据。本页不认证集成分支、发布版本或已安装应用。</p>
+<p>设计说明预期行为；实现记录定位代码和验证。历史审查结果保留在 Git 历史中。</p>
+<h2 id="implementation-section-1">查找实现文档</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="实现导航表"><table><thead><tr><th>领域</th><th>设计</th><th>补充文档</th><th>检查内容</th></tr></thead><tbody>
+<tr><td>仓库归属</td><td><a href="repository-structure.zh.html">设计</a></td><td><a href="repository-structure-implementation.zh.html">实现背景</a></td><td>应用根目录、兼容接口及验证。</td></tr>
+<tr><td>执行控制</td><td><a href="runtime/execution/control.zh.html">设计</a></td><td><a href="runtime/README.zh.md">实现背景</a></td><td>暂停、继续、取消、恢复和界面同步。</td></tr>
+<tr><td>Goal 执行</td><td><a href="runtime/reliability/goal-and-recovery.zh.html">设计</a></td><td><a href="runtime/reliability/goal-and-recovery.zh.html">实现背景</a></td><td>控制器生命周期、持久化及剩余验收。</td></tr>
+<tr><td>会话与 DAG</td><td><a href="runtime/dag/overview.zh.md">设计</a></td><td><a href="runtime/session/README.zh.md">实现背景</a></td><td>图语义、存储和会话操作。</td></tr>
+<tr><td>权限与沙箱</td><td><a href="runtime/security/sandbox-architecture.zh.html">设计</a></td><td><a href="runtime/security/sandbox-architecture.zh.html">实现背景</a></td><td>权限、批准和执行边界。</td></tr>
+<tr><td>记忆</td><td><a href="memory/architecture.zh.html">设计</a></td><td><a href="memory/README.zh.md">实现背景</a></td><td>记忆归属、召回和实现边界。</td></tr>
+<tr><td>网页集成</td><td><a href="integrations/web-use.zh.html">设计</a></td><td><a href="integrations/computer-and-browser-use.zh.md#web_use-运行时">实现背景</a></td><td>浏览器集成及其实现证据。</td></tr>
+<tr><td>记录与回放</td><td><a href="providers/record-replay.zh.html">设计</a></td><td><a href="providers/record-replay.zh.md">实现背景</a></td><td>服务商记录、回放和失败处理。</td></tr>
+<tr><td>MCP 服务器</td><td><a href="integrations/mcp-server.zh.html">设计</a></td><td><a href="integrations/mcp-integration.zh.html">实现背景</a></td><td>服务器开放接口与 MCP 集成。</td></tr>
+<tr><td>分发</td><td><a href="distribution/installation-packaging.zh.html">设计</a></td><td><a href="distribution/automatic-updates.zh.html">实现背景</a></td><td>打包、激活、更新与发布验收。</td></tr>
+<tr><td>测试</td><td><a href="testing/test-system.zh.html">设计</a></td><td><a href="repository-structure-implementation.zh.html">实现背景</a></td><td>验证层次及源码布局检查。</td></tr>
+</tbody></table></div>
+<p>其他领域请使用 <a href="README.zh.md">子系统索引</a>。 <a href="feature-matrix.zh.html">框架功能比较</a> 有独立比较范围，不是发布验收报告。</p>
+<h2 id="implementation-section-2">准确理解实现状态</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="实现导航表"><table><thead><tr><th>状态</th><th>必要含义</th></tr></thead><tbody>
+<tr><td>已实现</td><td>所述合同已有实现及要求的验证证据，必须明确已验证边界。</td></tr>
+<tr><td>部分实现</td><td>已有部分路径，但仍存在明确列出的实现或验收要求。</td></tr>
+<tr><td>未实现</td><td>设计规定了仍需实现的行为。</td></tr>
+<tr><td>不在范围内</td><td>该行为被当前设计排除，并非隐含实现任务。</td></tr>
+<tr><td>未重新验证</td><td>现有证据尚未对当前源码或目标环境核查，不得据此标记当前通过。</td></tr>
+</tbody></table></div>
+<h2 id="implementation-section-3">每份实现文档的内容</h2>
+<ol>
+<li>公开入口及其可观察行为。</li>
+<li>源码负责位置和实现链接，包括兼容入口。</li>
+<li>数据归属、状态转换及持久化边界。</li>
+<li>适用时说明失败、取消和恢复行为。</li>
+<li>可复现验证命令及各自检查的具体合同。</li>
+<li>实现状态附录，列明剩余工作和验收缺口。</li>
+</ol>
+<p>架构依据维护在主题设计中。实现记录聚焦源码映射和验证。迁移时间线及过往审查输出保留在 Git 历史，不在多个页面重复。</p>
+<h2 id="implementation-section-4">实现状态</h2>
+<p>此次导航更新不重新运行子系统测试，也不证明已发布、部署或通过已安装 App 验收。请查阅链接主题的证据，并在修改状态前重新验证受影响合同。</p>

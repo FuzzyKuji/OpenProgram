@@ -1,0 +1,11 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>阅读、编辑与历史</title>
+<style>body{font:16px system-ui;max-width:1000px;margin:48px auto;padding:24px;background:#171719;color:#eee;line-height:1.6}section{border:1px solid #444;border-radius:12px;padding:24px;margin:20px 0}button{background:#333;color:#fff;padding:10px;border:1px solid #555;border-radius:6px}pre{white-space:pre-wrap}.add{color:#94d4a5}.remove{color:#efa5a5}a{color:#acd4ff}</style>
+<h1>阅读、编辑与历史</h1>
+<p>打开主题或 Core 来源记录时显示渲染后的 Markdown。点击编辑切换到源码。编辑立即在本地持久化，并立即交给串行文件写入器。Git 历史检查点以五分钟间隔归并手动编辑。</p>
+<section><h2>主题标题</h2><button>预览</button> <button>编辑</button> <button>历史</button> <p>渲染后的记忆内容，保留现有脚注和链接。</p></section>
+<section><h2>历史</h2><p>按最新优先排序，显示本地日期时间、提交说明及可选择的版本。按需加载更早记录。选择版本后查看相对其父版本新增和删除的行。</p><pre class="remove">− 原段落</pre><pre class="add">+ 更新后的段落</pre><p>选择版本并点击“恢复此版本”可恢复该文档。恢复前先记录当前状态，再创建新提交，保留已有历史。自动保存期间仍可使用键盘撤销和重做。服务端任务每 15 秒检查持久化的待处理截止时间；即使页面关闭，编辑也会在五分钟后形成检查点。重启后继续处理待完成期限。</p></section>
+<h2>现有实现与参考</h2><p>编辑器默认显示源码并要求点击保存。暂存写入已验证引用、重建派生视图并提交 Git 历史，但未展示历史。保留该事务及 Markdown 渲染。</p>
+<table><tr><th>参考</th><th>采用的行为</th><th>边界</th></tr><tr><td><a href="https://hackmd.io/@hackmd-blog/hackmd-versions-api-2026">HackMD 版本</a></td><td>版本列表和可见差异</td><td>不提供协作编辑或命名版本</td></tr><tr><td><a href="https://obsidian.md/help/sync/version-history">Obsidian 历史</a></td><td>自动持久化与可访问历史</td><td>本地 Git，不提供同步服务</td></tr></table>
+<h2>数据与失败处理</h2><p>经过所有者授权的 Memory 端点读取有界 Git 历史，仅限主题 Markdown。在现有写锁下比较提交的基础内容，拒绝过期编辑。由于规范化可能修改源码，返回规范保存文本。仅内联显示错误和 Git 警告，不显示“保存中”或“已保存”。跨导航和刷新保留本地草稿，按文件串行保存。旧响应不得把后续输入标记为已保存。</p>
+<h2>验收</h2><p>主题与 Core 默认预览，无保存按钮。输入自动持久化，切换文件后仍保留，并产生可见 Git 记录。撤销按单次编辑回退；历史可恢复选定版本。历史支持更早分页和父版本差异。保存被拒绝或发生冲突时保留草稿并显示错误。路径与版本输入不能逃逸 Memory。现有源码验证与渲染保持不变。</p>
+<h2>来源链接与侧栏</h2><p>归档隐藏会话，不按期限或容量删除。原会话已删除时链接不可用，标注“原会话已删除”；不因删除另建来源副本。展示内容前检查现有 Memory 来源存储。Memory 导航和刷新控件复用主侧栏行及图标按钮样式。</p><h2>实现状态</h2><p>已实现并经过独立审查。路由测试覆盖延迟 Git 提交、恢复和已删除来源访问；控制器测试覆盖串行写入与撤销/重做。归档测试覆盖重启后保留。完整检查和默认 App 可视验证是发布条件。</p></html>

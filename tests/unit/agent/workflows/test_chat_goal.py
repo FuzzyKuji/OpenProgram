@@ -1,0 +1,272 @@
+from __future__ import annotations
+
+import pytest
+
+
+@pytest.mark.parametrize("source", ["web", "tui", "acp"])
+def test_chat_runtime_keeps_goal_tool_membership_on_approval_resume(monkeypatch, source):
+    from openprogram.runtime.conversation import turn_runtime as dispatcher
+    from openprogram.runtime.execution.agent_checkpoint import validate_runtime_contract
+    from openprogram.runtime.conversation.turn_runtime import loop_runner
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.models.providers.types import AgentTool
+    from openprogram.models.providers.types import Model
+
+    model = Model(id="fake", name="fake", api="openai-completions", provider="openai",
+                  base_url="https://example.invalid/v1")
+    tools = [AgentTool(name=name, label=name, description=name,
+                       parameters={"type": "object"}, execute=lambda *args: None)
+             for name in ("goal", "todo_create", "update_goal")]
+    monkeypatch.setattr(dispatcher, "_load_agent_profile", lambda *a: {})
+    monkeypatch.setattr(dispatcher, "_resolve_model", lambda *a: model)
+    monkeypatch.setattr(loop_runner, "_resolve_tools", lambda *a, **k: tools)
+    monkeypatch.setattr(loop_runner, "_wrap_with_approval", lambda tool, *a: tool)
+    monkeypatch.setattr("openprogram.runtime.context.components.build_system_prompt", lambda *a, **k: "system")
+    monkeypatch.setattr("openprogram.programs.tools.planning.goal.chat.instructions", lambda *a: "")
+    request = TurnRequest("approval-goal", "calculate", "main", source)
+    request._execution_revision_id = "test-revision"
+    initial = loop_runner.resolve_agent_runtime(request)[-1]
+    assert "goal" not in {tool["name"] for tool in initial["tools"]}
+    resumed = loop_runner.resolve_agent_runtime(request, saved_runtime_contract=initial)[-1]
+    assert "goal" not in {tool["name"] for tool in resumed["tools"]}
+    validate_runtime_contract(initial, resumed)
+
+
+def test_chat_runtime_keeps_saved_tools_when_live_catalog_grows(monkeypatch):
+    from openprogram.runtime.conversation import turn_runtime as dispatcher
+    from openprogram.runtime.execution.agent_checkpoint import validate_runtime_contract
+    from openprogram.runtime.conversation.turn_runtime import loop_runner
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.models.providers.types import AgentTool
+    from openprogram.models.providers.types import Model
+
+    model = Model(id="fake", name="fake", api="openai-completions", provider="openai",
+                  base_url="https://example.invalid/v1")
+    tools = [AgentTool(name=name, label=name, description=name,
+                       parameters={"type": "object"}, execute=lambda *args: None)
+             for name in ("todo_create", "update_goal")]
+    extra = AgentTool(name="weekly_report", label="weekly_report", description="weekly_report",
+                      parameters={"type": "object"}, execute=lambda *args: None)
+    live = {"extra": False}
+
+    def resolve(*_args, **_kwargs):
+        return [*tools, extra] if live["extra"] else list(tools)
+
+    monkeypatch.setattr(dispatcher, "_load_agent_profile", lambda *a: {})
+    monkeypatch.setattr(dispatcher, "_resolve_model", lambda *a: model)
+    monkeypatch.setattr(loop_runner, "_resolve_tools", resolve)
+    monkeypatch.setattr(loop_runner, "_wrap_with_approval", lambda tool, *a: tool)
+    monkeypatch.setattr("openprogram.runtime.context.components.build_system_prompt", lambda *a, **k: "system")
+    monkeypatch.setattr("openprogram.programs.tools.planning.goal.chat.instructions", lambda *a: "")
+    request = TurnRequest("approval-goal", "calculate", "main", "web")
+    request._execution_revision_id = "test-revision"
+    saved = loop_runner.resolve_agent_runtime(request)[-1]
+    live["extra"] = True
+    resumed = loop_runner.resolve_agent_runtime(request, saved_runtime_contract=saved)[-1]
+    assert {tool["name"] for tool in resumed["tools"]} == {tool["name"] for tool in saved["tools"]}
+    assert "weekly_report" not in {tool["name"] for tool in resumed["tools"]}
+    validate_runtime_contract(saved, resumed)
+
+
+def test_live_tool_visibility_preserves_execution_contract(monkeypatch):
+    from openprogram.runtime.permissions.lifecycle import wrap_live_permission
+    from openprogram.runtime.permissions.authority import owner_authority
+    from openprogram.runtime.agent.turn_request import TurnRequest
+    from openprogram.runtime.permissions.modes import PermissionRules
+    from openprogram.models.providers.types import AgentTool
+    rules = PermissionRules(deny=[])
+    monkeypatch.setattr("openprogram.runtime.permissions.rule.load_merged_rules", lambda _: rules)
+    request = TurnRequest("deny-bash", "hello", "main", "web",
+                          **owner_authority("owner/install/0123456789abcdef"))
+    tool = wrap_live_permission(AgentTool(name="bash", label="bash", description="shell",
+                              parameters={}, execute=lambda *args: None), request, lambda _: None)
+    assert tool._permission_visible()
+    rules.deny = ["bash"]
+    assert not tool._permission_visible()
+    rules.deny = ["bash(rm *)"]
+    assert tool._permission_visible()
+    assert tool.name == "bash"
+
+
+@pytest.fixture
+def session(tmp_path, monkeypatch):
+    from openprogram.runtime.context.session_db import SessionDB
+    import openprogram.programs.tools.planning.goal as goals
+    db = SessionDB(tmp_path / "sessions")
+    db.create_session("chat-goal", "main")
+    monkeypatch.setattr(goals, "_db", lambda: db)
+    monkeypatch.setattr(goals, "_emit_goal_update", lambda *a, **k: None)
+    monkeypatch.setattr(goals, "goal_usage", lambda *a: {"total_tokens": 0, "cost_usd": 0, "cost_known": True})
+    yield goals, db
+    db.close()
+
+
+def test_slash_goal_starts_normal_chat(session):
+    goals, _ = session
+    result = goals.handle_goal_command("chat-goal", "implement and verify the feature")
+    assert "invoke" not in result
+    assert result["send_text"]
+    goal = goals.load_goal("chat-goal")
+    assert goal["execution_mode"] == "chat"
+    assert goal["text"] == "implement and verify the feature"
+    assert "max_turns" not in goal["budget"]
+
+
+def test_chat_goal_completion_rejects_unfinished_todos(session, monkeypatch):
+    from openprogram.programs.tools.planning.goal import chat
+    from openprogram.programs.tools.planning.todo import shared
+    goals, _ = session
+    goal = chat.create("chat-goal", "implement and verify")
+    monkeypatch.setattr(shared, "load", lambda sid: [{
+        "id": "1", "subject": "verify", "status": "pending",
+        "goal_id": goal["goal_id"], "goal_revision": goal["revision"],
+    }])
+    with pytest.raises(ValueError, match="todo"):
+        chat.update("chat-goal", "complete", expected=chat.identity(goal))
+    assert goals.load_goal("chat-goal")["status"] == "active"
+
+
+def test_todo_tools_publish_current_goal_progress(session, monkeypatch, tmp_path):
+    from openprogram.programs.tools.planning.goal import chat
+    from openprogram.programs.tools.planning.todo import shared
+    from openprogram.programs.tools.planning.todo.todo_create.todo_create import _todo_create_impl
+    from openprogram.programs.tools.planning.todo.todo_update.todo_update import _todo_update_impl
+    goals, _ = session
+    monkeypatch.setattr(shared, "todos_path", lambda sid: tmp_path / "todos.json")
+    monkeypatch.setattr(shared, "current_session_id", lambda: "chat-goal")
+    goal = chat.create("chat-goal", "verify")
+    monkeypatch.setattr(chat, "current_identity", lambda: chat.identity(goal))
+    assert "created" in _todo_create_impl("verify")
+    assert goals.load_goal("chat-goal")["checklist"] == [{"text": "verify", "done": False}]
+    assert "updated" in _todo_update_impl("1", status="completed")
+    saved = goals.load_goal("chat-goal")
+    assert saved["checklist"] == [{"text": "verify", "done": True}]
+    assert saved["status"] == "active"
+    goal = saved
+    goal["revision"] += 1
+    goals.save_goal("chat-goal", goal)
+    assert "updated" in _todo_update_impl("1", subject="old revision")
+    assert goals.load_goal("chat-goal")["checklist"] == []
+
+
+def test_todo_saved_success_survives_goal_projection_failure(session, monkeypatch, tmp_path):
+    from openprogram.programs.tools.planning.goal import chat
+    from openprogram.programs.tools.planning.todo import shared
+    from openprogram.programs.tools.planning.todo.todo_create.todo_create import _todo_create_impl
+    from openprogram.programs.tools.planning.todo.todo_update.todo_update import _todo_update_impl
+    goals, _ = session
+    monkeypatch.setattr(shared, "todos_path", lambda sid: tmp_path / "todos.json")
+    monkeypatch.setattr(shared, "current_session_id", lambda: "chat-goal")
+    goal = chat.create("chat-goal", "verify")
+    monkeypatch.setattr(chat, "current_identity", lambda: chat.identity(goal))
+    refresh = chat.refresh_todos
+    def unavailable(_sid):
+        raise goals.GoalConflictError("busy")
+    monkeypatch.setattr(chat, "refresh_todos", unavailable)
+    assert "created" in _todo_create_impl("verify")
+    assert "updated" in _todo_update_impl("1", status="completed")
+    assert shared.load("chat-goal")[0]["status"] == "completed"
+    refresh("chat-goal")
+    assert goals.load_goal("chat-goal")["checklist"] == [{"text": "verify", "done": True}]
+
+
+def test_todo_refresh_preserves_legacy_goal_checklist(session):
+    from openprogram.programs.tools.planning.goal import chat
+    goals, _ = session
+    goal = chat.create("chat-goal", "verify")
+    goal.update(execution_mode="workflow", checklist=[{"text": "legacy", "done": False}])
+    goals.save_goal("chat-goal", goal)
+    chat.refresh_todos("chat-goal")
+    assert goals.load_goal("chat-goal")["checklist"] == goal["checklist"]
+
+
+def test_legacy_provider_receipt_refreshes_goal_usage_without_duplicate_charge(session, monkeypatch):
+    from openprogram.programs.tools.planning.goal import chat
+    from openprogram.models.usage.event import UsageEvent
+    from openprogram.models.usage.recorder import run_usage_hooks
+    goals, _ = session
+    total = {"total_tokens": 0, "cost_usd": 0, "cost_known": True, "unknown_cost_events": 0}
+    monkeypatch.setattr(goals, "goal_usage", lambda *a: dict(total))
+    goal = chat.create("chat-goal", "verify")
+    goal.pop("usage_mode")
+    goals.reset_goal_usage_cursor("chat-goal", goal)
+    goals.save_goal("chat-goal", goal)
+    total.update(total_tokens=100, cost_usd=0.2)
+    event = UsageEvent(session_id="chat-goal", total_tokens=100)
+    run_usage_hooks(event)
+    run_usage_hooks(event)
+    saved = goals.load_goal("chat-goal")
+    assert saved["usage"]["total_tokens"] == 100
+    assert saved["usage"]["cost_usd"] == pytest.approx(0.2)
+    saved["status"] = "paused"
+    goals.save_goal("chat-goal", saved)
+    total.update(total_tokens=200, cost_usd=0.4)
+    run_usage_hooks(event)
+    assert goals.load_goal("chat-goal")["usage"]["total_tokens"] == 100
+
+
+def test_metering_read_failure_preserves_cursor_and_does_not_double_bill(session, monkeypatch):
+    goals, _ = session
+    goal = {"usage": {"total_tokens": 10, "cost_usd": 0.1, "cost_known": True},
+            "usage_cursor": {"total_tokens": 100, "cost_usd": 1, "unknown_cost_events": 0}}
+    monkeypatch.setattr(goals, "goal_usage", lambda *a: {"available": False})
+    goals.accumulate_goal_usage("chat-goal", goal)
+    assert goal["usage_cursor"]["total_tokens"] == 100
+    assert goal["usage"]["cost_known"] is False
+    monkeypatch.setattr(goals, "goal_usage", lambda *a: {
+        "total_tokens": 110, "cost_usd": 1.2, "unknown_cost_events": 0})
+    goals.accumulate_goal_usage("chat-goal", goal)
+    assert goal["usage"]["total_tokens"] == 20
+    assert goal["usage"]["cost_usd"] == pytest.approx(0.3)
+    assert goal["usage"]["cost_known"] is True
+
+
+def test_legacy_resume_settles_failed_boundary_before_excluding_paused_usage(session, monkeypatch):
+    from openprogram.programs.tools.planning.goal import chat
+    goals, _ = session
+    goal = chat.create("chat-goal", "verify")
+    goal.pop("usage_mode")
+    goal.update(status="paused", usage={"total_tokens": 10, "cost_usd": 0.1},
+                usage_cursor={"total_tokens": 100, "cost_usd": 1}, usage_pending_until=50.0)
+    goals.save_goal("chat-goal", goal)
+    def aggregate(sid, since, until=None):
+        return {"total_tokens": 110 if until == 50.0 else 900,
+                "cost_usd": 1.2 if until == 50.0 else 9, "unknown_cost_events": 0}
+    monkeypatch.setattr(goals, "goal_usage", aggregate)
+    resumed = chat.resume("chat-goal")
+    assert resumed["usage"]["total_tokens"] == 20
+    assert resumed["usage"]["cost_usd"] == pytest.approx(0.3)
+    assert resumed["usage_cursor"]["total_tokens"] == 900
+    assert "usage_pending_until" not in resumed
+
+
+def test_unsettled_restart_usage_is_not_presented_as_free(session):
+    goals, _ = session
+    goal = goals.normalize_goal({"execution_mode": "chat", "pause_reason": "worker_restart",
+                                "execution_id": "old", "usage": {"total_tokens": 0, "cost_usd": 0}})
+    assert goal["usage"]["accounting_pending"]
+    assert goal["usage"]["cost_known"] is False
+
+
+def test_old_revision_cannot_complete_new_goal(session):
+    from openprogram.programs.tools.planning.goal import chat
+    goals, _ = session
+    goal = chat.create("chat-goal", "first objective")
+    expected = chat.identity(goal)
+    goal["revision"] += 1
+    goal["text"] = "updated objective"
+    goals.save_goal("chat-goal", goal)
+    with pytest.raises(goals.GoalConflictError):
+        chat.update("chat-goal", "complete", expected=expected)
+
+
+def test_budget_exhausted_resume_does_not_reactivate(session):
+    from openprogram.programs.tools.planning.goal import chat
+    goals, _ = session
+    goal = chat.create("chat-goal", "task", token_budget=10)
+    goal.update(status="budget_exhausted", legacy_usage={"total_tokens": 10})
+    goals.save_goal("chat-goal", goal)
+    result = goals.handle_goal_command("chat-goal", "resume")
+    assert not result["send_text"]
+    assert "budget" in result["text"]
+    assert goals.load_goal("chat-goal")["status"] == "budget_exhausted"

@@ -1,0 +1,21 @@
+/* /mcp — page-local styles only. The shared chrome (.view /
+   .topbar / .splitBody / .empty) now lives in
+   components/ui/manage-page.module.css alongside /skills and
+   /plugins; what's left here is the server rail and the action
+   buttons used inside the detail pane. */
+
+.serverDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.dotReady    { background: var(--accent-green); }
+.dotError    { background: var(--accent-red); }
+.dotDisabled { background: var(--text-muted); }
+.dotStarting { background: var(--accent-yellow); }
+
+
+/* Action button — mirrors welcome-screen.module.css .example so
+   action rows on /mcp read with the same weight as the welcome
+   tile buttons elsewhere in the app. */

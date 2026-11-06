@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenProgram · App 图标规范</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page:#f5f6f8; --surface:#fff; --ink:#17181c; --muted:#666b76;
+    --line:#dfe2e8; --soft:#eef0f4; --blue:#4F46E5; --purple:#8B5CF6;
+    --ok:#247a4a; --warn:#9b5b12;
+  }
+  @media (prefers-color-scheme:dark) {
+    :root { --page:#15171b; --surface:#1d2025; --ink:#f4f5f7; --muted:#a7acb6;
+      --line:#343840; --soft:#272b31; --blue:#8f8af7; --ok:#75d39a; --warn:#f0b667; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink); font:15px/1.58 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif; }
+  main { width:min(1080px,calc(100% - 32px)); margin:0 auto; padding:56px 0 88px; }
+  header { padding-bottom:30px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 10px; font-size:clamp(30px,5vw,48px); line-height:1.08; letter-spacing:-.035em; }
+  header p { margin:0; max-width:760px; color:var(--muted); }
+  section { margin-top:48px; }
+  h2 { margin:0 0 18px; font-size:24px; letter-spacing:-.02em; }
+  p { margin:0 0 12px; }
+  code { font:13px/1.5 ui-monospace,"SFMono-Regular",Menlo,monospace; }
+  .lead { max-width:800px; color:var(--muted); }
+  .flow { display:grid; grid-template-columns:1fr 52px 1fr 52px 1fr; align-items:center; gap:12px; }
+  .stage { min-height:280px; padding:22px; background:var(--surface); border:1px solid var(--line); border-radius:14px; }
+  .stage small { display:block; margin-bottom:18px; color:var(--muted); font-weight:600; letter-spacing:.02em; }
+  .arrow { text-align:center; color:var(--muted); font-size:24px; }
+  .canvas { display:block; width:174px; height:174px; margin:8px auto 20px; }
+  .canvas.fill { background:linear-gradient(160deg,#4B4FD6,#3A3AA8 50%,#23214F); }
+  .canvas.transparent { background-image:linear-gradient(45deg,var(--soft) 25%,transparent 25%),linear-gradient(-45deg,var(--soft) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--soft) 75%),linear-gradient(-45deg,transparent 75%,var(--soft) 75%); background-size:20px 20px; background-position:0 0,0 10px,10px -10px,-10px 0; }
+  .canvas svg { display:block; }
+  .caption { color:var(--muted); font-size:13px; }
+  .swatches { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+  .swatch { display:flex; gap:12px; align-items:center; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+  .swatch i { flex:none; width:34px; height:34px; border-radius:50%; }
+  .swatch i.sq { border-radius:8px; }
+  .swatch span { color:var(--muted); font-size:13px; }
+  .rule-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  .rule { padding:18px 20px; background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .rule b { display:block; margin-bottom:5px; }
+  .do b { color:var(--ok); } .dont b { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--line); }
+  th,td { padding:13px 16px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr:last-child td { border-bottom:0; }
+  th { color:var(--muted); font-size:12px; letter-spacing:.03em; }
+  .files { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .file { padding:13px 15px; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+  .file code { display:block; overflow-wrap:anywhere; }
+  .file span { display:block; margin-top:4px; color:var(--muted); font-size:13px; }
+  a { color:var(--blue); }
+  @media (max-width:820px) {
+    .flow { grid-template-columns:1fr; }
+    .arrow { transform:rotate(90deg); }
+    .rule-grid,.files,.swatches { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>App 图标规范</h1>
+    <p>macOS App、Windows 安装包、WebUI 标签页、PWA 和文档站共用同一个标志：靛蓝底板里一个薰衣草色细胞，细胞中有三个扁平圆片。macOS App 打包扁平的 <code>icon.icns</code>；<code>AppIcon.icon</code> 以 Icon Composer 图层保存同一图形，供 Liquid Glass 工具链使用。</p>
+  </header>
+
+  <section aria-labelledby="mark">
+    <h2 id="mark">标志构成</h2>
+    <div class="flow">
+      <article class="stage">
+        <small>1 · 底板</small>
+        <div class="canvas fill" aria-label="靛蓝底板渐变"></div>
+        <p class="caption">斜向靛蓝渐变铺满整个底板。在 <code>AppIcon.icon</code> 中它是 <code>linear-gradient</code> 填充；扁平渲染把它画在圆角方形内。</p>
+      </article>
+      <div class="arrow" aria-hidden="true">+</div>
+      <article class="stage">
+        <small>2 · 细胞与圆片</small>
+        <div class="canvas transparent" aria-label="透明画布上的细胞与三个圆片"><svg viewBox="0 0 1024 1024" width="174" height="174" aria-hidden="true"><defs><radialGradient id="doc-cell" cx="452" cy="415" r="522" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F4F2FF"/><stop offset="1" stop-color="#E6E2FA"/></radialGradient></defs><path d="M890 410C884 418 878 425 871 432C865 439 860 445 855 451C850 457 845 463 842 468C839 473 837 478 836 483C835 488 835 493 836 497C837 502 839 507 842 512C844 516 847 521 851 526C854 531 858 537 861 542C865 548 868 553 871 559C874 565 876 570 878 576C880 582 882 588 883 594C884 600 884 606 884 611C883 617 883 623 881 628C880 634 878 639 876 644C873 649 871 654 868 659C864 664 861 668 857 673C853 677 849 681 845 685C840 689 836 692 831 696C826 699 821 703 816 706C811 709 806 712 801 715C797 718 792 720 788 724C784 727 780 730 776 734C773 737 770 741 767 746C764 750 762 755 760 760C758 766 757 771 755 778C754 784 753 790 751 797C750 804 748 810 746 817C744 823 741 830 738 835C735 841 731 846 727 850C723 854 718 857 712 858C706 860 700 861 693 861C687 860 680 859 672 856C665 854 658 851 651 848C644 844 637 841 630 837C624 834 617 831 612 829C606 827 601 826 596 826C591 826 587 828 582 831C578 834 574 838 570 844C566 850 562 857 558 865C554 873 550 882 545 891C540 899 535 908 529 916C524 924 518 932 512 938C505 944 499 948 492 951C486 954 479 954 473 953C467 952 460 949 455 944C449 939 444 932 439 924C434 916 430 907 426 898C422 888 419 879 416 869C413 859 410 850 408 841C405 833 402 826 399 819C397 813 394 808 390 805C386 802 382 800 378 799C373 798 367 799 361 800C355 801 349 804 341 806C334 809 326 812 318 815C310 818 302 821 293 823C285 826 276 828 268 829C260 830 252 830 245 829C237 829 231 827 224 825C218 823 213 819 208 815C203 811 199 806 196 801C193 795 190 789 189 783C187 776 186 769 186 762C185 754 186 747 186 739C187 732 189 724 190 716C192 708 194 701 197 693C199 686 201 679 203 672C206 665 208 659 209 652C211 646 212 641 213 635C213 630 213 625 212 621C210 616 208 612 205 608C201 604 197 601 192 597C186 594 180 590 173 587C166 583 158 579 150 575C143 571 135 567 127 562C120 557 113 552 107 547C101 542 96 536 93 530C89 524 87 518 87 512C87 505 88 499 91 493C95 487 99 481 105 476C112 471 119 466 127 461C135 456 143 452 152 448C160 444 168 441 176 437C183 434 190 430 196 427C201 423 206 420 208 416C211 412 212 408 212 403C212 398 211 392 209 386C207 380 203 373 200 366C197 359 193 352 189 344C186 336 183 328 181 321C179 313 178 306 178 299C178 292 179 286 182 280C184 275 188 271 193 267C198 263 204 261 210 259C217 257 224 256 232 255C239 254 247 254 254 254C262 254 269 254 276 254C282 254 288 253 294 252C299 250 304 248 307 246C311 243 315 239 318 235C320 230 323 225 325 219C327 213 329 207 332 200C334 193 336 186 339 179C341 172 344 166 347 160C351 153 355 148 359 143C363 138 368 134 373 130C378 127 383 125 389 123C395 122 401 121 407 121C413 121 419 122 425 123C432 125 438 126 444 129C450 131 456 134 462 136C468 139 474 142 480 145C485 148 491 151 496 154C501 157 506 160 512 163C517 165 522 168 526 169C531 171 536 173 541 174C546 175 551 175 556 174C561 174 566 173 572 171C577 170 583 167 589 164C595 161 601 157 607 153C614 149 621 145 628 141C636 136 643 132 651 128C659 124 667 121 674 119C682 116 690 115 697 115C704 115 710 116 716 119C722 121 727 126 731 131C735 137 738 144 740 153C742 161 743 171 743 181C743 191 742 202 741 213C740 223 738 234 736 244C734 254 732 264 731 272C729 281 729 288 729 294C730 300 731 304 734 308C737 311 742 313 748 314C753 314 761 314 769 314C778 313 788 312 798 311C808 310 820 309 831 308C842 308 853 308 863 309C873 310 882 312 890 314C898 317 905 321 909 326C914 331 917 337 918 343C920 349 919 357 917 364C915 372 911 379 906 387C902 395 896 403 890 410Z" fill="url(#doc-cell)"/><circle cx="426.4" cy="440.2" r="162.8" fill="#4F46E5"/><circle cx="608.6" cy="570.0" r="126.9" fill="#8B5CF6"/><circle cx="473.4" cy="647.2" r="82.8" fill="#38BDF8"/></svg></div>
+        <p class="caption">细胞是薰衣草色窗口，外轮廓是平滑的放射状波形。三个扁平圆片在其中叠放，由后到前依次为靛、紫、天蓝。</p>
+      </article>
+      <div class="arrow" aria-hidden="true">→</div>
+      <article class="stage">
+        <small>3 · 扁平 App 图标</small>
+        <img class="canvas" src="../../../../images/openprogram-app-icon.svg" alt="完成后的 OpenProgram App 图标">
+        <p class="caption">前面两个圆片向后方圆片投下柔和阴影，不用球体光照也能表达前后层次。</p>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="geometry">
+    <h2 id="geometry">几何与配色</h2>
+    <p class="lead">所有尺寸均为底板边长的比例，从底板中心量起。细胞轮廓是闭合曲线 <code>r(θ) = R · (1 + Σ aₖ cos(kθ + φₖ))</code>，整体旋转 −15°，<code>R = 0.364</code>，包含四个谐波：k = 9（a = 0.12，φ = 1.3）、k = 7（0.05，0.2）、k = 12（0.035，2.4）、k = 2（0.02，1.8）。主导的 9 次谐波形成约九条大小不一的圆润放射，其余谐波让放射不规则。每个凸起和凹陷都是平滑圆弧，轮廓没有尖点。轮廓最远到 0.446，在底板内留出清晰边距。</p>
+    <table>
+      <thead><tr><th>元素</th><th>位置 (dx, dy)</th><th>半径</th><th>颜色</th></tr></thead>
+      <tbody>
+        <tr><td>靛色圆片（最后）</td><td>−0.084, −0.070</td><td>0.159</td><td><code>#4F46E5</code></td></tr>
+        <tr><td>紫色圆片</td><td>+0.094, +0.057</td><td>0.124</td><td><code>#8B5CF6</code>，柔和阴影</td></tr>
+        <tr><td>天蓝圆片（最前）</td><td>−0.038, +0.132</td><td>0.081</td><td><code>#38BDF8</code>，柔和阴影</td></tr>
+        <tr><td>细胞</td><td>居中</td><td>0.364 ± 波形</td><td>径向 <code>#F4F2FF</code> → <code>#E6E2FA</code></td></tr>
+        <tr><td>底板</td><td colspan="2">整个底板</td><td>线性 <code>#4B4FD6</code> → <code>#3A3AA8</code> → <code>#23214F</code></td></tr>
+      </tbody>
+    </table>
+    <div class="swatches" style="margin-top:14px">
+      <div class="swatch"><i style="background:#4F46E5"></i><div><code>#4F46E5</code><span> 靛</span></div></div>
+      <div class="swatch"><i style="background:#8B5CF6"></i><div><code>#8B5CF6</code><span> 紫</span></div></div>
+      <div class="swatch"><i style="background:#38BDF8"></i><div><code>#38BDF8</code><span> 天蓝</span></div></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="rules">
+    <h2 id="rules">资源边界</h2>
+    <div class="rule-grid">
+      <div class="rule do"><b>保留</b><span>三种颜色的扁平圆片；细胞的平滑波形轮廓；靛蓝底板渐变；区分前后圆片的阴影。</span></div>
+      <div class="rule dont"><b>避免</b><span>圆片上的球体光照或径向高光、玻璃半透明、细胞外的描边圆环、细胞轮廓上的尖点，以及标志内的文字或位图。</span></div>
+      <div class="rule do"><b>Icon Composer 图层</b><span>透明 1024 × 1024 画布，每层一个元素，SVG 中不画圆角方形、外框、滤镜或阴影。阴影由分组设置提供。</span></div>
+      <div class="rule dont"><b>扁平渲染</b><span>ICNS、favicon 和 PWA 图标由下列扁平 SVG 源渲染，不从打包后 App 的截图导出。</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="matrix">
+    <h2 id="matrix">输出目标</h2>
+    <table>
+      <thead><tr><th>目标</th><th>源</th><th>输出</th></tr></thead>
+      <tbody>
+        <tr><td>macOS App</td><td><code>docs/images/openprogram-app-icon.svg</code>——Big Sur 网格：1024 画布上偏移 100 的 824 px 底板，外形用 Apple 连续圆角（半径 185.4 px、60% 平滑），与程序坞里的系统图标同一轮廓，带柔和底板阴影</td><td><code>apps/desktop/build/icon.icns</code>（16–1024 px），即 <code>apps/desktop/package.json</code> 的打包输入</td></tr>
+        <tr><td>Liquid Glass 工具链</td><td><code>apps/desktop/build/AppIcon.icon</code></td><td>Icon Composer 分组由前到后：天蓝圆片、紫色圆片、靛色圆片、细胞。所有分组关闭 Specular 与 translucency，所有图层关闭 glass，阴影为 neutral（前两个圆片 0.5，其余 0.3）。<code>ictool</code> 可导出 Default、Dark、ClearLight 和 TintedDark。</td></tr>
+        <tr><td>WebUI 标签页、文档站</td><td><code>docs/images/openprogram-tab-icon.source.svg</code>——铺满画布的 64 px 圆角底板</td><td>原样复制到 <code>apps/web/app/icon.svg</code> 和 <code>scripts/docs_site/assets/mark.svg</code></td></tr>
+        <tr><td>Favicon、Windows 安装包</td><td>64 px 标签页图标</td><td><code>apps/web/app/favicon.ico</code>，含 16、32、48、64、128、256 px 的 PNG 条目</td></tr>
+        <tr><td>PWA</td><td>64 px 标签页图标；maskable 图标使用铺满的变体</td><td><code>apps/web/public/icons/icon-192.png</code>、<code>icon-512.png</code>，以及细胞位于 80% 安全圆内的 <code>icon-512-maskable.png</code></td></tr>
+        <tr><td>README、官网、社交卡片</td><td>同一标志（126 px）加转为轮廓的 Instrument Sans 字标与 Geist Mono 标语</td><td><code>docs/images/logo-lockup-dark.svg</code>、<code>logo-lockup-light.svg</code> 及其 PNG、圆片由后到前依次弹出的 README GIF、<code>logo.svg</code>，以及 <code>openprogram-social-card.svg</code> / <code>.png</code>。各文件用途见<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/docs/images/README.md">图片源说明</a>。</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section aria-labelledby="implementation">
+    <h2 id="implementation">检查</h2>
+    <div class="files">
+      <div class="file"><code>apps/desktop/scripts/check-icon.sh</code><span>由 <code>npm run icon:check</code> 运行。要求四个图层、恰好三个已批准颜色的扁平圆片、细胞填充、线性渐变底板填充，以及关闭 Specular、translucency 和 glass 的由前到后分组顺序；拒绝图层 SVG 中的圆角方形、外框、滤镜、阴影、文字和位图。</span></div>
+      <div class="file"><code>openprogram/operations/self_update/control/supervisor.py</code><span>受信任的图标探针用 <code>sips</code> 渲染四个图层 SVG，要求 1024 × 1024 透明画布。</span></div>
+    </div>
+    <p class="lead" style="margin-top:14px">设计遵循 Apple <a href="https://developer.apple.com/design/human-interface-guidelines/app-icons">App 图标 HIG</a> 与 <a href="https://developer.apple.com/icon-composer/">Icon Composer</a>；打包遵循 <a href="https://www.electron.build/docs/features/icons-and-images/">Electron Builder 图标文档</a>。</p>
+  </section>
+
+  <section aria-labelledby="status">
+    <h2 id="status">实现状态</h2>
+    <table>
+      <thead><tr><th>范围</th><th>状态</th></tr></thead>
+      <tbody>
+        <tr><td>macOS ICNS、<code>AppIcon.icon</code> 图层、favicon、标签页图标、文档站标志与 PWA 图标</td><td>已实现</td></tr>
+        <tr><td>README 组合标志及其动画（<code>docs/images/logo-lockup*</code>）、社交卡片、字标（<code>docs/images/logo.svg</code>）和文档 <code>logo.png</code></td><td>已实现</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>

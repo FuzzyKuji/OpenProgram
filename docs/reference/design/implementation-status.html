@@ -1,0 +1,52 @@
+<style>
+.doc-intro { border-left: 3px solid var(--acc); padding: 4px 0 4px 18px; margin: 18px 0 28px; }
+.doc-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
+.doc-flow > div { padding: 16px; background: var(--bg-code); border-radius: 8px; min-width: 0; }
+.doc-flow strong { display: block; color: var(--tx); }
+.doc-flow p { margin: 8px 0 0; font-size: 14px; }
+.doc-scroll { max-width: 100%; overflow-x: auto; }
+.doc-scroll:focus-visible, summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
+code { overflow-wrap: anywhere; }
+details { padding: 12px 0; border-bottom: 1px solid var(--bd); }
+summary { cursor: pointer; font-weight: 600; }
+@media (max-width: 680px) { .doc-flow { grid-template-columns: 1fr; } }
+</style>
+
+<h1>OpenProgram implementation navigation</h1>
+<p>Use this page to find the current owner of a design and its implementation evidence. It does not certify an integration branch, release, or installed application.</p>
+<p>Designs explain intended behavior; implementation notes locate code and verification. Historical review results remain in Git history.</p>
+<h2 id="implementation-section-1">Find the implementation documentation</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="Implementation navigation table"><table><thead><tr><th>Area</th><th>Design</th><th>Supporting documentation</th><th>What to inspect</th></tr></thead><tbody>
+<tr><td>Repository ownership</td><td><a href="repository-structure.html">Design</a></td><td><a href="repository-structure-implementation.html">Implementation context</a></td><td>Application roots, compatibility surfaces and verification.</td></tr>
+<tr><td>Execution control</td><td><a href="runtime/execution/control.html">Design</a></td><td><a href="runtime/README.md">Implementation context</a></td><td>Pause, resume, cancellation, recovery and surface synchronization.</td></tr>
+<tr><td>Goal execution</td><td><a href="runtime/reliability/goal-and-recovery.html">Design</a></td><td><a href="runtime/reliability/goal-and-recovery.html">Implementation context</a></td><td>Controller lifecycle, persistence and remaining acceptance.</td></tr>
+<tr><td>Sessions and DAG</td><td><a href="runtime/dag/overview.md">Design</a></td><td><a href="runtime/session/README.md">Implementation context</a></td><td>Graph semantics, storage and session operations.</td></tr>
+<tr><td>Permissions and sandbox</td><td><a href="runtime/security/sandbox-architecture.html">Design</a></td><td><a href="runtime/security/sandbox-architecture.html">Implementation context</a></td><td>Authority, approvals and execution boundaries.</td></tr>
+<tr><td>Memory</td><td><a href="memory/architecture.html">Design</a></td><td><a href="memory/README.md">Implementation context</a></td><td>Memory ownership, recall and implementation boundaries.</td></tr>
+<tr><td>Web integration</td><td><a href="integrations/web-use.html">Design</a></td><td><a href="integrations/computer-and-browser-use.md#the-web_use-runtime">Implementation context</a></td><td>Browser integration and its implementation evidence.</td></tr>
+<tr><td>Record and replay</td><td><a href="providers/record-replay.html">Design</a></td><td><a href="providers/record-replay.md">Implementation context</a></td><td>Provider recording, replay and failure handling.</td></tr>
+<tr><td>MCP server</td><td><a href="integrations/mcp-server.html">Design</a></td><td><a href="integrations/mcp-integration.html">Implementation context</a></td><td>Server exposure and MCP integration.</td></tr>
+<tr><td>Distribution</td><td><a href="distribution/installation-packaging.html">Design</a></td><td><a href="distribution/automatic-updates.html">Implementation context</a></td><td>Packaging, activation, updates and release acceptance.</td></tr>
+<tr><td>Testing</td><td><a href="testing/test-system.html">Design</a></td><td><a href="repository-structure-implementation.html">Implementation context</a></td><td>Verification layers and source-layout checks.</td></tr>
+</tbody></table></div>
+<p>For other areas, use the <a href="README.md">subsystem index</a>. The <a href="feature-matrix.html">framework feature comparison</a> has a separate comparison scope; it is not a release acceptance report.</p>
+<h2 id="implementation-section-2">Read implementation status precisely</h2>
+<div class="doc-scroll" role="region" tabindex="0" aria-label="Implementation navigation table"><table><thead><tr><th>State</th><th>Required meaning</th></tr></thead><tbody>
+<tr><td>Implemented</td><td>The described contract has an implementation and the required verification evidence. State the verified boundary explicitly.</td></tr>
+<tr><td>Partial</td><td>Some paths exist, but named implementation or acceptance requirements remain.</td></tr>
+<tr><td>Unimplemented</td><td>The design specifies behavior for which implementation is still required.</td></tr>
+<tr><td>Out of scope</td><td>The behavior is excluded from the current design; it is not an implicit implementation task.</td></tr>
+<tr><td>Not reverified</td><td>Existing evidence has not been checked against the current source or target environment. Do not convert it into a current pass.</td></tr>
+</tbody></table></div>
+<h2 id="implementation-section-3">What each implementation document contains</h2>
+<ol>
+<li>Public entry points and the observable behavior they provide.</li>
+<li>Source owners and links to the implementation, including compatibility entry points.</li>
+<li>Data ownership, state transitions and persistence boundaries.</li>
+<li>Failure, cancellation and recovery behavior where applicable.</li>
+<li>Reproducible verification commands and the specific contract each checks.</li>
+<li>An implementation-status appendix listing remaining work and acceptance gaps.</li>
+</ol>
+<p>Maintain architectural rationale in the topic's design. Keep implementation notes focused on the source mapping and verification. Use Git history for migration chronology and previous review output rather than duplicating them across pages.</p>
+<h2 id="implementation-section-4">Implementation status</h2>
+<p>This navigation update does not rerun subsystem tests or establish publication, deployment or installed-App acceptance. Consult the linked topic for its evidence and reverify the affected contract before changing its status.</p>

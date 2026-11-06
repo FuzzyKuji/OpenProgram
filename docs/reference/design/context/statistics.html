@@ -1,0 +1,136 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Accounting rules</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #fff; --text: #202124; --muted: #6b7280;
+    --line: #deded9; --blue: #2563eb; --blue-soft: #eff6ff;
+    --green: #15803d; --green-soft: #f0fdf4; --amber: #a16207;
+    --amber-soft: #fffbeb; --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { max-width: 760px; margin-bottom: 32px; }
+  .eyebrow { color: var(--blue); font: 600 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  h1 { margin: 10px 0 12px; font-size: clamp(30px, 5vw, 44px); line-height: 1.12; letter-spacing: -.03em; }
+  h2 { margin: 0 0 12px; font-size: 21px; }
+  p { margin: 0 0 12px; }
+  code { font-family: var(--mono); font-size: .9em; background: #eeeeeb; padding: 2px 5px; border-radius: 4px; }
+  .meta, .status { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: var(--surface); color: var(--muted); font-size: 12px; }
+  .pill.active { color: var(--green); border-color: #bbdfc5; background: var(--green-soft); }
+  section { margin-top: 42px; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .card { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .card strong { display: block; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; }
+  .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr; align-items: stretch; gap: 10px; }
+  .flow .step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; }
+  .flow .arrow { align-self: center; color: var(--muted); font-family: var(--mono); }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); }
+  th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; background: #f1f1ee; }
+  tr:last-child td { border-bottom: 0; }
+  .note { border-left: 4px solid var(--blue); background: var(--blue-soft); padding: 14px 16px; }
+  .warning { border-left-color: var(--amber); background: var(--amber-soft); }
+  ul { margin: 8px 0 0; padding-left: 20px; }
+  li { margin: 5px 0; }
+  .formula { padding: 15px 18px; background: #202124; color: #f8fafc; border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 13px; white-space: pre-wrap; }
+  @media (max-width: 760px) {
+    main { padding: 28px 16px 64px; }
+    .grid { grid-template-columns: 1fr; }
+    .flow { grid-template-columns: 1fr; }
+    .flow .arrow { transform: rotate(90deg); justify-self: center; }
+    table { table-layout: fixed; font-size: 12px; }
+    th, td { padding: 9px 7px; overflow-wrap: anywhere; }
+    .pill { max-width: 100%; overflow-wrap: anywhere; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">Context · Measurement contract</div>
+    <h1>Accounting rules</h1>
+    <p>For users and implementers: defines how the bottom Context panel reports actual totals, categorized content and differences that cannot be reconstructed directly.</p>
+    <div class="meta">
+      <span class="pill active">Status: implemented</span>
+      <span class="pill">Scope: shared Web / App API</span>
+      <span class="pill">Excluded: new UI styling</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>01 · The result must answer three questions</h2>
+    <div class="grid">
+      <article class="card"><strong>How much context is occupied?</strong><p>Prefer actual input tokens returned by the provider; use local estimates only when no measurement is available.</p></article>
+      <article class="card"><strong>Where does the content come from?</strong><p>Show system, tools, MCP, skills, memory and messages as mutually exclusive categories; never count them twice.</p></article>
+      <article class="card"><strong>What cannot be reconstructed?</strong><p>Show the positive difference between the measured total and categorized estimates as “Other context (estimated)”; do not hide it.</p></article>
+    </div>
+  </section>
+
+  <section>
+    <h2>02 · A single snapshot</h2>
+    <div class="flow" aria-label="Statistics data flow">
+      <div class="step"><strong>Current branch</strong><br>Read compacted rendered history, the latest system prompt and the frozen tool set.</div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="step"><strong>Local categorization</strong><br>Calculate message structure, tool schemas, Skills and Memory; subtract nested items from their parent categories.</div>
+      <div class="arrow" aria-hidden="true">→</div>
+      <div class="step"><strong>Provider calibration</strong><br>Combine the latest measured total for the same HEAD and calculate the uncategorized difference.</div>
+    </div>
+    <p class="note" style="margin-top:14px">Calculate the local breakdown only once per API response. The panel must not reread the dynamic tool registry within that response, or the categories and <code>estimated</code> may refer to different moments.</p>
+  </section>
+
+  <section>
+    <h2>03 · Mutually exclusive categories</h2>
+    <table>
+      <thead><tr><th>Category</th><th>Source</th><th>Accuracy and boundaries</th></tr></thead>
+      <tbody>
+        <tr><td>Messages</td><td>Rendered history; visible text, thinking, tool input/result and memory prefetch</td><td>Text can be reconstructed; original images that were not persisted contribute to the difference.</td></tr>
+        <tr><td>System prompt</td><td>The latest complete system prompt actually recorded</td><td>Calculate the full value first, then subtract Skills, resident Memory and the deferred catalog to avoid duplication.</td></tr>
+        <tr><td>Skills / Memory</td><td>Indexes and resident blocks actually injected into the system prompt</td><td>These are components of the System prompt and must not increase the total again.</td></tr>
+        <tr><td>System tools / MCP tools</td><td>Provider schemas for the tool set frozen for this turn</td><td>Assign each tool according to its <code>_mcp_server</code> to one of the two categories.</td></tr>
+        <tr><td>Deferred tools</td><td>Tool-name catalog within the system prompt</td><td>Count the name catalog actually sent, not the full descriptions/schemas.</td></tr>
+        <tr><td>Other context (estimated)</td><td><code>provider total - classified estimate</code></td><td>Includes content that cannot be reconstructed reliably: non-persisted images, provider wrapping overhead and temporary surface prompts.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>04 · Calculation rules</h2>
+    <div class="formula">classified = system_other + skills + memory + tools + mcp + deferred + messages
+other = max(0, provider_total - classified)
+displayed_used = provider_total if measured else classified
+free = max(0, window - displayed_used)</div>
+    <p class="note warning" style="margin-top:14px">If local category estimates exceed the provider measurement, retain the provider total as the occupancy value and scale displayed categories down proportionally. The response retains raw estimates and the calibration factor; never display a negative difference.</p>
+  </section>
+
+  <section>
+    <h2>05 · Acceptance criteria</h2>
+    <ul>
+      <li>In the same response, <code>estimated</code> and the raw category total come from the same calculation.</li>
+      <li>When measured, displayed categories sum to <code>total_used</code>; when estimated, they sum to <code>input_used</code>.</li>
+      <li>After a branch switch or graph change, do not reuse the old provider measurement for the new HEAD.</li>
+      <li>After a model switch, immediately use its context window and replace the old measurement with a fresh estimate for the current model. Use the new provider measurement after the next request completes.</li>
+      <li>Tool input/result, thinking and memory prefetch affect Messages.</li>
+      <li>App and Web consume the same <code>/api/sessions/{id}/context</code> contract and do not estimate independently.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>06 · Implementation evidence</h2>
+    <div class="grid">
+      <article class="card"><strong>Record actual input</strong><p><code>system_prompt_node.py</code> reads the actual system prompt by branch HEAD; <code>tool_snapshot_node.py</code> stores the frozen tools for the turn and their calculated cost.</p></article>
+      <article class="card"><strong>Shared calculation and calibration</strong><p><code>session_stats.py</code> handles categorization, deduplication and calibration against the provider total; <code>budget.py</code> estimates the frozen tool schemas.</p></article>
+      <article class="card"><strong>Consume the same API</strong><p><code>tree.py</code> calculates the breakdown once; App and Web use <code>context-breakdown-panel.tsx</code> to display the same response.</p></article>
+    </div>
+    <p class="note" style="margin-top:14px"><code>test_session_stats_accuracy.py</code> Coverage includes structured messages, uncategorized differences, overestimate calibration, branch ancestry, old-snapshot compatibility, child Agents that do not advance HEAD, frozen tools, dynamic registries and model switches; all 51 focused Context tests passed.</p>
+  </section>
+</main>
+</body>
+</html>

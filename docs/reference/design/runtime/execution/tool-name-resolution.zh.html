@@ -1,0 +1,12 @@
+<!doctype html><html lang="zh"><meta charset="utf-8"><title>工具名解析</title><body>
+<h1>工具名解析</h1>
+<p>Agent 在每一轮公开的工具名都是小写。模型仍可能沿用早先上下文里的 Claude Code 写法：<code>Bash</code>、<code>Read</code> 或 <code>ToolSearch</code>。执行器目前在检查对应的可用工具之前就拒绝这些名字。</p>
+<h2>约定</h2>
+<p>执行时，名字完全匹配者优先。三种显式的兼容写法分别可以解析为 <code>bash</code>、<code>read</code> 和 <code>tool_search</code>，前提是目标工具已在该轮允许的工具列表中。<code>ToolSearch</code> 把它的 <code>query</code> 参数当作 <code>select</code> 接受。值为 null 的可选参数 <code>max_results</code> 会被省略。所有解析后的调用都使用目标工具的 schema、预检、闸门和执行器。未知或被禁用的工具仍不可用。原始调用名和 ID 保留在对话和事件记录里。</p>
+<h2>验收</h2>
+<p>公开的 agent 循环在规范工具可用时接受每一种观察到的写法；参数无效时仍然校验失败。缺少规范工具时，不能通过别名调用它。已注册的精确名字优先。已安装的 App 使用同一个 worker，代码提交后需要刷新。</p>
+<h2>有界实现</h2>
+<p>修改 <code>openprogram/runtime/agent/loop.py</code> 和 <code>openprogram/programs/_host/runtime.py</code>；新增或扩展 <code>tests/unit/agent/behavior/test_tool_name_resolution.py</code> 和 <code>tests/unit/programs/runtime/test_tools_runtime.py</code>。测试先通过工具执行器复现三次失败的调用。保持 provider 请求格式、无关工具名、项目路径和权限策略不变。验证别名调用、缺失目标、参数校验、精确名优先、限定范围的 ToolSearch 和公开的 agent 循环。运行受影响的 agent 与 runtime 测试套件、链接检查和 diff 检查；已有的失败单独记录。</p>
+<h2>实现状态</h2>
+<p>执行器依据每轮的工具列表解析这三种观察到的写法。测试在实现之前复现了三次失败，实现之后通过。受影响的 agent 测试套件通过 676 个测试，两个跳过，一个无关的静态契约失败，在未改动的 HEAD 上同样复现。链接检查在已有的未跟踪上下文演示文件中发现 16 个链接问题；本页没有新增。已安装 App 的验证要等本地刷新后进行。</p>
+</body></html>

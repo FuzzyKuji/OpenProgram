@@ -1,0 +1,431 @@
+"""Task 4: browse goes live, read paths switch.
+
+  * list_models_for_provider = live merge of official-API list ⊕ models.dev,
+    NEVER persisted; enabled flag from config spec rows;
+  * no-key / offline degradation falls back to models.dev then empty, never
+    raising;
+  * a short-TTL browse cache; force_refresh bypasses it;
+  * list_enabled_models reads ENABLED_MODELS directly (config spec rows), no
+    network;
+  * the Fetch button (fetch_models_remote) = force-refresh browse + overwrite
+    the spec rows of enabled models present in the fresh result, no file
+    persistence, then reload the registry.
+
+No network, no real config: fetch_and_normalize, models.dev, _is_configured
+and config IO are all stubbed at the seam each module binds.
+"""
+from __future__ import annotations
+
+import copy
+
+import pytest
+
+from openprogram.models.listing import listing
+from openprogram.models.listing import fetchers as F
+from openprogram.models.providers.settings import storage as st
+from openprogram.models.listing import provider_models as pm
+from openprogram.models.providers.catalog import metadata as cat
+
+
+@pytest.fixture(autouse=True)
+def _clear_browse_cache(monkeypatch):
+    from openprogram.models.providers.catalog.sources import models_dev
+
+    monkeypatch.setattr(cat, "_models_dev_info", lambda _provider_id: {})
+    monkeypatch.setattr(
+        models_dev,
+        "_start_background_refresh",
+        lambda: pytest.fail("browse unit tests must not refresh models.dev"),
+    )
+    # This module exercises the WebUI seams, not the models.dev cache. Keep
+    # an expired cache left by an earlier test from reaching the refresh path.
+    monkeypatch.setattr(models_dev, "_load", lambda: {})
+    listing._reset_browse_cache()
+    yield
+    listing._reset_browse_cache()
+
+
+@pytest.fixture
+def mem_cfg(monkeypatch):
+    store: dict = {}
+    _read = lambda: copy.deepcopy(store)
+    _write = lambda cfg: store.clear() or store.update(copy.deepcopy(cfg))
+    def _update(mutator):
+        current = copy.deepcopy(store)
+        result = mutator(current)
+        _write(current)
+        from openprogram.models.providers.catalog import enabled_models as mg
+
+        mg.reload()
+        return result
+
+    monkeypatch.setattr(st, "_read_providers_cfg", _read)
+    monkeypatch.setattr(st, "_write_providers_cfg", _write)
+    monkeypatch.setattr(st, "_update_providers_cfg", _update)
+    st._reset_spec_migration()
+    return store
+
+
+# ---------------------------------------------------------------------------
+# Browse: no key → models.dev; enabled flag from config spec rows
+# ---------------------------------------------------------------------------
+
+def test_no_key_browse_returns_models_dev(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: False)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {
+        "md-1": {"name": "MD One", "context_window": 128000},
+        "md-2": {"name": "MD Two"},
+    })
+    # If browse ever hit the official API despite no key, this would blow up.
+    def _boom(*a, **k):
+        raise AssertionError("official API must not be called without a key")
+    monkeypatch.setattr(F, "fetch_and_normalize", _boom)
+
+    rows = listing.list_models_for_provider("acme")
+    ids = {r["id"] for r in rows}
+    assert ids == {"md-1", "md-2"}
+    assert all(r["enabled"] is False for r in rows)
+
+
+def test_enabled_flag_from_config_spec_rows(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: False)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {
+        "md-1": {"name": "MD One"}, "md-2": {"name": "MD Two"},
+    })
+    mem_cfg["acme"] = {"models": [{"id": "md-2", "name": "MD Two"}]}
+    rows = {r["id"]: r for r in listing.list_models_for_provider("acme")}
+    assert rows["md-2"]["enabled"] is True
+    assert rows["md-1"]["enabled"] is False
+
+
+def test_official_api_wins_and_models_dev_enriches(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {
+        "live-1": {"context_window": 200000, "input_cost": 3.0},
+    })
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda pid, timeout=15.0: {
+        "models": [{"id": "live-1", "name": "Live One"}],
+    })
+    rows = {r["id"]: r for r in listing.list_models_for_provider("acme")}
+    assert set(rows) == {"live-1"}
+    assert rows["live-1"]["name"] == "Live One"          # official wins
+    assert rows["live-1"]["context_window"] == 200000    # models.dev fills
+
+
+# ---------------------------------------------------------------------------
+# Degradation: official API error → models.dev; both gone → manual/empty
+# ---------------------------------------------------------------------------
+
+def test_official_error_falls_back_to_models_dev(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {"md-x": {"name": "X"}})
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda pid, timeout=15.0: {
+        "error": "401 unauthorized",
+    })
+    rows = listing.list_models_for_provider("acme")
+    assert {r["id"] for r in rows} == {"md-x"}
+
+
+def test_fully_offline_returns_manual_rows_no_raise(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {})  # models.dev down
+    monkeypatch.setattr(F, "fetch_and_normalize",
+                        lambda pid, timeout=15.0: {"error": "network down"})
+    mem_cfg["acme"] = {"models": [
+        {"id": "hand-1", "name": "Hand One", "source": "manual"},
+    ]}
+    rows = listing.list_models_for_provider("acme")  # must not raise
+    assert {r["id"] for r in rows} == {"hand-1"}
+    assert rows[0]["enabled"] is True  # it's a stored spec row
+
+
+# ---------------------------------------------------------------------------
+# Cache: repeated browse hits the API once; force_refresh re-hits
+# ---------------------------------------------------------------------------
+
+def test_browse_cache_ttl_and_force_refresh(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {})
+    calls = {"n": 0}
+
+    def _fetch(pid, timeout=15.0):
+        calls["n"] += 1
+        return {"models": [{"id": "m", "name": "M"}]}
+    monkeypatch.setattr(F, "fetch_and_normalize", _fetch)
+
+    listing.list_models_for_provider("acme")
+    listing.list_models_for_provider("acme")
+    assert calls["n"] == 1  # second read served from cache
+
+    listing.list_models_for_provider("acme", force_refresh=True)
+    assert calls["n"] == 2  # force bypasses cache
+
+
+# ---------------------------------------------------------------------------
+# list_enabled_models reads the registry directly (no network)
+# ---------------------------------------------------------------------------
+
+def test_enabled_models_reads_registry(monkeypatch):
+    import openprogram.models.providers.catalog.enabled_models as mg
+    from openprogram.models.providers.types import Model
+    monkeypatch.setattr(cat, "label_for", lambda pid: pid.upper())
+    monkeypatch.setattr(mg, "ENABLED_MODELS", {
+        "openai/gpt-x": Model.model_validate({
+            "id": "gpt-x", "name": "GPT-X", "provider": "openai",
+            "api": "openai-responses", "base_url": "https://api.openai.com/v1",
+        }),
+    })
+    monkeypatch.setattr(st, "_read_providers_cfg",
+                        lambda: {"openai": {"enabled": True}})
+    # If it delegated to the live browse path this would explode.
+    monkeypatch.setattr(listing, "_browse_models",
+                        lambda *a, **k: (_ for _ in ()).throw(AssertionError("no browse")))
+    out = listing.list_enabled_models()
+    assert [(m["provider"], m["id"]) for m in out] == [("openai", "gpt-x")]
+    assert out[0]["provider_label"] == "OPENAI"
+    assert out[0]["enabled"] is True
+
+
+def test_list_providers_hides_alias_provider_row(monkeypatch):
+    # An id that's a known alias of another provider (chatgpt-subscription →
+    # openai-codex) must not surface as its own sidebar row. Even if it leaks
+    # into get_providers() (both config keys built rows), list_providers folds
+    # it away; the canonical openai-codex row stays.
+    import openprogram.models.providers as P
+    from openprogram.models.providers.types import Model
+    from openprogram.models.providers.catalog import sources as S
+
+    def _mk(pid):
+        return Model.model_validate({
+            "id": "gpt-5.5", "name": "GPT-5.5", "provider": pid,
+            "api": "openai-codex", "base_url": "https://chatgpt.com/backend-api",
+        })
+    monkeypatch.setattr(P, "get_providers",
+                        lambda: ["openai-codex", "chatgpt-subscription"])
+    monkeypatch.setattr(P, "get_models", lambda pid: [_mk(pid)])
+    monkeypatch.setattr(cat, "label_for", lambda pid: pid)
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(cat, "_shipped_provider_ids", lambda: set())
+    monkeypatch.setattr(S.models_dev, "list_providers", lambda: [])
+    monkeypatch.setattr(st, "_read_providers_cfg", lambda: {
+        "openai-codex": {"enabled": True},
+        "chatgpt-subscription": {"enabled": True},
+    })
+    ids = [p["id"] for p in listing.list_providers()]
+    assert "openai-codex" in ids
+    assert "chatgpt-subscription" not in ids
+
+
+# ---------------------------------------------------------------------------
+# Fetch button = Refresh: overwrite enabled specs, no persistence, reload reg
+# ---------------------------------------------------------------------------
+
+def test_refresh_overwrites_enabled_specs(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {})
+    # Enabled model has a STALE stored spec (old context window).
+    mem_cfg["acme"] = {
+        "enabled": True,
+        "models": [{"id": "keep", "name": "Keep", "context_window": 1}],
+    }
+    # Fresh official-API result carries the corrected context window, plus a
+    # new model the user hasn't enabled.
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda pid, timeout=15.0: {
+        "models": [
+            {"id": "keep", "name": "Keep", "context_window": 999999,
+             "api": "openai-completions", "base_url": "https://acme.test/v1"},
+            {"id": "unenabled", "name": "New"},
+        ],
+    })
+    # Real reload(): fetch_models_remote calls the actual enabled_models.reload,
+    # so the healed spec must land in the live registry. The registry reads
+    # config via read_providers_config — point that at the same in-memory store
+    # this test's mem_cfg fixture writes.
+    import openprogram.models.providers.settings.config_read as cr
+    import openprogram.models.providers.catalog.enabled_models as mg
+    monkeypatch.setattr(cr, "read_providers_config",
+                        lambda: st._read_providers_cfg())
+
+    res = F.fetch_models_remote("acme")
+    assert res["refreshed"] == ["keep"]
+    # Stale spec healed in place.
+    rows = {r["id"]: r for r in mem_cfg["acme"]["models"]}
+    assert rows["keep"]["context_window"] == 999999
+    # Un-enabled model did NOT get a spec row (Refresh only touches enabled).
+    assert "unenabled" not in rows
+    # REAL reload ran: the healed spec is now in the live runtime registry with
+    # the corrected context window.
+    assert mg.ENABLED_MODELS["acme/keep"].context_window == 999999
+    # reload() rebuilds from config spec rows only — no import-time seed
+    # resurrection. The mem_cfg here carries no claude-code rows, so none appear.
+    assert not any(k.startswith("claude-code/") for k in mg.ENABLED_MODELS)
+
+
+# ---------------------------------------------------------------------------
+# C2: offline legacy-config migration builds minimal spec rows locally so the
+# enabled ids still resolve (get_model != None) without network.
+# ---------------------------------------------------------------------------
+
+def test_offline_legacy_migration_yields_resolvable_registry(monkeypatch, mem_cfg):
+    # Legacy config: enabled ids ONLY (the pre-migration shape), no spec rows.
+    mem_cfg["anthropic"] = {"enabled": True,
+                            "enabled_models": ["claude-opus-4-8"]}
+    mem_cfg["openai"] = {"enabled": True, "enabled_models": ["gpt-4o"]}
+    # Offline: models.dev unreachable — no row resolves, not even from cache.
+    from openprogram.models.providers.catalog.sources import models_dev
+    monkeypatch.setattr(models_dev, "lookup", lambda pid, mid: None)
+    st._reset_spec_migration()
+
+    # Run the migration in place on the config (the mem_cfg fixture replaces
+    # st._read_providers_cfg wholesale, so drive _migrate_specs directly — it's
+    # the unit under test; with no models.dev row it builds minimal rows).
+    changed = st._migrate_specs(mem_cfg)
+    assert changed
+
+    # Legacy ids now have minimal spec rows backfilled from provider.json.
+    a_rows = {r["id"]: r for r in mem_cfg["anthropic"]["models"]}
+    assert a_rows["claude-opus-4-8"]["api"] == "anthropic-messages"
+    assert a_rows["claude-opus-4-8"]["base_url"] == "https://api.anthropic.com"
+    assert a_rows["claude-opus-4-8"]["source"] == "migration-minimal"
+    o_rows = {r["id"]: r for r in mem_cfg["openai"]["models"]}
+    assert o_rows["gpt-4o"]["api"] == "openai-responses"
+    assert o_rows["gpt-4o"]["base_url"] == "https://api.openai.com/v1"
+
+    # And the runtime registry resolves each id after a real reload — the
+    # regression that used to hand get_model → None offline.
+    import openprogram.models.providers.settings.config_read as cr
+    import openprogram.models.providers.catalog.enabled_models as mg
+    from openprogram.models.providers.catalog import models as PM
+    monkeypatch.setattr(cr, "read_providers_config",
+                        lambda: st._read_providers_cfg())
+    mg.reload()
+    assert mg.ENABLED_MODELS  # non-empty
+    m = PM.get_model("anthropic", "claude-opus-4-8")
+    assert m is not None and m.api == "anthropic-messages"
+    assert m.base_url == "https://api.anthropic.com"
+    assert PM.get_model("openai", "gpt-4o") is not None
+
+
+def test_refresh_keeps_enabled_model_absent_upstream(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {})
+    mem_cfg["acme"] = {
+        "enabled": True,
+        "models": [{"id": "ghost", "name": "Ghost", "context_window": 5}],
+    }
+    # Upstream no longer lists "ghost".
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda pid, timeout=15.0: {
+        "models": [{"id": "other", "name": "Other"}],
+    })
+    import openprogram.models.providers.catalog.enabled_models as mg
+    monkeypatch.setattr(mg, "reload", lambda: None)
+
+    res = F.fetch_models_remote("acme")
+    assert res["refreshed"] == []
+    # Stored spec for the absent enabled model is preserved untouched.
+    rows = {r["id"]: r for r in mem_cfg["acme"]["models"]}
+    assert rows["ghost"]["context_window"] == 5
+
+
+def test_subscription_refresh_auto_syncs_catalog_and_respects_disables(
+    monkeypatch, mem_cfg,
+):
+    mem_cfg["xai-subscription"] = {
+        "enabled": True,
+        "disabled_models": ["future-grok"],
+        "models": [{
+            "id": "grok-old", "name": "Old", "source": "subscription-login",
+        }],
+    }
+    monkeypatch.setattr(
+        listing, "_browse_models_with_error",
+        lambda *_a, **_k: ([
+            {"id": "grok-4.6", "name": "Grok 4.6", "context_window": 500_000},
+            {"id": "future-grok", "name": "Future Grok"},
+        ], None),
+    )
+    import openprogram.models.providers.catalog.enabled_models as mg
+    monkeypatch.setattr(mg, "reload", lambda: None)
+
+    result = F.fetch_models_remote("xai-subscription")
+
+    assert result["added"] == 1
+    rows = mem_cfg["xai-subscription"]["models"]
+    assert [row["id"] for row in rows] == ["grok-4.6"]
+    assert rows[0]["source"] == "subscription-catalog"
+
+
+def test_subscription_refresh_broadcasts_only_when_catalogue_changes(
+    monkeypatch, mem_cfg,
+):
+    mem_cfg["xai-subscription"] = {"enabled": True, "models": []}
+    monkeypatch.setattr(
+        listing, "_browse_models_with_error",
+        lambda *_a, **_k: ([{"id": "grok-4.6", "name": "Grok 4.6"}], None),
+    )
+    import openprogram.models.providers.catalog.enabled_models as mg
+    monkeypatch.setattr(mg, "reload", lambda: None)
+    frames = []
+    monkeypatch.setattr("openprogram.runtime.events.emit_ws_frame", frames.append)
+
+    F.fetch_models_remote("xai-subscription")
+    F.fetch_models_remote("xai-subscription")
+
+    assert frames == [{
+        "type": "provider_models_changed",
+        "data": {"provider": "xai-subscription"},
+    }]
+
+
+def test_empty_subscription_refresh_preserves_saved_models(monkeypatch, mem_cfg):
+    saved = {"enabled": True, "models": [{"id": "grok-old", "name": "Old"}]}
+    mem_cfg["xai-subscription"] = copy.deepcopy(saved)
+    monkeypatch.setattr(listing, "_browse_models_with_error", lambda *a, **k: ([], None))
+    F.fetch_models_remote("xai-subscription")
+    assert mem_cfg["xai-subscription"] == saved
+
+
+def test_unconfigured_subscription_fallback_does_not_retire_models(monkeypatch, mem_cfg):
+    saved = {"enabled": True, "models": [{"id": "grok-old", "name": "Old"}]}
+    mem_cfg["xai-subscription"] = copy.deepcopy(saved)
+    monkeypatch.setattr(cat, "is_configured", lambda pid: False)
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {"fallback": {"name": "Fallback"}})
+    monkeypatch.setattr("openprogram.models.providers.catalog.subscription_catalog.load_catalog", lambda pid: ([], None))
+    F.fetch_models_remote("xai-subscription")
+    assert mem_cfg["xai-subscription"] == saved
+
+
+def test_settings_snapshot_skips_remote_and_preserves_selection(monkeypatch, mem_cfg):
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda *a, **k: pytest.fail("remote request"))
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {"catalog": {"name": "Catalog"}})
+    mem_cfg["acme"] = {"models": [{"id": "manual", "source": "manual"}]}
+    rows = {row["id"]: row for row in listing.list_models_for_provider("acme", cached_only=True)}
+    assert set(rows) == {"catalog", "manual"}
+    assert rows["manual"]["enabled"] is True
+    assert rows["catalog"]["enabled"] is False
+
+
+def test_settings_snapshot_uses_remote_cache_without_fetch(monkeypatch, mem_cfg):
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda *a, **k: pytest.fail("remote request"))
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: pytest.fail("unneeded catalogue read"))
+    listing._browse_cache["acme"] = (0, [{"id": "remote"}])
+    rows = listing.list_models_for_provider("acme", cached_only=True)
+    assert [row["id"] for row in rows] == ["remote"]
+
+
+def test_settings_models_route_uses_snapshot(monkeypatch, mem_cfg):
+    import inspect
+    import json
+    from fastapi import FastAPI
+    from openprogram.interfaces.server.routes.identity.providers import register
+    monkeypatch.setattr(cat, "is_configured", lambda pid: True)
+    monkeypatch.setattr(F, "fetch_and_normalize", lambda *a, **k: pytest.fail("remote request"))
+    monkeypatch.setattr(pm, "_models_dev_for", lambda pid: {"local": {"name": "Local"}})
+    app = FastAPI()
+    register(app)
+    endpoints = {route.path: route.endpoint for route in app.routes}
+    for path in ("/api/providers/list", "/api/providers/{name}/models", "/api/providers/{name}/fetch-models"):
+        assert not inspect.iscoroutinefunction(endpoints[path])
+    response = endpoints["/api/providers/{name}/models"]("acme")
+    assert json.loads(response.body)["models"][0]["id"] == "local"

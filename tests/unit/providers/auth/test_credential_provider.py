@@ -1,0 +1,377 @@
+"""Unit tests for auth.credential_provider — refresh dedup + fallback chains."""
+from __future__ import annotations
+
+import asyncio
+import time
+from pathlib import Path
+
+import pytest
+
+from openprogram.models.auth import (
+    AuthConfigError,
+    AuthEventType,
+    AuthNeedsReauthError,
+    AuthPoolExhaustedError,
+    AuthReadOnlyError,
+    AuthStore,
+    Credential,
+    CredentialData,
+)
+from openprogram.models.auth.credential_provider import (
+    CredentialProvider,
+    ProviderAuthConfig,
+    register_provider_config,
+)
+
+
+def _oauth(
+    provider="openai-codex",
+    profile="default",
+    access="A",
+    refresh="R",
+    expires_at_ms: int | None = None,
+) -> Credential:
+    if expires_at_ms is None:
+        expires_at_ms = int(time.time() * 1000) + 3600_000
+    return Credential(
+        provider_id=provider, account_id=profile, kind="oauth",
+        payload=CredentialData(
+            kind="oauth", auth_value=access,
+            data={"refresh_token": refresh, "expires_at_ms": expires_at_ms, "client_id": "cid"},
+        ),
+    )
+
+
+def _api(provider="openai", profile="default", key="k") -> Credential:
+    return Credential(
+        provider_id=provider, account_id=profile, kind="api_key",
+        payload=CredentialData(kind="api_key", auth_value=key),
+    )
+
+
+def _manager(tmp_path: Path) -> tuple[CredentialProvider, AuthStore]:
+    store = AuthStore(root=tmp_path)
+    return CredentialProvider(store=store), store
+
+
+# ---- happy path ------------------------------------------------------------
+
+def test_acquire_returns_api_key_credential(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_api())
+    cred = asyncio.run(m.acquire("openai"))
+    assert cred.payload.auth_value == "k"
+
+
+def test_acquire_unknown_provider_raises_config_error(tmp_path: Path):
+    m, _ = _manager(tmp_path)
+    with pytest.raises(AuthConfigError):
+        asyncio.run(m.acquire("unknown"))
+
+
+def test_acquire_picks_healthy_from_pool(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_api(key="a"))
+    store.add_credential(_api(key="b"))
+    cred = asyncio.run(m.acquire("openai"))
+    # fill_first default → picks "a"
+    assert cred.payload.auth_value == "a"
+
+
+# ---- OAuth expiry + refresh -----------------------------------------------
+
+def test_fresh_oauth_is_not_refreshed(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_oauth(access="A"))
+    calls = []
+
+    def refresh(c):
+        calls.append(c)
+        return _oauth(access="SHOULD_NOT_HAPPEN")
+
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex", refresh=refresh,
+    ))
+    cred = asyncio.run(m.acquire("openai-codex"))
+    assert cred.payload.auth_value == "A"
+    assert calls == []
+
+
+def test_expired_oauth_triggers_refresh(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    expired = _oauth(access="old", expires_at_ms=0)
+    store.add_credential(expired)
+
+    def refresh(c):
+        return Credential(
+            provider_id=c.provider_id, account_id=c.account_id,
+            kind="oauth", credential_id=c.credential_id,
+            payload=CredentialData(
+                kind="oauth", auth_value="new",
+                data={
+                    "refresh_token": c.payload.data["refresh_token"],
+                    "expires_at_ms": int(time.time() * 1000) + 3600_000,
+                    "client_id": c.payload.data["client_id"],
+                },
+            ),
+        )
+
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex", refresh=refresh,
+    ))
+    cred = asyncio.run(m.acquire("openai-codex"))
+    assert cred.payload.auth_value == "new"
+    # Persisted back
+    stored = store.get_pool("openai-codex", "default").credentials[0]
+    assert stored.payload.auth_value == "new"
+
+
+def test_missing_refresh_fn_raises_needs_reauth(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_oauth(access="x", expires_at_ms=0))
+    register_provider_config(ProviderAuthConfig(provider_id="openai-codex"))
+    with pytest.raises(AuthNeedsReauthError):
+        asyncio.run(m.acquire("openai-codex"))
+
+
+# ---- refresh failure marks needs_reauth (no retry spam) -------------------
+
+def test_dead_refresh_token_marks_needs_reauth_and_stops_retrying(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_oauth(access="old", expires_at_ms=0))
+    calls = {"n": 0}
+
+    def refresh(c):
+        calls["n"] += 1
+        # Mimic Anthropic's "refresh token dead" 400.
+        raise RuntimeError(
+            "Anthropic OAuth refresh failed 400: invalid_grant, "
+            "Refresh token not found or invalid"
+        )
+
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex", refresh=refresh,
+    ))
+
+    # First acquire: refresh runs once and fails -> bubble up.
+    with pytest.raises(RuntimeError):
+        asyncio.run(m.acquire("openai-codex"))
+    assert calls["n"] == 1
+
+    # The failure was persisted as needs_reauth (was the bug: stayed valid).
+    stored = store.get_pool("openai-codex", "default").credentials[0]
+    assert stored.status == "needs_reauth"
+    assert stored.last_error
+
+    # Second acquire: the pool skips the dead credential (no second
+    # refresh attempt -> no log spam) and reports the pool exhausted.
+    with pytest.raises(AuthPoolExhaustedError):
+        asyncio.run(m.acquire("openai-codex"))
+    assert calls["n"] == 1  # refresh NOT called again
+
+
+def test_transient_refresh_failure_does_not_mark_needs_reauth(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_oauth(access="old", expires_at_ms=0))
+
+    def refresh(c):
+        raise RuntimeError("Anthropic OAuth refresh failed 503: connection timeout")
+
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex", refresh=refresh,
+    ))
+
+    with pytest.raises(RuntimeError):
+        asyncio.run(m.acquire("openai-codex"))
+
+    # Transport failure says nothing about the token -> credential untouched.
+    stored = store.get_pool("openai-codex", "default").credentials[0]
+    assert stored.status != "needs_reauth"
+
+
+# ---- concurrent refresh dedup ---------------------------------------------
+
+def test_concurrent_refresh_is_deduped(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    expired = _oauth(access="old", expires_at_ms=0)
+    store.add_credential(expired)
+    call_count = {"n": 0}
+    refresh_entered = asyncio.Event()
+    release_refresh = asyncio.Event()
+
+    async def async_refresh(c):
+        call_count["n"] += 1
+        refresh_entered.set()
+        await release_refresh.wait()
+        return Credential(
+            provider_id=c.provider_id, account_id=c.account_id,
+            kind="oauth", credential_id=c.credential_id,
+            payload=CredentialData(
+                kind="oauth", auth_value=f"new-{call_count['n']}",
+                data={
+                    "refresh_token": "R2",
+                    "expires_at_ms": int(time.time() * 1000) + 3600_000,
+                    "client_id": "cid",
+                },
+            ),
+        )
+
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex", async_refresh=async_refresh,
+    ))
+
+    async def run():
+        tasks = [
+            asyncio.create_task(m.acquire("openai-codex"))
+            for _ in range(10)
+        ]
+        await refresh_entered.wait()
+        await asyncio.sleep(0)
+        release_refresh.set()
+        return await asyncio.gather(*tasks)
+
+    results = asyncio.run(run())
+    # Every caller got the same result from a single refresh.
+    assert call_count["n"] == 1
+    assert all(r.payload.auth_value == "new-1" for r in results)
+
+
+# ---- read-only -------------------------------------------------------------
+
+def test_read_only_expired_credential_raises_read_only(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    cred = _oauth(access="x", expires_at_ms=0)
+    cred.read_only = True
+    store.add_credential(cred)
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex",
+        refresh=lambda c: c,   # would mutate if called; must not be called
+    ))
+    with pytest.raises(AuthReadOnlyError):
+        asyncio.run(m.acquire("openai-codex"))
+
+
+def test_read_only_fresh_credential_is_returned_asis(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    cred = _oauth(access="fresh")
+    cred.read_only = True
+    store.add_credential(cred)
+    register_provider_config(ProviderAuthConfig(provider_id="openai-codex"))
+    out = asyncio.run(m.acquire("openai-codex"))
+    assert out.payload.auth_value == "fresh"
+
+
+# ---- fallback chain --------------------------------------------------------
+
+def test_fallback_chain_takes_over_when_primary_missing(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_api(provider="anthropic", key="ant"))
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex",
+        fallback_chain=[("anthropic", "default")],
+    ))
+    cred = asyncio.run(m.acquire("openai-codex"))
+    assert cred.provider_id == "anthropic"
+    assert cred.payload.auth_value == "ant"
+
+
+def test_fallback_chain_cycle_is_broken(tmp_path: Path):
+    m, _ = _manager(tmp_path)
+    register_provider_config(ProviderAuthConfig(
+        provider_id="a", fallback_chain=[("b", "default")],
+    ))
+    register_provider_config(ProviderAuthConfig(
+        provider_id="b", fallback_chain=[("a", "default")],
+    ))
+    with pytest.raises(AuthConfigError):
+        asyncio.run(m.acquire("a"))
+
+
+def test_pool_exhausted_falls_through_to_next(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    # Primary pool: revoked
+    dead = _api(provider="openai-codex", key="dead")
+    dead.status = "revoked"
+    store.add_credential(dead)
+    # Fallback: healthy api key on anthropic
+    store.add_credential(_api(provider="anthropic", key="ant"))
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex",
+        fallback_chain=[("anthropic", "default")],
+    ))
+    cred = asyncio.run(m.acquire("openai-codex"))
+    assert cred.provider_id == "anthropic"
+
+
+def test_pool_exhausted_with_no_fallback_raises(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    dead = _api(provider="openai-codex", key="dead")
+    dead.status = "revoked"
+    store.add_credential(dead)
+    register_provider_config(ProviderAuthConfig(provider_id="openai-codex"))
+    with pytest.raises(AuthPoolExhaustedError):
+        asyncio.run(m.acquire("openai-codex"))
+
+
+# ---- failure reporting -----------------------------------------------------
+
+def test_apply_failure_cools_down_credential(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    cred = _api(key="k")
+    store.add_credential(cred)
+    m.apply_failure("openai", "default", cred.credential_id, "rate_limit")
+    reloaded = store.get_pool("openai", "default").credentials[0]
+    assert reloaded.cooldown_until_ms > int(time.time() * 1000)
+    assert reloaded.status == "rate_limited"
+
+
+def test_apply_success_clears_expired_cooldown(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    cred = _api(key="k")
+    cred.cooldown_until_ms = 1   # in the past
+    cred.status = "rate_limited"
+    store.add_credential(cred)
+    m.apply_success("openai", "default", cred.credential_id)
+    # In-memory is cleared; disk write skipped on purpose, but the
+    # status transition we care about happened.
+    assert cred.status == "valid"
+
+
+# ---- events ---------------------------------------------------------------
+
+def test_refresh_emits_started_and_succeeded(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    store.add_credential(_oauth(access="x", expires_at_ms=0))
+    register_provider_config(ProviderAuthConfig(
+        provider_id="openai-codex",
+        refresh=lambda c: Credential(
+            provider_id=c.provider_id, account_id=c.account_id,
+            kind="oauth", credential_id=c.credential_id,
+            payload=CredentialData(
+                kind="oauth", auth_value="new",
+                data={
+                    "refresh_token": "r",
+                    "expires_at_ms": int(time.time() * 1000) + 3600_000,
+                    "client_id": "cid",
+                },
+            ),
+        ),
+    ))
+    events = []
+    store.subscribe(events.append)
+    asyncio.run(m.acquire("openai-codex"))
+    types = {e.type for e in events}
+    assert AuthEventType.REFRESH_STARTED in types
+    assert AuthEventType.REFRESH_SUCCEEDED in types
+
+
+def test_pool_exhausted_emits_event(tmp_path: Path):
+    m, store = _manager(tmp_path)
+    dead = _api(provider="x", key="k"); dead.status = "revoked"
+    store.add_credential(dead)
+    register_provider_config(ProviderAuthConfig(provider_id="x"))
+    events = []
+    store.subscribe(events.append)
+    with pytest.raises(AuthPoolExhaustedError):
+        asyncio.run(m.acquire("x"))
+    assert any(e.type == AuthEventType.POOL_EXHAUSTED for e in events)

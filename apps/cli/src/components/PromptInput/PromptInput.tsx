@@ -1,0 +1,524 @@
+import React, { useEffect, useState, useMemo, useRef } from 'react';
+import { Box, Text, useDeclaredCursor, useInput } from '../../runtime/index';
+import { PromptInputHelpMenu } from './PromptInputHelpMenu.js';
+import { FileMenu } from './FileMenu.js';
+import { allSlashCommands, SlashCommand } from '../../commands/registry.js';
+import { fileCompletions, findAtToken, FileMatch } from '../../utils/fileCompletions.js';
+import { usePanelWidth } from '../../utils/useTerminalWidth.js';
+import { useColors } from '../../theme/ThemeProvider.js';
+import { stringWidth } from '../../runtime/ink/stringWidth.js';
+import {
+  firstGrapheme,
+  getGraphemeSegmenter,
+  nextGraphemeBoundary,
+  previousGraphemeBoundary,
+} from '../../runtime/utils/intl.js';
+import { clearDraft, getDraft, setDraft } from '../../utils/draftStore.js';
+
+export interface PromptInputProps {
+  onSubmit: (text: string) => void;
+  busy?: boolean;
+  /** Called when the user hits esc while busy — REPL sends a stop. */
+  onCancel?: () => void;
+  /** Past submissions for ↑/↓ recall (newest last). */
+  history?: string[];
+  /** Text injected by an external picker, then consumed into local input state. */
+  initialDraft?: string;
+  onDraftApplied?: () => void;
+  /** Open cross-session context search. Receives the current draft. */
+  onContextSearch?: (draft: string) => void;
+  /** Empty prompt + `?` opens the keyboard shortcut reference. */
+  onShowShortcuts?: () => void;
+  /** Session id used as the persistence key for per-session drafts.
+   *  ``null`` / ``undefined`` falls back to a "__new__" slot so the
+   *  draft typed before a session exists still persists. Match what
+   *  the web composer does in ``session-store.ts``. */
+  draftKey?: string | null;
+}
+
+export const filterCommands = (filter: string): SlashCommand[] => {
+  // Arguments are not part of command completion. Keeping them in the
+  // filter made valid input such as `/memory status` display the misleading
+  // "no matching commands" message even though Enter executed it correctly.
+  const needle = filter.replace(/^\//, '').trimStart().split(/\s/, 1)[0].toLowerCase();
+  const commands = allSlashCommands();
+  if (!needle) return commands;
+  return commands.filter((c) => c.name.toLowerCase().includes(needle));
+};
+
+const visibleInput = (text: string): string => text.replace(/\n/g, '↵ ');
+
+const clamp = (n: number, min: number, max: number): number =>
+  Math.min(max, Math.max(min, n));
+
+const sliceCells = (text: string, start: number, end: number): string => {
+  if (end <= start) return '';
+  let position = 0;
+  let out = '';
+
+  for (const { segment } of getGraphemeSegmenter().segment(text)) {
+    const width = Math.max(0, stringWidth(segment));
+    const next = position + width;
+    if (next <= start) {
+      position = next;
+      continue;
+    }
+    if (position >= end) break;
+    if (next > end) break;
+    out += segment;
+    position = next;
+  }
+
+  return out;
+};
+
+interface InputViewport {
+  prefix: boolean;
+  before: string;
+  cursor: string;
+  after: string;
+  suffix: boolean;
+}
+
+export const buildInputViewport = (
+  value: string,
+  cursor: number,
+  maxColumns: number,
+): InputViewport => {
+  const before = visibleInput(value.slice(0, cursor));
+  const cursorGrapheme = firstGrapheme(value.slice(cursor));
+  const rawCursor = visibleInput(cursorGrapheme);
+  const cursorText = firstGrapheme(rawCursor) || ' ';
+  const after = visibleInput(value.slice(cursor + cursorGrapheme.length));
+  const cursorCol = stringWidth(before);
+  const cursorWidth = Math.max(1, stringWidth(cursorText));
+  const afterStart = cursorCol + cursorWidth;
+  const totalWidth = afterStart + stringWidth(after);
+  const columns = Math.max(1, maxColumns);
+
+  if (totalWidth <= columns) {
+    return { prefix: false, before, cursor: cursorText, after, suffix: false };
+  }
+
+  let markerColumns = 2;
+  let start = 0;
+  let end = columns;
+
+  for (let i = 0; i < 4; i++) {
+    const contentColumns = Math.max(cursorWidth, columns - markerColumns);
+    start = clamp(
+      cursorCol - Math.floor(contentColumns * 0.75),
+      0,
+      Math.max(0, totalWidth - contentColumns),
+    );
+    end = Math.min(totalWidth, start + contentColumns);
+    const nextMarkerColumns = (start > 0 ? 1 : 0) + (end < totalWidth ? 1 : 0);
+    if (nextMarkerColumns === markerColumns) break;
+    markerColumns = nextMarkerColumns;
+  }
+
+  return {
+    prefix: start > 0,
+    before: sliceCells(before, start, cursorCol),
+    cursor: cursorText,
+    after: sliceCells(after, Math.max(0, start - afterStart), Math.max(0, end - afterStart)),
+    suffix: end < totalWidth,
+  };
+};
+
+export const PromptInput: React.FC<PromptInputProps> = ({
+  onSubmit,
+  busy,
+  onCancel,
+  history,
+  initialDraft,
+  onDraftApplied,
+  onContextSearch,
+  onShowShortcuts,
+  draftKey,
+}) => {
+  const colors = useColors();
+  const [value, setValue] = useState('');
+  const [cursor, setCursor] = useState(0);
+  // A terminal can deliver several printable keys plus Enter in one stdin
+  // read (notably ConPTY and programmatic paste). React batches that read, so
+  // render-state alone is stale until every key has been dispatched. Keep the
+  // editing cursor synchronous as well as reactive so characters retain order
+  // and Enter submits the complete line.
+  const valueRef = useRef(value);
+  const inputCursorRef = useRef(cursor);
+  valueRef.current = value;
+  inputCursorRef.current = cursor;
+  const replaceInput = (next: string, nextCursor = next.length) => {
+    valueRef.current = next;
+    inputCursorRef.current = nextCursor;
+    setValue(next);
+    setCursor(nextCursor);
+  };
+  const moveCursor = (next: number) => {
+    inputCursorRef.current = next;
+    setCursor(next);
+  };
+  const [menuIndex, setMenuIndex] = useState(0);
+  // -1 means we're not browsing history. 0..history.length-1 picks an entry.
+  const [historyIndex, setHistoryIndex] = useState<number>(-1);
+  const width = usePanelWidth();
+  const inSlashMode = value.startsWith('/');
+  const matches = useMemo(() => (inSlashMode ? filterCommands(value) : []), [value, inSlashMode]);
+
+  // Fish-shell style autosuggest: when the current input is a prefix of
+  // a past submission, show the rest in dim gray after the cursor.
+  // → / End / ctrl-e accepts. New keystrokes that don't match the
+  // suggestion silently update / drop it.
+  const suggestion = useMemo<string | null>(() => {
+    if (!value || !history || history.length === 0) return null;
+    if (cursor !== value.length) return null;
+    if (inSlashMode) return null; // slash menu has its own popup
+    for (let i = history.length - 1; i >= 0; i--) {
+      const h = history[i] ?? '';
+      if (h !== value && h.startsWith(value)) return h.slice(value.length);
+    }
+    return null;
+  }, [value, cursor, history, inSlashMode]);
+
+  // Detect an "@partial" token before the cursor — when present we open
+  // the file completion menu and drive it with ↑↓/tab/enter.
+  const atToken = useMemo(() => findAtToken(value, cursor), [value, cursor]);
+  const fileMatches = useMemo<FileMatch[]>(() => {
+    if (!atToken) return [];
+    try {
+      return fileCompletions(atToken.partial);
+    } catch {
+      return [];
+    }
+  }, [atToken]);
+  const [fileIndex, setFileIndex] = useState(0);
+  useEffect(() => {
+    if (fileIndex >= fileMatches.length) setFileIndex(0);
+  }, [fileMatches.length, fileIndex]);
+  const inFileMode = atToken !== null && fileMatches.length > 0;
+
+  useEffect(() => {
+    if (menuIndex >= matches.length) setMenuIndex(0);
+  }, [matches.length, menuIndex]);
+
+  useEffect(() => {
+    if (initialDraft === undefined) return;
+    replaceInput(initialDraft);
+    setHistoryIndex(-1);
+    onDraftApplied?.();
+  }, [initialDraft, onDraftApplied]);
+
+  // Per-session draft persistence. On draftKey change (session
+  // switch) we hydrate the textarea with whatever the user left
+  // there last time. On every value change we write back through a
+  // debounce so we don't hammer the disk on every keystroke. The
+  // initial-load effect skips writes via the ``hydratedRef`` guard
+  // so a stale ref doesn't immediately re-persist the hydrated
+  // value as if the user had just typed it.
+  const hydratedRef = useRef<string | null | undefined>(undefined);
+  useEffect(() => {
+    const loaded = getDraft(draftKey);
+    hydratedRef.current = draftKey;
+    replaceInput(loaded);
+    setHistoryIndex(-1);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [draftKey]);
+  useEffect(() => {
+    // Don't write until hydration for the current key has settled —
+    // the first render after a draftKey switch still has the old
+    // value; the hydrate-effect above will replace it next tick.
+    if (hydratedRef.current !== draftKey) return;
+    const t = setTimeout(() => setDraft(draftKey, value), 250);
+    return () => clearTimeout(t);
+  }, [value, draftKey]);
+
+  const submitText = (text: string) => {
+    if (busy || !text.trim()) return;
+    replaceInput('');
+    setMenuIndex(0);
+    setHistoryIndex(-1);
+    // Submitted text leaves the draft slot empty so reopening the
+    // session lands on a clean prompt instead of replaying the last
+    // message.
+    clearDraft(draftKey);
+    onSubmit(text);
+  };
+
+  useInput((input, key) => {
+    const currentValue = valueRef.current;
+    const currentCursor = inputCursorRef.current;
+    // While the agent is busy, esc cancels the in-flight turn.
+    if (busy) {
+      if (key.escape) onCancel?.();
+      return;
+    }
+
+    // Ctrl-R opens saved-context search. The old input-history search
+    // remains covered by ↑/↓ recall and autosuggest.
+    if (key.ctrl && input === 'r') {
+      onContextSearch?.(currentValue);
+      return;
+    }
+
+    if (input === '?' && !key.ctrl && !key.meta && currentValue.length === 0) {
+      onShowShortcuts?.();
+      return;
+    }
+    // Readline-compatible editing works consistently in PowerShell, cmd,
+    // Windows Terminal and POSIX shells. Handle these before menu routing so
+    // editing an incomplete slash command never triggers the picker.
+    if (key.ctrl && input === 'a') {
+      moveCursor(0);
+      return;
+    }
+    if (key.ctrl && input === 'e') {
+      if (suggestion && currentCursor === currentValue.length) {
+        replaceInput(currentValue + suggestion);
+        setHistoryIndex(-1);
+      } else {
+        moveCursor(currentValue.length);
+      }
+      return;
+    }
+    if (key.ctrl && input === 'w') {
+      let start = currentCursor;
+      while (start > 0 && /\s/.test(currentValue[start - 1]!)) start--;
+      while (start > 0 && !/\s/.test(currentValue[start - 1]!)) start--;
+      const next = currentValue.slice(0, start) + currentValue.slice(currentCursor);
+      replaceInput(next, start);
+      setHistoryIndex(-1);
+      return;
+    }
+
+    // File-completion navigation: when an @partial is at the cursor and
+    // we have matches, ↑↓/tab/enter drive the file menu.
+    if (inFileMode && atToken) {
+      if (key.upArrow) {
+        setFileIndex((i) => (i - 1 + fileMatches.length) % fileMatches.length);
+        return;
+      }
+      if (key.downArrow) {
+        setFileIndex((i) => (i + 1) % fileMatches.length);
+        return;
+      }
+      if ((key.tab && !key.shift) || key.return) {
+        const pick = fileMatches[fileIndex]!;
+        const before = currentValue.slice(0, atToken.start);
+        const after = currentValue.slice(currentCursor);
+        const insertText = `@${pick.path}${pick.isDir ? '/' : ''} `;
+        const next = before + insertText + after;
+        replaceInput(next, before.length + insertText.length);
+        return;
+      }
+      if (key.escape) {
+        // Drop the @partial so the menu closes.
+        const before = currentValue.slice(0, atToken.start);
+        const after = currentValue.slice(currentCursor);
+        replaceInput(before + after, before.length);
+        return;
+      }
+    }
+
+    // Slash-menu navigation has priority when active.
+    if (inSlashMode && matches.length > 0) {
+      if (key.upArrow) {
+        setMenuIndex((i) => (i - 1 + matches.length) % matches.length);
+        return;
+      }
+      if (key.downArrow) {
+        setMenuIndex((i) => (i + 1) % matches.length);
+        return;
+      }
+      if (key.tab && !key.shift) {
+        const cmd = matches[menuIndex]!;
+        const next = `/${cmd.name} `;
+        setValue(next);
+        setCursor(next.length);
+        return;
+      }
+      if (key.return) {
+        const cmd = matches[menuIndex]!;
+        // If the user has only typed `/foo` (no trailing space/args), running
+        // the command means submitting `/foo`. If they've typed `/foo bar`,
+        // submit the whole line.
+        const trimmed = currentValue.trim();
+        const exactMatch = trimmed === `/${cmd.name}` || trimmed.startsWith(`/${cmd.name} `);
+        const toSend = exactMatch ? currentValue : `/${cmd.name}`;
+        submitText(toSend);
+        return;
+      }
+    }
+
+    if (key.return) {
+      // alt+enter inserts a newline; plain enter submits.
+      if (key.meta) {
+        const next = currentValue.slice(0, currentCursor) + '\n' + currentValue.slice(currentCursor);
+        replaceInput(next, currentCursor + 1);
+        return;
+      }
+      submitText(currentValue);
+      return;
+    }
+    if (key.escape) {
+      replaceInput('');
+      setMenuIndex(0);
+      setHistoryIndex(-1);
+      return;
+    }
+    // History recall: ↑ on an empty/inactive line walks backwards through
+    // past submissions, ↓ walks forward toward the live input.
+    if (key.upArrow && history && history.length > 0) {
+      const next = historyIndex < 0 ? history.length - 1 : Math.max(0, historyIndex - 1);
+      setHistoryIndex(next);
+      const v = history[next] ?? '';
+      replaceInput(v);
+      return;
+    }
+    if (key.downArrow && history && historyIndex >= 0) {
+      const next = historyIndex + 1;
+      if (next >= history.length) {
+        setHistoryIndex(-1);
+        replaceInput('');
+      } else {
+        setHistoryIndex(next);
+        const v = history[next] ?? '';
+        replaceInput(v);
+      }
+      return;
+    }
+    if (key.leftArrow) {
+      moveCursor(previousGraphemeBoundary(currentValue, currentCursor));
+      return;
+    }
+    if (key.rightArrow) {
+      // At end-of-line with a suggestion, → accepts the rest.
+      if (currentCursor === currentValue.length && suggestion) {
+        const next = currentValue + suggestion;
+        replaceInput(next);
+        setHistoryIndex(-1);
+        return;
+      }
+      moveCursor(nextGraphemeBoundary(currentValue, currentCursor));
+      return;
+    }
+    if (key.backspace) {
+      if (currentCursor === 0) return;
+      const previous = previousGraphemeBoundary(currentValue, currentCursor);
+      const next = currentValue.slice(0, previous) + currentValue.slice(currentCursor);
+      replaceInput(next, previous);
+      return;
+    }
+    if (key.delete) {
+      if (currentCursor >= currentValue.length) return;
+      const following = nextGraphemeBoundary(currentValue, currentCursor);
+      const next = currentValue.slice(0, currentCursor) + currentValue.slice(following);
+      replaceInput(next, currentCursor);
+      return;
+    }
+    // Plain character insert. Filter out control chars.
+    if (input && !key.ctrl && !key.meta) {
+      setHistoryIndex(-1);
+      const next = currentValue.slice(0, currentCursor) + input + currentValue.slice(currentCursor);
+      replaceInput(next, currentCursor + input.length);
+    }
+  });
+
+  const lineCount = value.length > 0 ? value.split('\n').length : 1;
+  const rightHint =
+    busy ? 'esc stop'
+    : inFileMode ? 'tab insert'
+    : inSlashMode ? 'tab fill'
+    : suggestion ? '→ accept'
+    : lineCount > 1 ? `${lineCount} lines`
+    : null;
+  const showRightHint = rightHint !== null && width >= 38;
+  const placeholder =
+    busy ? 'waiting for response'
+    : 'message, /command, @file';
+  const borderColor =
+    busy ? colors.warning
+    : inFileMode || inSlashMode ? colors.accent
+    : colors.primary;
+  const innerWidth = Math.max(8, width - 4);
+  const rightHintWidth = showRightHint ? stringWidth(rightHint) + 2 : 0;
+  const inputAreaWidth = Math.max(8, innerWidth - rightHintWidth);
+  const valueViewportWidth = Math.max(1, inputAreaWidth - 2);
+  const inputViewport = buildInputViewport(value, cursor, valueViewportWidth);
+  const inputViewportCells =
+    (inputViewport.prefix ? 1 : 0) +
+    stringWidth(inputViewport.before) +
+    stringWidth(inputViewport.cursor) +
+    stringWidth(inputViewport.after) +
+    (inputViewport.suffix ? 1 : 0);
+  const suggestionCells = Math.max(0, valueViewportWidth - inputViewportCells);
+  const suggestionPreview = (() => {
+    if (!suggestion || suggestionCells <= 1) return '';
+    const visible = visibleInput(suggestion);
+    if (stringWidth(visible) <= suggestionCells) return visible;
+    return `${sliceCells(visible, 0, suggestionCells - 1)}…`;
+  })();
+  const cursorRef = useDeclaredCursor({
+    line: 0,
+    column:
+      2 +
+      (inputViewport.prefix ? 1 : 0) +
+      stringWidth(inputViewport.before),
+    active: !busy,
+  });
+
+  return (
+    <Box flexDirection="column" width={width} flexShrink={0}>
+      {inFileMode ? (
+        <FileMenu items={fileMatches} selectedIndex={fileIndex} />
+      ) : inSlashMode ? (
+        <PromptInputHelpMenu items={matches} selectedIndex={menuIndex} />
+      ) : null}
+      <Box
+        borderStyle="round"
+        borderColor={borderColor}
+        paddingX={1}
+        justifyContent="space-between"
+        flexShrink={0}
+        width={width}
+        tabIndex={0}
+        autoFocus
+        onKeyDownCapture={(event) => {
+          if (event.key === 'tab' && !event.ctrl && !event.meta) {
+            event.preventDefault();
+          }
+        }}
+      >
+        <Box ref={cursorRef} flexShrink={0} width={inputAreaWidth}>
+          <Text color={colors.primary}>{'> '}</Text>
+          {value.length === 0 ? (
+            <>
+              <Text>{' '}</Text>
+              <Text color={colors.muted} wrap="truncate-end">{placeholder}</Text>
+            </>
+          ) : (
+            <>
+              {inputViewport.prefix ? <Text color={colors.border}>…</Text> : null}
+              <Text>{inputViewport.before}</Text>
+              <Text>{inputViewport.cursor}</Text>
+              <Text>{inputViewport.after}</Text>
+              {inputViewport.suffix ? <Text color={colors.border}>…</Text> : null}
+              {suggestionPreview ? (
+                <Text color={colors.muted}>
+                  {suggestionPreview}
+                </Text>
+              ) : null}
+            </>
+          )}
+        </Box>
+        {showRightHint ? (
+          <Box flexShrink={0} marginLeft={2}>
+            <Text color={busy ? colors.warning : colors.muted}>
+              {rightHint}
+            </Text>
+          </Box>
+        ) : null}
+      </Box>
+    </Box>
+  );
+};

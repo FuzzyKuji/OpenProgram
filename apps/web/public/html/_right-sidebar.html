@@ -1,0 +1,28 @@
+  <aside id="rightSidebar" class="sidebar right-sidebar collapsed" data-view="history">
+    <div class="sidebar-header right-sidebar-header">
+      <button class="sidebar-toggle" onclick="rightDock.toggle()" title="Toggle panel">
+        <svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor" style="transform:scaleX(-1)"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm0,160H88V56H216V200Z"/></svg>
+      </button>
+    </div>
+    <div class="sidebar-nav-group">
+      <div class="sidebar-nav-item right-nav-item" data-view="history" onclick="rightDock.toggle('history')">
+        <span class="sidebar-nav-icon"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor"><path d="M232,64a32,32,0,1,0-40,31v17a8,8,0,0,1-8,8H96a23.84,23.84,0,0,0-8,1.38V95a32,32,0,1,0-16,0v66a32,32,0,1,0,16,0V144a8,8,0,0,1,8-8h88a24,24,0,0,0,24-24V95A32.06,32.06,0,0,0,232,64ZM64,64A16,16,0,1,1,80,80,16,16,0,0,1,64,64ZM96,192a16,16,0,1,1-16-16A16,16,0,0,1,96,192Z"/></svg></span>
+        <span class="sidebar-nav-label">History</span>
+      </div>
+      <div class="sidebar-nav-item right-nav-item" data-view="detail" onclick="rightDock.toggle('detail')">
+        <span class="sidebar-nav-icon"><svg width="20" height="20" viewBox="0 0 256 256" fill="currentColor"><path d="M216,40H40A16,16,0,0,0,24,56V200a16,16,0,0,0,16,16H216a16,16,0,0,0,16-16V56A16,16,0,0,0,216,40Zm-8,96H188.64L159,188a8,8,0,0,1-6.95,4h-.46a8,8,0,0,1-6.89-4.84L103,89.92,79,132a8,8,0,0,1-7,4H48a8,8,0,0,1,0-16H67.36L97.05,68a8,8,0,0,1,14.3.82L153,166.08l24-42.05a8,8,0,0,1,6.95-4h24a8,8,0,0,1,0,16Z"/></svg></span>
+        <span class="sidebar-nav-label">Execution Detail</span>
+      </div>
+    </div>
+    <div class="right-view-host">
+      <div id="historyPanel" class="right-view" data-view="history">
+        <div id="branchesPanel"></div>
+        <div class="history-body"></div>
+      </div>
+      <div id="detailPanel" class="right-view" data-view="detail">
+        <div id="detailBody" class="detail-body">
+          <div class="detail-empty">No execution selected.<br/><span>Click a node in the conversation tree to inspect its context and output.</span></div>
+        </div>
+      </div>
+    </div>
+  </aside>

@@ -1,0 +1,141 @@
+/* Footer "..." menu — replaces legacy .sidebar-footer / .user-menu rules
+   in 02-sidebar.css. Visual parity with the old design. */
+
+.footer {
+  position: relative;
+  border-top: 1px solid var(--border);
+  margin-top: auto;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+/* 1:1 mirror of Claude.ai's user-menu footer (measured live):
+     btn          h=64px  padding=32px 16px  gap=0  text-align=left
+     avatar box   36x36   border-radius=9999px  border=none
+     avatar svg   36x36
+     name         14/20   weight 510   bright text color
+     subtitle     12/16   weight 400   muted text color
+     chevron      14x14   color = bright text (same as name)
+   We keep avatar/text physically adjacent (gap:0) and rely on the
+   text wrapper's left margin for visual separation. */
+.trigger {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  /* Claude footer: fixed 64px height with padding 32/16. Padding eats
+     the content box (height - padding = 0), so the 36px avatar visually
+     centers via flex alignment rather than physically fitting in
+     content. Looks like a 64px-tall row with a 36px circle in it.
+
+     Horizontal padding is 16px; in the collapsed left sidebar the left
+     padding is 6px (styles/base/sidebar.css), which places the avatar in
+     the 47px-wide collapsed card, and the right one 26px, so the name
+     keeps its width. Between the two it moves with the rail:
+     same duration and curve as the rail's width, read from the rail's
+     shell (--rail-move-duration / --rail-move-easing, set by
+     use-resizable-rail.ts), so the avatar glides from one resting
+     place to the other while the card grows or shrinks around it.
+     Outside a rail those variables are unset and the padding does not
+     animate. */
+  height: 64px;
+  padding-top: 32px;
+  padding-bottom: 32px;
+  padding-left: 16px;
+  padding-right: 16px;
+  box-sizing: border-box;
+  border-radius: 0;
+  cursor: pointer;
+  user-select: none;
+  background: transparent;
+  border: none;
+  width: 100%;
+  text-align: left;
+  font-family: inherit;
+  color: var(--text-primary);
+  transition:
+    background var(--motion-medium) var(--ease-standard),
+    padding-left var(--rail-move-duration, 0s) var(--rail-move-easing, linear),
+    padding-right var(--rail-move-duration, 0s) var(--rail-move-easing, linear);
+  overflow: hidden;
+}
+.trigger:hover { background: var(--bg-hover); }
+
+.avatar {
+  width: 36px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  color: var(--primary-foreground);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-chat);
+  font-weight: 600;
+  flex-shrink: 0;
+  transition: opacity var(--motion-medium) var(--ease-standard);
+}
+.trigger:hover .avatar {
+  opacity: 0.92;
+}
+
+.name {
+  width: 100%;
+  /* Claude's name ink (195 194 183) is our --text-primary exactly. */
+  color: var(--text-primary);
+  font-size: var(--fs-base);
+  font-weight: 500;
+  line-height: 20px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.subtitle {
+  width: 100%;
+  /* Claude's subtitle ink (151 149 140) is our --text-secondary exactly. */
+  color: var(--text-secondary);
+  font-size: var(--fs-xs);
+  font-weight: 400;
+  line-height: 16px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+/* Trailing chevron-up-down — Claude colors it the same as name (primary). */
+.chevron {
+  flex-shrink: 0;
+  color: var(--text-primary);
+  margin-left: 8px;
+  opacity: 0.85;
+  transition: opacity var(--motion-medium) var(--ease-standard);
+}
+.trigger:hover .chevron { opacity: 1; }
+
+/* Popover anchored above the trigger. Frame, rows and separator are the
+   shared menu classes (ui/menu/menu-styles.ts MENU_PANEL / itemCls /
+   MENU_SEPARATOR), so this menu cannot drift from the others; only the
+   placement lives here. Gap below matches left/right 8px. */
+.menu {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: calc(100% + 8px);
+  max-width: none;
+  z-index: 50;
+}
+
+/* Rows are links and buttons: full width, no underline. Border and
+   fill come from Tailwind's preflight (layered), so itemCls's hover
+   fill still wins — an unlayered `background` here would hide it. */
+.item {
+  width: 100%;
+  text-align: left;
+  text-decoration: none;
+  font-family: inherit;
+}
+.item svg { color: var(--text-muted); }
+.item:hover svg { color: var(--text-primary); }
+
+/* Collapsed-sidebar rules live in app/styles/02-sidebar.css and
+   target stable companion classes (`user-menu-footer-*`) so the
+   legacy CSS can match them without going through CSS-module hashes. */

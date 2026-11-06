@@ -1,0 +1,19 @@
+<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Windows CI 完整执行</title><body><main>
+<h1>Windows CI 完整执行</h1>
+<p>原生 x64 和 ARM64 作业使用四个 worker 执行平台合同及完整单元测试。测试计数完成不代表错误报告和进程退出已完成。</p>
+<h2>跨平台测试参数</h2>
+<p>大型参数化载荷使用显式短测试 ID。Pytest 会把完整节点 ID 写入 PYTEST_CURRENT_TEST；Windows 环境变量值必须少于 32767 个字符。从 8 MiB 图像字符串生成 ID 会阻止 setup 和 teardown，并在整个错误报告中重复载荷。载荷字节保持不变。POSIX mode 断言只在 POSIX 系统运行；目录往返测试仍在 Windows 运行。</p>
+<h2>失败诊断</h2>
+<p>Windows Python 输出不使用缓冲，单元测试结果包含测试名称。无论成功失败，均上传完整输出和单独的 traceback 文件。进程级 traceback 期限替代 pytest faulthandler 插件，避免异常报告取消该期限；它覆盖测试执行、报告和退出。测试步骤与作业也有有限执行期限。失败测试保持非零退出状态，不删除测试，也不将其视为通过。</p>
+<h2>文档读取与测试资源归属</h2>
+<p>文档发布在打开时通过设备和 inode 绑定文件身份，分别在描述符与路径名 stat API 内比较元数据稳定性。Windows 可能以不同方式表示时间戳；稳定的表示差异不能产生冲突。任一 API 内发生变化，或内容版本不匹配，仍拒绝发布并保留原始字节。</p>
+<p>历史归属测试 fixture 在构造后立即注册 SessionStore.close。关闭操作在生产线程 teardown 检查运行前取消并等待延迟索引写入线程，包括 setup 或断言失败的情况。检查机制保持不变。</p>
+<p>tracked-dispatch 测试 fixture 保留其 JobRunner，并在取得后立即注册清理。它们请求既有的不等待单例关闭，然后等待 dispatcher、reconciler 和 budget 线程，再关闭 SessionStore。生产关闭操作具有有限期限，并不证明测试所属资源已退出。</p>
+<p>子进程事件清理测试断言：普通回调仍阻塞时结果已经返回，随后释放并等待回调线程。setup 和主机调度时间不算回调清理延迟。同步期限用于检测挂起，不作为性能断言。</p>
+<h2>验收</h2>
+<p>两种原生架构都必须完成完整单元测试和平台合同。故意阻塞的诊断进程必须输出 Python 栈并以失败状态退出。普通失败测试必须输出详情并以失败状态退出。</p>
+<h2>实现状态</h2>
+<p>文档路由 fixture 隔离 HOME 和 USERPROFILE，并使用原始路径函数解析状态。因此延迟导入保留的是跟随当前环境的函数，而不是绑定到先前测试目录的临时 fixture 函数。</p>
+<p>原生 x64 诊断确认参数 ID 过长和仅适用于 POSIX 的权限断言问题。两者均已修正；最终原生 x64 和 ARM64 回归检查仍待完成。</p>
+<p>文档读取的可移植性和 fixture 清理通过公开文件写入回归覆盖、相关测试及独立规格与质量审查。四个 worker 的连续三次完整本地测试也通过。原生 Windows 确认仍待完成。</p>
+</main></body></html>

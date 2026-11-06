@@ -1,0 +1,534 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenProgram · Provider request recording and strict offline replay</title>
+<style>
+  :root {
+    --bg:#10131a; --panel:#171c26; --panel2:#1d2431; --line:#2d3747;
+    --text:#d9e0ea; --muted:#8f9bad; --accent:#65a6ff; --accent2:#a68cff;
+    --ok:#51d49a; --warn:#f2c15c; --bad:#ff7474; --code:#0c0f15;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  * { box-sizing:border-box }
+  body { margin:0; background:var(--bg); color:var(--text);
+    font:14px/1.68 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif }
+  main { max-width:1160px; margin:0 auto; padding:42px 28px 92px }
+  h1 { margin:0 0 8px; font-size:29px; line-height:1.25; color:#f3f6fa }
+  h2 { margin:44px 0 14px; padding-top:18px; border-top:1px solid var(--line);
+    font-size:20px; color:#f1f4f8 }
+  h3 { margin:25px 0 9px; font-size:16px; color:#dfe6f1 }
+  p { margin:9px 0 }
+  a { color:var(--accent) }
+  code,.mono { font-family:var(--mono); font-size:.91em }
+  code { padding:1px 5px; border:1px solid #263143; border-radius:5px;
+    background:var(--code); color:#cfe1ff }
+  pre { margin:12px 0; padding:14px 16px; overflow:auto; border:1px solid var(--line);
+    border-radius:10px; background:var(--code); color:#d8e4f5; font:12.5px/1.6 var(--mono) }
+  ul,ol { margin:8px 0; padding-left:22px }
+  li { margin:5px 0 }
+  .eyebrow { margin:0 0 5px; color:var(--accent); font:600 11px/1.4 var(--mono);
+    letter-spacing:.14em; text-transform:uppercase }
+  .sub { max-width:90ch; margin:0; color:var(--muted) }
+  .lead { margin:20px 0 0; padding:17px 19px; border:1px solid var(--line);
+    border-left:4px solid var(--accent); border-radius:11px; background:linear-gradient(135deg,#172131,#171b25) }
+  .toc { display:flex; flex-wrap:wrap; gap:7px; margin:20px 0 0 }
+  .toc a { padding:4px 10px; border:1px solid var(--line); border-radius:999px;
+    background:var(--panel); color:#c5cfdd; text-decoration:none; font-size:12px }
+  .grid { display:grid; gap:13px }
+  .g2 { grid-template-columns:repeat(2,minmax(0,1fr)) }
+  .g3 { grid-template-columns:repeat(3,minmax(0,1fr)) }
+  .card { padding:15px 17px; border:1px solid var(--line); border-radius:11px; background:var(--panel) }
+  .card h3,.card h4 { margin:0 0 7px }
+  .card p:last-child { margin-bottom:0 }
+  .small { color:var(--muted); font-size:12.5px }
+  .pill { display:inline-block; padding:3px 7px; border:1px solid; border-radius:999px;
+    font:600 10.5px/1.2 var(--mono); white-space:nowrap }
+  .ok { color:var(--ok); border-color:#28684e; background:#10271e }
+  .warn { color:var(--warn); border-color:#695525; background:#2a2414 }
+  .bad { color:var(--bad); border-color:#6c3030; background:#2b1719 }
+  .plan { color:#c8b9ff; border-color:#534576; background:#201b31 }
+  .note { margin:12px 0; padding:12px 14px; border-left:3px solid var(--accent2);
+    border-radius:6px; background:#181724; color:#c9c4dc }
+  .warning { border-left-color:var(--warn); background:#252113; color:#d9cda9 }
+  .failure { border-left-color:var(--bad); background:#281719; color:#e0b7b7 }
+  .table-wrap { overflow-x:auto; margin:12px 0; border:1px solid var(--line); border-radius:10px }
+  table { width:100%; border-collapse:collapse; min-width:720px; font-size:13px }
+  th,td { padding:9px 11px; border-bottom:1px solid var(--line); vertical-align:top; text-align:left }
+  th { background:var(--panel2); color:#cdd7e5; font-size:11.5px; letter-spacing:.04em }
+  tr:last-child td { border-bottom:0 }
+  tbody tr:nth-child(even) td { background:#131822 }
+  td.center,th.center { text-align:center; white-space:nowrap }
+  .diagram { margin:14px 0; padding:8px; border:1px solid var(--line); border-radius:12px; background:#0d1118 }
+  svg { display:block; width:100%; height:auto }
+  .sequence { margin:12px 0; border:1px solid var(--line); border-radius:10px; overflow:hidden }
+  .sequence .row { display:grid; grid-template-columns:42px 1fr; border-top:1px solid var(--line) }
+  .sequence .row:first-child { border-top:0 }
+  .sequence .n { display:flex; align-items:center; justify-content:center; background:var(--panel2);
+    color:var(--accent); font:600 12px var(--mono) }
+  .sequence .body { padding:9px 13px; background:var(--panel) }
+  .sequence .meta { color:var(--muted); font-size:12px }
+  .file-list td:first-child { white-space:nowrap }
+  .status-grid { display:grid; grid-template-columns:160px 1fr 1fr; border:1px solid var(--line);
+    border-radius:10px; overflow:hidden; margin:12px 0 }
+  .status-grid > div { padding:9px 11px; border-bottom:1px solid var(--line) }
+  .status-grid > div:nth-last-child(-n+3) { border-bottom:0 }
+  .status-grid .head { background:var(--panel2); color:#cbd5e3; font-weight:600 }
+  .status-grid .value { background:var(--panel) }
+  .foot { margin-top:48px; padding-top:15px; border-top:1px solid var(--line); color:var(--muted); font-size:12px }
+  @media(max-width:780px) {
+    main { padding:28px 17px 72px }
+    .g2,.g3 { grid-template-columns:1fr }
+    .status-grid { grid-template-columns:1fr }
+    .status-grid > div { border-bottom:1px solid var(--line)!important }
+    .status-grid > div:last-child { border-bottom:0!important }
+  }
+</style>
+</head>
+<body>
+<main>
+  <p class="eyebrow">OpenProgram / Provider design / implementation handoff</p>
+  <h1>Request recording and strict offline replay</h1>
+  <p class="sub">Design audit baseline: <code>990bfe36e625579443e1cb01a1b3266c8dbd0e87</code>; lifecycle implementation review: <code>99252205957a2850e1203a888a0fa0b403b0c3f7</code>. This page defines product entry points, the provider runtime lifecycle, registry wrappers, file safety, strict offline behavior, and verification contracts, with separate design and implementation evidence.</p>
+
+  <div class="lead">
+    <b>Selected design.</b> Retain the existing <code>RecordingProvider</code>, <code>ReplayProvider</code> and registry transform; add an explicit, thread-safe, process-wide provider runtime lifecycle. Importing <code>openprogram.models.providers</code> does not register vendor providers, read <code>record_replay</code> settings, open recording files, or install a transform. Registration and activation finish before the first actual provider lookup; <code>openprogram recordings</code> performs management operations only, without entering the runtime lifecycle. Recording is disabled by default; redaction cannot be disabled. Replay never reads credentials, delegates to a live provider, or uses provider fallback.
+  </div>
+
+  <nav class="toc" aria-label="Contents">
+    <a href="#scope">01 Goals and boundaries</a><a href="#current">02 Current implementation</a>
+    <a href="#reference">03 Reference snapshot</a><a href="#decision">04 Architecture</a>
+    <a href="#entry">05 CLI and configuration</a><a href="#registry">06 Registry wrappers</a>
+    <a href="#format">07 Files and concurrency</a><a href="#security">08 Permissions and redaction</a>
+    <a href="#offline">09 Strict offline replay</a><a href="#management">10 File management</a>
+    <a href="#failures">11 Failure semantics</a><a href="#compat">12 Compatibility</a>
+    <a href="#files">13 Minimal file changes</a><a href="#tests">14 Test matrix</a>
+    <a href="#status">15 Implementation record</a>
+  </nav>
+
+  <h2 id="scope">01 · Goals, non-goals, and security boundaries</h2>
+  <div class="grid g3">
+    <section class="card">
+      <h3>Goals</h3>
+      <ul>
+        <li>Enable complete provider request recording through the product CLI/config.</li>
+        <li>Reproduce multiple provider calls across APIs offline from one file.</li>
+        <li>Write files safely under concurrency, with owner-only permissions and mandatory redaction.</li>
+        <li>Provide scriptable list/show/delete/prune operations.</li>
+        <li>Identify errors by file, line, call, event, or field.</li>
+        <li>Separate provider registration, runtime activation, and recording management into independently callable and verifiable boundaries.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3>Non-goals</h3>
+      <ul>
+        <li>Do not record tools, MCP, browser operations, or arbitrary HTTP traffic.</li>
+        <li>Do not define, persist, or restore workflows, Agent DAGs, Sessions, or tool side effects; replay replaces only the LLM provider request/event boundary.</li>
+        <li>Do not define JSONL as a permanently stable public interchange format.</li>
+        <li>Do not perform fuzzy matching across models or prompts.</li>
+        <li>No Web UI entry point in this phase; CLI/config cover the worker first.</li>
+        <li>Do not automatically upload, share, or commit recording files.</li>
+        <li>Do not rewrite the provider plugin protocol, change the recording format, or support runtime hot switching.</li>
+      </ul>
+    </section>
+    <section class="card">
+      <h3>Security boundaries</h3>
+      <ul>
+        <li>“Strict offline” guarantees no network access only at the LLM provider layer.</li>
+        <li>Tools still run under their own permissions during replay; use sandbox/network policy when the entire process must be offline.</li>
+        <li>Redaction handles credentials only; prompts, responses, and tool results may contain private business data.</li>
+        <li><code>show</code> shows metadata by default; content requires an explicit request.</li>
+      </ul>
+    </section>
+  </div>
+
+  <h2 id="current">02 · Current baseline implementation and gaps</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Capability</th><th>Current evidence</th><th class="center">Status</th><th>Gap</th></tr></thead>
+    <tbody>
+      <tr><td>Recording, replay, and redaction</td><td><code>recording.py</code>, <code>replay.py</code></td><td class="center"><span class="pill ok">Implemented</span></td><td>Tests cover strict v1 JSONL, concurrent writes, mandatory redaction, offline mismatches, and the legacy reader.</td></tr>
+      <tr><td>Registry transform</td><td><code>api_registry.py::configure_provider_transform()</code></td><td class="center"><span class="pill ok">Implemented</span></td><td>Covers existing and subsequently registered providers; permits only one transform per process.</td></tr>
+      <tr><td>CLI/config and file management</td><td><code>openprogram recordings</code></td><td class="center"><span class="pill ok">Implemented</span></td><td>status/record/replay/off/list/show/delete/prune and next-start settings are implemented.</td></tr>
+      <tr><td>Management-command recovery</td><td><code>e8c9f645</code></td><td class="center"><span class="pill ok">Implemented</span></td><td>Recording management does not initialize the provider runtime; recovery from a corrupt replay file no longer requires an environment-variable sentinel.</td></tr>
+      <tr><td>Provider runtime lifecycle</td><td><code>initialization.py</code>, <code>register.py</code></td><td class="center"><span class="pill ok">Implemented</span></td><td>Verified explicit NEW/INITIALIZING/READY/FAILED states, concurrent first initialization, redacted failures, atomic auth/API publication, and startup fail-fast behavior.</td></tr>
+      <tr><td>Concise Markdown reference</td><td><code>record-replay.md</code>/<code>.zh.md</code></td><td class="center"><span class="pill ok">Synchronized</span></td><td>Documents the current CLI, strict offline guarantees, and lifecycle implementation evidence.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <div class="note"><b>Implemented lifecycle boundary: </b><code>providers/__init__.py</code> does not register built-ins, read settings, open recording files, or install a transform. Public provider lookup and Web/worker startup explicitly call <code>initialize_provider_runtime()</code>; recording management operates directly on settings and files, without an environment-variable protocol.</div>
+
+  <h2 id="reference">03 · Corresponding design in the reference corpus</h2>
+  <p>The repository reference snapshot contains only <code>references/pi-ai</code>. This section describes that snapshot alone, without claiming coverage of other versions or the entire open-source ecosystem.</p>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Object</th><th>Actual mechanism</th><th>Recording/replay support</th><th>OpenProgram decision</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><code>references/pi-ai/src/stream.ts</code></td>
+        <td><code>stream()</code>/<code>streamSimple()</code> resolves a provider by <code>model.api</code> and calls its methods directly.</td>
+        <td><span class="pill bad">Absent from the snapshot</span>. The snapshot has no recording/replay module, configuration entry, or recording-file management; <code>stream.ts</code> also has no wrapper hook.</td>
+        <td>Adopt one registry dispatch point; transform providers centrally in the registry instead of editing each vendor module.</td>
+      </tr>
+      <tr>
+        <td><code>references/pi-ai/src/types.ts</code></td>
+        <td>Shares <code>Model</code>, <code>Context</code>, stream options, and event types.</td>
+        <td><span class="pill bad">Absent from the snapshot</span>. No recording manifest or replay mismatch type exists.</td>
+        <td>Serialize the existing corresponding Pydantic types; do not create a second request/event domain model.</td>
+      </tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">Rejected approaches: per-vendor recorders, raw HTTP proxy capture, and test mocks as substitutes for product entry points. These duplicate implementation, expose unredacted wire data, or fail to cover actual worker configuration.</p>
+
+  <h2 id="decision">04 · Architecture</h2>
+  <div class="diagram">
+  <svg viewBox="0 0 1120 430" role="img" aria-label="Separation of provider import, runtime initialization, and recording management">
+    <defs>
+      <marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#65a6ff"/></marker>
+      <marker id="arrow2" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 Z" fill="#a68cff"/></marker>
+    </defs>
+    <text x="24" y="28" fill="#8f9bad" font-size="12">Module import</text>
+    <rect x="24" y="44" width="1072" height="68" rx="10" fill="#171c26" stroke="#2d3747"/>
+    <text x="560" y="72" fill="#d9e0ea" text-anchor="middle" font-size="14" font-weight="700">import openprogram.models.providers</text>
+    <text x="560" y="94" fill="#8f9bad" text-anchor="middle" font-size="12">Define and export APIs only; no vendor registration, settings reads, recording-file access, or transform installation</text>
+
+    <text x="24" y="150" fill="#8f9bad" font-size="12">Normal execution</text>
+    <rect x="24" y="166" width="230" height="78" rx="10" fill="#171c26" stroke="#65a6ff"/>
+    <text x="139" y="195" fill="#d9e0ea" text-anchor="middle" font-size="14" font-weight="700">Actual provider lookup</text>
+    <text x="139" y="218" fill="#8f9bad" text-anchor="middle" font-size="12">get_api_provider(api)</text>
+    <line x1="254" y1="205" x2="334" y2="205" stroke="#65a6ff" marker-end="url(#arrow)"/>
+    <rect x="342" y="154" width="300" height="102" rx="10" fill="#171c26" stroke="#65a6ff"/>
+    <text x="492" y="184" fill="#d9e0ea" text-anchor="middle" font-size="14" font-weight="700">initialize_provider_runtime()</text>
+    <text x="492" y="207" fill="#8f9bad" text-anchor="middle" font-size="12">NEW → INITIALIZING → READY / FAILED</text>
+    <text x="492" y="230" fill="#8f9bad" text-anchor="middle" font-size="12">Built-ins → config snapshot → atomic transform</text>
+    <line x1="642" y1="205" x2="722" y2="205" stroke="#65a6ff" marker-end="url(#arrow)"/>
+    <rect x="730" y="166" width="366" height="78" rx="10" fill="#171c26" stroke="#2d3747"/>
+    <text x="913" y="195" fill="#d9e0ea" text-anchor="middle" font-size="14" font-weight="700">Final registry provider</text>
+    <text x="913" y="218" fill="#8f9bad" text-anchor="middle" font-size="12">Original provider / RecordingProvider / ReplayProvider</text>
+
+    <text x="24" y="300" fill="#8f9bad" font-size="12">Management execution</text>
+    <rect x="24" y="316" width="320" height="78" rx="10" fill="#211a31" stroke="#a68cff"/>
+    <text x="184" y="345" fill="#c8b9ff" text-anchor="middle" font-size="14" font-weight="700">openprogram recordings ...</text>
+    <text x="184" y="368" fill="#c7bfd5" text-anchor="middle" font-size="12">Call inspection/config functions directly</text>
+    <line x1="344" y1="355" x2="454" y2="355" stroke="#a68cff" marker-end="url(#arrow2)"/>
+    <rect x="462" y="316" width="300" height="78" rx="10" fill="#171c26" stroke="#a68cff"/>
+    <text x="612" y="345" fill="#d9e0ea" text-anchor="middle" font-size="14" font-weight="700">No provider runtime initialization</text>
+    <text x="612" y="368" fill="#8f9bad" text-anchor="middle" font-size="12">Diagnose or disable corrupt settings/files</text>
+    <rect x="806" y="316" width="290" height="78" rx="10" fill="#171c26" stroke="#2d3747"/>
+    <text x="951" y="345" fill="#d9e0ea" text-anchor="middle" font-size="14" font-weight="700">next_start</text>
+    <text x="951" y="368" fill="#8f9bad" text-anchor="middle" font-size="12">Current process lifecycle stays unchanged</text>
+  </svg>
+  </div>
+  <div class="grid g2">
+    <section class="card"><h3>Retain</h3><p>Existing JSONL, strict parser, shared sink/replay, registry transform, next-start settings, management functions, and direct <code>RecordingProvider</code>/<code>ReplayProvider</code> construction in the library API.</p></section>
+    <section class="card"><h3>Separate</h3><p><code>register_builtins()</code> handles provider/auth adapter registration only; <code>initialize_provider_runtime()</code> owns the once-only configuration snapshot and transform. Management commands call neither. They can diagnose corrupt settings or replay files and disable them. Management changes take effect on the next start and do not reset the current process lifecycle.</p></section>
+    <section class="card"><h3>Add</h3><p>A shared lifecycle state, concurrent first initialization, cached failures, mandatory initialization before public provider lookup, and explicit startup fail-fast calls in Web/worker.</p></section>
+    <section class="card"><h3>Reject</h3><p>No environment-controlled import, per-vendor initialization branches, configuration hot reload, format changes, or provider-runtime dependency in recording management.</p></section>
+  </div>
+
+  <h2 id="entry">05 · CLI and configuration contracts</h2>
+  <h3>CLI syntax</h3>
+  <pre>openprogram recordings status [--json]
+openprogram recordings record [--name NAME]
+openprogram recordings replay &lt;ID-or-PATH&gt;
+openprogram recordings off
+openprogram recordings list [--json]
+openprogram recordings show &lt;ID-or-PATH&gt; [--json] [--content]
+openprogram recordings delete &lt;ID&gt; [--yes]
+openprogram recordings prune --older-than-days N [--dry-run] [--yes]</pre>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Command</th><th>Defined behavior</th><th>Exit code</th></tr></thead>
+    <tbody>
+      <tr><td><code>status</code></td><td>Show effective mode, selected file, configuration source, file availability, and restart requirement. Do not read recording content.</td><td>0 when valid; 1 for invalid configuration.</td></tr>
+      <tr><td><code>record</code></td><td>Create and validate a managed ID; precreate a header-only file with mode 0600, then atomically write <code>mode=record</code> and the selector. If any step fails, remove the newly created empty recording and preserve old settings. Do not restart the worker immediately. When no name is supplied, generate a UTC timestamp with a random suffix.</td><td>0 only after both file and configuration succeed.</td></tr>
+      <tr><td><code>replay</code></td><td>Strictly parse the selected file first; on success, atomically write <code>mode=replay</code> and the selector.</td><td>1 for an invalid file; configuration remains unchanged.</td></tr>
+      <tr><td><code>off</code></td><td>Set mode to off only; retain the last selector for explicit reuse.</td><td>0 on success.</td></tr>
+      <tr><td><code>list/show/delete/prune</code></td><td>See §10. Management commands do not change mode.</td><td>2 for argument errors; 1 for operational errors.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3>Configuration schema</h3>
+  <pre>{
+  "record_replay": {
+    "mode": "off",          // off | record | replay
+    "file": ""              // managed ID or explicit filesystem path
+  }
+}</pre>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>SettingSpec</th><th>Type and default</th><th>apply</th><th>Validation</th></tr></thead>
+    <tbody>
+      <tr><td><code>record_replay.mode</code></td><td>enum, default <code>off</code></td><td><code>next_start</code></td><td>Only off/record/replay.</td></tr>
+      <tr><td><code>record_replay.file</code></td><td>text, empty by default</td><td><code>next_start</code></td><td>May be empty when off; empty record selection fails at startup (CLI record generates it first); replay requires a strictly readable file.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p><code>openprogram config set</code> can still edit each setting separately; the recommended <code>recordings record/replay/off</code> uses <code>setup.update_config()</code> to write both fields at once, avoiding intermediate states. Settings are read only when <code>initialize_provider_runtime()</code> moves from NEW to INITIALIZING, never after READY or FAILED. Changes require restarting the affected process, which command output must state explicitly. Management commands inspect/update settings without runtime initialization.</p>
+  <div class="note"><b>Path rules: </b>A selector without path separators is a managed ID in the current profile; a selector containing separators or an absolute path is an explicit path. Recording permits only paths under the managed root, preventing a persistent worker from overwriting project files. replay/show may read explicit files. delete/prune always operate only within the managed root.</div>
+
+  <h2 id="registry">06 · Registry wrappers and lifecycle</h2>
+  <h3>Import contract</h3>
+  <p><code>import openprogram.models.providers</code> only defines Python APIs, exports model APIs, and loads existing static model modules. It must not call <code>register_builtins()</code>, read <code>record_replay</code> settings, open recording files, install a transform, or mutate the credential registry through auth-adapter imports. Isolated subprocess tests verify this contract; comments are insufficient. Removing other existing read-only initialization in model catalog modules is outside this task.</p>
+
+  <h3>Responsibilities and interfaces</h3>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Interface</th><th>Responsibility</th><th>Prohibited behavior</th></tr></thead>
+    <tbody>
+      <tr><td><code>register_builtins()</code></td><td>Resolve built-in providers idempotently and thread-safely; publish API providers in one atomic registry batch; explicitly load existing auth adapters.</td><td>Do not read record/replay settings, access recording files, or install transforms. Do not silently treat internal import errors as missing optional SDKs.</td></tr>
+      <tr><td><code>initialize_provider_runtime()</code></td><td>Serialize built-in registration, configuration snapshotting, record/replay preconstruction, and transform publication.</td><td>Do not resolve credentials, construct vendor clients, or make network requests.</td></tr>
+      <tr><td><code>get_api_provider(api)</code></td><td>At the public provider lookup boundary, ensure runtime READY before returning the final registry provider.</td><td>When FAILED, do not return the original provider or bypass recording/replay settings.</td></tr>
+      <tr><td><code>create_runtime(...)</code></td><td>Ensure provider runtime READY first; off/record retain existing routing, while replay builds a base Runtime from an explicit or non-credential default provider/model.</td><td>In replay, do not perform CLI/AuthStore detection or construct a subscription runtime that reads credentials.</td></tr>
+      <tr><td>recordings management</td><td>Read/validate files and update next-start settings.</td><td>Do not call <code>initialize_provider_runtime()</code> or depend on the provider registry.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <p><code>api_registry</code> retains <code>register_api_provider(api, provider)</code>, <code>get_api_provider(api)</code> and a once-only transform. The transform covers registrations made both before and after initialization.</p>
+  <pre>configure_provider_transform(transform)
+  - Set once per process; the same value is a no-op, conflicts raise RuntimeError
+  - Retain the original provider; do not wrap an already transformed provider again
+  - Atomically replace all current registry values
+  - Later register_api_provider(api, original) stores transform(api, original) automatically
+
+record:
+  shared_sink = RecordingSink(path)
+  transform(api, original) -> RecordingProvider(original, shared_sink)
+
+replay:
+  shared_replay = ReplayProvider(path)
+  transform(api, original) -> shared_replay
+  original only confirms that the API is registered; ReplayProvider neither retains it nor delegates to it</pre>
+  <p>All recording wrappers share one sink; all replay APIs share one <code>ReplayProvider</code>, so <code>call_index</code> represents the total order of provider API calls in the process, rather than a separate sequence starting at 0 for each API. Direct library use still supports independent constructors; product activation must not require callers to enumerate APIs.</p>
+
+  <h3>Process-wide state</h3>
+  <pre>NEW
+  └─ initialize_provider_runtime() ─→ INITIALIZING
+       ├─ success ─→ READY
+       └─ any incomplete exit ─→ FAILED (immutable failure descriptor)</pre>
+  <ul>
+    <li>State and waiting use one <code>threading.Condition</code>; one thread initializes at a time, while others wait for READY or FAILED.</li>
+    <li>READY never rereads settings; changes continue to follow <code>next_start</code>.</li>
+    <li>FAILED occurs only during built-in registration: the runtime stores the stage, cause type, and redacted cause message. Each caller receives a fresh <code>ProviderRuntimeInitializationError</code> with identical fields and message; do not reuse exception objects carrying old tracebacks.</li>
+    <li>Record/replay activation failure does not set runtime FAILED: log the error, atomically replace the registry transform with a fail-closed <code>_BlockedRecordReplayProvider</code>, and enter READY with <code>snapshot.mode == "blocked"</code>. Every provider call raises the same diagnostic, directing the user to <code>openprogram recordings status</code> or <code>openprogram recordings off</code>; no credential resolution or network access occurs.</li>
+    <li><code>KeyboardInterrupt</code>/<code>SystemExit</code> and similar control exceptions store a <code>initialization_interrupted</code> failure descriptor under the lock and <code>notify_all()</code>; the initializing thread rethrows the original control exception, while waiters and later callers receive a stable initialization failure. No in-process retry; restart begins at NEW.</li>
+    <li>Construct <code>RecordingSink</code>/<code>ReplayProvider</code> and complete validation before publishing the transform; publication failure must not leave a partially replaced registry.</li>
+    <li>Use fresh subprocesses to isolate off/record/replay/blocked/FAILED tests; add no production API that resets global lifecycle state.</li>
+  </ul>
+
+  <h3>Visibility of built-in registration</h3>
+  <p><code>register_builtins()</code> imports and validates built-in modules under its own lock, builds a local API-provider batch, and publishes it once through the registry. Failure before publication leaves the API registry unchanged; mark registered only after complete success. Anthropic/Codex/Gemini auth adapters retain their idempotent registration functions, moved from package import to this explicit phase. If an auth adapter fails, the provider runtime enters FAILED; public <code>get_api_provider()</code> cannot observe or use published providers because of the lifecycle gate. A process restart rebuilds them. Anthropic/OpenAI/Google SDKs are core dependencies, so wrapping the entire provider import in <code>except ImportError</code> must no longer hide internal defects.</p>
+
+  <div class="sequence" aria-label="Normal provider lookup sequence">
+    <div class="row"><div class="n">1</div><div class="body"><b>Resolve profile</b><div class="meta">Reuse existing CLI/worker profile resolution; the lifecycle does not reinterpret it.</div></div></div>
+    <div class="row"><div class="n">2</div><div class="body"><b>Public entry requests a provider</b><div class="meta"><code>get_api_provider(api)</code> first calls <code>initialize_provider_runtime()</code>; Web/worker may call it explicitly before starting threads to report failures early.</div></div></div>
+    <div class="row"><div class="n">3</div><div class="body"><b>Register built-ins</b><div class="meta"><code>register_builtins()</code> is itself thread-safe; mark registration successful only when complete, and do not permanently retain partial state after errors.</div></div></div>
+    <div class="row"><div class="n">4</div><div class="body"><b>Read settings once and preconstruct</b><div class="meta">off installs no transform; record creates a shared sink; replay fully parses the file and creates a shared replay provider.</div></div></div>
+    <div class="row"><div class="n">5</div><div class="body"><b>Publish atomically and handle calls</b><div class="meta">The registry returns the final provider; resolve credentials only when <code>requires_credentials != False</code>.</div></div></div>
+  </div>
+
+  <h3>Explicit startup and shared guarantees</h3>
+  <p>Web and worker explicitly call <code>initialize_provider_runtime()</code> before starting recovery threads, dispatchers, or provider warm-up threads, so invalid replay is reported during single-threaded startup. Public <code>get_api_provider()</code> still performs an idempotent check, covering Python library calls and future entry points. Lazy auth-adapter registration calls only <code>register_builtins()</code>; a corrupt replay file cannot cause it to fail.</p>
+
+  <h3>Runtime construction and credential boundary</h3>
+  <p>Strict offline behavior must cover <code>create_runtime()</code>, not just <code>stream.py</code>. The current factory and subscription constructors read API keys/OAuth before <code>get_api_provider()</code>. The target does not refactor live runtimes: off/record retain the existing factory; replay adds a credential-free branch accepting explicit provider/model choices, or <code>AGENTIC_PROVIDER</code>/<code>AGENTIC_MODEL</code> and the existing non-credential selection in configuration <code>default_provider</code>/<code>default_model</code>. Without a selection, immediately return a replay configuration error; do not proceed to CLI or AuthStore detection.</p>
+  <p>The replay factory does not construct a subscription runtime. It uses pure provider-to-model-namespace metadata from <code>PROVIDERS</code> to construct a base <code>Runtime</code>. Plain providers already have this field; add <code>model_namespace</code>: <code>openai-codex→openai-codex</code>, <code>gemini-cli→gemini-subscription</code> to the subscription entries. API-routed providers retain their model-catalog namespace. This branch does not infer the original factory provider from the recording: v1 requests store only the wire-level <code>Model</code>, which does not encode the original runtime factory choice. Nor can the first model in a multi-API file define all subsequent runtime identities. Once a request enters <code>ReplayProvider</code>, existing full request comparison validates the final <code>Model</code>, context, tools, and options; mismatches use the existing <code>ReplayMismatch</code> diagnostic.</p>
+  <div class="note warning"><b>Scope isolation: </b>A parallel auth-account-management refactor exists in the main workspace. This task does not modify the three subscription runtimes or credential APIs; the replay factory bypasses them. Implementation uses an isolated worktree; integration must recheck the final registry call locations.</div>
+
+  <h3>Relationship to the OpenProgram execution model</h3>
+  <p>record/replay supports provider testing and failure reproduction, not workflow definition. Agent loops, Runtime retries, tools, Session persistence, and DAG state execute normally; only the registry provider changes from live/record to <code>ReplayProvider</code>. Replay can therefore verify upper-layer behavior against the same model-event sequence, but it does not restore historical Sessions, replay tool side effects, roll back files, or define execution steps.</p>
+
+  <h2 id="format">07 · Recording files, strict parsing, and concurrent writes</h2>
+  <h3>Format policy</h3>
+  <p>New writers continue to emit <code>format_version=1</code> and the existing four line types.<code>call_end.outcome</code> is optional diagnostic metadata: absence means <code>complete</code>, preserving compatibility with old v1 files and readers. It does not change event models or request matching. Headers may gain optional metadata; v1 readers must ignore unknown header fields. Bump the version only when required request/event fields or semantics change.</p>
+  <pre>{"type":"header","format_version":1,
+ "recording_id":"20260811T134502Z-f7a29c1d",
+ "created_at":"2026-08-11T13:45:02Z","redaction_version":1}
+{"type":"request","call_index":0,"model":{...},"context":{...},"options":{...}}
+{"type":"event","call_index":0,"event_index":0,"event":{...}}
+{"type":"call_end","call_index":0,"event_count":1,"outcome":"complete"}</pre>
+  <p><code>recording_id</code>, <code>created_at</code> and <code>redaction_version</code> support management and diagnostics only, not request comparison. Old v1 files without these fields remain replayable; list/show derive missing information from stat and content.</p>
+
+  <h3>Strict-reader invariants</h3>
+  <div class="grid g2">
+    <section class="card"><h4>File level</h4><ul><li>The first nonempty line must be the only header.</li><li>Every line must be a JSON object; errors include the line number.</li><li><code>format_version</code> must be a supported integer.</li><li>Accept only header/request/event/call_end.</li></ul></section>
+    <section class="card"><h4>Call level</h4><ul><li>Each request has a unique <code>call_index</code>, consecutive from 0.</li><li>Events must reference an existing, unfinished call.</li><li><code>event_index</code> is consecutive from 0.</li><li>Each request has exactly one call_end.</li></ul></section>
+    <section class="card"><h4>Completion level</h4><ul><li><code>event_count</code> equals the actual event count.</li><li><code>outcome</code> accepts only complete/error/cancelled/abandoned; missing values default to complete for compatibility.</li><li>No more events for a call after call_end.</li><li>Unknown event types fail during provider construction, not midway through replay.</li><li>Reject empty files, truncated final lines, and orphan lines.</li></ul></section>
+    <section class="card"><h4>Request level</h4><ul><li>Apply the same redaction version to incoming requests before comparison.</li><li>Compare model/context/options in that order.</li><li>Preserve call, field, recorded, and incoming in differences.</li><li>Reject calls beyond the recording; never fall back to a live provider.</li></ul></section>
+  </div>
+
+  <h3>Concurrent-write contract</h3>
+  <ol>
+    <li><code>RecordingSink</code> holds a process-local <code>threading.RLock</code>; serialize and append each JSONL line within the same critical section.</li>
+    <li>Each append opens the data file with <code>os.open(O_WRONLY | O_CREAT | O_APPEND, 0o600)</code> and uses <code>openprogram.host._platform.locking.flock(fd, LOCK_EX)</code> for interprocess exclusion.</li>
+    <li>Create the initial header and allocate the next <code>call_index</code> under the file lock. The minimal implementation may scan the maximum request index at begin_call: accept O(n) allocation on this diagnostic path, adding a sidecar counter only if measurements show large files are a bottleneck.</li>
+    <li>Write a complete UTF-8 JSON record plus newline using a <code>os.write</code> loop; do not assume one write completes it.</li>
+    <li>Do not force fsync after each request/event append; fsync after call_end. A crash may leave an incomplete call that the strict parser detects.</li>
+    <li>Events may interleave across threads/processes; <code>call_index</code> from <code>event_index</code> groups each call completely. Replay order follows request call_index.</li>
+  </ol>
+  <div class="note warning"><b>Known limit: </b>Concurrent request start order depends on scheduling. Recording guarantees file integrity, not deterministic scheduling. Tests requiring deterministic replay should issue provider calls serially. Add explicit request correlation only if reproducing concurrent scheduling becomes necessary.</div>
+
+  <h2 id="security">08 · 0700/0600, path constraints, and redaction</h2>
+  <h3>Filesystem</h3>
+  <ul>
+    <li>The managed root is <code>get_state_dir() / "recordings"</code>; add <code>get_recordings_dir()</code> and tighten it to 0700 after creation.</li>
+    <li>On POSIX, tighten the managed recording root to 0700 whether new or existing. A library-level explicit external <code>RecordingSink(path)</code> does not change parent-directory permissions or follow parent symlinks to chmod. Create data files as 0600 on first write. After each open of an existing record target, call <code>openprogram.host._platform.filesystem.restrict_to_user(path)</code> to repair overly broad permissions, then verify mode 0600 with <code>fstat</code>; reject recording if it cannot be guaranteed.</li>
+    <li>Replay distinguishes managed and explicit external paths: managed files may be tightened to 0600; external files must already be regular files with mode 0600 and are not <code>chmod</code>-modified. Explicitly reject overly broad external permissions for the owner to resolve.</li>
+    <li>Create lock files as 0600 too. list/show/delete/prune use <code>lstat</code> to reject symlinks and verify managed-root containment after resolution.</li>
+    <li>Recording uses <code>O_NOFOLLOW</code> where supported and <code>O_EXCL</code> to initialize a new file; never truncate an existing recording. Name conflicts fail immediately. Without <code>O_NOFOLLOW</code>, open the basename relative to a managed-root directory fd, then compare <code>lstat</code>/<code>fstat</code> device, inode, and regular-file type against the opened result.</li>
+    <li>delete/prune delete only regular files with the <code>.jsonl</code> suffix; no recursion, symlink following, or explicit external deletion.</li>
+  </ul>
+
+  <h3>Redaction contract</h3>
+  <ul>
+    <li><code>remove_secret_values()</code> runs before any serialization; record mode has no disable option.</li>
+    <li>Retain the current case-insensitive sensitive-field set, including nested dicts/lists. Field names recognize <code>-</code>/<code>_</code> and camelCase boundaries. Compound header/option names ending in <code>token</code>, <code>key</code>, <code>secret</code>, <code>password</code> are fully redacted too, such as <code>X-Session-Token</code>, <code>service_api_key</code>, <code>refreshToken</code>, <code>clientSecret</code>. Do not match non-credential counters such as <code>token_count</code>/<code>tokenCount</code>.</li>
+    <li>Value patterns cover common Authorization schemes (Bearer, Basic, Bot, token, Key), URL userinfo, and the currently implemented query keys <code>api_key</code>/<code>apikey</code>/<code>access_token</code>/<code>token</code>; adding a query key requires implementation and tests together, not a design-only claim.</li>
+    <li>Do not use generic high-entropy-string rules: they unpredictably change normal prompts and cause replay mismatches. New provider credential forms require deterministic patterns and regression tests.</li>
+    <li>record and replay must dispatch using the same <code>redaction_version</code>. Treat existing v1 files without this field as redaction v1.</li>
+  </ul>
+  <div class="note failure"><b>Content risk: </b>Credential redaction is not content anonymization. Prompts, responses, tool results, file excerpts, and personal information remain. Documentation, CLI help, and the notice before <code>show --content</code> must explain this.</div>
+
+  <h2 id="offline">09 · Strict offline replay contract</h2>
+  <p>Structural constraints enforce replay isolation; it does not depend on callers voluntarily avoiding network access.</p>
+  <ol>
+    <li>The replay transform returns the same <code>ReplayProvider</code>.</li>
+    <li><code>ReplayProvider</code> retains no original provider, imports no vendor transport, and offers no fallback.</li>
+    <li><code>stream.py</code> must obtain the provider first; when the provider declares <code>requires_credentials = False</code>, do not call <code>resolve_provider_key()</code>.</li>
+    <li>Fully parse and validate the file before transform installation; corrupt files block worker startup rather than failing midway through startup.</li>
+    <li>Unknown APIs still produce the registry missing-provider error; never dynamically load live providers for replay.</li>
+    <li>Request mismatches, exhausted recordings, unknown events, and event-validation failures raise directly; no failure may switch to a live provider.</li>
+  </ol>
+  <p>Tests replace both <code>socket.socket.connect</code>, <code>socket.create_connection</code> and shared HTTP-client constructors with failing sentinels, asserting no network attempt on successful replay, mismatch, corrupt-file, and exhaustion paths.</p>
+
+  <h2 id="management">10 · Recording-file management</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Command</th><th>Default output/behavior</th><th>Safety rules</th></tr></thead>
+    <tbody>
+      <tr><td><code>list</code></td><td>ID, created_at, format version, call/event counts, integrity, bytes, and active marker; newest first.<code>--json</code> emits stable fields.</td><td>A corrupt file shows <code>invalid</code> and a brief error without blocking other entries; no request content is printed.</td></tr>
+      <tr><td><code>show</code></td><td>By default, parse and show header, statistics, each call’s model provider/api/id, event count, and completion status.<code>--content</code> is required to print the complete redacted JSONL.</td><td>Print a risk notice to stderr before content reaches stdout; do not mix notices into JSON output.</td></tr>
+      <tr><td><code>delete</code></td><td>Delete one managed ID. A TTY requires typing the complete ID by default; without a TTY or <code>--yes</code>, exit 2.</td><td>Reject active selectors, external paths, directories, and symlinks; deletion is irreversible.</td></tr>
+      <tr><td><code>prune</code></td><td>Delete managed files older than N days using stat mtime; <code>--dry-run</code> lists candidates only. Output matched/deleted/failed/bytes.</td><td>N must be a positive integer; skip active files, invalid symlinks, and files holding an exclusive lock. Without <code>--yes</code>, request TTY confirmation or exit 2 in non-TTY mode.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p>list/show use the same pure <code>inspect_recording(path)</code> function, and replay activation uses the same strict parser. Do not add a permissive management parser. prune uses stat mtime for age; header created_at is display-only, preventing header edits from changing retention.</p>
+
+  <h2 id="failures">11 · Failure semantics</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Phase</th><th>Condition</th><th>Exception/CLI behavior</th><th>May continue?</th></tr></thead>
+    <tbody>
+      <tr><td>Built-in registration</td><td>Vendor import failure, auth-adapter registration failure, or aborted batch publication</td><td>Runtime enters FAILED and stores an immutable failure descriptor (<code>stage="builtins"</code>); each caller receives a fresh <code>ProviderRuntimeInitializationError</code> with consistent fields; wake every waiter; never return the original provider.</td><td class="center">Management commands may continue</td></tr>
+      <tr><td>Record/replay activation</td><td>Unknown mode, empty file, external record path, or missing/corrupt/unsupported replay file</td><td>Structured error log; atomically replace the registry transform with a fail-closed <code>_BlockedRecordReplayProvider</code>; runtime READY with <code>snapshot.mode == "blocked"</code>. Every provider call raises the same diagnostic, directing the user to <code>openprogram recordings status</code>/<code>off</code>; no credential resolution or network access occurs.</td><td class="center">Diagnostics only</td></tr>
+      <tr><td>Control-flow exit</td><td>Initializing thread receives <code>KeyboardInterrupt</code>/<code>SystemExit</code></td><td>Enter FAILED and wake waiters; initializer rethrows the original control exception, other callers receive <code>initialization_interrupted</code>; only a process restart permits retry.</td><td class="center">Management commands may continue</td></tr>
+      <tr><td>Creation</td><td>Existing filename, symlink, unwritable directory, or permissions that cannot be tightened</td><td><code>RecordingFileError</code>; do not overwrite existing files.</td><td class="center">No</td></tr>
+      <tr><td>Writing</td><td>Lock failure, full disk, or serialization failure</td><td>Stop the current provider call and retain written data; do not merely log and continue live execution.</td><td class="center">No</td></tr>
+      <tr><td>Live provider</td><td>Startup/midstream failure, cancellation, or consumer closing the generator early</td><td>In <code>finally</code>, write call_end with outcome and close the source generator, then preserve the original exception/cancellation semantics. The whole file remains parseable. Replay validates the request first and reports interruption only when that call is consumed; counting then allows retry against the next recorded call.</td><td class="center">Per call</td></tr>
+      <tr><td>Parsing</td><td>Invalid JSON, version, ordering, count, or event type</td><td><code>RecordingFileError(path, line, call_index, reason)</code>.</td><td class="center">No</td></tr>
+      <tr><td>Matching</td><td>Incoming differs from recorded</td><td>Retain existing <code>ReplayMismatch</code> fields; CLI/Web error chains show call and field.</td><td class="center">No</td></tr>
+      <tr><td>Exhaustion</td><td>Incoming call exceeds recorded calls</td><td><code>ReplayMismatch(field_path="call_index")</code>.</td><td class="center">No</td></tr>
+      <tr><td>Underconsumption</td><td>Process/test ends with unconsumed recorded calls</td><td>Retain <code>assert_consumed()</code>; one-shot/program/test entry points call it at normal completion and fail if needed. A long-lived worker shows consumed/total in status without declaring an error prematurely.</td><td class="center">Per entry point</td></tr>
+      <tr><td>Management deletion</td><td>Some file deletions fail</td><td>Report each file; prune continues with the remainder, then exits 1.</td><td class="center">Yes</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h2 id="compat">12 · Compatibility and migration rules</h2>
+  <ul>
+    <li><b>Library API: </b><code>RecordingProvider(provider, path)</code>, <code>ReplayProvider(path)</code>, <code>recording_path</code>, <code>call_count</code> and existing exception attributes remain.</li>
+    <li><b>Existing v1 files: </b>Continue reading them; stricter checks reject truncated, orphaned, or duplicate lines previously ignored by permissive readers. This fail-closed behavior is intentional.</li>
+    <li><b>Old writers: </b>Headers containing only type/version remain valid; derive management metadata from stat/content and mark it <code>legacy-v1</code>.</li>
+    <li><b>Default execution: </b><code>mode=off</code> takes one configuration snapshot on first actual provider lookup; later requests add no config-file I/O. Provider identity and credential-resolution order remain unchanged.</li>
+    <li><b>Configuration: </b>A missing <code>record_replay</code> subtree means off. Environment variables do not automatically enable it, and no scan selects the “latest recording.”</li>
+    <li><b>Import: </b><code>import openprogram.models.providers</code> no longer guarantees a populated built-in registry; actual provider lookup and explicit <code>register_builtins()</code> take that responsibility. Public stream/complete behavior is unchanged.</li>
+    <li><b>Management recovery: </b>Remove <code>_OPENPROGRAM_RECORDINGS_MANAGEMENT</code>; structural separation guarantees status/off recovery, independent of import order.</li>
+    <li><b>Markdown: </b><code>record-replay.md</code>/<code>.zh.md</code> tracks this page’s current CLI, strict offline guarantees, and lifecycle boundaries, replacing the obsolete test-library-only description.</li>
+    <li><b>Future formats: </b>Use separate parsers for version upgrades; never rewrite user files in place. Offer an explicit migrate command only for defined field-semantic changes.</li>
+  </ul>
+
+  <h2 id="files">13 · Minimal implementation files</h2>
+  <div class="table-wrap">
+  <table class="file-list">
+    <thead><tr><th>File</th><th>Minimal change</th><th>Reason for reuse</th></tr></thead>
+    <tbody>
+      <tr><td><code>openprogram/models/providers/catalog/initialization.py</code></td><td>Add runtime state, Condition, once-only built-in registration, configuration snapshot, transform activation, and failure propagation.</td><td>Lifecycle coordination stays separate from recording format and registry storage.</td></tr>
+      <tr><td><code>openprogram/models/providers/catalog/register.py</code></td><td>Make <code>register_builtins()</code> thread-safe and mark success only after complete execution.</td><td>Keep the existing vendor-registration list; do not duplicate it in the lifecycle module.</td></tr>
+      <tr><td><code>openprogram/models/providers/catalog/api_registry.py</code></td><td><code>get_api_provider()</code> ensures runtime READY before registry lookup; retain existing atomic transform publication.</td><td>The common boundary for every actual API-provider lookup.</td></tr>
+      <tr><td><code>openprogram/models/providers/catalog/registry.py</code><br><code>openprogram/runtime/agent/runtime/factory.py</code></td><td>Add pure <code>model_namespace</code> metadata to the subscription entries; <code>create_runtime()</code> (the runtime factory) obtains a lifecycle snapshot first and adds a credential-free base Runtime branch only for replay.</td><td>Retain live factory, subscription runtime, and credential behavior for off/record.</td></tr>
+      <tr><td><code>openprogram/models/providers/__init__.py</code></td><td>Remove built-in registration and record/replay activation calls; retain exports only.</td><td>Eliminate package-import effects on runtime state and the filesystem.</td></tr>
+      <tr><td><code>openprogram/models/providers/recording/recording.py</code></td><td>Keep format and management functions; invoke activation explicitly through the lifecycle, no longer during import.</td><td>Do not relocate stable recording/replay logic.</td></tr>
+      <tr><td><code>openprogram/models/auth/credential_provider.py</code></td><td>Replace side-effect provider imports with explicit <code>register_builtins()</code>.</td><td>Auth needs adapter registration only, not replay activation.</td></tr>
+      <tr><td><code>openprogram/interfaces/server/server.py</code></td><td>Explicitly initialize provider runtime before starting threads.</td><td>Preserve single-threaded preloading and expose its failure boundary as an explicit API.</td></tr>
+      <tr><td><code>openprogram/operations/worker/runner.py</code></td><td>In <code>start_web()</code>, provider warm-up, and channel threads are preceded by explicit initialization.</td><td>Worker startup consistently fails fast on invalid replay configuration; background threads may not initiate first initialization independently.</td></tr>
+      <tr><td><code>openprogram/interfaces/cli/application.py</code></td><td>Remove the recording environment-variable sentinel; keep direct management-function dispatch.</td><td>Module boundaries guarantee management recovery.</td></tr>
+      <tr><td><code>tests/component/providers/registry/test_provider_initialization.py</code></td><td>Add import-purity, state-machine, concurrency, failure-atomicity, and auth/Web boundary tests.</td><td>Separate lifecycle tests from format and CLI tests.</td></tr>
+      <tr><td><code>tests/component/providers/registry/test_record_replay_cli.py</code></td><td>Add real subprocess recovery cases for status/off with missing, corrupt, and unsupported-version files.</td><td>Verify user recovery entries; do not substitute unit mocks for startup behavior.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="small">Do not change vendor providers, off/record live factories, Web routes, Node CLI, or the recording format. Add only the replay branch to the runtime factory. Calls bypassing <code>get_api_provider()</code> or plugins bypassing <code>register_api_provider()</code> must return to the shared boundary; do not add vendor-specific cases in the recorder or lifecycle module.</p>
+
+  <h2 id="tests">14 · Acceptance and test matrix</h2>
+  <div class="table-wrap">
+  <table>
+    <thead><tr><th>Dimension</th><th>Case</th><th>Key assertions</th></tr></thead>
+    <tbody>
+      <tr><td>Import contract</td><td>An isolated subprocess executes only <code>import openprogram.models.providers</code></td><td>No config read, recording open, vendor SDK/auth-adapter import, or API-registry mutation.</td></tr>
+      <tr><td>First initialization</td><td>No settings / mode off / record / replay</td><td>Process built-ins and settings once; after READY, preserve provider identity, credential-resolver counts, and existing behavior.</td></tr>
+      <tr><td>Concurrent initialization</td><td>Multiple threads first call <code>get_api_provider()</code></td><td>Only one initializer; others receive the same READY provider or FAILED cause, with no deadlock.</td></tr>
+      <tr><td>Failure atomicity</td><td>Inject exceptions in built-in registration, config reading, ReplayProvider construction, and transform publication</td><td>No original provider returned, credential lookup, or network-client construction; no partially published transform.</td></tr>
+      <tr><td>Entry-point consistency</td><td>Web startup, worker, public stream, direct library lookup, and auth-adapter loading</td><td>Actual provider use ensures READY; Web/worker fail fast before threads; auth registers built-ins without replay activation.</td></tr>
+      <tr><td>Registry</td><td>Registration before/after wrapping, repeated configuration, two APIs</td><td>Transform existing and later entries; reject conflicting transforms; recording wrappers share a sink, replay shares call_count.</td></tr>
+      <tr><td>Concurrent threads</td><td>Two threads record multiple calls/events each</td><td>Every line is valid JSON; call_index is unique and consecutive; each event_index is consecutive; call_end counts are correct.</td></tr>
+      <tr><td>Concurrent processes</td><td>Two processes write one managed file</td><td>One header, no partial lines or duplicate call_index; strict parsing passes.</td></tr>
+      <tr><td>Errors and cancellation</td><td>Provider exception, task cancellation, consumer <code>aclose()</code>, synchronous startup failure</td><td>Preserve control flow; close the source generator; write correct call_end outcome/event_count; preserve whole-file parseability; replay fails at the matching call without corrupting later counts.</td></tr>
+      <tr><td>Activation failure</td><td>Missing/corrupt replay file, unknown mode, invalid record selector</td><td>Application initialization does not raise; runtime READY, <code>snapshot.mode == "blocked"</code>; provider calls fail closed without credentials/network, and management commands can recover.</td></tr>
+      <tr><td>Replay counting</td><td>A request mismatches, then is corrected and retried</td><td>Mismatch does not increment <code>call_count</code>; compare the corrected request against the same recorded call. Only success or a recorded interruption consumes it.</td></tr>
+      <tr><td>Permissions</td><td>New directories/files/locks, existing broad-permission directories, managed legacy 0644 files, explicit external 0644 files</td><td>POSIX 0700/0600; record and managed replay may tighten permissions; external replay validates and rejects broad permissions without chmod.</td></tr>
+      <tr><td>Paths</td><td><code>../</code>, absolute record paths, symlinks, directories, external deletion</td><td>record/delete/prune reject escapes; replay/show may read explicit external files.</td></tr>
+      <tr><td>Redaction</td><td>Case-varied fields, nested values, compound token/key/secret/password suffixes, common auth schemes, URL userinfo/query, ordinary text</td><td>Credential bytes never appear in files; non-credential text such as <code>token_count</code> remains; record/replay use the same rule version.</td></tr>
+      <tr><td>Strict format</td><td>Empty file, invalid JSON, duplicate header, unknown line, orphan event, index gap, duplicate end, wrong count, unknown event</td><td>Report path/line/call/reason when constructing ReplayProvider.</td></tr>
+      <tr><td>Strict offline behavior</td><td>Successful, mismatch, exhaustion, and corrupt-file replay paths</td><td>No socket/HTTP-client sentinel or credential-resolver call; no live fallback.</td></tr>
+      <tr><td>Runtime factory</td><td>Explicit provider/model, non-credential defaults, missing defaults, plain/subscription providers</td><td>Replay uses the entry’s <code>model_namespace</code> without importing/constructing the provider’s dedicated Runtime class (<code>PROVIDER_RUNTIMES</code>), CLI/AuthStore detection, or credential resolution; ReplayProvider still strictly compares the final wire-level Model.</td></tr>
+      <tr><td>CLI configuration</td><td>record/replay/off/status, invalid selectors, concurrent config writes</td><td>Atomic update; no config change on failure; restart notice; profile isolation; no runtime initialization.</td></tr>
+      <tr><td>Recovery commands</td><td>status/off with missing, corrupt, or unsupported-version replay files</td><td>Real subprocess starts; status reports a stable diagnostic; off updates settings; no environment sentinel required.</td></tr>
+      <tr><td>Management</td><td>mixed valid/invalid list, metadata show, content show, active delete, dry-run prune, partial failure</td><td>Stable JSON schema; content hidden by default; active files protected; correct counts and exit codes.</td></tr>
+      <tr><td>Legacy files</td><td>Header-only v1 metadata generated by current tests</td><td>Valid files still replay; structurally corrupt legacy files fail new strict checks.</td></tr>
+      <tr><td>Existing loop</td><td>Multi-turn tool-loop record → replay</td><td>Event types, tool execution, and final message match current tests.</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <h3>Minimum post-implementation verification commands</h3>
+  <pre>pytest -q tests/component/providers/registry/test_provider_initialization.py tests/component/providers/registry/test_record_replay.py tests/component/providers/registry/test_record_replay_registry.py tests/component/providers/registry/test_record_replay_cli.py
+  pytest -q tests/component/providers/adapters/test_scripted_provider.py tests/component/providers/registry/test_registry_from_config.py tests/unit/runtime/test_usage_stream_chokepoint.py tests/unit/providers/auth/test_auth_methods.py tests/unit/webui/test_web_config_schema.py tests/component/config/test_config_write_safety.py
+python -m openprogram recordings --help
+python -m openprogram config get record_replay.mode
+python -m scripts.docs_site.build
+python -m scripts.docs_site.checklinks
+git diff --check</pre>
+
+  <h2 id="status">15 · Implementation and verification record</h2>
+  <div class="status-grid" role="table" aria-label="Implementation status">
+    <div class="head">Status</div><div class="head">Scope</div><div class="head">Evidence (design baseline 990bfe36; implementation review 99252205)</div>
+    <div class="value"><span class="pill ok">Implemented</span></div><div class="value">Shares <code>RecordingSink</code> writes one v1 JSONL with thread locks, interprocess <code>flock</code>, complete <code>os.write</code> and <code>call_end</code>, and fsync; extends mandatory redaction and enforces 0700/0600 plus symlink/regular-file checks.</div><div class="value"><code>recording.py::RecordingSink</code>, <code>paths.py::get_recordings_dir</code>; a three-process spawn test strictly parses 15 consecutive calls.</div>
+    <div class="value"><span class="pill ok">Implemented</span></div><div class="value">A once-only registry transform covers existing and later providers; recording shares a sink, replay shares one prevalidated provider.</div><div class="value"><code>api_registry.py::configure_provider_transform</code>, <code>recording.py::activate_record_replay_from_config</code>, <code>test_record_replay_registry.py</code>.</div>
+    <div class="value"><span class="pill ok">Implemented</span></div><div class="value">The strict parser validates headers, versions, line types, call/event indices, call_end/count, and event models at construction. Replay has no original provider/fallback; both stream entries select the provider before skipping credential resolution.</div><div class="value"><code>replay.py::read_recording_file</code>, <code>ReplayProvider.requires_credentials</code>, <code>stream.py</code>; structural-failure, credential-sentinel, and multi-turn tool-loop tests.</div>
+    <div class="value"><span class="pill ok">Implemented</span></div><div class="value"><code>record_replay.mode/file</code> are next_start settings. CLI provides status/record/replay/off/list/show/delete/prune. Failed configuration rolls back new files; destructive commands protect active files, symlinks, external paths, locks, and non-TTY confirmation.</div><div class="value"><code>state/settings.py</code>, <code>cli/__init__.py</code>, <code>recording.py</code> and CLI/management tests.</div>
+    <div class="value"><span class="pill ok">Temporary fix superseded</span></div><div class="value">Recording management neither imports nor initializes provider runtime; with corrupt or missing replay files, <code>status/off</code> directly recovers configuration. The environment-variable sentinel has been removed.</div><div class="value"><code>e8c9f645</code>, <code>test_off_recovers_from_a_replay_file_that_became_invalid</code> and import-side-effect subprocess tests.</div>
+    <div class="value"><span class="pill ok">Implemented</span></div><div class="value">Explicit provider lifecycle, side-effect-free package import, thread-safe first initialization, stable FAILED propagation for built-in registration errors, and fail-closed blocked providers for record/replay activation errors while runtime remains READY (<code>snapshot.mode="blocked"</code>), with auth/recording/runtime separation and read-only model resolution in replay.</div><div class="value"><code>4d82d485..99252205</code>; specification re-review PASS, quality re-review PASS; committed state <code>tests/unit + tests/providers</code> is recorded in the delivery report.</div>
+    <div class="value"><span class="pill ok">Reliability revision implemented</span></div><div class="value">Exceptions, cancellation, early close, and synchronous startup failure write one outcome-bearing call_end and close the source. Stop after the first terminal event; preserve source-close errors. Activation failure atomically replaces the existing registry transform with a fail-closed provider. Mismatches do not consume calls; matched interrupted calls consume once and report the interruption.</div><div class="value"><code>c26df53a</code>, <code>a4f27b3b</code>, <code>fe727546</code>, <code>6595d444</code>; public-entry RED/GREEN, specification re-review PASS, quality re-review PASS.</div>
+    <div class="value"><span class="pill warn">Compatibility boundary</span></div><div class="value">Retain v1 constructors, attributes, exceptions, old headers, and mismatch behavior; stricter checks reject corrupt lines ignored by old readers. Strict offline guarantees remain limited to LLM providers; interprocess scheduling order is not guaranteed reproducible.</div><div class="value"><code>test_record_replay.py</code> continues to cover library recording, two-turn tool loops, version rejection, and field differences.</div>
+    <div class="value"><span class="pill plan">Explicit exclusions</span></div><div class="value">Web UI, process-wide HTTP recording, tool/MCP recording, fuzzy request matching, automatic network fallback, automatic upload, and Windows-specific implementation/validation.</div><div class="value">Outside this phase.</div>
+    <div class="value"><span class="pill ok">Verification completed</span></div><div class="value">Relevant pytest, complete unit/providers, changed-file Ruff, docs build, link checker, CLI smoke, and whitespace diff checks.</div><div class="value">Repository-root pytest is separately blocked during integration collection by the existing missing module <code>openprogram.programs.workflow.test_framework</code>; this change does not modify that entry.</div>
+  </div>
+
+  <p class="foot">Design sources: current OpenProgram provider implementation, CLI/config entries, tests, and the in-repository <code>references/pi-ai</code> snapshot. Implementation-status updates must cite code symbols, tests, or commits; a written design is not an implemented capability.</p>
+</main>
+</body>
+</html>

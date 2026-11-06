@@ -1,0 +1,1064 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenProgram In-Conversation Self-Update</title>
+<style>
+  :root {
+    color-scheme: dark;
+    --bg: #090d13;
+    --surface: #101722;
+    --surface-2: #151f2d;
+    --surface-3: #0c121b;
+    --line: #273548;
+    --line-strong: #3b506a;
+    --text: #d8e2ee;
+    --muted: #8c9bad;
+    --title: #f7f9fc;
+    --blue: #6ba7ff;
+    --cyan: #4fd8d0;
+    --green: #79d79b;
+    --amber: #f3bd69;
+    --red: #ff8295;
+    --violet: #b79bff;
+    --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
+    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    --radius: 15px;
+  }
+
+  * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
+  body {
+    margin: 0;
+    background:
+      radial-gradient(circle at 11% -5%, rgba(79, 216, 208, .11), transparent 30rem),
+      radial-gradient(circle at 92% 8%, rgba(107, 167, 255, .10), transparent 31rem),
+      var(--bg);
+    color: var(--text);
+    font: 15px/1.65 var(--sans);
+  }
+  a { color: var(--blue); text-underline-offset: 3px; }
+  a:hover { color: #a6cbff; }
+  code {
+    padding: 2px 6px;
+    border: 1px solid rgba(107, 167, 255, .18);
+    border-radius: 6px;
+    background: rgba(107, 167, 255, .07);
+    color: #afd0ff;
+    font: .84em/1.5 var(--mono);
+  }
+  pre {
+    margin: 0;
+    padding: 17px;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--surface-3);
+    color: #cbd6e4;
+    font: 12px/1.7 var(--mono);
+  }
+  button { font: inherit; }
+  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+
+  .page {
+    display: grid;
+    grid-template-columns: 218px minmax(0, 1fr);
+    gap: 44px;
+    width: min(1320px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 42px 0 100px;
+  }
+  .rail {
+    position: sticky;
+    top: 24px;
+    align-self: start;
+    max-height: calc(100vh - 48px);
+    overflow: auto;
+  }
+  .rail-mark {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 22px;
+    color: var(--title);
+    font: 700 13px var(--mono);
+  }
+  .rail-mark::before {
+    width: 12px;
+    height: 12px;
+    border: 3px solid var(--cyan);
+    border-radius: 3px;
+    content: "";
+    box-shadow: 7px 7px 0 -4px var(--violet);
+  }
+  .rail nav { display: grid; gap: 3px; }
+  .rail a {
+    padding: 7px 10px;
+    border-left: 2px solid transparent;
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 12px;
+  }
+  .rail a:hover,
+  .rail a[aria-current="true"] {
+    border-left-color: var(--cyan);
+    color: var(--title);
+    background: rgba(79, 216, 208, .05);
+  }
+  .rail-note {
+    margin-top: 22px;
+    padding: 12px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+    color: var(--muted);
+    font-size: 11px;
+  }
+  main { min-width: 0; }
+  section { scroll-margin-top: 24px; margin-top: 70px; }
+  .hero { margin-top: 0; }
+  .eyebrow {
+    margin: 0 0 12px;
+    color: var(--cyan);
+    font: 700 11px/1.4 var(--mono);
+    letter-spacing: .12em;
+    text-transform: uppercase;
+  }
+  h1, h2, h3 { color: var(--title); }
+  h1 {
+    max-width: 900px;
+    margin: 0;
+    font-size: clamp(38px, 6vw, 72px);
+    line-height: 1.03;
+    letter-spacing: -.045em;
+  }
+  .lede {
+    max-width: 830px;
+    margin: 22px 0 0;
+    color: #b9c7d8;
+    font-size: 18px;
+  }
+  .principle {
+    margin-top: 24px;
+    padding: 15px 18px;
+    border: 1px solid rgba(243, 189, 105, .35);
+    border-left: 4px solid var(--amber);
+    border-radius: 10px;
+    background: rgba(243, 189, 105, .06);
+    color: #e7d2af;
+  }
+
+  .scope-strip, .brief, .cards, .boundary-grid, .reference-grid,
+  .evidence-grid, .api-grid, .task-grid {
+    display: grid;
+    gap: 14px;
+  }
+  .scope-strip {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    margin-top: 32px;
+  }
+  .scope-cell, .brief article, .card, .boundary, .reference-card,
+  .evidence, .api-card, .task-card {
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: linear-gradient(150deg, rgba(21, 31, 45, .95), rgba(16, 23, 34, .95));
+  }
+  .scope-cell { padding: 16px; }
+  .scope-cell .k, .label {
+    color: var(--muted);
+    font: 700 10px/1.4 var(--mono);
+    letter-spacing: .09em;
+    text-transform: uppercase;
+  }
+  .scope-cell .v { margin-top: 6px; color: var(--title); font-weight: 700; }
+  .scope-cell .detail { margin-top: 5px; color: var(--muted); font-size: 12px; }
+  .brief { grid-template-columns: 2fr 1fr 1fr; margin-top: 14px; }
+  .brief article { padding: 17px; }
+  .brief h2 { margin: 0 0 7px; font-size: 13px; }
+  .brief p { margin: 0; color: var(--muted); font-size: 13px; }
+
+  .section-head {
+    display: grid;
+    grid-template-columns: 48px minmax(0, 1fr);
+    gap: 16px;
+    align-items: start;
+    margin-bottom: 24px;
+  }
+  .section-num {
+    display: grid;
+    place-items: center;
+    width: 42px;
+    height: 42px;
+    border: 1px solid var(--line-strong);
+    border-radius: 12px;
+    color: var(--cyan);
+    font: 700 11px var(--mono);
+  }
+  .section-head h2 { margin: 0; font-size: 27px; letter-spacing: -.02em; }
+  .section-head p { max-width: 840px; margin: 5px 0 0; color: var(--muted); }
+
+  .contract-table, .failure-table, .mapping-table {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .table-row {
+    display: grid;
+    grid-template-columns: 1.1fr 1fr 1.55fr;
+  }
+  .mapping-table .table-row { grid-template-columns: 1fr 1fr 1.3fr 1.1fr; }
+  .failure-table .table-row { grid-template-columns: 1.05fr 1.45fr 1.25fr; }
+  .table-row + .table-row { border-top: 1px solid var(--line); }
+  .table-row > div { min-width: 0; padding: 14px 16px; }
+  .table-row > div + div { border-left: 1px solid var(--line); }
+  .table-head {
+    background: var(--surface-2);
+    color: var(--muted);
+    font: 700 10px/1.4 var(--mono);
+    letter-spacing: .08em;
+    text-transform: uppercase;
+  }
+  .state-tag {
+    display: inline-flex;
+    align-items: center;
+    gap: 7px;
+    color: var(--text);
+    font: 700 11px var(--mono);
+  }
+  .state-tag::before { width: 8px; height: 8px; border-radius: 50%; content: ""; background: var(--amber); }
+  .state-tag.exists::before { background: var(--green); }
+  .state-tag.missing::before { background: var(--red); }
+  .small { color: var(--muted); font-size: 12px; }
+
+  .diagram {
+    overflow: auto;
+    padding: 24px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface-3);
+  }
+  .diagram svg { display: block; width: 100%; min-width: 910px; height: auto; }
+  .diagram text { font-family: var(--mono); }
+  .diagram-mobile { display: none; }
+  .caption { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
+
+  .cards { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .card { padding: 18px; }
+  .card h3 { margin: 7px 0 8px; font-size: 16px; }
+  .card p { margin: 0; color: var(--muted); font-size: 13px; }
+  .card ul { margin: 12px 0 0; padding-left: 18px; color: #b8c6d7; font-size: 12px; }
+  .card li + li { margin-top: 5px; }
+  .accent-cyan { border-top: 3px solid var(--cyan); }
+  .accent-blue { border-top: 3px solid var(--blue); }
+  .accent-violet { border-top: 3px solid var(--violet); }
+  .accent-amber { border-top: 3px solid var(--amber); }
+  .accent-green { border-top: 3px solid var(--green); }
+  .accent-red { border-top: 3px solid var(--red); }
+
+  .experience {
+    display: grid;
+    grid-template-columns: 230px minmax(0, 1fr);
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .experience-tabs {
+    display: flex;
+    flex-direction: column;
+    padding: 12px;
+    border-right: 1px solid var(--line);
+    background: var(--surface-3);
+  }
+  .experience-tab {
+    width: 100%;
+    padding: 11px 12px;
+    border: 0;
+    border-left: 2px solid transparent;
+    background: transparent;
+    color: var(--muted);
+    text-align: left;
+    cursor: pointer;
+  }
+  .experience-tab[aria-selected="true"] {
+    border-left-color: var(--cyan);
+    background: rgba(79, 216, 208, .06);
+    color: var(--title);
+  }
+  .experience-stage { min-height: 350px; padding: 24px; }
+  .experience-panel { display: none; }
+  .experience-panel.active { display: block; }
+  .mock-window {
+    max-width: 720px;
+    overflow: hidden;
+    border: 1px solid var(--line-strong);
+    border-radius: 13px;
+    background: #0d141f;
+  }
+  .mock-bar {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    padding: 10px 13px;
+    border-bottom: 1px solid var(--line);
+    color: var(--muted);
+    font: 11px var(--mono);
+  }
+  .mock-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--line-strong); }
+  .mock-chat { padding: 18px; }
+  .bubble { max-width: 90%; margin-bottom: 12px; padding: 12px 14px; border-radius: 11px; font-size: 13px; }
+  .bubble.user { margin-left: auto; background: #1c2a3d; }
+  .bubble.agent { background: #151e2a; }
+  .update-card {
+    margin-top: 12px;
+    padding: 15px;
+    border: 1px solid var(--line-strong);
+    border-radius: 11px;
+    background: rgba(107, 167, 255, .06);
+  }
+  .update-card .top { display: flex; justify-content: space-between; gap: 12px; color: var(--title); font-weight: 700; }
+  .phase { color: var(--cyan); font: 11px var(--mono); }
+  .progress { height: 6px; margin: 12px 0; overflow: hidden; border-radius: 99px; background: #202c3b; }
+  .progress span { display: block; width: var(--progress, 50%); height: 100%; background: linear-gradient(90deg, var(--cyan), var(--blue)); }
+  .steps { display: grid; gap: 6px; color: var(--muted); font: 11px var(--mono); }
+  .steps .done { color: var(--green); }
+  .steps .bad { color: var(--red); }
+
+  .state-machine {
+    display: grid;
+    grid-template-columns: repeat(6, minmax(116px, 1fr));
+    gap: 8px;
+    overflow-x: auto;
+    padding-bottom: 4px;
+  }
+  .machine-node {
+    position: relative;
+    min-width: 116px;
+    padding: 13px 12px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+  }
+  .machine-node:not(:last-child)::after {
+    position: absolute;
+    top: 50%;
+    right: -9px;
+    color: var(--line-strong);
+    content: "›";
+    transform: translateY(-50%);
+  }
+  .machine-node strong { display: block; color: var(--title); font: 12px var(--mono); }
+  .machine-node span { display: block; margin-top: 5px; color: var(--muted); font-size: 11px; }
+  .machine-node.critical { border-color: rgba(243, 189, 105, .55); }
+  .machine-node.success { border-color: rgba(121, 215, 155, .55); }
+
+  .schema-grid { display: grid; grid-template-columns: 1.05fr .95fr; gap: 16px; }
+  .schema-note {
+    padding: 18px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+  }
+  .schema-note h3 { margin: 0 0 10px; font-size: 16px; }
+  .schema-note p, .schema-note li { color: var(--muted); font-size: 13px; }
+  .schema-note ul { margin: 10px 0 0; padding-left: 19px; }
+
+  .boundary-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .boundary { padding: 18px; }
+  .boundary h3 { margin: 6px 0 8px; font-size: 16px; }
+  .boundary p { margin: 0; color: var(--muted); font-size: 13px; }
+  .boundary ul { margin: 11px 0 0; padding-left: 18px; font-size: 12px; }
+  .boundary.control { border-left: 3px solid var(--cyan); }
+  .boundary.candidate { border-left: 3px solid var(--violet); }
+  .boundary.state { border-left: 3px solid var(--amber); }
+  .boundary.verify { border-left: 3px solid var(--green); }
+
+  .api-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .api-card { padding: 18px; }
+  .api-card h3 { margin: 8px 0; font: 700 14px var(--mono); }
+  .api-card p { margin: 0; color: var(--muted); font-size: 12px; }
+
+  .check-list { display: grid; gap: 10px; }
+  .check-row {
+    display: grid;
+    grid-template-columns: 160px 1fr 110px;
+    gap: 14px;
+    align-items: start;
+    padding: 14px 16px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+  }
+  .check-row strong { color: var(--title); font-size: 13px; }
+  .check-row span { color: var(--muted); font-size: 12px; }
+  .owner { color: var(--cyan) !important; font: 11px var(--mono); }
+
+  .reference-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .reference-card { padding: 17px; }
+  .reference-card h3 { margin: 7px 0 8px; font-size: 15px; }
+  .reference-card p { margin: 0; color: var(--muted); font-size: 12px; }
+  .choice { color: var(--green); }
+  .choice.modified { color: var(--amber); }
+  .choice.rejected { color: var(--red); }
+
+  .task-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .task-card { padding: 18px; }
+  .task-card .task-id { color: var(--cyan); font: 700 11px var(--mono); }
+  .task-card h3 { margin: 7px 0; font-size: 17px; }
+  .task-card p { margin: 0 0 10px; color: var(--muted); font-size: 12px; }
+  .task-card ul { margin: 0; padding-left: 18px; color: #b9c6d6; font-size: 12px; }
+  .task-card li + li { margin-top: 4px; }
+
+  .acceptance {
+    counter-reset: acceptance;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .acceptance article {
+    position: relative;
+    min-height: 92px;
+    padding: 15px 15px 15px 51px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    background: var(--surface);
+    counter-increment: acceptance;
+  }
+  .acceptance article::before {
+    position: absolute;
+    top: 15px;
+    left: 15px;
+    display: grid;
+    place-items: center;
+    width: 25px;
+    height: 25px;
+    border-radius: 8px;
+    background: rgba(79, 216, 208, .10);
+    color: var(--cyan);
+    content: counter(acceptance, decimal-leading-zero);
+    font: 700 10px var(--mono);
+  }
+  .acceptance strong { color: var(--title); font-size: 13px; }
+  .acceptance p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
+
+  .evidence-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .evidence { padding: 16px; }
+  .evidence h3 { margin: 6px 0 7px; font-size: 15px; }
+  .evidence p { margin: 0; color: var(--muted); font-size: 12px; }
+  .evidence.exists { border-top: 3px solid var(--green); }
+  .evidence.target { border-top: 3px solid var(--amber); }
+  .source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; margin-top: 18px; }
+  .source-link {
+    padding: 12px 14px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    background: var(--surface-3);
+    text-decoration: none;
+  }
+  .source-link span { display: block; color: var(--title); font: 11px var(--mono); overflow-wrap: anywhere; }
+  .source-link small { display: block; margin-top: 5px; color: var(--muted); }
+  .footer {
+    display: flex;
+    justify-content: space-between;
+    gap: 20px;
+    margin-top: 70px;
+    padding-top: 18px;
+    border-top: 1px solid var(--line);
+    color: var(--muted);
+    font: 11px var(--mono);
+  }
+
+  @media (max-width: 1050px) {
+    .page { grid-template-columns: 1fr; }
+    .rail {
+      position: static;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+      max-height: none;
+      overflow-x: auto;
+      padding-bottom: 10px;
+    }
+    .rail-mark { flex: 0 0 auto; margin: 0; }
+    .rail nav { display: flex; flex: 0 0 auto; }
+    .rail a { white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
+    .rail a[aria-current="true"] { border-left-color: transparent; border-bottom-color: var(--cyan); }
+    .rail-note { display: none; }
+    .scope-strip { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  }
+  @media (max-width: 760px) {
+    .page { width: min(100% - 24px, 720px); gap: 26px; padding-top: 20px; }
+    .rail { margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
+    h1 { font-size: 41px; }
+    .lede { font-size: 16px; }
+    .scope-strip, .brief, .cards, .boundary-grid, .reference-grid,
+    .evidence-grid, .api-grid, .task-grid, .schema-grid, .acceptance,
+    .source-list { grid-template-columns: 1fr; }
+    .section-head { grid-template-columns: 38px minmax(0, 1fr); gap: 11px; }
+    .section-num { width: 34px; height: 34px; }
+    .section-head h2 { font-size: 23px; }
+    .contract-table .table-row, .failure-table .table-row, .mapping-table .table-row {
+      grid-template-columns: 1fr;
+    }
+    .table-row > div + div { border-left: 0; border-top: 1px dashed var(--line); }
+    .table-head { display: none; }
+    .diagram svg { display: none; }
+    .diagram-mobile { display: grid; gap: 8px; }
+    .diagram-mobile div { padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface); font-size: 12px; }
+    .experience { grid-template-columns: 1fr; }
+    .experience-tabs { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+    .experience-tab { width: auto; white-space: nowrap; border-left: 0; border-bottom: 2px solid transparent; }
+    .experience-tab[aria-selected="true"] { border-left-color: transparent; border-bottom-color: var(--cyan); }
+    .experience-stage { min-height: 390px; padding: 14px; }
+    .check-row { grid-template-columns: 1fr; gap: 5px; }
+    .footer { flex-direction: column; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    html { scroll-behavior: auto; }
+    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
+  }
+</style>
+</head>
+<body>
+<div class="page" data-document="self-update">
+  <aside class="rail" aria-label="Document contents">
+    <div class="rail-mark">OpenProgram / Self update</div>
+    <nav>
+      <a href="#overview">Scope</a>
+      <a href="#current">Current state</a>
+      <a href="#experience">User flow</a>
+      <a href="#architecture">Architecture</a>
+      <a href="#workflow">Workflow</a>
+      <a href="#iteration-execution">Post-failure execution</a>
+      <a href="#iteration-activation">Subsequent updates</a>
+      <a href="#decisions">Design decisions</a>
+      <a href="#state">State and storage</a>
+      <a href="#protocol">Sequence</a>
+      <a href="#verification">Acceptance</a>
+      <a href="#verification-actions">Acceptance tools</a>
+      <a href="#failures">Failure recovery</a>
+      <a href="#security">Security boundaries</a>
+      <a href="#api">Interfaces</a>
+      <a href="#surfaces">State and session recovery</a>
+      <a href="#references">References</a>
+      <a href="#plan">Implementation plan</a>
+      <a href="#acceptance">Completion conditions</a>
+      <a href="#implementation-status">Implementation status</a>
+    </nav>
+    <div class="rail-note">Authoritative design · runtime<br>Official Release updates remain defined by distribution/automatic-updates.html.</div>
+  </aside>
+
+  <main>
+    <section class="hero" id="overview">
+      <p class="eyebrow">Runtime architecture · owner initiated · macOS v1</p>
+      <h1>In-conversation self-update</h1>
+      <p class="lede">A user asks an Agent in OpenProgram to modify OpenProgram. The Agent edits, tests, and commits in an isolated worktree; a worker-independent controller rebuilds the changed parts of the App and installs it with the smallest restart they need. Once the candidate serves, an acceptance task checks the original objective. System-check or goal-acceptance failure restores the old App.</p>
+      <div class="principle"><strong>Core constraint: </strong>The worker being replaced cannot complete its own replacement. Persist handoff and pause checkpoints for other tasks before restart, then create a new acceptance task with provenance. After verification, resume compatible tasks from checkpoints and create a follow-up for the initiating session.</div>
+
+      <div class="scope-strip" aria-label="Design scope">
+        <div class="scope-cell"><div class="k">Platform</div><div class="v">Default macOS App</div><div class="detail">/Applications/OpenProgram.app · :18100 · ~/.openprogram</div></div>
+        <div class="scope-cell"><div class="k">Candidate</div><div class="v">Local Git commit</div><div class="detail">Isolated worktree; dirty candidates prohibited</div></div>
+        <div class="scope-cell"><div class="k">Activation</div><div class="v">Whole-bundle swap</div><div class="detail">Partial rebuild; hot, worker, or App restart</div></div>
+        <div class="scope-cell"><div class="k">Concurrency</div><div class="v">One active update</div><div class="detail">Installation lock + update id + idempotent recovery</div></div>
+      </div>
+
+      <div class="brief">
+        <article><h2>Question</h2><p>How can an owner authorize framework changes in chat, followed automatically by build, stopping the old instance, App replacement, restart, acceptance Agent execution, and failure handling?</p></article>
+        <article><h2>Audience</h2><p>Runtime, Desktop, Job/DAG, permission, and local-release maintainers.</p></article>
+        <article><h2>Exclusions</h2><p>Windows/Linux, remote stable Releases, unauthorized background edits, multi-machine deployment, and unlimited automatic repair loops.</p></article>
+      </div>
+    </section>
+
+    <section id="current" aria-labelledby="current-title">
+      <div class="section-head"><div class="section-num">01</div><div><h2 id="current-title">Current implementation and gaps</h2><p>The self-update control protocol, post-restart acceptance, controlled repair, and status UI are on the main line. In the default App, an owner conversation on a weak conversational model has driven every activation level to a verified, delivered result: hot (docs), worker (Python), App (docs and Desktop) and the complete package build. Inconclusive and failing verdicts roll back, diagnose, and run bounded source repair. Source existence alone still never counts as an installed working feature.</p></div></div>
+      <div class="contract-table">
+        <div class="table-row table-head"><div>Reused module</div><div>Original behavior</div><div>Self-update responsibility</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Agent edits and worktrees</span></div><div>Owner sessions can use file, shell, and worktree tools; permission, sandbox, and read-before-edit rules constrain writes.</div><div>Add a dedicated <code>self_update(action="prepare")</code> accepting committed candidates only; generic shell access must not implicitly grant deployment authority.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Complete App build</span></div><div><code>package-and-install-app.sh</code> already builds the runtime and Electron App and runs packaged smoke checks.</div><div>Delegate build and activation to a one-shot supervisor; do not stop the current worker during build.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Transactional installation and recovery</span></div><div><code>install-app.sh</code> already validates candidates, preserves previous.app, restores the old App on failure, and restores original App/worker/launchd state.</div><div>Delay deleting previous.app until post-restart system checks and Agent goal acceptance both complete.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Source upgrade probe</span></div><div><code>openprogram upgrade</code> already supports cold start, doctor, restart, and expected-revision checks.</div><div>Extract a shared probe; use a local immutable commit instead of <code>origin/main</code>.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Session / Job persistence</span></div><div>Session history persists; ordinary running turns become interrupted and running Jobs become worker_lost on restart.</div><div>Do not reuse a running Job. Create a new verification Job in the new worker from the update record.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Scheduler / JobRunner</span></div><div>Scheduler handles time-triggered once, recurring, and monitor user tasks; JobRunner provides durable Jobs, concurrency limits, and resource governance.</div><div>Self-update creates no Scheduler task. Startup recovery claims pending acceptance records, then submits a one-shot verification Job through JobRunner.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Updater detection</span></div><div><code>openprogram/operations/self_update/github_release/</code> distinguishes managed release, source checkout, and unsupported installations, and prohibits applying updates directly during worker startup.</div><div>Reuse installation detection; startup hooks only inspect, claim, and schedule acceptance. External supervisor still replaces the App.</div></div>
+        <div class="table-row"><div><span class="state-tag exists">Cross-restart handoff</span></div><div><code>self_update/</code> stores independent requests, state, controller, and acceptance evidence without reusing upgrade-state.</div><div>Persist turn-end release, startup claim, stable verification Job, result delivery to the original session, and Desktop reopen. Record real-restart acceptance separately.</div></div>
+      </div>
+    </section>
+
+    <section id="experience" aria-labelledby="experience-title">
+      <div class="section-head"><div class="section-num">02</div><div><h2 id="experience-title">Conversation behavior</h2></div></div>
+      <p>The user requests work through a normal conversation. Messages and tool results describe that work. Installation state is maintained by the update subsystem, not by a separate conversation widget. Reopening the App restores the conversation without an update history panel, update recovery notice or temporary verification dialog.</p>
+    </section>
+
+    <section id="architecture" aria-labelledby="architecture-title">
+      <div class="section-head"><div class="section-num">03</div><div><h2 id="architecture-title">Target architecture</h2><p>Separate the controller from candidate runtime. The current worker prepares and hands off; the supervisor controls activation and restoration; the new worker runs fixed system checks and a new acceptance Agent.</p></div></div>
+      <div class="diagram">
+        <svg viewBox="0 0 1100 560" role="img" aria-labelledby="architecture-svg-title architecture-svg-desc">
+          <title id="architecture-svg-title">OpenProgram in-conversation self-update architecture</title>
+          <desc id="architecture-svg-desc">Owner conversation directs an Agent to produce a candidate commit in an isolated worktree. A launchd-managed supervisor builds and probes the complete App, waits for turn-end handoff, then stops the old instance and installs the candidate. The new worker performs system verification and creates an acceptance Agent. Success commits installation; failure restores the old App through the supervisor.</desc>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#73849a"/></marker>
+            <marker id="arrow-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#79d79b"/></marker>
+            <marker id="arrow-bad" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#ff8295"/></marker>
+          </defs>
+          <g fill="none" stroke="#73849a" stroke-width="2" marker-end="url(#arrow)">
+            <path d="M190 90H285"/><path d="M465 90H560"/><path d="M740 90H835"/>
+            <path d="M925 135V215"/><path d="M835 260H740"/><path d="M560 260H465"/>
+            <path d="M375 305V385"/><path d="M465 430H560"/><path d="M740 430H835"/>
+          </g>
+          <path d="M925 475V520H710" fill="none" stroke="#79d79b" stroke-width="2" marker-end="url(#arrow-ok)"/>
+          <path d="M835 456H770V520H465" fill="none" stroke="#ff8295" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#arrow-bad)"/>
+          <g font-size="12" fill="#f7f9fc">
+            <rect x="20" y="45" width="170" height="90" rx="13" fill="#151f2d" stroke="#4fd8d0"/>
+            <text x="105" y="76" text-anchor="middle" font-weight="700">Owner chat</text><text x="105" y="98" text-anchor="middle" fill="#8c9bad" font-size="10">Goal + update authorization</text><text x="105" y="116" text-anchor="middle" fill="#8c9bad" font-size="10">Current session / agent</text>
+            <rect x="285" y="45" width="180" height="90" rx="13" fill="#151f2d" stroke="#6ba7ff"/>
+            <text x="375" y="76" text-anchor="middle" font-weight="700">Isolated worktree</text><text x="375" y="98" text-anchor="middle" fill="#8c9bad" font-size="10">Edit · test · review</text><text x="375" y="116" text-anchor="middle" fill="#8c9bad" font-size="10">immutable candidate SHA</text>
+            <rect x="560" y="45" width="180" height="90" rx="13" fill="#151f2d" stroke="#f3bd69"/>
+            <text x="650" y="76" text-anchor="middle" font-weight="700">Update record</text><text x="650" y="98" text-anchor="middle" fill="#8c9bad" font-size="10">session · turn · criteria</text><text x="650" y="116" text-anchor="middle" fill="#8c9bad" font-size="10">atomic state + lock</text>
+            <rect x="835" y="45" width="180" height="90" rx="13" fill="#151f2d" stroke="#b79bff"/>
+            <text x="925" y="76" text-anchor="middle" font-weight="700">launchd supervisor</text><text x="925" y="98" text-anchor="middle" fill="#8c9bad" font-size="10">one-shot · outside worker</text><text x="925" y="116" text-anchor="middle" fill="#8c9bad" font-size="10">trusted current controller</text>
+            <rect x="835" y="215" width="180" height="90" rx="13" fill="#151f2d" stroke="#b79bff"/>
+            <text x="925" y="246" text-anchor="middle" font-weight="700">Build + cold probe</text><text x="925" y="268" text-anchor="middle" fill="#8c9bad" font-size="10">complete App bundle</text><text x="925" y="286" text-anchor="middle" fill="#8c9bad" font-size="10">packaged smoke · doctor</text>
+            <rect x="560" y="215" width="180" height="90" rx="13" fill="#151f2d" stroke="#f3bd69"/>
+            <text x="650" y="246" text-anchor="middle" font-weight="700">Turn-end handoff</text><text x="650" y="268" text-anchor="middle" fill="#8c9bad" font-size="10">final response durable</text><text x="650" y="286" text-anchor="middle" fill="#8c9bad" font-size="10">runtime quiescent</text>
+            <rect x="285" y="215" width="180" height="90" rx="13" fill="#151f2d" stroke="#ff8295"/>
+            <text x="375" y="246" text-anchor="middle" font-weight="700">Activate transaction</text><text x="375" y="268" text-anchor="middle" fill="#8c9bad" font-size="10">stop App / worker</text><text x="375" y="286" text-anchor="middle" fill="#8c9bad" font-size="10">retain previous.app</text>
+            <rect x="285" y="385" width="180" height="90" rx="13" fill="#151f2d" stroke="#6ba7ff"/>
+            <text x="375" y="416" text-anchor="middle" font-weight="700">New worker</text><text x="375" y="438" text-anchor="middle" fill="#8c9bad" font-size="10">expected identity</text><text x="375" y="456" text-anchor="middle" fill="#8c9bad" font-size="10">startup recovery</text>
+            <rect x="560" y="385" width="180" height="90" rx="13" fill="#151f2d" stroke="#4fd8d0"/>
+            <text x="650" y="416" text-anchor="middle" font-weight="700">System verification</text><text x="650" y="438" text-anchor="middle" fill="#8c9bad" font-size="10">revision · health · doctor</text><text x="650" y="456" text-anchor="middle" fill="#8c9bad" font-size="10">single dispatch claim</text>
+            <rect x="835" y="385" width="180" height="90" rx="13" fill="#151f2d" stroke="#79d79b"/>
+            <text x="925" y="416" text-anchor="middle" font-weight="700">Verification Agent</text><text x="925" y="438" text-anchor="middle" fill="#8c9bad" font-size="10">same agent profile</text><text x="925" y="456" text-anchor="middle" fill="#8c9bad" font-size="10">new self_update_verify turn</text>
+            <rect x="560" y="500" width="150" height="46" rx="20" fill="rgba(121,215,155,.10)" stroke="#79d79b"/>
+            <text x="635" y="527" text-anchor="middle" fill="#79d79b" font-weight="700">commit install</text>
+            <rect x="315" y="500" width="150" height="46" rx="20" fill="rgba(255,130,149,.09)" stroke="#ff8295"/>
+            <text x="390" y="527" text-anchor="middle" fill="#ff8295" font-weight="700">rollback + report</text>
+          </g>
+          <g font-size="10" fill="#8c9bad"><text x="780" y="512">pass</text><text x="724" y="453" fill="#ff8295">fail / timeout</text></g>
+        </svg>
+        <div class="diagram-mobile">
+          <div><strong>1 · Prepare</strong><br>Agent edits, tests, reviews, and creates a candidate commit in an isolated worktree.</div>
+          <div><strong>2 · Handoff</strong><br>Owner approves; the update record stores session, turn, candidate, and acceptance criteria; launchd manages the supervisor.</div>
+          <div><strong>3 · Build</strong><br>Rebuild the changed parts (or the complete App) and run packaged smoke and cold probes while the old worker remains running.</div>
+          <div><strong>4 · Activate</strong><br>After the current response is durable and other tasks are paused or finished, stop App/worker, preserve previous.app, and activate the candidate.</div>
+          <div><strong>5 · Accept</strong><br>The new worker checks revision/doctor, then creates a new self_update_verify Agent turn to check the original objective.</div>
+          <div><strong>6 · Terminal state</strong><br>Delete previous.app after success; restore the old App on failure/timeout and write evidence back to the original session.</div>
+        </div>
+        <p class="caption">Candidate builds may execute candidate code, but sandboxing must deny writes to default state, installation, and update-record directories. Only a supervisor generated by the currently installed version may activate or restore.</p>
+      </div>
+    </section>
+
+    <section id="workflow" aria-labelledby="workflow-title">
+      <div class="section-head"><div class="section-num">04</div><div><h2 id="workflow-title">Workflow and model responsibilities</h2><p>Preparation reuses the normal conversational Agent’s planning, implementation, and review process. After submission, <code>self_update/</code> durable control logic transitions states, without a generic new Workflow engine. Acceptance, diagnosis, and repair use frozen stage prompts and structured outputs; model outputs cannot directly stop processes, install, roll back, or change transaction state.</p></div></div>
+      <div class="mapping-table">
+        <div class="table-row table-head"><div>Stage and trigger</div><div>LLM work</div><div>Deterministic system action</div><div>Persistent output</div></div>
+        <div class="table-row"><div><strong>PLAN</strong><br><span class="small">Owner states the objective</span></div><div>Clarify the objective; list scope, risks, and observable acceptance criteria.</div><div>Record the session contract; prepare freezes checkout, base SHA, authority, budget, and allowed paths.</div><div>Session record; after submission, <br><code>request.json</code> goal/assertions</div></div>
+        <div class="table-row"><div><strong>IMPLEMENT</strong><br><span class="small">Plan contract accepted</span></div><div>Edit source and tests in an isolated worktree; explain unaddressed items.</div><div>Restrict files, commands, network, and credentials; record diffs, commands, and exit codes.</div><div>worktree<br>change manifest</div></div>
+        <div class="table-row"><div><strong>REVIEW</strong><br><span class="small">Implementation complete</span></div><div>Check correctness, security, rollback compatibility, schema, coverage, and unrelated changes.</div><div>Run agreed checks and save evidence; prepare rechecks clean Git and HEAD without treating Git checks as review proof.</div><div>Session/review records<br>candidate SHA</div></div>
+        <div class="table-row"><div><strong>AUTHORIZE</strong><br><span class="small">Candidate buildable</span></div><div>Explain changes, verification, interruption, and recovery to the user without replacing their authorization.</div><div>Require owner approval, freeze candidate/scope/iteration envelope and stage configuration, then start the supervisor.</div><div><code>request.json</code><br>Stage configurations and iteration authorization</div></div>
+        <div class="table-row"><div><strong>STAGE / ACTIVATE</strong><br><span class="small">Authorization and gates pass</span></div><div>No LLM call.</div><div>Complete App build, cold probe, maintenance, turn-end handoff, transactional replacement, and restart.</div><div>artifact manifest<br>transaction journal</div></div>
+        <div class="table-row"><div><strong>VERIFY</strong><br><span class="small">New worker system gates pass</span></div><div>Run frozen check IDs; provide pass/fail/inconclusive and evidence per assertion. UI plans require the actual default App.</div><div>Startup recovery claims atomically; JobRunner creates a constrained Job with deterministic ID; supervise timeout and lease.</div><div><code>verifier-result-{attempt}.json</code><br>Signed receipt containing structured results</div></div>
+        <div class="table-row"><div><strong>DIAGNOSE</strong><br><span class="small">Goal acceptance fails</span></div><div>Distinguish implementation, test, environment, and objective issues; propose the smallest next repair.</div><div>Restore the old App first; check iteration budget, authorization scope, and stop conditions.</div><div><code>diagnosis-result-{attempt}.json</code><br>next-attempt plan</div></div>
+        <div class="table-row"><div><strong>FINALIZE</strong><br><span class="small">Success or stop</span></div><div>Report actual source, artifact, live revision, acceptance, and rollback states.</div><div>Commit installation on success; preserve evidence and candidate on failure; update the original session. Worker startup later removes the staged App, runtime copy and build directories of finished updates older than seven days, keeping the newest two; records, events and evidence files stay, and a NEEDS_MANUAL_RECOVERY transaction or one still named by a pending diagnosis, repair or iteration pointer is left whole.</div><div>terminal state<br>session result</div></div>
+      </div>
+      <div class="cards" style="margin-top:16px">
+        <article class="card accent-cyan"><div class="label">Restart dispatch</div><h3>No ordinary Scheduler task</h3><p>Scheduler time triggers and user-task authority do not suit the update protocol. Once JobRunner, session store, and owner-auth are available, the new worker executes <code>recover_pending_updates()</code>.</p></article>
+        <article class="card accent-blue"><div class="label">Exactly once</div><h3>Stable Job ID + atomic claim</h3><p>The Job ID uses <code>self-update:{update_id}:verify:{attempt}</code>. The claim stores owner, lease, attempt, and job_id. Repeated startup does not resubmit an existing Job or terminal state.</p></article>
+        <article class="card accent-violet"><div class="label">Prompt contract</div><h3>Stage context and tool isolation</h3><p>The implementation Agent cannot bypass installation approval; the acceptance Agent has no source-write tools; diagnostic and repair Agents are read-only and propose structured output.<code>verifier_config.py</code>, <code>diagnosis.py</code>, <code>source_repair.py</code> stores stage configurations. New plans share goal, assertions, verification plan, iteration policy, and deadlines; inherited context never expands tool permissions. Stages cannot call <code>tool_search</code>, so their pinned tools always ship with full schemas, even tools the registry defers for ordinary turns. Structured output prefers native schema output, then a strict hidden submit tool, then a prompt fallback that is still schema-validated, so any conversational model can run a stage; output that fails validation is an inconclusive verdict.</p></article>
+      </div>
+      <div class="schema-grid" style="margin-top:16px">
+        <div class="schema-note"><h3>Startup order</h3><ul><li>Load and migrate self-update state schema; fail closed on corruption.</li><li>Complete Job orphan reconciliation.</li><li>Start JobRunner and confirm admission/resource governance availability.</li><li>Complete revision, owner-auth, Web/WS, and doctor system gates.</li><li>CAS-claim the attempt, submit one verification Job, then start ordinary Scheduler.</li></ul><p>Ordinary Scheduler startup failure does not block acceptance; JobRunner or system-gate failure requests supervisor rollback.</p></div>
+        <div class="schema-note"><h3>Controlled iteration policy</h3><ul><li>Default <code>approve_each_activation</code>: roll back and diagnose after failure; reauthorize before activating a new candidate.</li><li>Optional <code>bounded_auto</code>: owner explicitly authorizes at most 3 attempts, a total deadline, allowed paths, and a test set.</li><li>Pause for reauthorization on new dependencies, permission/approval changes, installer/supervisor changes, expanded paths, or changed objective.</li><li>Every attempt gets a new SHA, attempt, and Job ID; never overwrite earlier evidence.</li><li>Stop on repeated identical failures, rollback failure, environment-related inconclusive results, or budget exhaustion.</li></ul></div>
+      </div>
+    </section>
+
+    <section id="iteration-execution" aria-labelledby="iteration-execution-title">
+      <div class="section-head"><div class="section-num">04a</div><div><h2 id="iteration-execution-title">Post-failure execution flow</h2><p>Service restoration, diagnosis, source repair, and activation approval are separate stages. Diagnosis does not authorize installation.</p></div></div>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Stage</div><div>Execution and persistence</div><div>Limits and subsequent actions</div></div>
+        <div class="table-row"><div>Automatic diagnosis after restoration</div><div>At owner authorization, new requests also freeze diagnostic model, profile, read-only tools, and output format. After a trusted controller confirms ROLLED_BACK and old-version system checks, it publishes this attempt’s diagnostic request before leaving maintenance. The worker creates a new task with stable Job ID <code>self-update:{update_id}:diagnose:{attempt}</code>.</div><div>Reuse JobRunner without Scheduler tasks, continuing the original turn, or moving the original session head. Allow only read, glob, grep, and list; prohibit source writes, shell, MCP, installation, and another update.</div></div>
+        <div class="table-row"><div>Fixed deadline and recovery</div><div>Bind diagnosis to original update, candidate, attempt, failure evidence, and rollback system evidence. Deadline is at most five minutes after rollback, or an earlier bounded_auto total deadline. Repeated startup reuses the request and Job ID; terminal or orphan Jobs are not rerun.</div><div>Bounded worker-side waiting collects results and cancels timeouts independently of Scheduler. A superseding update, owner cancellation, missing model, expiry, or evidence change stops diagnosis without changing ROLLED_BACK or re-restricting restored service.</div></div>
+        <div class="table-row"><div>Structured diagnosis</div><div>Record classification—implementation, test, environment, unclear objective, or insufficient evidence—reasons, original evidence references, and repair suggestions. Attach results to the original session as an independent Job and save an attempt diagnostic record.</div><div>Model classifications and suggestions require verification; they are neither test evidence nor new owner authorization. Environment, unclear-objective, and insufficient-evidence issues must not trigger automatic edits or activation.</div></div>
+        <div class="table-row"><div>Generate and apply source repairs</div><div>Create a separate stable-ID repair Job only when the new request freezes repair configuration, diagnosis is implementation or test, the old version is restored, and budget remains. The model uses the original model/profile and read-only tools to return structured edits. The controller checks original text and applies edits in a newly isolated worktree; the model executes no shell or Git.</div><div>Default scope is original changed_paths; bounded_auto uses original allowed_paths. Protected permission, approval, update-controller, installation-script, dependency, and Git-configuration files are never automatically edited. Stop on out-of-scope paths, symlinks, duplicate replacements, or source mismatch; do not modify the user’s original worktree.</div></div>
+        <div class="table-row"><div>New candidate and test evidence</div><div>The controller creates a new local commit and records the complete diff from original base, then runs frozen required_tests in a networkless sandbox without App write access. Record command, candidate SHA, exit code, and bounded logs. Recheck HEAD, Git binding, and tracked files after tests; tests that modify source invalidate evidence.</div><div>Repair Job and tests share a ten-minute post-rollback deadline, shortened by the original total deadline. A new update, owner cancellation, or expiry terminates the stage and test process group. Preserve evidence and isolated worktrees for terminal, failed, or partial edits; restart does not repeat edits/commits/tests or extend deadlines.</div></div>
+        <div class="table-row"><div>Reauthorization and activation</div><div>Candidate records bind original request, diagnosis, repair Job, full diff, and test results. The controller rechecks attempts, deadline, paths, dependencies, and repeated failures. approve_each_activation awaits owner approval for the new SHA; bounded_auto submits only within the original envelope.</div><div>A candidate record is not installation authority. Missing/failed required tests prohibit activation; environment, objective, or inconclusive diagnoses do not trigger automatic repair. The next candidate still requires full build, system gates, a new acceptance Job, and rollback on failure. Completed repair/testing does not establish implemented subsequent activation.</div></div>
+      </div>
+      <p>Old updates without frozen diagnosis retain their original recovery behavior; never synthesize configuration from mutable profiles. Diagnostic requests, claims, and results live in the original update directory, with one pending pointer at self-updates root. A new update revokes the old pointer under the same storage lock. Execution rechecks durable Job, current worker claim, frozen inputs, and unexpired deadline, rejecting forged source or input drift while restoring an old queue. Owners stop diagnosis through existing Job cancellation or <code>self_update(action="cancel")</code>, which stops the whole iteration. Diagnosis must not overwrite verifier verdict, signed acceptance results, or rollback conclusion.</p>
+      <p>Repair likewise requires independently frozen configuration in the original request; old requests gain no source-write capability. Default initial authorization includes isolated-worktree repair and listed tests after rollback, but not reinstalling. Only new requests explicitly selecting bounded_auto and approving the complete iteration authorization below allow scoped reinstallation. Repair output allows at most 32 text edits totaling 1 MiB. Each old_text must uniquely match a regular UTF-8 file; null old_text creates only nonexistent files. null new_text permits deletion only when old_text equals the complete file. The repair Job uses wait=true, creates no ordinary follow-up Agent, and leaves the original head unchanged. After the model Job completes, the owner calls <code>self_update(action="cancel", update_id)</code> in the original session to cancel still-running candidate tests. Record candidate_ready only after the new SHA, complete diff, all configured tests, and post-test checks pass; no required_tests means awaiting_tests. Missing/failed configured tests or failed post-test checks mean failed; explicit cancellation and expiry mean cancelled and expired. None means installed.</p>
+    </section>
+
+    <section id="iteration-activation" aria-labelledby="iteration-activation-title">
+      <div class="section-head"><div class="section-num">04b</div><div><h2 id="iteration-activation-title">Authorization and updates for repaired versions</h2><p>Every update retains independent requests and evidence; an iteration sequence shares the original goal, scope, attempt budget, and total deadline.</p></div></div>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Contract</div><div>Controller behavior</div><div>Rejection and recovery</div></div>
+        <div class="table-row"><div>Original authorization and compatibility</div><div>The first request freezes root update, owner, session, goal, assertions, original base, model/profile, mode, paths, tests, max_attempts, and optional total deadline. bounded_auto requires a complete total deadline, paths, and nonempty tests. Approval explicitly includes bounded reinstallation; the immutable request stores an authorization-record digest.</div><div>Old requests without this record gain no reinstallation authority even if policy.mode=bounded_auto. Current profiles, model suggestions, and candidate_ready cannot manufacture authorization. Changed objectives, wider paths, or added dependencies require a new owner request, not mutation of the sequence.</div></div>
+        <div class="table-row"><div>Revalidate evidence</div><div>The candidate must come from this attempt’s completed repair Job. Request, diagnosis, Job output, generated intent, candidate manifest, and test-log digests agree. Reread real Git: the dedicated worktree still belongs to the original session, HEAD equals the approval SHA, the tree is clean, the SHA newly descends from the prior candidate, and full diff from original base satisfies scope/protected-path checks. Check before approval display, after approval, and before child reservation; supervisor build/activation retain drift checks.</div><div>Require nonempty required_tests with matching command, SHA, exit code, and logs for every item; model claims or manifest success fields alone are insufficient. Missing, drifted, failed, or out-of-scope evidence stops submission with a reason; reapproval cannot bypass it. awaiting_tests candidates without configured tests require a new owner request specifying tests.</div></div>
+        <div class="table-row"><div>Two approval modes</div><div>By default, <code>self_update(action="retry", update_id, candidate_sha)</code> in the original session forces one-time approval for the exact SHA, displaying full changes, tests, and remaining budget. It cannot become a persistent allow rule. bounded_auto submits automatically from original authorization and real evidence, without another model tool call.</div><div>Owner rejection or approval timeout creates no successor. Both modes verify current owner, original goal/assertions, successful rollback, remaining attempts, and total deadline. Only implementation/test failures may continue; environment, unclear objective, inconclusive, unverified rollback, or consecutive identical failures stop. Failure fingerprints use trusted categories and failed assertion/check IDs, not model explanations, timestamps, SHAs, or random IDs.</div></div>
+        <div class="table-row"><div>Attempt counts and immutable successors</div><div>The first update is attempt=1. Successors use new update_id, SHA, attempt, and stage Job IDs, recording root/parent relations. Original goal, assertions, base, owner, model/profile, and policy stay fixed; only current identity/output schema are rebound. At most 3 attempts includes the first.</div><div>Reserve one unique successor and next attempt under the same storage lock. Reservation consumes budget permanently across submission failure, cancellation, and restart. A parent cannot have a second successor. Each build/acceptance retains per-attempt timeouts within the original total deadline. After expiry, only necessary safe rollback/recovery remains allowed; no further repairs or installation.</div></div>
+        <div class="table-row"><div>Interruption, concurrency, and complete updates</div><div>Persist the next-stage request after candidate results and before removing the repair pending pointer. Startup resumes approval/submission from that request. Save fixed child ID and budget reservation first, publish child request and active ownership, then invoke the existing external supervisor. Repeated recovery can only finish this submission, never re-edit, retest, or expand authority.</div><div>Other active updates or maintenance block submission; a new owner update revokes pending work from the old sequence. Default approval requests release after the approving turn is durable; automatic submission uses persisted authorization, results, and submission records rather than a fabricated chat turn. Successors still perform full packaging, cold probe, system gates, new verifier, and commit/rollback. Submission failure retains inspectable records without skipping stages.</div></div>
+        <div class="table-row"><div>Cancellation and visible state</div><div><code>self_update(action="cancel", update_id)</code> persists a stop marker in the original owner session, stopping the sequence’s unsubmitted approvals/automatic submissions and cancelling running diagnosis/repair Jobs and candidate tests. Created but unactivated children use existing cancellation. Other sequences and ordinary tasks remain unaffected. State shows root, parent, current child, attempt/max_attempts, total deadline, and stop reason.</div><div>Transactions already activating/verifying cannot be forcibly interrupted by deleting requests. Prohibit later attempts while existing transaction logic finishes verification or safe rollback. Submission phases distinguish awaiting_approval, submitting, submitted, and stopped. submitted means handed to the supervisor, not installed successfully; success still requires child SUCCEEDED and acceptance evidence.</div></div>
+      </div>
+      <p>This stage reuses SelfUpdateStore process locking, JobRunner, mandatory approval, trusted supervisor, and transactional installer, without another Scheduler or generic workflow executor.<code>self_update/iteration.py</code> remains a side-effect-free policy decision; the new submission coordinator validates evidence, reserves budget, persists state, and recovers. Source responsibility boundaries do not replace real restart, rollback, and multi-attempt acceptance.</p>
+    </section>
+
+    <section id="decisions" aria-labelledby="decisions-title">
+      <div class="section-head"><div class="section-num">05</div><div><h2 id="decisions-title">Design decisions</h2><p>V1 adds only boundaries required for the goal, without another Job system, plugin system, or update dependency.</p></div></div>
+      <div class="cards">
+        <article class="card accent-cyan"><div class="label">Controller</div><h3>Update control must be outside the worker</h3><p>Use macOS <code>launchctl submit</code> to launch a one-shot supervisor outside the worker process tree, allowing activation, verification timeout, and restoration after worker/App shutdown.</p></article>
+        <article class="card accent-blue"><div class="label">Candidate</div><h3>Deploy immutable commits only</h3><p>Candidates must come from dedicated clean worktrees with explicit bases. Reread HEAD during build; discard artifacts on drift rather than deploying directory snapshots.</p></article>
+        <article class="card accent-violet"><div class="label">Artifact</div><h3>Rebuild what changed, swap the whole bundle</h3><p><code>delivery/activation.py</code> diffs the installed App's <code>openprogram-source-revision</code> against the candidate and maps each path to web, docs, tui, python, or desktop. A partial build clones the installed App and runs <code>package-incremental-app.sh</code> in the same sandbox; dependency locks, packaging scripts, icons, and unknown paths take the complete build. Every plan still installs one whole signed bundle through the same transaction, so commit and rollback keep one meaning. The plan is written to <code>activation.json</code>.</p></article>
+        <article class="card accent-cyan"><div class="label">Restart</div><h3>Restart only what loads the change</h3><p><code>hot</code> (web, docs, tui) renames bundles under the running App and worker, which read those files per request; it skips maintenance, pages compare the <code>frontend_build</code> export ID the worker sends on every WebSocket connect and on each swap, and reload when it changes, and the supervisor admits the verifier through <code>POST /api/self-updates/{id}/dispatch</code>. <code>worker</code> (python) stops and restarts only the worker while the App shows its updating page. <code>app</code> (desktop or complete) quits and reopens the App. The installer journals the mode and mirrors it on rollback.</p></article>
+        <article class="card accent-blue"><div class="label">Identity</div><h3>The installed revision names the system</h3><p><code>/api/diagnostics</code> reports <code>revision</code>, frozen at worker start, and <code>installed_revision</code>, read from disk. System gates use the installed revision; after a worker or App restart they also require the two to match, proving the new code is loaded.</p></article>
+        <article class="card accent-amber"><div class="label">Handoff</div><h3>Tool calls do not stop the worker directly</h3><p><code>self_update(action="prepare")</code> only persists the request and starts the supervisor. After the assistant final, session commit, and change attribution are durable, dispatcher writes <code>turn_released</code>.</p></article>
+        <article class="card accent-green"><div class="label">Continuation</div><h3>Startup recovery creates a new acceptance Job</h3><p>The new worker atomically claims the update and reuses JobRunner to create a background task with <code>source=self_update_verify</code>. Ordinary Scheduler neither creates, polls, nor retries it.</p></article>
+        <article class="card accent-red"><div class="label">Rollback</div><h3>Goal failure also restores the old App</h3><p>Retain previous.app until system checks and goal acceptance both pass. System errors, Agent fail/inconclusive verdicts, and timeouts restore the old App while preserving candidate worktree and evidence.</p></article>
+      </div>
+    </section>
+
+    <section id="state" aria-labelledby="state-title">
+      <div class="section-head"><div class="section-num">06</div><div><h2 id="state-title">State machine and persistence</h2><p>One directory per update id. Every transition uses temporary files, fsync, and replace; <code>active.json</code> stores only the current update id.</p></div></div>
+      <div class="state-machine" aria-label="Self-update state machine">
+        <div class="machine-node"><strong>PREPARING</strong><span>Request, authorization, and candidate frozen</span></div>
+        <div class="machine-node"><strong>STAGING</strong><span>Complete build and isolated probe</span></div>
+        <div class="machine-node"><strong>READY</strong><span>Wait for turn release and idle</span></div>
+        <div class="machine-node critical"><strong>ACTIVATING</strong><span>Stop and replace, retaining previous</span></div>
+        <div class="machine-node critical"><strong>VERIFYING</strong><span>New worker + acceptance Agent</span></div>
+        <div class="machine-node success"><strong>SUCCEEDED</strong><span>Commit installation, clean previous</span></div>
+      </div>
+      <div class="cards" style="margin-top:12px">
+        <article class="card accent-amber"><div class="label">Pre-activation terminal</div><h3>ABORTED</h3><p>Authorization rejection, build failure, candidate drift, cancellation, or idle-wait timeout; the old App was never replaced.</p></article>
+        <article class="card accent-red"><div class="label">Recovered terminal</div><h3>ROLLED_BACK</h3><p>Candidate activated but system/goal acceptance failed; old App restored and old revision reverified.</p></article>
+        <article class="card accent-violet"><div class="label">Operator terminal</div><h3>NEEDS_MANUAL_RECOVERY</h3><p>Unable to determine old/new App state automatically, or rollback failed; stop automatic actions and retain the entire transaction.</p></article>
+      </div>
+      <div class="schema-grid" style="margin-top:16px">
+        <pre><span style="color:#8c9bad">~/.openprogram/self-updates/</span>
+  active.json                 <span style="color:#8c9bad"># schema + update_id</span>
+  maintenance.json            <span style="color:#8c9bad"># admission ownership</span>
+  &lt;update_id&gt;/
+    request.json              <span style="color:#8c9bad"># immutable intent</span>
+    state.json                <span style="color:#8c9bad"># current phase + owner</span>
+    events.jsonl              <span style="color:#8c9bad"># append-only evidence</span>
+    verifier-config.json      <span style="color:#8c9bad"># frozen model / tools / optional plan</span>
+    diagnosis-config.json
+    source-repair-config.json
+    iteration-root.json       <span style="color:#8c9bad"># frozen root authority</span>
+    iteration-next.json       <span style="color:#8c9bad"># bound proposal + unique child reservation</span>
+    iteration-status.json     <span style="color:#8c9bad"># submission / stop evidence</span>
+    supervisor.sh             <span style="color:#8c9bad"># trusted copied controller</span>
+    supervisor.log
+    artifact.json             <span style="color:#8c9bad"># path + hashes</span>
+    verifier-result-{attempt}.json
+    diagnosis-result-{attempt}.json
+    source-repair-result-{attempt}.json
+    controller/               <span style="color:#8c9bad"># trusted runtime and installer</span>
+    bootstrap.json
+    recover.sh
+<span style="color:#8c9bad">/Applications/.openprogram-app-install.*/</span>
+  previous.app                <span style="color:#8c9bad"># transaction path bound in state.detail</span></pre>
+        <div class="schema-note">
+          <h3><code>request.json</code> stable fields</h3>
+          <ul>
+            <li><code>schema</code>, <code>update_id</code>, <code>created_at</code></li>
+            <li><code>session_id</code>, <code>origin_turn_id</code>, <code>origin_assistant_id</code>, <code>agent_id</code></li>
+            <li><code>repo</code>, <code>worktree_id</code>, <code>base_sha</code>, <code>candidate_sha</code></li>
+            <li><code>changed_paths</code>, <code>pre_update_evidence</code></li>
+            <li><code>goal</code>, <code>assertions</code>, <code>timeout_seconds</code>; acceptance goals reside directly in request, without separate acceptance.json</li>
+            <li><code>iteration_policy</code>: mode, max_attempts, deadline, allowed_paths, required_tests</li>
+            <li><code>pre_update_evidence</code> binds the iteration-record digest containing root/parent update, original authorization digest, sequence attempt, and unique child ID. Every successor has its own directory; original requests and historical terminal states are immutable.</li>
+            <li><code>app_path</code> is fixed to normalized <code>/Applications/OpenProgram.app</code></li>
+          </ul>
+          <h3><code>state.json</code> mutable fields</h3>
+          <ul>
+            <li><code>phase</code>, <code>revision</code>, <code>updated_at</code>, <code>detail</code></li>
+            <li><code>attempt</code>, <code>dispatch.job_id</code>, <code>dispatch.claimed_by</code>, <code>dispatch.lease_until</code></li>
+            <li><code>last_event</code>: deterministically repair the final event when state was persisted but event append was interrupted</li>
+          </ul>
+          <p>Accept no URL, arbitrary installer path, shell command, state-directory override, or port override. Candidates cannot choose the controller.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="protocol" aria-labelledby="protocol-title">
+      <div class="section-head"><div class="section-num">07</div><div><h2 id="protocol-title">Complete sequence</h2><p>Build takes most of the time without affecting the old instance; only activation/restart causes temporary unavailability.</p></div></div>
+      <div class="check-list">
+        <div class="check-row"><strong>1 · Agent prepares candidate</strong><span>Edit in a separate worktree; run affected tests, full gates, specification review, and quality review; commit and confirm a clean tree.</span><span class="owner">owner worker</span></div>
+        <div class="check-row"><strong>2 · Create request</strong><span><code>self_update(action="prepare")</code> recomputes base/candidate/changed paths from Git, saves acceptance, and shows exact authorization. Reject the current main checkout, dirty candidates, version mismatch, and a second active update.</span><span class="owner">owner worker</span></div>
+        <div class="check-row"><strong>3 · Start supervisor</strong><span>The current trusted runtime generates a fixed supervisor file with mode 0700 and uses <code>launchctl submit</code> for a one-shot job. Pass only update id and state directory.</span><span class="owner">launchd</span></div>
+        <div class="check-row"><strong>4 · Build and probe</strong><span>Supervisor calls the partial or complete App build in the candidate worktree. Current trusted smoke/probe contracts validate manifest, assets, startup, doctor, <code>/chat</code>, and expected revision. Sandbox the candidate build.</span><span class="owner">supervisor</span></div>
+        <div class="check-row"><strong>5 · turn-end release</strong><span>Agent reports “candidate committed, update scheduled.” After final node, session status, turn commit, and change attribution are all durable, dispatcher sets <code>turn_released=true</code>.</span><span class="owner">dispatcher</span></div>
+        <div class="check-row"><strong>6 · Wait for idle</strong><span>Reject new write turns and wait for other foreground turns and running Jobs to finish naturally, up to ten minutes by default. Timeout aborts before worker shutdown without cancelling other tasks.</span><span class="owner">maintenance gate</span></div>
+        <div class="check-row"><strong>7 · Activate</strong><span>Record original App/worker/launchd state; stop App and worker; move old App to transaction/previous.app; move staged App to the canonical path; re-register Launch Services; restore original startup state.</span><span class="owner">supervisor</span></div>
+        <div class="check-row"><strong>8 · System verification</strong><span>The new worker must prove owner identity and candidate revision and pass doctor, Web, and WS gates. On failure/timeout, supervisor stops it and restores previous.app.</span><span class="owner">supervisor</span></div>
+        <div class="check-row"><strong>9 · Automatically trigger Agent</strong><span>After JobRunner is ready, startup recovery atomically claims the attempt and creates a stable-ID constrained Job with source=<code>self_update_verify</code>. Ordinary Scheduler is uninvolved.</span><span class="owner">new worker</span></div>
+        <div class="check-row"><strong>10 · Commit, restore, or iterate</strong><span>Pass commits installation; any other verdict/timeout first restores the old App. Default waits for new authorization; bounded_auto creates the next attempt within the original scope and remaining budget. All results return to the original session.</span><span class="owner">supervisor</span></div>
+      </div>
+    </section>
+
+    <section id="verification" aria-labelledby="verification-title">
+      <div class="section-head"><div class="section-num">08</div><div><h2 id="verification-title">Two-layer acceptance contract</h2><p>Deterministic system checks first establish identity, startup, and service availability; the Agent then assesses the requested behavior. Neither layer replaces the other.</p></div></div>
+      <div class="mapping-table">
+        <div class="table-row table-head"><div>Layer</div><div>Executor</div><div>Required checks</div><div>Failure result</div></div>
+        <div class="table-row"><div><strong>Pre-update evidence</strong></div><div>Modification Agent + review</div><div>RED/GREEN, affected/full tests, docs/checklinks, clean candidate, and two independent review verdicts.</div><div>Do not create an update request.</div></div>
+        <div class="table-row"><div><strong>Artifact gate</strong></div><div>supervisor</div><div>Complete runtime manifest, Electron bundle, version match, packaged smoke, and isolated cold start.</div><div>The old instance keeps running.</div></div>
+        <div class="table-row"><div><strong>Live system gate</strong></div><div>supervisor</div><div>Default 18100, owner-auth identity, expected candidate revision, doctor, and basic Web/WS connectivity.</div><div>Automatically restore the old App.</div></div>
+        <div class="table-row"><div><strong>Goal acceptance</strong></div><div>verification Agent</div><div>Read every original assertion and check real public entry points. UI changes require operating the canonical App; API/CLI changes require invoking real entries.</div><div>fail/inconclusive verdict triggers automatic restoration.</div></div>
+        <div class="table-row"><div><strong>Evidence binding</strong></div><div>controller</div><div>Each assertion stores command/page/node, observation, artifact revision, and time; verdict covers all required assertions.</div><div>Missing fields mean inconclusive.</div></div>
+      </div>
+      <div class="cards" style="margin-top:16px">
+        <article class="card accent-green"><div class="label">Verifier authority</div><h3>Read and operate acceptance entry points</h3><p>Tool allowlist is read/glob/grep/list plus <code>self_update_observe</code>. Check IDs execute only frozen local API, CLI/test, or UI actions. No generic Browser/Computer Use, shell, source edits, commits, deployments, external messages, or second-update authority.</p></article>
+        <article class="card accent-amber"><div class="label">Semantic limit</div><h3>Agent verdict assesses evidence</h3><p>Candidate runtime cannot independently prove its own trustworthiness. Supervisor decides system gates; the Agent gives structured pass/fail/inconclusive for user goals with inspectable evidence.</p></article>
+        <article class="card accent-blue"><div class="label">Timeout</div><h3>No unlimited waiting</h3><p>System startup: 90 seconds; Agent acceptance: 10 minutes by default; entire update: 30 minutes by default. Timeout never means success.</p></article>
+      </div>
+    </section>
+
+    <section id="verification-actions" aria-labelledby="verification-actions-title">
+      <div class="section-head"><div class="section-num">08A</div><div><h2 id="verification-actions-title">Real UI, API, and test evidence</h2><p>Acceptance Agent uses the same JobRunner and frozen configuration. Added capabilities are bounded acceptance operations, not another Agent, Scheduler, or generic browser-control service.</p></div></div>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Acceptance entry</div><div>Execution contract</div><div>Irreplaceable evidence</div></div>
+        <div class="table-row"><div>Default App UI</div><div>A constrained adapter connects to the actual main window of <code>/Applications/OpenProgram.app</code>. Bind App process, window, owner, <code>update_id</code>, attempt, and current worker identity, rechecking before and after actions. The model cannot supply CDP addresses, arbitrary targets, JS, or file paths.</div><div>Save real screenshots, accessibility trees, current route, window identity, and time. Receiving only <code>/chat</code> HTML, DOM text, or an embedded Web-tab screenshot cannot prove main-App visual or interaction requirements.</div></div>
+        <div class="table-row"><div>UI interaction</div><div>Freeze original-session main-window checks: screenshot/accessibility tree, chat scrolling, and session/dag switching. New packages declare UI protocol 1/2/3 by capability; legacy protocol 4 remains read/rollback-compatible only, rejecting temporary test-object operations.</div><div>Success must bind original session, worker, Job, and target window and restore owned scroll/view changes; user-input interruption must preserve user choices. Arbitrary clicks, messages, settings, external navigation, file transfer, clipboard, and code execution are unauthorized.</div></div>
+        <div class="table-row"><div>Local API</div><div>Keep owner-auth and loopback restrictions; use frozen method, path, arguments, and response bounds. Prohibit redirects, model-supplied authentication, and arbitrary URLs. Check the same worker/candidate identity before and after calls.</div><div>Real responses must support the assertion. A health check does not prove functional correctness; HTTP 200, page titles, or model claims alone cannot establish a pass.</div></div>
+        <div class="table-row"><div>Constrained tests and CLI</div><div>Fixed CLI version/help calls use the installed App runtime; frozen test:python runs in the candidate worktree. Accept no model shell. Native acceptance sandbox is single-process and denies fork, posix_spawn, and subprocesses; this does not change separate build/repair-test execution policy.</div><div>Source tests cannot replace post-install acceptance, and CLI help cannot prove arbitrary features. Use a minimal networkless environment denying writes to default data and App. Timeout, cancellation, output overflow, identity changes, or cleanup failure cannot pass. Do not start a second profile/App.</div></div>
+      </div>
+      <div class="cards" style="margin-top:16px">
+        <article class="card accent-blue"><div class="label">Frozen verification plan</div><h3>Capabilities determined before updating</h3><p>Each assertion binds evidence kind, check ID, allowed targets/actions, and budget. Bind the plan digest into request evidence and verifier configuration. Prepare checks dependencies and permissions; old configurations do not automatically gain new UI/test permissions.</p></article>
+        <article class="card accent-green"><div class="label">Trusted evidence receipt</div><h3>Execution adapters save evidence</h3><p>Reuse the controller’s constrained observations and signed receipts, adding evidence kinds without accepting model-signed results. Bind each item to update, attempt, SHA, worker, check ID, time, and content digest. Bound screenshots/output; exclude authentication from logs, screenshot exports, and model context.</p></article>
+        <article class="card accent-amber"><div class="label">Failure and cleanup</div><h3>Missing evidence cannot pass</h3><p>Record precise reasons for closed windows, identity changes, denied permissions, vanished objects, judgment-affecting truncation, provider failure, and timeout. Adapters release their own connections/test resources without closing user windows; cleanup failure is recorded and blocks pass. Reconnects/restarts never reset the total deadline.</p></article>
+      </div>
+      <p style="margin-top:16px">Page content, test output, and candidate code are untrusted data and cannot expand tool authority. Allowed-action enforcement must cover UI, IPC, and backend write entries; DOM selectors, button text, or read-only prompts alone cannot prevent side effects. Automatic acceptance avoids other sessions and personal browser data. User activity in the target window stops automatic interaction while preserving evidence; waiting cannot exceed the original deadline.</p>
+    </section>
+
+    <section id="failures" aria-labelledby="failures-title">
+      <div class="section-head"><div class="section-num">09</div><div><h2 id="failures-title">Failure semantics and recovery</h2><p>Failure state must state whether the candidate activated, which revision is running, whether the old App remains, and whether acceptance executed.</p></div></div>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Failure point</div><div>System action</div><div>User-visible result</div></div>
+        <div class="table-row"><div>Authorization denied, dirty candidate, or no commit</div><div>Do not start supervisor or change worker/App.</div><div>Original session shows a stable error and repair conditions.</div></div>
+        <div class="table-row"><div>build, tests, manifest, packaged smoke, cold probe</div><div>Stop staging; old instance keeps running; clean unverified artifacts.</div><div>The same session receives the failed step and log summary without restart.</div></div>
+        <div class="table-row"><div>Other tasks do not finish within the wait deadline</div><div>Exit maintenance and abort the update without cancelling other turns/Jobs.</div><div>Show <code>quiescence-timeout</code> and the still-running task list.</div></div>
+        <div class="table-row"><div>Old App/worker cannot stop</div><div>Leave installation unchanged and restore prior maintenance state.</div><div>Show exact PID/launchd state without claiming activation.</div></div>
+        <div class="table-row"><div>App move, Launch Services, or new-worker startup fails</div><div>Move new App to failed.app, restore previous.app and original startup state.</div><div>Reopen the old App; result card shows ROLLED_BACK.</div></div>
+        <div class="table-row"><div>Revision/doctor/Web/WS gate fails</div><div>Create no acceptance Agent; restore previous.app immediately.</div><div>Original session receives system-gate evidence.</div></div>
+        <div class="table-row"><div>Acceptance Agent fails, is inconclusive, or times out</div><div>Save verifier-result and restore the old App first. New requests with frozen configuration diagnose automatically. Allowed implementation/test failures proceed to repair/testing; default waits for authorization only before reinstalling, while complete bounded_auto authorization permits scoped automatic submission. Inconclusive, environment, and objective issues stop reinstallation.</div><div>Show each assertion, restored revision, attempt, and remaining budget.</div></div>
+        <div class="table-row"><div>JobRunner, provider, or model unavailable</div><div>Do not defer through Scheduler; mark environment-related inconclusive and restore the old App. Governed stage Jobs make one provider attempt; when a request ends without an outcome and the execution waits for effect reconciliation, the Job recovery loop cancels the stage Job instead of letting it run to the deadline.</div><div>Show missing dependencies and retry conditions without mislabeling a code defect.</div></div>
+        <div class="table-row"><div>Rollback itself fails</div><div>Stop all automatic iteration, retain previous/candidate/transaction, and enter NEEDS_MANUAL_RECOVERY.</div><div>Show actual App, revision, processes, and read-only recovery instructions without claiming restoration.</div></div>
+        <div class="table-row"><div>Supervisor crashes or machine restarts</div><div>Before the next worker/App startup, recover idempotently from phase, canonical App, previous.app, and revision.</div><div>Add no RECOVERED phase. Preserve SUCCEEDED, ROLLED_BACK, or ABORTED according to actual recovery outcome; uncertainty becomes NEEDS_MANUAL_RECOVERY. Store recovery events/evidence separately.</div></div>
+      </div>
+      <h3 id="recovery-bootstrap" style="margin-top:24px">App-independent recovery entry</h3>
+      <p>Before candidate activation, the trusted current version saves controller/runtime/installer and generates update-specific <code>~/.openprogram/self-updates/&lt;update_id&gt;/recover.sh</code>, with a matching one-shot login task in the local user’s <code>~/Library/LaunchAgents/</code>. Script, state directory, and runtime all reside outside the App, independent of PATH OpenProgram, the damaged App, ordinary worker, and Scheduler. Without a complete verifiable saved copy, do not generate replacement control code or guess recovery.</p>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Entry</div><div>Behavior</div><div>Constraint</div></div>
+        <div class="table-row"><div><code>recover.sh status</code><br>No arguments still means status only</div><div>Saved runtime reads this update, maintenance ownership, and manual-recovery results, returning the fixed recovery-entry path.</div><div>No model, App mutation, or new update; reject other arguments, arbitrary commands, paths, and profiles.</div></div>
+        <div class="table-row"><div><code>recover.sh repair</code></div><div>Reuse the manual-confirmation flow below. If App/CLI cannot start, the owner can still inspect the plan and authorize recovery in a terminal.</div><div>Interactive confirmation and the original ten-minute deadline remain required; acceptance, journal, identity, and permission constraints remain unchanged.</div></div>
+        <div class="table-row"><div>At next user login<br>or <code>recover.sh resume</code></div><div>Revalidate saved bundle, request, and fixed script; invoke the original supervisor to continue existing handoff/recovery by persisted phase, without synthesizing turn release.</div><div>Reuse original update, rollback, commit, and repair deadlines/results. Manual state without manual authorization stays in maintenance; approve no new candidate and create no second acceptance Job.</div></div>
+      </div>
+      <p>Login filename is <code>ai.openprogram.self-update.recovery.&lt;update_id&gt;.plist</code>, executed at most once per user login and removed when complete: <code>RunAtLoad=true</code>, without <code>KeepAlive</code>, schedules, or persistent daemons. Writing the plist does not immediately load another controller; normal updates retain the original one-shot supervisor and controller lock. If both App and controller are unavailable in the current login, the terminal script is the explicit entry. After reboot, automatic recovery requires this user to log in; no claim is made for logged-out or locked-disk execution.</p>
+      <p>Publish binding records for recovery entry, fixed arguments, and plist before supervisor submission and candidate activation. Operate only canonical user-owned directories and exact files for this update. Reject conflicting existing content, symlinks, nonregular files, or unsafe permissions without overwriting. Repeated preparation validates saved copies rather than copying from the replaced App. Startup failures retain independent diagnostics and never clear maintenance or extend authorization.</p>
+      <p>After the original update terminates and releases maintenance, remove only this login plist if its content still matches binding records. Retain saved runtime, scripts, original evidence, and recovery results for inspection. Cleanup failure records diagnosis without changing verified outcomes; rerunning a leftover one-shot task must not recover a completed update. A damaged entry, permission drift, or insufficient evidence still requires manual handling; no arbitrary file repair or forced maintenance clearing is provided.</p>
+<div id="execution-restart"><h3>Task pause, restart, and continuation</h3>
+<p>On entering maintenance, the worker uses existing canonical pause commands to reach durable execution checkpoints. Each update saves execution id, pause command id, and observed version, resuming only tasks it paused. Previously paused, awaiting-input, cancelled, or completed tasks do not resume automatically. Queued Jobs that never ran retain queue identity and do not participate in active-execution waiting.</p>
+<p>Supervisor replaces the App only after canonical active attempts and legacy running tasks finish. After commit or verified rollback and maintenance release, the new worker continues tasks through original continue commands and the Job resource queue. Fixed command ids prevent duplicate execution on repeated recovery. Failed pauses or unpausable tasks that miss the deadline abort the update and resume already paused work.</p>
+<p>Checkpoint recovery retains execution-contract validation. Changed tool implementations or permissions prohibit replaying old operations and preserve the old checkpoint. Only a continue initiated by this update and rejected for contract change may create a fixed-identity replanning Job from the original task/history, retaining original tools/permissions and rechecking execution/update ownership before running. Unresolved side effects, user cancellation, or other session activity prevent automatic replanning. Task-recovery failure does not change installation acceptance. The initiating session gets a durable terminal follow-up reading original goal/history/update result; it neither replaces the verifier nor gains interactive reactivation authority. Old records do not retroactively create follow-ups.</p>
+<p>Acceptance entries are supervisor waiting, worker reconciliation, and real canonical pause/continue. Cover queued tasks, checkpoint recovery, duplicate worker recovery, user pause/cancel, unreleased maintenance, failed updates, and exactly one original-session follow-up. Status: implementation and focused tests complete; independent reviews, full tests, and real-App acceptance pending.</p></div>
+      <h3 id="owner-repair" style="margin-top:24px">Explicit manual recovery</h3>
+      <p><code>openprogram self-update status [update_id] --json</code> reads maintenance ownership, original terminal state, and recovery results without models, new updates, or App mutation.<code>openprogram self-update repair &lt;update_id&gt;</code> is an independent local-owner control entry, separate from chat/Scheduler. An interactive terminal must confirm displayed update id, target revision, recovery action, and plan digest; no skip-confirmation flag. Recompare original state, maintenance ownership, installation journal, and trusted controller at confirmation; reject stale confirmation after any change.</p>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Original transaction evidence</div><div>Authorized action</div><div>Pass condition</div></div>
+        <div class="table-row"><div>Not irreversibly committed; previous identity and old revision known</div><div>Original trusted installer idempotently restores the old App without activating a new candidate.</div><div>Canonical old-App identity matches; restarted old revision, owner, doctor, Web, and WS all pass.</div></div>
+        <div class="table-row"><div>Already committing/committed with a complete original accepted signed decision</div><div>Only finish the original irreversible commit; confirmation cannot manufacture goal pass or authorize initial commit from activated state.</div><div>Original grant/result/decision/journal identities agree; canonical candidate and restarted live version pass new checks.</div></div>
+        <div class="table-row"><div>ABORTED and still prepared</div><div>Only verify the unchanged old App and restore execution; no installation/rollback.</div><div>Prepared journal unchanged, running version is not candidate, all system checks pass.</div></div>
+        <div class="table-row"><div>Unknown identity, missing evidence, damaged trusted controller, or failed check</div><div>Retain maintenance and all recovery files with a precise failure. Do not guess paths, delete the old App, or continue automatic iteration.</div><div>Show manual work still required; do not mark the original goal achieved.</div></div>
+      </div>
+      <p>Each confirmation creates an independent durable recovery request bound to original update/transaction identity with a ten-minute deadline, never extended by retries/restarts. Reuse saved controller/runtime/installer only, launched under a one-shot launchd label including recovery request id; do not recopy control code from the damaged App. The recovery process uses the original installation transaction to validate canonical App, restarts the default worker, and verifies the new process so startup checks and ordinary Scheduler resume normally. Interruptions allow idempotent recovery/worker restart within the same deadline, but no verifier Job or second update.</p>
+      <p>Original terminal state, verdict, and deadline remain unchanged. Manual recovery writes a separate resolution receipt distinguishing old-version restoration, accepted-version restoration, and unactivated-update restoration. Atomically release this maintenance owner only when the receipt matches new system evidence. Failure, expiry, or no confirmation keeps ordinary tasks prohibited; another attempt needs fresh confirmation. This is not arbitrary shell, file repair, or forced maintenance clearing.</p>
+    </section>
+
+    <section id="security" aria-labelledby="security-title">
+      <div class="section-head"><div class="section-num">10</div><div><h2 id="security-title">Permissions and trust boundaries</h2><p>Permission to edit code and permission to replace the running product are separate. The latter grants one candidate SHA or an explicit bounded multi-attempt envelope.</p></div></div>
+      <h3 id="offline-build-inputs">Offline build inputs</h3>
+      <p>The controller obtains pinned uv, managed Python, and dependencies from the saved trusted complete runtime. Before reuse, byte-compare candidate <code>uv.lock</code> and <code>product-runtime.json</code>; mismatches or missing inputs fail before activation, without silently reusing incompatible dependencies or allowing candidate network access. Dependency changes require matching complete-runtime inputs first; candidates cannot choose download sources or inherit owner credentials.</p>
+      <p>Copy runtime and existing npm/uv/Electron-builder/node-gyp caches into a private build-home; macOS uses independent copy-on-write copies, never shared writable caches. The trusted controller selects Electron platform ZIPs by fixed version, architecture, and release SHA-256, copies them into candidate-read-only update inputs, and uses them through <code>electronDist</code>. Cache hits never skip integrity checks. Candidates still rebuild Web, docs, wheel, and Desktop archive, installing only the new wheel into private runtime. Normal official-Release builds remain unchanged. Copy, build, and checks share the original deadline; cache hits are not acceptance evidence.</p>
+      <p>Build processes cannot access external networks, default App, or user state. Packaged worker smoke may bind/access only one controller-selected private loopback port, explicitly excluding 18100; sandboxing still denies all other networking. Fixed checks requiring host graphics do not widen candidate sandbox permissions: the controller invokes system <code>sips</code> with fixed arguments for four fixed icon sources, then runs a Playwright Chromium probe using fixed trusted-runtime Python. Before/after execution, candidate browser-resource tree hashes must match saved trusted resources. Worker, icon, and browser checks must complete and enter manifest/receipt before activation; no passing by exposing the default worker or skipping checks. Actual packaging/installed-App acceptance appears at the end.</p>
+      <div class="boundary-grid">
+        <article class="boundary control"><div class="label">Trusted controller</div><h3>Control logic comes from the currently installed version</h3><p>Before activation, copy supervisor/installer from current runtime and pin hashes. Candidate supplies no supervisor, App path, state path, command, or recovery policy.</p><ul><li>One-shot launchd label includes update id</li><li>0700 controller, 0600 state</li><li>Fixed default profile, 18100, canonical App path</li></ul></article>
+        <article class="boundary candidate"><div class="label">Candidate code</div><h3>Build execution with restricted permissions</h3><p>Candidate build/smoke executes source, so run sandboxed with minimal environment. Deny provider credentials, default session state, installation directory, and update records.</p><ul><li>Write only candidate worktree and staging temp</li><li>Do not inherit tokens/API keys</li><li>Network off by default; dependencies from lockfile/cache</li></ul></article>
+        <article class="boundary state"><div class="label">User authority</div><h3>Activation must remain within owner approval</h3><p><code>self_update(action="prepare")</code> joins mandatory approvals that bypass cannot skip. Default binds the candidate; bounded iteration binds goal, allowed paths, maximum attempts, deadline, and prohibited changes.</p><ul><li>cron/scheduler/sub-agent/MCP cannot initiate</li><li>Approval never becomes a generic persistent allow rule</li><li>Scope, dependency, or permission changes invalidate it</li></ul></article>
+        <article class="boundary verify"><div class="label">Verification</div><h3>Acceptance Agent permissions independently narrowed</h3><p>Automatic acceptance cannot edit source or update again. It may only read evidence, run constrained checks, and operate local UI; extra side effects require inconclusive.</p><ul><li>Fixed agent/profile/model snapshot</li><li>Evidence required for every assertion</li><li>Submit verdict with supervisor one-time token</li></ul></article>
+      </div>
+    </section>
+
+    <section id="api" aria-labelledby="api-title">
+      <div class="section-head"><div class="section-num">11</div><div><h2 id="api-title">Public entries and internal boundaries</h2><p>Users still only need chat. Tool arguments remain structured; models receive no installation commands.</p></div></div>
+      <div class="api-grid">
+        <article class="api-card"><div class="label">One entry · guided</div><h3>self_update</h3><p><code>{action?, update_id?, worktree_id?, candidate_sha?, goal?, assertions?, iteration_policy?, verification_plan?}</code>. One tool for every owner action. The schema is short; the first result carries the workflow guide, and <code>prepare</code> / <code>retry</code> are refused until their tool guide (<code>self_update.prepare</code>, <code>self_update.retry</code>) is in the model's context, the refusal carrying it.</p></article>
+        <article class="api-card"><div class="label">prepare · forced one-shot approval</div><h3>action="prepare"</h3><p><code>{worktree_id, candidate_sha, goal, assertions[], iteration_policy?, verification_plan?}</code>. After mandatory approval, validate candidate, freeze configuration, write request, and start supervisor. Return update_id, phase, candidate_sha, base_sha, and changed_paths, not installation success.</p></article>
+        <article class="api-card"><div class="label">status · read-only, no approval</div><h3>action="status"</h3><p><code>{update_id?}</code>, the default action. Return phase, steps, current/candidate revision, active App, rollback availability, verifier verdict, repair result and iteration.</p></article>
+        <article class="api-card"><div class="label">retry · forced one-shot approval</div><h3>action="retry"</h3><p><code>{update_id, candidate_sha}</code>. Approve a repaired SHA in the original session after real-evidence verification; the card shows the candidate's paths, tests and budget, and identity, candidate and budget are rechecked before and after approval. Return fixed child ID and submission state, never fabricated installation success.</p></article>
+        <article class="api-card"><div class="label">cancel · runtime control</div><h3>action="cancel"</h3><p><code>{update_id?}</code>, defaulting to the session's active update. Stop the whole iteration: abort a PREPARING/STAGING/READY request, cancel pending approval, diagnosis, source repair and candidate tests. Activated transactions finish necessary verification/recovery but cannot create another attempt.</p></article>
+      </div>
+      <div class="schema-grid" style="margin-top:16px">
+        <pre><span style="color:#8c9bad"># Job result; controller wraps it in a signed receipt</span>
+{
+  "schema": 1,
+  "update_id": "su_...",
+  "candidate_sha": "...",
+  "attempt": 1,
+  "verdict": "pass | fail | inconclusive",
+  "assertions": [
+    {
+      "id": "acceptance-1",
+      "status": "pass",
+      "entry": "default App",
+      "observation": "...",
+      "evidence_refs": ["observation-id"],
+      "observed_at": 1.0
+    }
+  ]
+}</pre>
+        <div class="schema-note"><h3>DAG representation</h3><p>The initiating assistant node records <code>self_update_id</code>. Post-restart verification branch uses: </p><ul><li><code>source=self_update_verify</code></li><li><code>caller=origin_assistant_id</code></li><li><code>predecessor=null</code>, without changing user main-branch HEAD</li><li>Results return through existing Job completion/follow-up mechanisms</li></ul><p>UI renders “Automatic post-update acceptance,” not a user message.</p></div>
+      </div>
+    </section>
+
+    <section id="surfaces" aria-labelledby="surfaces-title">
+      <div class="section-head"><div class="section-num">11A</div><div><h2 id="surfaces-title">Update records and normal conversation results</h2></div></div>
+      <p>Installation, verification and rollback retain their durable update records. Conversations display their normal messages and tool results only. The message list does not mount a software-update history component, issue update-history polling requests, or expose update management forms. Desktop recovery retains its routing and acknowledgement protocol without adding update recovery notices to the conversation.</p>
+      <div class="mapping-table">
+        <div class="table-row table-head"><div>Projection field</div><div>Writer and provenance</div><div>Read meaning</div><div>Missing or stale</div></div>
+        <div class="table-row"><div><code>update_id</code>, root/parent, origin session, attempt</div><div>Validated request and iteration relations.</div><div>Identify the update, original session, and parent/child attempts; identity is supplied only by the server.</div><div>Reject inconsistent ownership; renderer values cannot rebind it.</div></div>
+        <div class="table-row"><div><code>phase</code>, <code>state_revision</code>, <code>updated_at</code></div><div>SelfUpdateStore durable phase, increasing <code>revision</code>, and time.</div><div>Transaction progress; <code>state_revision</code> is a state version, not a Git SHA.</div><div>Corrupt/future schemas return explicit errors, not “no update.” Reads cannot initialize, repair, or advance transactions.</div></div>
+        <div class="table-row"><div><code>candidate_revision</code>, changed paths</div><div>Prepare verifies Git and freezes the request.</div><div>Target source revision and changes, not installed/running status.</div><div>Never fill running revision from candidate SHA.</div></div>
+        <div class="table-row"><div><code>last_verified_runtime</code></div><div>Select and validate controller <code>system_gate</code>, <code>committed_system_gate</code>, <code>restored_system_gate</code> by phase; pre-activation old version comes from <code>previous_system_gate</code>. Manual recovery uses the corresponding validated recovery receipt.</div><div>Last verified SHA, worker PID, verification time, and evidence source. SUCCEEDED selects commit evidence, ROLLED_BACK restoration evidence, VERIFYING candidate evidence. Installation-journal committed is not another update phase.</div><div>Without matching evidence during transitions, ABORTED, or manual recovery, report unknown; do not choose the latest apparently valid old gate. This is not continuous liveness proof.</div></div>
+        <div class="table-row"><div><code>target_app</code> and rollback state</div><div>Canonical App path from request, transaction manifest, and corresponding recovery state.</div><div>Distinguish installation target, recoverable copy, restored state, and manual recovery required.</div><div>Do not label target path “actual active App”; a previous saved copy does not imply rollback remains available.</div></div>
+        <div class="table-row"><div>Acceptance, diagnosis, repair, and next submission</div><div>Corresponding validated result/receipt and next-candidate summary.</div><div>Per-assertion verdict/evidence, repaired SHA, approval status, budget, and child ID. Verifier pass is not installation commit; update phase becomes SUCCEEDED only after commit completes.</div><div>No result yet means pending; no evidence means inconclusive. Continued repair after rollback cannot overwrite the original failure.</div></div>
+      </div>
+      <h3 id="projection-contract" style="margin-top:24px">Shared read contract</h3>
+      <p><code>openprogram/operations/self_update/control/projection.py</code> provides shared read-only projections for dedicated tools, Web, and Running. Owner-auth route is <code>GET /api/self-updates?session_id=…</code> and <code>GET /api/self-updates/{update_id}?session_id=…</code>, validating origin session. History uses bounded stable-cursor pagination independent of the active pointer. Evidence is revalidated through the same update’s <code>/evidence?session_id=…&amp;evidence_id=…</code> route, returning only observations referenced by signed results.</p>
+      <p>Projection includes only allowlisted fields, bounded summaries, and opaque evidence IDs, excluding configuration, tokens, signing keys, environment variables, and arbitrary log paths. Evidence reads recheck owner/session/update/receipt bindings and never permit arbitrary files. Read state and associated results consistently; if no coherent snapshot is possible, return retryable error. Reads trigger no claim, repair, Job, or Scheduler.</p>
+      <p>Update projection APIs remain read-only and session-scoped for explicit tool reads. Chat does not poll these APIs. Stored update status does not infer success or failure from a disconnected window.</p>
+      <div class="cards" style="margin-top:16px">
+        <article class="card accent-blue"><div class="label">Conversation</div><h3>Normal results</h3><p>Tool results and durable result delivery use the existing conversation message flow. No separate update history, pagination, evidence viewer or update request form is mounted in chat.</p></article>
+        <article class="card accent-green"><div class="label">Durable result delivery</div><h3>Results do not depend on an online window</h3><p>Controller persists terminal state first; worker delivers bounded results to the original session through existing Job completion/follow-up. Stable delivery keys use update, attempt, and result type; repeated startup or lost ACK creates no duplicate message. Deliver even if terminal state precedes verifier creation or the session is closed. Deleted sessions retain undelivered status, without redirecting or creating user tasks.</p></article>
+        <article class="card accent-amber"><div class="label">No false completion</div><h3>Show execution and installation outcomes separately</h3><p>Show acceptance-task completion, goal pass, installation commit, rollback completion, and later repair separately. Deterministic code generates notices without another LLM or triggering installation. DAG retains origin-caller/verification-Job relations without changing main-branch HEAD.</p></article>
+      </div>
+      <h3 id="desktop-reopen" style="margin-top:24px">Desktop restart returns to the original session</h3>
+      <p>Reuse <code>apps/desktop/main/worker/worker-start-url.js</code> owner-auth startup and existing <code>/s/{session_id}</code> routes. Before App shutdown, supervisor saves a trusted reopen intent bound to update, attempt, origin session, owner, deadline, and startup action. Desktop receives only an opaque update ID; authenticated service validates the session and constructs a same-origin route. Candidate, model, CLI arguments, and renderer cannot choose arbitrary URLs, paths, or auth fragments.</p>
+      <p>Consume the intent only during this update-triggered reopen; preserve normal startup, current windows, center tabs, and stable Release updater. ACK only after authentication and original-session load. Crashes before ACK may retry navigation without reactivation or verifier recreation. Only the designated main window consumes it; repeated consumption navigates idempotently without duplicate tabs. After user navigation away, do not force a return or insert a special recovery prompt.</p>
+      <p>Owner changes, missing session, expiry, identity mismatch, or unavailable recovery APIs retain ordinary startup and internal reasons. Do not navigate elsewhere, create sessions, or claim installation success from navigation failure. If App was closed, follow saved startup state; prepare must show and authorize opening a window when visible-App acceptance requires it. Both update and rollback versions must support minimum read/recovery protocols; reject incompatibility before activation.</p>
+    </section>
+
+    <section id="references" aria-labelledby="references-title">
+      <div class="section-head"><div class="section-num">12</div><div><h2 id="references-title">Reference implementations and adoption</h2><p>References establish process, update, and worktree boundaries; this design still defines candidate sources, permissions, and acceptance.</p></div></div>
+      <div class="reference-grid">
+        <article class="reference-card"><span class="label choice">Adopt</span><h3><a href="https://git-scm.com/docs/git-worktree">Git worktree</a></h3><p>Use linked worktrees to isolate candidate HEAD/index/working directory; serving checkout and existing dirty user checkouts are not build inputs.</p></article>
+        <article class="reference-card"><span class="label choice modified">Adapt</span><h3><a href="https://developer.apple.com/library/archive/documentation/MacOSX/Conceptual/BPSystemStartup/Chapters/CreatingLaunchdJobs.html">Apple launchd agent</a></h3><p>Use an independent process within the user login session. V1 uses one-shot <code>launchctl submit</code>, without a persistent updater daemon.</p></article>
+        <article class="reference-card"><span class="label choice modified">Adapt</span><h3><a href="https://www.electronjs.org/docs/latest/tutorial/updates">Electron update lifecycle</a></h3><p>Adopt staged artifacts, restart, and explicit state; candidates come from local commits rather than remote feeds.</p></article>
+        <article class="reference-card"><span class="label choice rejected">Reject</span><h3><a href="https://www.electronjs.org/docs/latest/api/auto-updater/">Electron autoUpdater</a></h3><p>macOS automatic updates require signing and release feeds, which do not cover unpublished local candidates, Agent acceptance, or current unsigned development-App contracts.</p></article>
+        <article class="reference-card"><span class="label choice">Reuse repository implementation</span><h3><a href="../distribution/automatic-updates.html">Stable release automatic updates</a></h3><p>Reuse complete artifacts, manifests, runtime probes, and platform installation boundaries without changing stable Release discovery, download, or user installation.</p></article>
+        <article class="reference-card"><span class="label choice">Reuse repository implementation</span><h3><a href="execution/agent-worktree.html">Agent worktree</a></h3><p>Reuse worktree ownership, commit, merge/discard, and approval semantics. Self-update reads candidates only and never automatically merges the user’s main branch.</p></article>
+      </div>
+    </section>
+
+    <section id="plan" aria-labelledby="plan-title">
+      <div class="section-head"><div class="section-num">13</div><div><h2 id="plan-title">Phased implementation plan</h2><p>Review each task independently; start the next only after specification and quality reviews pass. Production filenames are target locations; first check existing shared primitives.</p></div></div>
+      <div class="task-grid">
+        <article class="task-card"><div class="task-id">TASK A · DURABLE CONTRACT</div><h3>State model and single-instance lock</h3><p>Add <code>openprogram/operations/self_update/</code>, using only stdlib JSON, fcntl, and atomic replace.</p><ul><li><code>types.py</code>: phase, request/result schema</li><li><code>store.py</code>: create/load/transition/claim/event journal</li><li>RED: corrupt JSON, concurrent create, illegal transition, duplicate claim, future schema</li><li>Gate: unit + component state recovery</li></ul></article>
+        <article class="task-card"><div class="task-id">TASK B · STAGE AND TRANSACTION</div><h3>Complete artifacts and deferred installation commit</h3><p>Reuse Desktop build/install scripts without new updater dependencies.</p><ul><li><code>package-and-install-app.sh</code>: separate build-only output</li><li><code>install-app.sh</code>: prepare/commit/rollback or equivalent defer-commit interface</li><li><code>upgrade.py</code>: extract shared identity/doctor probe</li><li>RED: build failure does not stop the old worker; post-activation failure restores the old App</li></ul></article>
+        <article class="task-card"><div class="task-id">TASK C · CHAT HANDOFF</div><h3>Dedicated tools, approval, and turn-end release</h3><p>Tools submit durable intent without stopping execution.</p><ul><li><code>programs/tools/system/self_update/</code>: prepare/status/cancel</li><li><code>permissions/approval.py</code>: forced owner approval</li><li><code>conversation/turn_runtime/</code>: release after final becomes durable</li><li>RED: reject dirty SHA, non-owner source, concurrent update, and non-durable final</li></ul></article>
+        <article class="task-card"><div class="task-id">TASK D · EXTERNAL SUPERVISOR</div><h3>launchd one-shot controller</h3><p>Current trusted version generates fixed controller; candidate supplies only commit content.</p><ul><li><code>self_update/supervisor.py</code> and fixed shell handoff</li><li>build sandbox, maintenance gate, quiescence timeout</li><li>Lifecycle of state/log/transaction directories</li><li>RED: supervisor completes after worker stops; repeated startup is idempotent</li></ul></article>
+        <article class="task-card"><div class="task-id">TASK E · RESTART VERIFICATION</div><h3>Startup claim, JobRunner, and controlled iteration</h3><p>Do not restore interrupted stacks; create new Jobs after restart, without ordinary Scheduler control.</p><ul><li><code>self_update/recovery.py</code>: system gates, lease, stable Job ID, exactly-once dispatch</li><li><code>worker/runner.py</code>: startup hook after JobRunner ready and before ordinary Scheduler</li><li><code>jobs/runner.py</code>: source/authority/tool/model snapshot</li><li><code>self_update/iteration.py</code>: attempt budget, scope diff, stop conditions</li><li>RED: repeated startup, expired lease, orphan verifier, missing provider, three-attempt exhaustion, expanded scope</li></ul></article>
+        <article class="task-card"><div class="task-id">TASK F · UI AND FULL ACCEPTANCE</div><h3>Result delivery and App verification</h3><p>Verification and recovery use application services; conversations retain ordinary messages and tool results.</p><ul><li>Read-only status tools and durable result delivery</li><li>Desktop reopen locates origin session</li><li>Constrained real UI/API/CLI/test evidence</li><li>Python/Web/CLI/Desktop/full gates, docs, and three default-App scenarios</li></ul></article>
+      </div>
+      <h3 id="task-f" style="margin-top:24px">Task F dependencies and verification scope</h3>
+      <div class="failure-table">
+        <div class="table-row table-head"><div>Subtask and target location</div><div>Deliverable</div><div>Required acceptance</div></div>
+        <div class="table-row"><div>F1 · <code>self_update/projection.py</code> , Web self-updates routes, existing status tool, and Running route</div><div>First implement same-origin allowlisted projection, paginated history, and permission contract, without new control entries.</div><div>Public API/tools: cross-session rejection, no credential leaks, readable terminal states, read queries never write, corrupt state not disguised as empty, distinct candidate/running revisions, old recovery evidence cannot override new state.</div></div>
+        <div class="table-row"><div>F2 · Existing Job result delivery</div><div>Normal durable message delivery; no dedicated chat update controls or history polling.</div><div>Results preceding subscriptions, closed windows, crash after delivery, repeated recovery, late responses after session switches, awaiting approval/rollback/manual recovery, terminal history, keyboard, and narrow screens. Run real component behavior tests, not source-string checks.</div></div>
+        <div class="table-row"><div>F3 · <code>apps/desktop/main.js</code>, <code>worker-start-url.js</code> and startup handoff</div><div>Depends on F1/F2; update-bound one-time reopen and original-session load ACK, preserving ordinary startup.</div><div>Real route loading, wrong owner/session, expired intent, auth failure, lost ACK, multiple windows, manual-navigation precedence; no second verifier or automatic session mutation.</div></div>
+        <div class="table-row"><div>F4 · <code>self_update/verifier_config.py</code> , existing constrained-observation/signature protocol, and App/test adapters</div><div>Depends on reviewed restart verification and F3; freeze acceptance plans and provide real UI/API/CLI/test evidence. Workflow stage prompts share goal, assertions, and budget; execution enforces tool permissions.</div><div>Real main-App window identification/screenshots, approved interaction, actual CLI checks; reject arbitrary JS/CDP/URL/shell, unauthorized writes, cross-session access, identity changes, forged receipts, and replay. Old configurations gain no permissions; missing evidence/cleanup failure cannot pass.</div></div>
+        <div class="table-row"><div>F5 · Mainline integration, product docs, and release acceptance</div><div>Depends on F1–F4; synchronize this page and English/Chinese product docs, preserve/check architecture diagrams, and reconcile the complete objective with implementation.</div><div>Full Python, contracts, Web, CLI, Desktop, packaging, docs/checklinks, and combined-commit verification. Then update the default App only using <code>scripts/refresh-local-app.sh</code> and verify success, pre-activation failure, and post-activation rollback. Record local commit, main, remote, and installed identity separately.</div></div>
+      </div>
+      <p style="margin-top:16px">Before each subtask, create an isolated worktree from an immutable reviewed commit and specify exact files, RED, and full test commands. Commit independent passing changes promptly; review pass is not release pass. Verified baseline failures remain failed, never substituted with smaller suites. Record machine docs checks, browser interaction, and desktop/narrow-screen visuals separately; add no duplicate design document.</p>
+    </section>
+
+    <section id="acceptance" aria-labelledby="acceptance-title">
+      <div class="section-head"><div class="section-num">14</div><div><h2 id="acceptance-title">Product-level completion conditions</h2><p>Mark in-conversation self-update implemented only after every condition holds.</p></div></div>
+      <div class="acceptance">
+        <article><strong>Real chat entry</strong><p>Owner requests a change in the default App; Agent edits/tests/commits a worktree and invokes the dedicated tool, without developer-run scripts.</p></article>
+        <article><strong>Immutable candidate</strong><p>Request, artifact, and live revision bind the same SHA; dirty worktree, HEAD drift, and version drift fail before stopping the old instance.</p></article>
+        <article><strong>Process boundary</strong><p>Supervisor survives worker/App shutdown; current turn is durable without permanently running nodes.</p></article>
+        <article><strong>No concurrent-work loss</strong><p>Other running work causes waiting or update abort, never implicit cancellation; maintenance does not lose submitted input.</p></article>
+        <article><strong>Complete artifact</strong><p>App bundle, embedded Python, Web/docs, Programs, Browser assets, and capability manifest all come from the candidate and pass packaged smoke.</p></article>
+        <article><strong>live identity</strong><p>After restart, the default-18100 owner-auth challenge proves candidate revision; anonymous health alone is insufficient.</p></article>
+        <article><strong>Automatic acceptance</strong><p>New worker creates exactly one self_update_verify Job; every required assertion has a result/evidence, otherwise inconclusive.</p></article>
+        <article><strong>Scheduling isolation</strong><p>Ordinary Scheduler stoppage, delay, or duplicate ticks do not affect acceptance. Worker restart, lease takeover, and orphan reconciliation still permit at most one verifier per attempt.</p></article>
+        <article><strong>Controlled iteration</strong><p>Default reauthorization each time; bounded_auto strictly enforces attempts, total deadline, paths, and prohibited changes, pausing on any violation.</p></article>
+        <article><strong>Automatic restoration</strong><p>System-gate, goal-acceptance, and timeout failures restore previous.app with verifiable worker revision and original-session results.</p></article>
+        <article><strong>Crash recovery</strong><p>Simulated process/machine restarts in READY, ACTIVATING, and VERIFYING recover deterministic terminal states without duplicate activation or Agent turns.</p></article>
+        <article><strong>Repository and visible state agree</strong><p>Design, tests, reviews, candidate commit, App source marker, live worker identity, and UI verdict reflect one implementation state.</p></article>
+      </div>
+    </section>
+
+    <section id="implementation-status" aria-labelledby="status-title">
+      <div class="section-head"><div class="section-num">15</div><div><h2 id="status-title">Implementation-status appendix</h2><p>This section describes mainline/installed-product integration. Feature-branch implementation/review evidence is separate and does not mean product availability; current gaps never weaken the target contract.</p></div></div>
+      <div class="evidence-grid">
+        <article class="evidence exists"><div class="label">Implemented foundation</div><h3>Agent edits and worktrees</h3><p>File/shell/worktree tools, approval, sandbox, read-before-edit, change attribution, and session DAG already exist.</p></article>
+        <article class="evidence exists"><div class="label">Implemented foundation</div><h3>Complete build and packaged smoke</h3><p>Desktop runtime preparation, Electron builder, runtime manifest, and isolated smoke already exist.</p></article>
+        <article class="evidence exists"><div class="label">Implemented foundation</div><h3>App installation failure recovery</h3><p>Existing install-app transactions preserve previous App and restore original state on activation/startup failure.</p></article>
+        <article class="evidence exists"><div class="label">Implemented foundation</div><h3>Updater, Scheduler, and JobRunner</h3><p>Reuse installation detection, source probes, Job persistence, and orphan reconciliation. Startup claims use JobRunner; ordinary Scheduler controls neither updates nor fallback acceptance.</p></article>
+        <article class="evidence exists"><div class="label">Accepted in the default App</div><h3>Durable self-update protocol</h3><p>State machine, single-active lock, durable release, maintenance, external supervisor, deferred commit/rollback, owner repair, and App-independent login recovery are on the main line. <code>delivery/activation.py</code> picks the smallest restart from the installed revision; incremental hot, worker and App updates and the complete package build each installed, verified and committed in the default App. Packaging never rewrites the runtime browser, so the trusted browser probe compares identical bytes.</p></article>
+        <article class="evidence exists"><div class="label">Accepted in the default App</div><h3>Automatic acceptance and session recovery</h3><p>Startup claim, the stable self_update_verify Job, signed results, rollback on goal failure, durable delivery and Desktop reopen ran in real updates. Stage tools ship with full schemas, structured output falls back to a schema-validated prompt for providers without native support, and a model request that ends without an outcome stops the stage instead of holding it to the deadline. The verdict schema admits only signed observation references, so a model that cites a file it read is asked to correct the answer, and a rejected result records why for diagnosis.</p></article>
+        <article class="evidence exists"><div class="label">Accepted in the default App</div><h3>Diagnosis and automatic repair</h3><p>A failed verdict rolls back, diagnosis classifies the cause, a constrained repair edits only its allowed paths in an isolated worktree, and the frozen required tests pass before the candidate waits for one-shot reapproval. The retry card shows the candidate's paths, tests and remaining budget and binds exactly that content, so the owner's answer reaches the retry; the repaired candidate then installs, verifies and delivers its result. Restart never resets attempts or deadlines, and the original failure conclusion stays on record.</p></article>
+        <article class="evidence exists"><div class="label">Accepted in the default App</div><h3>Result delivery and constrained observation</h3><p>Results reach the original conversation as tool blocks after the turn that started the update, including turns whose blocks were already saved, and one unreadable record never blocks the others. Signed HTTP, CLI/test, screenshot, scroll and view checks stay limited to frozen checks; chat embeds no update-management interface, and arbitrary UI actions and real-data mutation remain unauthorized.</p></article>
+      </div>
+
+      <div class="source-list" aria-label="Current implementation entries">
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/tools/system/self_update/__init__.py"><span>openprogram/programs/tools/system/self_update/</span><small>Owner tools, prepare/retry approval, and observation entry</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/control/supervisor.py"><span>openprogram/operations/self_update/control/supervisor.py</span><small>External transaction control, system checks, and rollback</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/verification/verifier_config.py"><span>openprogram/operations/self_update/verification/verifier_config.py</span><small>Frozen configurations, stage prompts, and tool allowlists</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/verification/verification_plan.py"><span>openprogram/operations/self_update/verification/verification_plan.py</span><small>Fixed checks, resource budgets, and UI protocol capabilities</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/repair/next_candidate.py"><span>openprogram/operations/self_update/repair/next_candidate.py</span><small>Next-candidate authorization, evidence, budget, and submission</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/control/projection.py"><span>openprogram/operations/self_update/control/projection.py</span><small>Shared read-only state for tools, Web, and Running</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/tests/component/self_update"><span>tests/component/self_update/</span><small>Control-protocol, acceptance, recovery, and iteration tests; not actual App-release proof</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/scripts/package-and-install-app.sh"><span>apps/desktop/scripts/package-and-install-app.sh</span><small>Complete App build, smoke, and installation entry</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/scripts/package-incremental-app.sh"><span>apps/desktop/scripts/package-incremental-app.sh</span><small>Partial rebuild inside a copy of the installed App</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/delivery/activation.py"><span>openprogram/operations/self_update/delivery/activation.py</span><small>Changed paths to components and restart level</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/scripts/install-app.sh"><span>apps/desktop/scripts/install-app.sh</span><small>Transactional installation, previous App, and failure recovery</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/smoke-packaged-runtime.sh"><span>scripts/release/smoke-packaged-runtime.sh</span><small>Packaged runtime and Web smoke</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/cli/commands/upgrade.py"><span>apps/cli/.../commands/upgrade.py</span><small>Source checkout probe, restart, and revision verification</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/worker/lifecycle.py"><span>openprogram/operations/worker/lifecycle.py</span><small>worker stop/start/restart</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/jobs/store.py"><span>openprogram/runtime/jobs/store.py</span><small>Job persistence and worker-lost recovery semantics</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/jobs/runner.py"><span>openprogram/runtime/jobs/runner.py</span><small>One-shot verification Job execution and resource governance</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/scheduler/service.py"><span>openprogram/runtime/scheduler/service.py</span><small>Ordinary Scheduler contract; self-update does not depend on this entry</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/github_release/__init__.py"><span>openprogram/operations/self_update/github_release/__init__.py</span><small>Installation detection and existing prohibition on startup-applied updates</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/execution/dag.py"><span>openprogram/runtime/execution/dag.py</span><small>startup interrupted-run reconciliation</small></a>
+        <a class="source-link" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/permissions/approval.py"><span>openprogram/runtime/permissions/approval.py</span><small>Owner, source, tool approval, and hard constraints</small></a>
+      </div>
+    </section>
+
+  <section id="quiet-history"><h2>Conversation boundary</h2><p>Opening, switching or reconnecting a conversation does not query software-update history. Normal tool output and existing result delivery remain available. Software-update loading, status, retry forms and recovery notices are absent from the chat UI. The production App does not mount a temporary verification rename dialog. Verification rejects test_object interactions before any UI request; screenshot, bounded scroll and perspective checks remain supported.</p><p>Acceptance: normal chat and App shell mount without software-update UI or history requests; desktop session acknowledgement still works; install and rollback behavior remains unchanged.</p></section>
+
+    <footer class="footer"><span>Canonical design: runtime / conversational self-update</span><span>Official Release updates: distribution / automatic updates</span></footer>
+
+  </main>
+</div>
+
+<script>
+  (function () {
+    var links = Array.from(document.querySelectorAll('.rail nav a'));
+    var sections = links.map(function (link) { return document.querySelector(link.getAttribute('href')); }).filter(Boolean);
+    if ('IntersectionObserver' in window) {
+      var observer = new IntersectionObserver(function (entries) {
+        var visible = entries.filter(function (entry) { return entry.isIntersecting; })
+          .sort(function (a, b) { return b.intersectionRatio - a.intersectionRatio; })[0];
+        if (!visible) return;
+        links.forEach(function (link) {
+          if (link.getAttribute('href') === '#' + visible.target.id) link.setAttribute('aria-current', 'true');
+          else link.removeAttribute('aria-current');
+        });
+      }, { rootMargin: '-15% 0px -70% 0px', threshold: [0, .2, .5] });
+      sections.forEach(function (section) { observer.observe(section); });
+    }
+  }());
+</script>
+</body>
+</html>

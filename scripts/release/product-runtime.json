@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "python": "3.12.10",
+  "uv": "0.11.16",
+  "office": {
+    "packageVersion": "0.3.34",
+    "source": "d15d12b6945be4d8b0f3aa1806120e740d2950ee",
+    "adoptionPatchSha256": "dc31dd9d3ee4cf777d3e2d19c5a00d76eec2115e239720cd09298be919741b9a",
+    "reviewedNpmLockSha256": "aa72a0c6b7259945cbda7aa7fa8ba75d5fa709080cc62b2b08fe300ee3de6293",
+    "optional": true
+  },
+  "capabilities": [
+    "web",
+    "providers",
+    "mcp",
+    "memory",
+    "channels",
+    "search",
+    "tui.ink",
+    "browser.playwright"
+  ]
+}

@@ -1,0 +1,139 @@
+"""edit function — string-replace inside an existing file."""
+
+from __future__ import annotations
+
+import os
+
+from openprogram.programs._host.runtime import function
+from openprogram.state.store.snapshot.checkpoint.helpers import (
+    checkpoint_abort_edit,
+    checkpoint_after_edit,
+    checkpoint_before_edit,
+)
+from openprogram.state.worktree.path_resolve import resolve_path
+import logging
+
+_log = logging.getLogger(__name__)
+
+
+_DESCRIPTION = (
+    "Replace an exact string in an existing file with a new string.\n"
+    "\n"
+    "- Paths MUST be absolute.\n"
+    "- `old_string` must match the target text EXACTLY including whitespace and "
+    "indentation. If it isn't unique in the file, either add more surrounding "
+    "context to make it unique, or pass `replace_all=true`.\n"
+    "- Use `write` instead when creating a new file or completely rewriting one."
+)
+
+
+@function(
+    name="edit",
+    accept_edits_safe=True,   # acceptEdits 档下自动放行（改文件——acceptEdits 自动批）
+    description=_DESCRIPTION,
+    toolset=["core"],
+    unsafe_in=["wechat", "telegram", "plan"],
+    path_params={"file_path": "write"},
+)
+def edit(file_path: str,
+         old_string: str,
+         new_string: str,
+         replace_all: bool = False) -> str:
+    """Replace `old_string` with `new_string` inside `file_path`.
+
+    Args:
+        file_path: Absolute path of the file to edit.
+        old_string: Exact text to find (must match existing content byte-for-byte).
+        new_string: Replacement text (must differ from old_string).
+        replace_all: Replace every occurrence of old_string. Default false.
+    """
+    # An SSH conversation edits the remote disk.
+    from ._remote import remote_target
+    _remote_fs = remote_target()
+    if _remote_fs is not None:
+        from . import _remote
+        return _remote.edit(_remote_fs, file_path, old_string, new_string, replace_all)
+
+    # Worktree-aware resolution: if an agent worktree is bound to the
+    # current context, treat a relative path as relative to the
+    # worktree root; if the LLM passed an absolute path outside the
+    # worktree, surface a soft warning but still proceed (D6 — warn,
+    # don't block).
+    resolved_path, outside_warning = resolve_path(file_path)
+    file_path = resolved_path
+    if not os.path.isabs(file_path):
+        return f"Error: file_path must be absolute, got {file_path!r}"
+    from openprogram.host.sandbox import validate_write_path
+    violation = validate_write_path(file_path)
+    if violation:
+        return f"Error: sandbox policy: {violation}"
+    if not os.path.exists(file_path):
+        return f"Error: file not found: {file_path}"
+    if old_string == new_string:
+        return "Error: old_string and new_string are identical — nothing to change"
+
+    # Read-before-edit freshness gate (Claude-Code-style): refuse to edit
+    # a file the agent never read, or one that changed on disk since it
+    # last saw it — so a concurrent user edit is never silently
+    # overwritten. No-op outside a dispatcher turn.
+    try:
+        from openprogram.state.store.snapshot import read_tracking as _rt
+        _fresh = _rt.check_fresh(file_path)
+        if _fresh in (_rt.NEVER_READ, _rt.STALE):
+            return _rt.stale_message(file_path, _fresh)
+    except Exception:
+        # Fail open: a tracking failure must not block the edit.
+        _log.debug("freshness check unavailable for %s", file_path, exc_info=True)
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            text = f.read()
+    except Exception as e:
+        return f"Error reading {file_path}: {type(e).__name__}: {e}"
+
+    count = text.count(old_string)
+    if count == 0:
+        return f"Error: old_string not found in {file_path}"
+    if count > 1 and not replace_all:
+        return (
+            f"Error: old_string occurs {count} times in {file_path}. "
+            "Add surrounding context to make it unique, or set replace_all=true."
+        )
+
+    new_text = (text.replace(old_string, new_string) if replace_all
+                else text.replace(old_string, new_string, 1))
+    # Back up pre-edit state for turn-scoped revert.
+    try:
+        prepared = checkpoint_before_edit(file_path)
+    except Exception as e:
+        return f"Error: mutation journal preparation failed for {file_path}: {e}"
+    try:
+        from openprogram.runtime.permissions.file_state import write_checked
+        write_checked(file_path, new_text)
+    except Exception as e:
+        if prepared:
+            checkpoint_abort_edit(file_path, str(e))
+        return f"Error writing {file_path}: {type(e).__name__}: {e}"
+    try:
+        checkpoint_after_edit(file_path, "edit")
+    except Exception as e:
+        return f"Error: mutation journal commit failed for {file_path}: {e}"
+
+    # Refresh the baseline to what we just wrote, so the agent can edit
+    # this file again without re-reading.
+    try:
+        from openprogram.state.store.snapshot import read_tracking as _rt
+        _rt.mark_seen(file_path)
+    except Exception:
+        # The read baseline is bookkeeping; without it a later edit asks for a re-read.
+        _log.debug("read baseline not recorded for %s", file_path, exc_info=True)
+
+    # 事件层 tap：写成功才发。
+    from openprogram.runtime.events import emit_safe
+    emit_safe("file.changed", "tool", {"path": file_path, "op": "edit"})
+
+    replaced = count if replace_all else 1
+    msg = f"Edited {file_path} ({replaced} replacement{'s' if replaced != 1 else ''})"
+    if outside_warning:
+        msg = f"{outside_warning}\n{msg}"
+    return msg

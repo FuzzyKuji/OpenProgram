@@ -1,0 +1,74 @@
+name: Publish openprogram.io
+
+# Runs only when started by hand: pushes, pull requests and schedules start
+# nothing, so publishing a version does not set off CI runs.
+on:
+  workflow_dispatch:
+
+# One publish at a time; a newer push supersedes a queued one but never
+# interrupts a push that is already writing to the site repository.
+concurrency:
+  group: publish-site
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # The landing page owns the domain root, so the documentation lives one
+    # level down and its links and sitemap entries carry the /docs/ prefix.
+    env:
+      OPENPROGRAM_DOCS_BASE: /docs/
+      OPENPROGRAM_DOCS_ORIGIN: https://openprogram.io
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      # The package itself is needed because the generated reference pages come
+      # from reading the real argparse tree and config schema.
+      - name: Install package and docs build dependencies
+        run: pip install -e . markdown-it-py mdit-py-plugins pygments
+
+      - name: Generate reference pages
+        run: python -m scripts.docs_site.generate_reference
+
+      - name: Build docs site
+        run: python -m scripts.docs_site.build
+
+      - name: Check landing page
+        run: python -m scripts.docs_site.check_landing
+
+      - name: Check docs links
+        run: python -m scripts.docs_site.checklinks
+
+      # Final layout: the landing page and the root-level files (CNAME,
+      # robots.txt, sitemap.xml) sit at /, the documentation under /docs/.
+      - name: Assemble the site
+        run: |
+          mkdir -p _publish/docs
+          cp -R docs/_site/. _publish/docs/
+          cp website/index.html _publish/index.html
+          for f in CNAME favicon.ico robots.txt sitemap.xml llms.txt .nojekyll README.md google01b0015fda12129e.html 7c5062acbc32b8a88d2e6b627d65cbfa.txt; do
+            [ -e "_publish/docs/$f" ] && mv "_publish/docs/$f" "_publish/$f"
+          done
+          mv _publish/docs/install.sh _publish/install
+          mv _publish/docs/install.ps1 _publish/install.ps1
+          grep -Fx 'google-site-verification: google01b0015fda12129e.html' \
+            _publish/google01b0015fda12129e.html
+          ls -la _publish
+
+      - name: Publish to the site repository
+        uses: peaceiris/actions-gh-pages@v4
+        with:
+          deploy_key: ${{ secrets.SITE_DEPLOY_KEY }}
+          external_repository: fzkuji-neo/openprogram-site
+          publish_branch: main
+          publish_dir: ./_publish
+          commit_message: "Publish openprogram.io (${{ github.sha }})"
+
+      - name: Submit sitemap to IndexNow
+        continue-on-error: true
+        run: |
+          python -m scripts.docs_site.indexnow \
+            _publish/sitemap.xml _indexnow --submit

@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Programs 访问选择器 — OpenProgram</title>
+<style>
+.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
+</style>
+</head>
+<body>
+<main class="ad">
+<header>
+<div class="eyebrow">OpenProgram · Agents</div>
+<h1>Programs 访问选择器</h1>
+<p class="lead">可复用配置、可选长期记忆、统一执行语义。</p>
+<a href="agent-tool-configuration-ui.html">English</a>
+<div class="status">部分已实现 · Agents 页面、带 revision 的保存配置和记忆策略已经实现；仍属目标设计的部分见文末实现状态。链接的原型只用示例数据，不修改真实配置。</div>
+<nav aria-label="设计文档">
+<a href="agent-configuration-ui.zh.html">配置契约</a>
+<a href="agent-core-configuration-ui.zh.html">页面与基础配置</a>
+<a href="agent-capability-configuration-ui.zh.html">能力配置</a>
+<a href="agent-tool-configuration-ui.zh.html">Programs 选择器</a>
+<a href="agent-configuration-plan.zh.html">实施计划</a>
+</nav>
+<nav class="toc" aria-label="本页目录">
+<a href="#purpose">选择可调用 Programs，不复制全局目录</a>
+<a href="#layout">选择器与结构预览</a>
+<a href="#semantics">选择语义与失败</a>
+<a href="#status">实现状态与验收</a>
+</nav>
+</header>
+<section id="purpose">
+<h2>选择可调用 Programs，不复制全局目录</h2>
+<p>Agents 配置访问范围，Programs 管理实际可调用对象。Agent 主面板显示策略和数量，可展开生效列表。收起时不加载完整目录，打开浏览 Programs 才请求详情。保留已有目标：工作流的一层组合预览与明确权限编辑是不同操作。</p>
+</section>
+<section id="layout">
+<h2>选择器与结构预览</h2>
+<div class="table-wrap">
+<table>
+<thead>
+<tr>
+<th>区域</th>
+<th>内容</th>
+<th>交互</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Agent 主面板</td>
+<td>Functions / Workflows / Applications 数量与可展开生效列表</td>
+<td>展开仅查看结构，不启用或禁用</td>
+</tr>
+<tr>
+<td>选择器左侧</td>
+<td>类型与类别导航</td>
+<td>搜索、仅已选、仅问题项</td>
+</tr>
+<tr>
+<td>选择器中部</td>
+<td>名称、描述、选择与可用状态</td>
+<td>复选框修改 Agent 草稿，不改变全局启用状态</td>
+</tr>
+<tr>
+<td>详情</td>
+<td>入口签名、输入输出、直接依赖、验证依据</td>
+<td>源码和完整图在 Programs 打开，原位最多两层</td>
+</tr>
+<tr>
+<td>工作流树</td>
+<td>位置稳定的圆形展开控件与连续层级线</td>
+<td>键盘可展开，遵守减少动画设置</td>
+</tr>
+<tr>
+<td>MCP 项目</td>
+<td>不在 Program 授权项中重复出现</td>
+<td>由 MCP 分区管理，实际工具仍走统一执行</td>
+</tr>
+</tbody>
+</table>
+</div>
+</section>
+<section id="semantics">
+<h2>选择语义与失败</h2>
+<ul>
+<li>全部、指定、关闭、继承沿用统一能力契约。预设是引用，预览展开名称和版本。转成手选只将名称放入草稿，不复制 Program 定义。</li>
+<li>Selected=[] 的效果始终为空。失效项按原名称显示在问题列表，可以移除，不能调用。目录获取失败与搜索无结果分开。</li>
+<li>完成关闭选择器后保留本地草稿，取消恢复打开选择器时的草稿快照，两者都不保存 Agent。全局保存使用同一 expected_revision 提交所有分区。</li>
+<li>不根据标题、源码状态或过期测试数量声称工作流已验证；可用证据和能力就绪分别显示。详情依赖的元数据 API 实现前不能标记完成。</li>
+<li>模型首轮上下文只包含常驻 schema 和受范围约束的搜索说明，不包含完整延迟能力清单。嵌套工作流必须执行已有 program/信任边界检查，选择工作流不代表授权任意隐藏工具。</li>
+</ul>
+</section>
+<section id="status">
+<h2>实现状态与验收</h2>
+<p>当前 AgentsPage 有模式摘要和按需目录弹窗，支持搜索与复选框。两层工作流结构详情和更丰富元数据属于目标 UI，不是已验证产品行为。验收执行真实展开、搜索、选择、关闭、重开操作，检查滚动与草稿保留，并通过公开执行器验证拒绝，覆盖窄屏和键盘。不增加新的工作流执行引擎。</p>
+</section>
+</main>
+</body>
+</html>

@@ -1,0 +1,159 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>OpenProgram · App Icon Specification</title>
+<style>
+  :root {
+    color-scheme: light dark;
+    --page:#f5f6f8; --surface:#fff; --ink:#17181c; --muted:#666b76;
+    --line:#dfe2e8; --soft:#eef0f4; --blue:#4F46E5; --purple:#8B5CF6;
+    --ok:#247a4a; --warn:#9b5b12;
+  }
+  @media (prefers-color-scheme:dark) {
+    :root { --page:#15171b; --surface:#1d2025; --ink:#f4f5f7; --muted:#a7acb6;
+      --line:#343840; --soft:#272b31; --blue:#8f8af7; --ok:#75d39a; --warn:#f0b667; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--page); color:var(--ink); font:15px/1.58 -apple-system,BlinkMacSystemFont,"SF Pro Text",system-ui,sans-serif; }
+  main { width:min(1080px,calc(100% - 32px)); margin:0 auto; padding:56px 0 88px; }
+  header { padding-bottom:30px; border-bottom:1px solid var(--line); }
+  h1 { margin:0 0 10px; font-size:clamp(30px,5vw,48px); line-height:1.08; letter-spacing:-.035em; }
+  header p { margin:0; max-width:760px; color:var(--muted); }
+  section { margin-top:48px; }
+  h2 { margin:0 0 18px; font-size:24px; letter-spacing:-.02em; }
+  p { margin:0 0 12px; }
+  code { font:13px/1.5 ui-monospace,"SFMono-Regular",Menlo,monospace; }
+  .lead { max-width:800px; color:var(--muted); }
+  .flow { display:grid; grid-template-columns:1fr 52px 1fr 52px 1fr; align-items:center; gap:12px; }
+  .stage { min-height:280px; padding:22px; background:var(--surface); border:1px solid var(--line); border-radius:14px; }
+  .stage small { display:block; margin-bottom:18px; color:var(--muted); font-weight:600; letter-spacing:.02em; }
+  .arrow { text-align:center; color:var(--muted); font-size:24px; }
+  .canvas { display:block; width:174px; height:174px; margin:8px auto 20px; }
+  .canvas.fill { background:linear-gradient(160deg,#4B4FD6,#3A3AA8 50%,#23214F); }
+  .canvas.transparent { background-image:linear-gradient(45deg,var(--soft) 25%,transparent 25%),linear-gradient(-45deg,var(--soft) 25%,transparent 25%),linear-gradient(45deg,transparent 75%,var(--soft) 75%),linear-gradient(-45deg,transparent 75%,var(--soft) 75%); background-size:20px 20px; background-position:0 0,0 10px,10px -10px,-10px 0; }
+  .canvas svg { display:block; }
+  .caption { color:var(--muted); font-size:13px; }
+  .swatches { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+  .swatch { display:flex; gap:12px; align-items:center; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+  .swatch i { flex:none; width:34px; height:34px; border-radius:50%; }
+  .swatch i.sq { border-radius:8px; }
+  .swatch span { color:var(--muted); font-size:13px; }
+  .rule-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+  .rule { padding:18px 20px; background:var(--surface); border:1px solid var(--line); border-radius:12px; }
+  .rule b { display:block; margin-bottom:5px; }
+  .do b { color:var(--ok); } .dont b { color:var(--warn); }
+  table { width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--line); }
+  th,td { padding:13px 16px; text-align:left; border-bottom:1px solid var(--line); vertical-align:top; }
+  tr:last-child td { border-bottom:0; }
+  th { color:var(--muted); font-size:12px; letter-spacing:.03em; }
+  .files { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:10px; }
+  .file { padding:13px 15px; background:var(--surface); border:1px solid var(--line); border-radius:10px; }
+  .file code { display:block; overflow-wrap:anywhere; }
+  .file span { display:block; margin-top:4px; color:var(--muted); font-size:13px; }
+  a { color:var(--blue); }
+  @media (max-width:820px) {
+    .flow { grid-template-columns:1fr; }
+    .arrow { transform:rotate(90deg); }
+    .rule-grid,.files,.swatches { grid-template-columns:1fr; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>App Icon Specification</h1>
+    <p>One mark serves the macOS App, the Windows installer, the WebUI tab, the PWA and the docs site: an indigo tile holding a lavender cell with three flat discs inside. The macOS App ships a flat <code>icon.icns</code>; <code>AppIcon.icon</code> keeps the same artwork as Icon Composer layers for the Liquid Glass toolchain.</p>
+  </header>
+
+  <section aria-labelledby="mark">
+    <h2 id="mark">The mark</h2>
+    <div class="flow">
+      <article class="stage">
+        <small>1 · Tile</small>
+        <div class="canvas fill" aria-label="Indigo tile gradient"></div>
+        <p class="caption">A diagonal indigo gradient fills the whole tile. In <code>AppIcon.icon</code> it is the <code>linear-gradient</code> fill; flat renders draw it inside the squircle.</p>
+      </article>
+      <div class="arrow" aria-hidden="true">+</div>
+      <article class="stage">
+        <small>2 · Cell and discs</small>
+        <div class="canvas transparent" aria-label="Cell and three discs on a transparent canvas"><svg viewBox="0 0 1024 1024" width="174" height="174" aria-hidden="true"><defs><radialGradient id="doc-cell" cx="452" cy="415" r="522" gradientUnits="userSpaceOnUse"><stop offset="0" stop-color="#F4F2FF"/><stop offset="1" stop-color="#E6E2FA"/></radialGradient></defs><path d="M890 410C884 418 878 425 871 432C865 439 860 445 855 451C850 457 845 463 842 468C839 473 837 478 836 483C835 488 835 493 836 497C837 502 839 507 842 512C844 516 847 521 851 526C854 531 858 537 861 542C865 548 868 553 871 559C874 565 876 570 878 576C880 582 882 588 883 594C884 600 884 606 884 611C883 617 883 623 881 628C880 634 878 639 876 644C873 649 871 654 868 659C864 664 861 668 857 673C853 677 849 681 845 685C840 689 836 692 831 696C826 699 821 703 816 706C811 709 806 712 801 715C797 718 792 720 788 724C784 727 780 730 776 734C773 737 770 741 767 746C764 750 762 755 760 760C758 766 757 771 755 778C754 784 753 790 751 797C750 804 748 810 746 817C744 823 741 830 738 835C735 841 731 846 727 850C723 854 718 857 712 858C706 860 700 861 693 861C687 860 680 859 672 856C665 854 658 851 651 848C644 844 637 841 630 837C624 834 617 831 612 829C606 827 601 826 596 826C591 826 587 828 582 831C578 834 574 838 570 844C566 850 562 857 558 865C554 873 550 882 545 891C540 899 535 908 529 916C524 924 518 932 512 938C505 944 499 948 492 951C486 954 479 954 473 953C467 952 460 949 455 944C449 939 444 932 439 924C434 916 430 907 426 898C422 888 419 879 416 869C413 859 410 850 408 841C405 833 402 826 399 819C397 813 394 808 390 805C386 802 382 800 378 799C373 798 367 799 361 800C355 801 349 804 341 806C334 809 326 812 318 815C310 818 302 821 293 823C285 826 276 828 268 829C260 830 252 830 245 829C237 829 231 827 224 825C218 823 213 819 208 815C203 811 199 806 196 801C193 795 190 789 189 783C187 776 186 769 186 762C185 754 186 747 186 739C187 732 189 724 190 716C192 708 194 701 197 693C199 686 201 679 203 672C206 665 208 659 209 652C211 646 212 641 213 635C213 630 213 625 212 621C210 616 208 612 205 608C201 604 197 601 192 597C186 594 180 590 173 587C166 583 158 579 150 575C143 571 135 567 127 562C120 557 113 552 107 547C101 542 96 536 93 530C89 524 87 518 87 512C87 505 88 499 91 493C95 487 99 481 105 476C112 471 119 466 127 461C135 456 143 452 152 448C160 444 168 441 176 437C183 434 190 430 196 427C201 423 206 420 208 416C211 412 212 408 212 403C212 398 211 392 209 386C207 380 203 373 200 366C197 359 193 352 189 344C186 336 183 328 181 321C179 313 178 306 178 299C178 292 179 286 182 280C184 275 188 271 193 267C198 263 204 261 210 259C217 257 224 256 232 255C239 254 247 254 254 254C262 254 269 254 276 254C282 254 288 253 294 252C299 250 304 248 307 246C311 243 315 239 318 235C320 230 323 225 325 219C327 213 329 207 332 200C334 193 336 186 339 179C341 172 344 166 347 160C351 153 355 148 359 143C363 138 368 134 373 130C378 127 383 125 389 123C395 122 401 121 407 121C413 121 419 122 425 123C432 125 438 126 444 129C450 131 456 134 462 136C468 139 474 142 480 145C485 148 491 151 496 154C501 157 506 160 512 163C517 165 522 168 526 169C531 171 536 173 541 174C546 175 551 175 556 174C561 174 566 173 572 171C577 170 583 167 589 164C595 161 601 157 607 153C614 149 621 145 628 141C636 136 643 132 651 128C659 124 667 121 674 119C682 116 690 115 697 115C704 115 710 116 716 119C722 121 727 126 731 131C735 137 738 144 740 153C742 161 743 171 743 181C743 191 742 202 741 213C740 223 738 234 736 244C734 254 732 264 731 272C729 281 729 288 729 294C730 300 731 304 734 308C737 311 742 313 748 314C753 314 761 314 769 314C778 313 788 312 798 311C808 310 820 309 831 308C842 308 853 308 863 309C873 310 882 312 890 314C898 317 905 321 909 326C914 331 917 337 918 343C920 349 919 357 917 364C915 372 911 379 906 387C902 395 896 403 890 410Z" fill="url(#doc-cell)"/><circle cx="426.4" cy="440.2" r="162.8" fill="#4F46E5"/><circle cx="608.6" cy="570.0" r="126.9" fill="#8B5CF6"/><circle cx="473.4" cy="647.2" r="82.8" fill="#38BDF8"/></svg></div>
+        <p class="caption">The cell is a lavender window with a smooth, radiating wave outline. Three flat discs overlap inside it, back to front: indigo, violet, sky.</p>
+      </article>
+      <div class="arrow" aria-hidden="true">→</div>
+      <article class="stage">
+        <small>3 · Flat App icon</small>
+        <img class="canvas" src="../../../../images/openprogram-app-icon.svg" alt="Finished OpenProgram App icon">
+        <p class="caption">The front two discs cast a soft shadow on the disc behind them, which gives the stack depth without sphere lighting.</p>
+      </article>
+    </div>
+  </section>
+
+  <section aria-labelledby="geometry">
+    <h2 id="geometry">Geometry and colour</h2>
+    <p class="lead">All sizes are fractions of the tile side, measured from the tile centre. The cell outline is the closed curve <code>r(θ) = R · (1 + Σ aₖ cos(kθ + φₖ))</code> rotated by −15°, with <code>R = 0.364</code> and four harmonics: k = 9 (a = 0.12, φ = 1.3), k = 7 (0.05, 0.2), k = 12 (0.035, 2.4), k = 2 (0.02, 1.8). The dominant 9th harmonic gives about nine rounded rays of uneven size; the others keep the rays irregular. Every bump and every dip is a smooth arc, so the outline has no cusps. The outline reaches at most 0.446, leaving a clear margin inside the tile.</p>
+    <table>
+      <thead><tr><th>Element</th><th>Position (dx, dy)</th><th>Radius</th><th>Colour</th></tr></thead>
+      <tbody>
+        <tr><td>Indigo disc (back)</td><td>−0.084, −0.070</td><td>0.159</td><td><code>#4F46E5</code></td></tr>
+        <tr><td>Violet disc</td><td>+0.094, +0.057</td><td>0.124</td><td><code>#8B5CF6</code>, soft shadow</td></tr>
+        <tr><td>Sky disc (front)</td><td>−0.038, +0.132</td><td>0.081</td><td><code>#38BDF8</code>, soft shadow</td></tr>
+        <tr><td>Cell</td><td>centred</td><td>0.364 ± wave</td><td>radial <code>#F4F2FF</code> → <code>#E6E2FA</code></td></tr>
+        <tr><td>Tile</td><td colspan="2">full tile</td><td>linear <code>#4B4FD6</code> → <code>#3A3AA8</code> → <code>#23214F</code></td></tr>
+      </tbody>
+    </table>
+    <div class="swatches" style="margin-top:14px">
+      <div class="swatch"><i style="background:#4F46E5"></i><div><code>#4F46E5</code><span> indigo</span></div></div>
+      <div class="swatch"><i style="background:#8B5CF6"></i><div><code>#8B5CF6</code><span> violet</span></div></div>
+      <div class="swatch"><i style="background:#38BDF8"></i><div><code>#38BDF8</code><span> sky</span></div></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="rules">
+    <h2 id="rules">Asset boundaries</h2>
+    <div class="rule-grid">
+      <div class="rule do"><b>Keep</b><span>Flat discs in their three colours; the cell's smooth wave outline; the indigo tile gradient; the shadow that separates the front discs from the ones behind.</span></div>
+      <div class="rule dont"><b>Avoid</b><span>Sphere lighting or radial highlights on discs, glass translucency, an outline ring around the cell, sharp points in the cell outline, and text or rasters inside the mark.</span></div>
+      <div class="rule do"><b>Icon Composer layers</b><span>Transparent 1024 × 1024 canvases, one element per layer, no squircle, frame, filter or shadow drawn in the SVG. Shadows come from the group settings.</span></div>
+      <div class="rule dont"><b>Flat renders</b><span>The ICNS, favicon and PWA icons are rendered from the flat SVG sources below, never from screenshots of a packaged App.</span></div>
+    </div>
+  </section>
+
+  <section aria-labelledby="matrix">
+    <h2 id="matrix">Targets</h2>
+    <table>
+      <thead><tr><th>Target</th><th>Source</th><th>Output</th></tr></thead>
+      <tbody>
+        <tr><td>macOS App</td><td><code>docs/images/openprogram-app-icon.svg</code> — Big Sur grid: an 824 px tile at offset 100 on a 1024 canvas with Apple's continuous corner (radius 185.4 px, 60% smoothing), the outline the system icons in the Dock use, with a soft tile shadow</td><td><code>apps/desktop/build/icon.icns</code> (16–1024 px), the packaging input in <code>apps/desktop/package.json</code></td></tr>
+        <tr><td>Liquid Glass toolchain</td><td><code>apps/desktop/build/AppIcon.icon</code></td><td>Icon Composer groups listed front to back: sky disc, violet disc, indigo disc, cell. Every group disables Specular and translucency, every layer disables glass, and shadows are neutral (0.5 on the two front discs, 0.3 on the rest). <code>ictool</code> exports Default, Dark, ClearLight and TintedDark.</td></tr>
+        <tr><td>WebUI tab, docs site</td><td><code>docs/images/openprogram-tab-icon.source.svg</code> — 64 px rounded tile filling the canvas</td><td>Copied unchanged to <code>apps/web/app/icon.svg</code> and <code>scripts/docs_site/assets/mark.svg</code></td></tr>
+        <tr><td>Favicon, Windows installer</td><td>The 64 px tab icon</td><td><code>apps/web/app/favicon.ico</code> with 16, 32, 48, 64, 128 and 256 px PNG entries</td></tr>
+        <tr><td>PWA</td><td>The 64 px tab icon; a full-bleed variant for the maskable icon</td><td><code>apps/web/public/icons/icon-192.png</code>, <code>icon-512.png</code>, and <code>icon-512-maskable.png</code> with the cell inside the 80% safe circle</td></tr>
+        <tr><td>README, website, social card</td><td>The same mark at 126 px beside the outlined Instrument Sans wordmark and Geist Mono tagline</td><td><code>docs/images/logo-lockup-dark.svg</code>, <code>logo-lockup-light.svg</code>, their PNG renders, the README GIFs in which the discs pop in back to front, <code>logo.svg</code>, and <code>openprogram-social-card.svg</code> / <code>.png</code>. The <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/docs/images/README.md">image sources guide</a> lists where each is used.</td></tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section aria-labelledby="implementation">
+    <h2 id="implementation">Checks</h2>
+    <div class="files">
+      <div class="file"><code>apps/desktop/scripts/check-icon.sh</code><span>Run by <code>npm run icon:check</code>. Requires the four layers, exactly three flat discs in the approved colours, the cell fill, the linear-gradient tile fill, and the front-to-back group order with Specular, translucency and glass disabled. Rejects squircles, frames, filters, shadows, text and rasters in the layer SVGs.</span></div>
+      <div class="file"><code>openprogram/operations/self_update/control/supervisor.py</code><span>The trusted icon probe renders each of the four layer SVGs with <code>sips</code> and requires a 1024 × 1024 transparent canvas.</span></div>
+    </div>
+    <p class="lead" style="margin-top:14px">The design follows Apple’s <a href="https://developer.apple.com/design/human-interface-guidelines/app-icons">App icons HIG</a> and <a href="https://developer.apple.com/icon-composer/">Icon Composer</a>. Packaging follows the <a href="https://www.electron.build/docs/features/icons-and-images/">Electron Builder icon documentation</a>.</p>
+  </section>
+
+  <section aria-labelledby="status">
+    <h2 id="status">Implementation status</h2>
+    <table>
+      <thead><tr><th>Scope</th><th>Status</th></tr></thead>
+      <tbody>
+        <tr><td>macOS ICNS, <code>AppIcon.icon</code> layers, favicon, tab icon, docs-site mark and PWA icons</td><td>Implemented</td></tr>
+        <tr><td>README lockups and their animation (<code>docs/images/logo-lockup*</code>), the social card, the wordmark (<code>docs/images/logo.svg</code>) and the docs <code>logo.png</code></td><td>Implemented</td></tr>
+      </tbody>
+    </table>
+  </section>
+</main>
+</body>
+</html>

@@ -1,0 +1,391 @@
+import { holdsLayout, leaves, rowLayout, sanitizeLayout, removePane, type CanvasLayout } from "./canvas/canvas-layout.ts";
+import type { CenterTab } from "./center-tabs-store";
+
+export const MAX_CENTER_TAB_GROUP_MEMBERS = Number.POSITIVE_INFINITY;
+export const MAX_CENTER_TAB_PANES = Number.POSITIVE_INFINITY;
+export const MAX_CENTER_TAB_GROUP_VISIBLE = MAX_CENTER_TAB_PANES;
+
+export interface CenterTabGroup {
+  canvas?: CanvasLayout;
+  id: string;
+  memberIds: string[];
+  visibleIds: string[];
+  focusedId: string;
+}
+
+export interface CenterTabLayout {
+  tabIds: string[];
+  groups: CenterTabGroup[];
+}
+
+export type CenterTabPane =
+  | { key: "session"; kind: "session"; activeTabId: string; memberIds: string[] }
+  | { key: string; kind: "peer"; tabId: string }
+  | { key: string; kind: "tab"; tabId: string };
+
+export type CenterTabStripEntry =
+  | { id: `tab:${string}`; kind: "tab"; tabId: string }
+  | { id: `group:${string}`; kind: "group"; group: CenterTabGroup };
+
+const unique = (ids: readonly string[]) => Array.from(new Set(ids));
+
+function moveBlockBefore(
+  tabIds: readonly string[],
+  block: readonly string[],
+  beforeId: string | null,
+): string[] {
+  const blockSet = new Set(block);
+  const remaining = tabIds.filter((id) => !blockSet.has(id));
+  const index = beforeId === null ? remaining.length : remaining.indexOf(beforeId);
+  const at = index < 0 ? remaining.length : index;
+  return [...remaining.slice(0, at), ...block, ...remaining.slice(at)];
+}
+
+export function normalizeCenterTabLayout(layout: CenterTabLayout): CenterTabLayout {
+  let tabIds = unique(layout.tabIds);
+  const alive = new Set(tabIds);
+  const claimed = new Set<string>();
+  const claimedGroupIds = new Set<string>();
+  const groups: CenterTabGroup[] = [];
+  for (const candidate of layout.groups) {
+    if (claimedGroupIds.has(candidate.id)) continue;
+    const memberIds = unique(candidate.memberIds).filter(
+      (id) => alive.has(id) && !claimed.has(id),
+    ).slice(0, MAX_CENTER_TAB_GROUP_MEMBERS);
+    // A pane whose tab was closed (or claimed by another group) is removed,
+    // not blanked: only panes the user deliberately left empty survive, so a
+    // canvas that drops to one live tab dissolves like any one-member group.
+    const kept = new Set(memberIds);
+    const pruned = candidate.canvas && {
+      ...candidate.canvas,
+      root: leaves(candidate.canvas.root)
+        .filter((pane) => pane.content && !kept.has(pane.content))
+        .reduce((root, pane) => removePane(root, pane.id), candidate.canvas.root),
+    };
+    if (memberIds.length === 0 || (memberIds.length < 2 && !holdsLayout(pruned))) continue;
+    claimedGroupIds.add(candidate.id);
+    const memberSet = new Set(memberIds);
+    const first = Math.min(...memberIds.map((id) => tabIds.indexOf(id)));
+    const beforeId = tabIds.slice(first).find((id) => !memberSet.has(id)) ?? null;
+    tabIds = moveBlockBefore(tabIds, memberIds, beforeId);
+    memberIds.forEach((id) => claimed.add(id));
+    let visibleIds = unique(candidate.visibleIds)
+      .filter((id) => memberIds.includes(id))
+      .slice(0, MAX_CENTER_TAB_GROUP_VISIBLE);
+    if (visibleIds.length === 0) {
+      visibleIds = memberIds.slice(0, MAX_CENTER_TAB_GROUP_VISIBLE);
+    }
+    const focusedId = visibleIds.includes(candidate.focusedId)
+      ? candidate.focusedId
+      : visibleIds[0];
+    // Legacy groups (and callers that add members) migrate to a row layout in
+    // their previously rendered order: visible panes first, then the rest.
+    const legacyOrder = unique([...visibleIds, ...memberIds]);
+    const canvas = sanitizeLayout(pruned ?? rowLayout(legacyOrder), kept);
+    const canvasIds = leaves(canvas.root).flatMap(p => p.content ? [p.content] : []);
+    const migrated = canvasIds.length > 0 && memberIds.some(id => !canvasIds.includes(id)) ? rowLayout(legacyOrder) : canvas;
+    // Every member is on the canvas, so visibleIds is the spatial pane order.
+    const placed = leaves(migrated.root).flatMap(p => p.content ? [p.content] : []);
+    groups.push({ ...candidate, memberIds, visibleIds: placed.length ? placed : memberIds, focusedId, canvas: migrated });
+  }
+  return { tabIds, groups };
+}
+
+export function findCenterTabGroup(
+  groups: readonly CenterTabGroup[],
+  tabId: string,
+): CenterTabGroup | undefined {
+  return groups.find((group) => group.memberIds.includes(tabId));
+}
+
+/** Single tabs that can join `subjectId` in a split view. Existing split
+ *  members are excluded because a complete pair cannot accept a third pane.
+ *
+ *  Session+session pairs are allowed: the focused session keeps the
+ *  singleton chat shell and the other renders as a read-along
+ *  `<PeerSessionPane />` (see resolveCenterTabPanes). */
+export function splitCandidates(
+  tabs: readonly CenterTab[],
+  groups: readonly CenterTabGroup[],
+  subjectId: string,
+): CenterTab[] {
+  const ownGroup = findCenterTabGroup(groups, subjectId);
+  if (ownGroup) return [];
+  const groupedIds = new Set(groups.flatMap((group) => group.memberIds));
+  return tabs.filter(
+    (tab) => tab.id !== subjectId && !groupedIds.has(tab.id),
+  );
+}
+
+export function focusCenterTabGroupMember(
+  layout: CenterTabLayout,
+  groupId: string,
+  memberId: string,
+): CenterTabLayout {
+  return normalizeCenterTabLayout({
+    ...layout,
+    groups: layout.groups.map((group) => {
+      if (group.id !== groupId || !group.memberIds.includes(memberId)) return group;
+      if (group.visibleIds.includes(memberId)) {
+        return { ...group, focusedId: memberId, canvas: group.canvas ? { ...group.canvas, focusedPaneId: leaves(group.canvas.root).find(p => p.content === memberId)?.id ?? group.canvas.focusedPaneId } : undefined };
+      }
+      const replaceAt = Math.max(0, group.visibleIds.indexOf(group.focusedId));
+      const visibleIds = [...group.visibleIds];
+      visibleIds[replaceAt] = memberId;
+      return { ...group, visibleIds, focusedId: memberId };
+    }),
+  });
+}
+
+export function ungroupCenterTab(
+  layout: CenterTabLayout,
+  tabId: string,
+  beforeId: string | null = null,
+): CenterTabLayout {
+  const source = findCenterTabGroup(layout.groups, tabId);
+  if (!source) {
+    return beforeId === null ? layout : moveCenterTab(layout, tabId, beforeId);
+  }
+  const groups = layout.groups.flatMap((group) => {
+    if (group.id !== source.id) return [group];
+    const memberIds = group.memberIds.filter((id) => id !== tabId);
+    const canvas = group.canvas ? { ...group.canvas, root: removePane(group.canvas.root, leaves(group.canvas.root).find(p => p.content === tabId)?.id ?? "") } : undefined;
+    if (!memberIds.length || (memberIds.length < 2 && !holdsLayout(canvas))) return [];
+    const visibleIds = group.visibleIds.filter((id) => id !== tabId);
+    return [{
+      ...group,
+      canvas,
+      memberIds,
+      visibleIds,
+      focusedId: visibleIds.includes(group.focusedId)
+        ? group.focusedId
+        : visibleIds[0] ?? memberIds[0],
+    }];
+  });
+  const tabIds = beforeId === null
+    ? layout.tabIds
+    : moveBlockBefore(layout.tabIds, [tabId], beforeId);
+  return normalizeCenterTabLayout({ tabIds, groups });
+}
+
+export function moveCenterTab(
+  layout: CenterTabLayout,
+  tabId: string,
+  beforeId: string | null,
+): CenterTabLayout {
+  if (beforeId === tabId
+      || !layout.tabIds.includes(tabId)
+      || (beforeId !== null && !layout.tabIds.includes(beforeId))) {
+    return layout;
+  }
+  const ungrouped = ungroupCenterTab(layout, tabId);
+  return normalizeCenterTabLayout({
+    ...ungrouped,
+    tabIds: moveBlockBefore(ungrouped.tabIds, [tabId], beforeId),
+  });
+}
+
+export function moveCenterTabGroup(
+  layout: CenterTabLayout,
+  groupId: string,
+  beforeId: string | null,
+): CenterTabLayout {
+  const group = layout.groups.find((candidate) => candidate.id === groupId);
+  if (!group || (beforeId !== null
+      && (!layout.tabIds.includes(beforeId) || group.memberIds.includes(beforeId)))) {
+    return layout;
+  }
+  return normalizeCenterTabLayout({
+    ...layout,
+    tabIds: moveBlockBefore(layout.tabIds, group.memberIds, beforeId),
+  });
+}
+
+export function moveCenterTabGroupMember(
+  layout: CenterTabLayout,
+  groupId: string,
+  memberId: string,
+  toIndex: number,
+): CenterTabLayout {
+  const group = layout.groups.find((candidate) => candidate.id === groupId);
+  if (!group || !group.memberIds.includes(memberId)) return layout;
+  const memberIds = group.memberIds.filter((id) => id !== memberId);
+  const at = Math.max(0, Math.min(toIndex, memberIds.length));
+  memberIds.splice(at, 0, memberId);
+  if (memberIds.every((id, index) => id === group.memberIds[index])) return layout;
+  const memberSet = new Set(memberIds);
+  const groupAt = Math.min(...memberIds.map((id) => layout.tabIds.indexOf(id)));
+  const beforeId = layout.tabIds.slice(Math.max(0, groupAt))
+    .find((id) => !memberSet.has(id)) ?? null;
+  return normalizeCenterTabLayout({
+    tabIds: moveBlockBefore(layout.tabIds, memberIds, beforeId),
+    groups: layout.groups.map((candidate) => candidate === group
+      ? { ...candidate, memberIds }
+      : candidate),
+  });
+}
+
+export function groupCenterTabs(
+  layout: CenterTabLayout,
+  sourceId: string,
+  targetId: string,
+  memberIndex: number,
+  newGroupId: string,
+): { layout: CenterTabLayout; accepted: boolean } {
+  if (sourceId === targetId
+      || !layout.tabIds.includes(sourceId)
+      || !layout.tabIds.includes(targetId)) {
+    return { layout, accepted: false };
+  }
+  const targetBefore = findCenterTabGroup(layout.groups, targetId);
+  if (targetBefore && !targetBefore.memberIds.includes(sourceId)
+      && targetBefore.memberIds.length >= MAX_CENTER_TAB_GROUP_MEMBERS) {
+    return { layout, accepted: false };
+  }
+  if (targetBefore?.memberIds.includes(sourceId)) {
+    return {
+      accepted: true,
+      layout: moveCenterTabGroupMember(layout, targetBefore.id, sourceId, memberIndex),
+    };
+  }
+  const detached = ungroupCenterTab(layout, sourceId);
+  const targetGroup = findCenterTabGroup(detached.groups, targetId);
+  const targetMembers = targetGroup?.memberIds ?? [targetId];
+  const at = Math.max(0, Math.min(memberIndex, targetMembers.length));
+  const memberIds = [...targetMembers];
+  memberIds.splice(at, 0, sourceId);
+  if (memberIds.length > MAX_CENTER_TAB_GROUP_MEMBERS) {
+    return { layout, accepted: false };
+  }
+  const group: CenterTabGroup = targetGroup
+    ? { ...targetGroup, memberIds }
+    : {
+        id: targetBefore?.id ?? newGroupId,
+        memberIds,
+        visibleIds: memberIds.slice(0, MAX_CENTER_TAB_GROUP_VISIBLE),
+        focusedId: targetId,
+      };
+  const groups = targetGroup
+    ? detached.groups.map((candidate) => candidate.id === group.id ? group : candidate)
+    : [...detached.groups, group];
+  const memberSet = new Set(memberIds);
+  const targetAt = Math.min(...targetMembers.map((id) => detached.tabIds.indexOf(id)));
+  const beforeId = detached.tabIds.slice(Math.max(0, targetAt))
+    .find((id) => !memberSet.has(id)) ?? null;
+  return {
+    accepted: true,
+    layout: normalizeCenterTabLayout({
+      tabIds: moveBlockBefore(detached.tabIds, memberIds, beforeId),
+      groups,
+    }),
+  };
+}
+
+export function mergeCenterTabGroup(
+  layout: CenterTabLayout,
+  sourceGroupId: string,
+  targetId: string,
+  memberIndex: number,
+): { layout: CenterTabLayout; accepted: boolean } {
+  const sourceGroup = layout.groups.find((group) => group.id === sourceGroupId);
+  if (!sourceGroup || !layout.tabIds.includes(targetId)) {
+    return { layout, accepted: false };
+  }
+  const targetGroup = findCenterTabGroup(layout.groups, targetId);
+  if (targetGroup?.id === sourceGroupId) return { layout, accepted: true };
+  const targetMembers = targetGroup?.memberIds ?? [targetId];
+  if (targetMembers.length + sourceGroup.memberIds.length > MAX_CENTER_TAB_GROUP_MEMBERS) {
+    return { layout, accepted: false };
+  }
+
+  const memberIds = [...targetMembers];
+  const at = Math.max(0, Math.min(memberIndex, memberIds.length));
+  memberIds.splice(at, 0, ...sourceGroup.memberIds);
+  const mergedGroup: CenterTabGroup = targetGroup
+    ? { ...targetGroup, memberIds }
+    : { ...sourceGroup, memberIds };
+  const groups = layout.groups.flatMap((group) => {
+    if (group.id === sourceGroupId) return targetGroup ? [] : [mergedGroup];
+    if (group.id === targetGroup?.id) return [mergedGroup];
+    return [group];
+  });
+  const memberSet = new Set(memberIds);
+  const targetAt = Math.min(...targetMembers.map((id) => layout.tabIds.indexOf(id)));
+  const beforeId = layout.tabIds.slice(Math.max(0, targetAt))
+    .find((id) => !memberSet.has(id)) ?? null;
+  return {
+    accepted: true,
+    layout: normalizeCenterTabLayout({
+      tabIds: moveBlockBefore(layout.tabIds, memberIds, beforeId),
+      groups,
+    }),
+  };
+}
+
+/** The strip shows a split where its first pane's tab sits. Docked tabs
+ *  move in front of the window they join (`anchorId`, that window's strip
+ *  tab), so whichever pane comes first the split keeps that window's place
+ *  in the strip instead of jumping to where a dragged tab used to be. */
+export function placeDockedTabs<T extends { id: string }>(tabs: readonly T[], sourceIds: readonly string[], anchorId: string): T[] {
+  const moving = new Set(sourceIds);
+  if (moving.has(anchorId)) return [...tabs];
+  const rest = tabs.filter((tab) => !moving.has(tab.id));
+  const at = rest.findIndex((tab) => tab.id === anchorId);
+  if (at < 0) return [...tabs];
+  const docked = sourceIds.flatMap((id) => tabs.filter((tab) => tab.id === id));
+  return [...rest.slice(0, at), ...docked, ...rest.slice(at)];
+}
+
+export function centerTabStripEntries(layout: CenterTabLayout): CenterTabStripEntry[] {
+  const firstToGroup = new Map(layout.groups.map((group) => [group.memberIds[0], group]));
+  const grouped = new Set(layout.groups.flatMap((group) => group.memberIds));
+  return layout.tabIds.flatMap<CenterTabStripEntry>((tabId) => {
+    const group = firstToGroup.get(tabId);
+    if (group) return [{ id: `group:${group.id}` as const, kind: "group" as const, group }];
+    if (grouped.has(tabId)) return [];
+    return [{ id: `tab:${tabId}` as const, kind: "tab" as const, tabId }];
+  });
+}
+
+export function resolveCenterTabPanes(
+  group: CenterTabGroup | undefined,
+  tabs: readonly CenterTab[],
+  activeId: string | null,
+): CenterTabPane[] {
+  const tabsById = new Map(tabs.map((tab) => [tab.id, tab]));
+  const visibleTabs = unique(group?.visibleIds ?? (activeId ? [activeId] : []))
+    .map((id) => tabsById.get(id))
+    .filter((tab): tab is CenterTab => Boolean(tab));
+  const sessionIds = visibleTabs
+    .filter((tab) => tab.kind === "session")
+    .map((tab) => tab.id);
+  const focusedSessionId = group && sessionIds.includes(group.focusedId)
+    ? group.focusedId
+    : sessionIds[0];
+  // Two sessions visible together = symmetric split: BOTH render as React
+  // panes and the singleton legacy shell is not used at all (it can only
+  // exist once, so it can't back either side fairly). A lone session still
+  // gets the legacy shell — that's the unchanged, non-split path.
+  const symmetricSessions = !!group?.canvas || sessionIds.length > 1;
+  let sessionAdded = false;
+  const panes: CenterTabPane[] = [];
+  for (const tab of visibleTabs) {
+    if (tab.kind === "session") {
+      if (symmetricSessions) {
+        panes.push({ key: `peer:${tab.id}`, kind: "peer", tabId: tab.id });
+        continue;
+      }
+      if (sessionAdded || !focusedSessionId) continue;
+      panes.push({
+        key: "session",
+        kind: "session",
+        activeTabId: focusedSessionId,
+        memberIds: sessionIds,
+      });
+      sessionAdded = true;
+    } else {
+      panes.push({ key: tab.id, kind: "tab", tabId: tab.id });
+    }
+  }
+  return panes.slice(0, MAX_CENTER_TAB_PANES);
+}

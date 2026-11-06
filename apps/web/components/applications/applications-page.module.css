@@ -1,0 +1,20 @@
+.notice { padding: 8px 24px; font-size: var(--fs-xs); color: var(--accent-green); border-bottom: 1px solid var(--border); }
+
+.application { display: flex; align-items: center; gap: 14px; padding: 14px 4px; border-top: 1px solid var(--border); }
+.application:first-child { border-top: 0; }
+.application[data-disabled] .appIcon,
+.application[data-disabled] .appMain { opacity: 0.5; }
+.appIcon { display: grid; place-items: center; width: 44px; height: 44px; flex: none; }
+.appMain { flex: 1; min-width: 0; }
+.appTitle h3 { margin: 0; overflow: hidden; color: var(--text-bright); font-size: var(--fs-base); font-weight: 600; white-space: nowrap; text-overflow: ellipsis; }
+.appMeta { flex: none; color: var(--text-secondary); font-size: var(--fs-xs); }
+.description { margin: 3px 0 0; overflow: hidden; color: var(--text-secondary); font-size: var(--fs-sm); line-height: 1.45; white-space: nowrap; text-overflow: ellipsis; }
+.fieldLabel { margin-top: 4px; color: var(--text-primary); font-size: var(--fs-sm); font-weight: 500; }
+.checks label { display: flex; align-items: center; gap: 8px; color: var(--text-secondary); font-size: var(--fs-sm); cursor: pointer; }
+.dialogError { margin: 0; color: var(--accent-red); font-size: var(--fs-sm); overflow-wrap: anywhere; }
+
+@media (max-width: 760px) {
+  .directory { flex-direction: column; }
+  .application { flex-wrap: wrap; }
+  .appActions { width: 100%; padding-left: 58px; }
+}

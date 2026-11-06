@@ -1,0 +1,100 @@
+/* The task list under a turn's reply: the tool steps' family, one hairline
+   and the page's own ground, no shadow and no caption. Layout lives in the
+   component's Tailwind classes. */
+.card {
+  margin: 4px 0 8px;
+  border: 1px solid var(--border-light);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-size: var(--fs-sm);
+  line-height: 1.5;
+}
+
+/* The folded form: one line, the tool summary's quiet ink. */
+.line {
+  height: var(--ui-button-h-sm);
+  border: none;
+  border-radius: var(--radius-lg);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: background-color var(--motion-fast) var(--ease-standard);
+}
+.line:hover { background: var(--bg-hover); }
+.line:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.card[data-open="1"] .line { border-radius: var(--radius-lg) var(--radius-lg) 0 0; }
+
+.lineIcon { color: var(--tool-tone-plan); flex: none; }
+
+.chevron {
+  flex: none;
+  color: var(--text-muted);
+  transition: transform var(--motion-medium) var(--ease-standard);
+}
+.line[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+
+/* Opening pushes the rows down; folding draws them back up. */
+.fold {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--motion-medium) var(--ease-standard);
+}
+.card[data-open="1"] .fold { grid-template-rows: 1fr; }
+
+/* Centre the icon on the first line of a wrapping subject. */
+.icon {
+  flex: none;
+  margin-top: calc((1.5em - 16px) / 2);
+  color: var(--text-secondary);
+}
+
+/* To do: an empty ring the size of the Solar circles beside it. */
+.ring {
+  box-sizing: border-box;
+  padding: 1.5px;
+}
+.ring::before {
+  content: "";
+  flex: 1;
+  border: 1.5px solid var(--text-muted);
+  border-radius: var(--radius-full);
+}
+
+.item[data-status="in_progress"] .icon { color: var(--tool-tone-plan); }
+.item[data-status="in_progress"] .subject { font-weight: 500; }
+.item[data-status="completed"] .subject {
+  color: var(--text-secondary);
+  text-decoration: line-through;
+  text-decoration-color: var(--text-muted);
+}
+
+/* Only while its turn runs does the current step turn: a sweep orbits its
+   ring, as on a running tool step. */
+.icon[data-live]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: var(--radius-full);
+  padding: 1.5px;
+  background: conic-gradient(from var(--todo-angle, 0deg), transparent 0 60%, currentColor 100%);
+  -webkit-mask: linear-gradient(#000 0 0) content-box, linear-gradient(#000 0 0);
+  -webkit-mask-composite: xor;
+  mask-composite: exclude;
+  animation: todo-orbit 1.1s linear infinite;
+}
+@property --todo-angle {
+  syntax: "<angle>";
+  inherits: false;
+  initial-value: 0deg;
+}
+@keyframes todo-orbit { to { --todo-angle: 360deg; } }
+
+.subject { overflow-wrap: anywhere; }
+
+@media (prefers-reduced-motion: reduce) {
+  .icon[data-live]::after { animation: none; }
+  .fold, .chevron { transition: none; }
+}

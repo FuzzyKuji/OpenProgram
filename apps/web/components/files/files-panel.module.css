@@ -1,0 +1,517 @@
+.viewerHint {
+  flex: 1;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  padding: 24px;
+  text-align: center;
+}
+
+/* ---- Text / code rendering --------------------------------------- */
+
+.code {
+  margin: 0;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+.codeLine {
+  display: flex;
+  white-space: pre;
+}
+.codeLine:hover { background: var(--bg-hover); }
+
+.lineNo {
+  flex-shrink: 0;
+  width: 42px;
+  padding-right: 12px;
+  text-align: right;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  user-select: none;
+}
+
+.lineText {
+  white-space: pre;
+}
+
+.truncatedNote {
+  margin-bottom: 8px;
+  font-size: var(--fs-2xs);
+  color: var(--accent-yellow);
+}
+
+.binaryCard {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary);
+  padding: 18px 24px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
+}
+
+.binaryName {
+  font-size: var(--fs-sm);
+  font-weight: 600;
+  color: var(--text-bright);
+  word-break: break-all;
+}
+
+.binaryMeta {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+
+.downloadLink {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 6px;
+  font-size: var(--fs-xs);
+  color: var(--accent-orange);
+  text-decoration: none;
+}
+.downloadLink:hover { text-decoration: underline; }
+
+/* ---- PDF (browser built-in viewer in an iframe) -------------------- */
+
+.pdfFrame {
+  flex: 1;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  border: 0;
+  background: var(--bg-primary);
+}
+
+/* ---- Editor (default text body of a file tab, see FileTabPane) -----
+   Gutter and textarea MUST share font/size/line-height/top-padding so
+   line numbers stay pixel-aligned with their lines; the gutter scrolls
+   by mirroring the textarea's scrollTop. */
+
+.editorWrap {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  overflow: hidden;
+  background: var(--bg-primary);
+}
+
+.editorGutter {
+  flex-shrink: 0;
+  width: 54px;
+  box-sizing: border-box;
+  overflow: hidden;
+  /* Extra bottom padding: the textarea's horizontal scrollbar adds to
+     its max scrollTop; without this slack the gutter clamps early and
+     drifts on the last lines. */
+  padding: 12px 12px 40px 0;
+  text-align: right;
+  white-space: pre;
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  color: var(--text-secondary);
+  opacity: 0.6;
+  user-select: none;
+}
+
+.editorTextarea {
+  flex: 1;
+  min-width: 0;
+  box-sizing: border-box;
+  resize: none;
+  border: none;
+  outline: none;
+  padding: 12px 14px 12px 12px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  line-height: 1.6;
+  white-space: pre;
+  overflow: auto;
+  tab-size: 2;
+}
+
+.conflictNote {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+  padding: 6px 14px;
+  font-size: var(--fs-xs);
+  color: var(--accent-yellow);
+  border-bottom: 1px solid var(--border);
+}
+
+/* ---- File tree (fills the right sidebar) --------------------------- */
+
+.treeCol {
+  font-size: var(--right-panel-text-size, var(--fs-base));
+  line-height: var(--right-panel-line-height, 1.5);
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  /* --files-tree-bg is set by hosts that sit on another surface (the
+     right rail's white card); everywhere else the tree is the deep tone. */
+  background: var(--files-tree-bg, var(--bg-secondary));
+}
+
+.treeHeader {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  padding: 6px 8px;
+  min-height: 48px;
+  box-sizing: border-box;
+  border-bottom: 1px solid var(--border);
+  flex-shrink: 0;
+}
+
+.treeCol > .treeHeader { border-bottom: 0; }
+
+.treeRootPath {
+  flex: 1;
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding-left: 8px;
+  color: var(--text-primary);
+  font-size: var(--right-panel-text-size, var(--fs-sm));
+  font-weight: var(--right-panel-font-weight, 650);
+  line-height: 36px;
+  letter-spacing: 0;
+}
+.treeRootLabel {
+  min-width: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  overflow: hidden;
+  color: inherit;
+  background: transparent;
+  font: inherit;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: default;
+}
+.treeRootLabel:focus-visible {
+  color: var(--text-bright);
+  outline: 1px solid color-mix(in srgb, var(--accent-blue) 60%, transparent);
+  outline-offset: 2px;
+}
+.treeRootFullPath {
+  display: none;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: var(--text-secondary);
+  font-size: var(--right-panel-meta-size, var(--fs-2xs));
+  font-weight: var(--right-panel-font-weight, 450);
+  line-height: var(--right-panel-line-height, 1.35);
+  user-select: text;
+}
+.treeToolbarExpanded {
+  height: 52px;
+}
+.treeToolbarExpanded .treeRootPath {
+  height: 52px;
+  gap: 8px;
+}
+.treeToolbarExpanded .treeRootLabel,
+.treeToolbarExpanded .treeToolbarActions {
+  display: none;
+}
+.treeToolbarExpanded .treeRootFullPath {
+  display: grid;
+}
+.treeRootIcon {
+  width: 16px;
+  height: 16px;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+}
+
+.treeToolbar {
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  transition: height var(--motion-medium) var(--ease-standard);
+}
+
+.treeToolbarActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.treeSearchPanel {
+  width: 100%;
+  min-width: 0;
+  height: 0;
+  margin-top: 0;
+  overflow: hidden;
+  opacity: 0;
+  transform: translateY(-5px);
+  transition: height var(--motion-medium) var(--ease-standard), margin-top var(--motion-medium) var(--ease-standard), opacity var(--motion-fast) var(--ease-standard), transform var(--motion-medium) var(--ease-standard);
+  pointer-events: none;
+}
+.treeSearchPanelOpen {
+  height: 64px;
+  margin-top: 4px;
+  opacity: 1;
+  transform: translateY(0);
+  pointer-events: auto;
+}
+.treeSearchLeading {
+  position: absolute;
+  left: 9px;
+  z-index: 1;
+  width: 14px;
+  height: 14px;
+  color: var(--text-secondary);
+  pointer-events: none;
+}
+.treeSearchInput {
+  width: 100%;
+  height: var(--ui-button-h);
+  padding: 0 128px 0 30px;
+  border: 1px solid var(--border);
+  border-radius: var(--ui-button-radius);
+  outline: none;
+  color: var(--text-primary);
+  background: var(--bg-input);
+  font-size: var(--right-panel-text-size, var(--fs-sm));
+}
+.treeSearchInput:focus {
+  border-color: color-mix(in srgb, var(--accent-blue) 65%, var(--border));
+}
+.treeSearchInput::placeholder { color: var(--text-secondary); }
+.treeSearchCount {
+  min-width: 38px;
+  padding: 0 3px;
+  color: var(--text-secondary);
+  font-size: var(--right-panel-meta-size, var(--fs-2xs));
+  line-height: 24px;
+  text-align: center;
+}
+@media (prefers-reduced-motion: reduce) {
+  .treeSearchPanel,
+  .treeToolbar { transition-duration: .01ms; }
+}
+
+.iconBtn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--ui-button-h-sm);
+  height: var(--ui-button-h-sm);
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  border-radius: var(--ui-list-radius);
+  cursor: pointer;
+}
+.iconBtn svg { width: 15px; height: 15px; }
+.iconBtn:hover {
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+.iconBtn:disabled {
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+/* Compact two-column tree row: the folder glyph is also the disclosure
+   control, so there is no separate arrow column. */
+.treeNode {
+  position: relative;
+}
+
+.treeRow {
+  position: relative;
+  display: grid;
+  grid-template-columns: 17px minmax(0, 1fr);
+  align-items: center;
+  height: 30px;
+  padding: 0 8px 0 0; /* nested depth is added inline */
+  font-size: var(--right-panel-text-size, var(--fs-sm));
+  color: var(--text-secondary);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.treeRow:hover {
+  color: var(--text-bright);
+  background: var(--bg-hover);
+}
+.treeRowActive {
+  color: var(--text-bright);
+  background: var(--bg-tertiary);
+  box-shadow: inset 2px 0 0 var(--accent-orange);
+}
+.treeRowDim { opacity: 0.45; }
+
+/* Row selected via click / right-click (targets the header's New
+   File/Folder buttons) — bg only, no accent bar (that marks the
+   active file tab). */
+.treeRowSelected {
+  color: var(--text-bright);
+  background: var(--bg-tertiary);
+}
+
+/* One-shot flash after "reveal in file tree" scrolls a row into view. */
+.treeRowFlash {
+  animation: treeRowFlash 1.2s ease-out;
+}
+@keyframes treeRowFlash {
+  0%, 45% { background: color-mix(in srgb, var(--accent-orange) 22%, transparent); }
+  100% { background: var(--bg-tertiary); }
+}
+
+.treeIcon {
+  justify-self: center;
+  color: var(--text-secondary);
+}
+
+/* Command-line tree structure. Each direct child owns one vertical
+   segment on its parent's icon axis. The last child stops that segment
+   at its row midpoint; the short horizontal stroke meets the child
+   glyph without adding another disclosure control. */
+.treeKids {
+  position: relative;
+}
+.treeKids > .treeNode::before {
+  content: "";
+  position: absolute;
+  z-index: 1;
+  left: var(--guide-x);
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: color-mix(in srgb, var(--text-muted) 60%, transparent);
+  pointer-events: none;
+}
+.treeKids > .treeNode:last-child::before {
+  bottom: auto;
+  height: 15px;
+}
+.treeKids > .treeNode > .treeRow::before {
+  content: "";
+  position: absolute;
+  left: var(--guide-x);
+  top: 50%;
+  width: 20px;
+  height: 1px;
+  background: color-mix(in srgb, var(--text-muted) 60%, transparent);
+  pointer-events: none;
+}
+
+.treeName,
+.treePath {
+  min-width: 0;
+  margin-left: 6px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.treePath { font-size: var(--right-panel-meta-size, var(--fs-xs)); }
+
+.treeNameMatch {
+  border-radius: var(--radius-2xs);
+  color: var(--text-bright);
+  background: color-mix(in srgb, var(--accent-yellow) 22%, transparent);
+}
+
+.treeNameMatchCurrent {
+  background: color-mix(in srgb, var(--accent-orange) 28%, transparent);
+  box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent-orange) 78%, transparent);
+}
+
+.treeHint {
+  padding: 3px 10px;
+  font-size: var(--right-panel-meta-size, var(--fs-xs));
+  color: var(--text-secondary);
+}
+
+/* Files retains the shared Explorer controls, with a separate path row. */
+.filePathRow { display: flex; align-items: center; min-width: 0; min-height: 30px; gap: 4px; }
+.fileBreadcrumb { position: relative; display: flex; align-items: center; min-width: 0; flex: 1; min-height: 32px; overflow: hidden; }
+/* shadcn Nova Breadcrumb, kept to one line: the panel shrinks it by
+   folding ancestors into the ellipsis instead of wrapping. The list fills
+   the row so the root's 40% cap measures the row, not the list itself. */
+.fileCrumbList { flex: 1 1 0; flex-wrap: nowrap; min-width: 0; overflow: hidden; font-size: var(--right-panel-text-size, var(--fs-base)); }
+.fileCrumbList > li { min-width: 0; flex-shrink: 0; }
+.fileCrumbList > li:last-child { flex: 0 1 auto; }
+.fileCrumbRoot { max-width: 40%; }
+.fileCrumbList button { min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; padding: 0; background: transparent; border: 0; font: inherit; cursor: pointer; border-radius: var(--radius-xs); }
+.fileCrumbList button:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; }
+.fileCrumbMore:hover { color: var(--foreground); }
+.fileCrumbMenu { width: max-content; min-width: 140px; max-width: min(300px, calc(100vw - 24px)); }
+.fileCrumbMenu [role="menuitem"] { overflow-wrap: anywhere; }
+
+.treeRowWithSize { grid-template-columns: 17px minmax(0, 1fr) auto; }
+.folderSize { font-size: var(--right-panel-meta-size, var(--fs-2xs)); color: var(--text-secondary); padding-left: 8px; white-space: nowrap; }
+.fileDetails { width: min(520px, calc(100vw - 24px)); max-width: none; max-height: calc(100vh - 40px); overflow-y: auto; }
+.fileDetails dl { display: grid; gap: 10px; font-size: var(--right-panel-meta-size, var(--fs-xs)); }
+.fileDetails dl > div { display: grid; grid-template-columns: 90px minmax(0, 1fr); gap: 12px; }
+.fileDetails dt { color: var(--text-secondary); }
+.fileDetails dd { overflow-wrap: anywhere; }
+.folderSizeDetails { display: grid; gap: 6px; font-size: var(--right-panel-meta-size, var(--fs-xs)); }
+.treeWithDetails { display: grid; grid-template-columns: minmax(0, 1fr) 300px; grid-template-rows: auto minmax(0, 1fr); }
+.treeWithDetails > .treeHeader { grid-column: 1; grid-row: 1; }
+.treeWithDetails > .treeBody { grid-column: 1; grid-row: 2; }
+.fileDetailsInline { grid-column: 2; grid-row: 1 / 3; border-left: 1px solid var(--border); padding: 16px; display: flex; flex-direction: column; gap: 16px; overflow-y: auto; color: var(--text-primary); }
+.fileDetailsInline dl { display: grid; gap: 12px; font-size: var(--right-panel-meta-size, var(--fs-xs)); }
+.fileDetailsInline dt { color: var(--text-secondary); margin-bottom: 3px; }
+.fileDetailsInline dd { overflow-wrap: anywhere; }
+.fileDetailHeading { display: flex; align-items: center; justify-content: space-between; }
+
+.fileBreadcrumbMeasure { position: absolute; font-size: var(--right-panel-text-size, var(--fs-base)); visibility: hidden; pointer-events: none; display: flex; width: max-content; height: 0; overflow: hidden; }
+.fileBreadcrumbMeasure > span { display: inline-block; flex: none; white-space: nowrap; }
+
+.folderSizeScanning { color: var(--text-secondary); animation: folder-size-pulse 1.8s ease-in-out infinite; }
+@keyframes folder-size-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .45; } }
+@media (prefers-reduced-motion: reduce) { .folderSizeScanning { animation: none; } }
+
+/* Files dragged in from the desktop: the tree is the drop zone and a chip
+   names the folder they will land in. */
+.externalDrop { box-shadow: inset 0 0 0 1.5px var(--accent-blue); border-radius: var(--ui-list-radius); }
+.externalDropHint {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  max-width: calc(100% - 24px);
+  overflow: hidden;
+  padding: 4px 10px;
+  font-size: var(--right-panel-meta-size, var(--fs-xs));
+  color: var(--text-bright);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translateX(-50%);
+  background: var(--glass-surface);
+  -webkit-backdrop-filter: var(--glass-backdrop);
+  backdrop-filter: var(--glass-backdrop);
+  border: 0.5px solid var(--glass-ring);
+  border-radius: var(--glass-radius);
+  box-shadow: var(--glass-shadow);
+}
+
+.locationNoticeTitle { display: flex; align-items: center; gap: 6px; font-size: var(--right-panel-text-size, var(--fs-sm)); font-weight: 500; color: var(--text-bright); }
+.locationNoticeTitle svg { flex-shrink: 0; color: var(--accent-orange); }
+.locationNoticeText { font-size: var(--right-panel-meta-size, var(--fs-xs)); line-height: 1.45; color: var(--text-secondary); }
+.locationNoticePath { font-size: var(--right-panel-meta-size, var(--fs-xs)); color: var(--text-secondary); overflow-wrap: anywhere; }

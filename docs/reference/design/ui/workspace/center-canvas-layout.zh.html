@@ -1,0 +1,798 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>中间画布：任意分屏布局 — 交互原型与规划</title>
+<style>
+  :root {
+    color-scheme: dark;
+    /* 与 apps/web/app/styles/base.css 暗色主题对齐 */
+    --bg-primary: #191918;
+    --bg-secondary: #141413;
+    --bg-tertiary: #252523;
+    --bg-deep: #141413;
+    --bg-hover: rgba(255, 255, 255, 0.06);
+    --border: rgba(255, 255, 255, 0.07);
+    --border-strong: rgba(255, 255, 255, 0.16);
+    --text: #c3c2b7;
+    --text-secondary: #94928b;
+    --text-bright: #f0efea;
+    --text-muted: #757370;
+    --accent: #6ea8fe;
+    --accent-fill: #3b82f6;
+    --green: #6e9b76;
+    --yellow: #d4a346;
+    --purple: #a371f7;
+    --cyan: #3bc9db;
+    --red: #c24e42;
+    /* 拖动中的 tab：介于当前 tab 与其他 tab 之间，不透明 */
+    --tab-active: var(--bg-primary);
+    --tab-idle: var(--bg-secondary);
+    --tab-dragging: color-mix(in srgb, var(--tab-active) 50%, var(--bg-tertiary));
+    --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", sans-serif;
+    --mono: "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+    --divider: 6px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg-deep); color: var(--text); font: 14px/1.6 var(--sans); }
+  code { font-family: var(--mono); font-size: 12px; color: #e6d7a8; background: #111110; padding: 1px 5px; border-radius: 4px; }
+  a { color: var(--cyan); }
+  .doc { max-width: 1180px; margin: 0 auto; padding: 36px 28px 80px; }
+  h1 { color: var(--text-bright); font-size: 26px; margin: 0 0 6px; letter-spacing: -0.01em; }
+  h2 { color: var(--text-bright); font-size: 19px; margin: 44px 0 10px; padding-top: 14px; border-top: 1px solid var(--border); }
+  h3 { color: var(--text-bright); font-size: 15px; margin: 22px 0 6px; }
+  p, li { color: var(--text); }
+  .lede { color: var(--text-secondary); margin: 0 0 22px; }
+  .kbd { font-family: var(--mono); font-size: 11.5px; padding: 1px 6px; border: 1px solid var(--border-strong); border-bottom-width: 2px; border-radius: 4px; color: var(--text-bright); }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; margin: 8px 0; }
+  th, td { border: 1px solid var(--border); padding: 7px 10px; text-align: left; vertical-align: top; }
+  th { color: var(--text-bright); background: var(--bg-secondary); font-weight: 600; }
+  .note { border-left: 3px solid var(--accent); background: rgba(110,168,254,0.07); padding: 10px 14px; border-radius: 0 6px 6px 0; margin: 12px 0; }
+  .warn { border-left-color: var(--yellow); background: rgba(212,163,70,0.08); }
+  pre { background: #111110; border: 1px solid var(--border); border-radius: 8px; padding: 12px 14px; overflow: auto; font: 12px/1.55 var(--mono); color: #d8d6cc; }
+
+  /* ───────────────────────── 原型窗口 ───────────────────────── */
+  .stage-wrap { position: relative; }
+  .toolbar { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 0 0 10px; }
+  .toolbar .label { color: var(--text-muted); font-size: 12px; margin-right: 4px; }
+  .btn { background: var(--bg-tertiary); color: var(--text); border: 1px solid var(--border); border-radius: 6px; padding: 4px 10px; font: 12.5px var(--sans); cursor: pointer; display: inline-flex; align-items: center; gap: 6px; }
+  .btn:hover { background: #3a3a37; color: var(--text-bright); }
+  .btn svg { width: 14px; height: 14px; }
+  .btn.sep { margin-left: 10px; }
+
+  .window { height: 640px; display: flex; flex-direction: column; background: var(--bg-primary); border: 1px solid var(--border-strong); border-radius: 10px; overflow: hidden; box-shadow: 0 30px 80px rgba(0,0,0,0.45); user-select: none; }
+  .titlebar { height: 38px; flex: none; display: flex; align-items: flex-end; gap: 0; padding: 0 8px 0 78px; background: var(--bg-secondary); position: relative; }
+  .traffic { position: absolute; left: 14px; top: 13px; display: flex; gap: 8px; }
+  .traffic i { width: 12px; height: 12px; border-radius: 50%; background: #4a4946; }
+  .strip { display: flex; align-items: flex-end; gap: 2px; height: 100%; flex: 1; min-width: 0; position: relative; }
+  .tab { position: relative; height: 31px; min-width: 0; width: 168px; flex: 0 1 168px; display: flex; align-items: center; gap: 7px; padding: 0 10px; border-radius: 8px 8px 0 0; background: var(--tab-idle); color: var(--text-secondary); font-size: 12.5px; cursor: default; transition: transform 160ms ease, background 120ms; }
+  .tab:hover { background: #262522; color: var(--text); }
+  .tab.active { background: var(--tab-active); color: var(--text-bright); }
+  .tab .ico { width: 14px; height: 14px; flex: none; border-radius: 3px; display: grid; place-items: center; font-size: 9px; font-weight: 700; color: #111; }
+  .tab .ttl { overflow: hidden; white-space: nowrap; text-overflow: ellipsis; flex: 1; }
+  .tab .cnt { font: 10.5px var(--mono); color: var(--text-muted); }
+  .tab.dragging { transition: none; z-index: 50; background: var(--tab-dragging); color: var(--text-bright); box-shadow: 0 6px 18px rgba(0,0,0,0.45), 0 0 0 1px var(--border-strong); border-radius: 8px; opacity: 1; pointer-events: none; }
+  .tab.placeholder-gap { visibility: hidden; }
+  .newtab { width: 28px; height: 28px; margin: 0 0 2px 6px; border-radius: 6px; color: var(--text-muted); display: grid; place-items: center; cursor: pointer; }
+  .newtab:hover { background: var(--bg-hover); color: var(--text-bright); }
+
+  .ico.chat { background: var(--accent); }
+  .ico.web { background: var(--cyan); }
+  .ico.term { background: var(--green); }
+  .ico.file { background: var(--yellow); }
+  .ico.prog { background: var(--purple); }
+
+  .canvas { flex: 1; min-height: 0; position: relative; padding: 4px; background: var(--bg-deep); }
+  .node { display: flex; min-width: 0; min-height: 0; flex: 1 1 0; }
+  .node.row { flex-direction: row; }
+  .node.col { flex-direction: column; }
+  .divider { flex: none; position: relative; z-index: 2; }
+  .row > .divider { width: var(--divider); cursor: col-resize; }
+  .col > .divider { height: var(--divider); cursor: row-resize; }
+  .divider::after { content: ""; position: absolute; border-radius: 2px; background: transparent; transition: background 120ms; }
+  .row > .divider::after { left: 2px; right: 2px; top: 30%; bottom: 30%; }
+  .col > .divider::after { top: 2px; bottom: 2px; left: 30%; right: 30%; }
+  .divider:hover::after, .divider.active::after { background: var(--accent); }
+
+  .pane { position: relative; flex: 1 1 0; min-width: 0; min-height: 0; display: flex; flex-direction: column; background: var(--bg-primary); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .pane.focused { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+  .pane-head { height: 28px; flex: none; display: flex; align-items: center; gap: 6px; padding: 0 6px 0 9px; border-bottom: 1px solid var(--border); background: var(--bg-secondary); font-size: 12px; color: var(--text-secondary); cursor: grab; }
+  .pane.focused .pane-head { color: var(--text-bright); }
+  .pane-head .ttl { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+  .pane-head .act { width: 20px; height: 20px; border-radius: 4px; display: grid; place-items: center; color: var(--text-muted); cursor: pointer; opacity: 0; transition: opacity 100ms; }
+  .pane:hover .act, .pane.focused .act { opacity: 1; }
+  .pane-head .act:hover { background: var(--bg-hover); color: var(--text-bright); }
+  .pane-head .act svg { width: 13px; height: 13px; }
+  .pane-body { flex: 1; min-height: 0; overflow: hidden; padding: 10px 12px; font-size: 12px; position: relative; }
+  .pane.compact .pane-body { padding: 6px 8px; }
+  .pane.tiny .pane-body > * { display: none; }
+  .pane.tiny .pane-body::after { content: attr(data-kind); position: absolute; inset: 0; display: grid; place-items: center; color: var(--text-muted); font-size: 11px; }
+  .pane.tiny .pane-head .act:not(.keep) { display: none; }
+
+  .mock-line { height: 7px; border-radius: 4px; background: #34332f; margin: 7px 0; }
+  .mock-bubble { background: var(--bg-tertiary); border-radius: 10px; padding: 7px 10px; margin: 6px 0 6px auto; width: fit-content; max-width: 80%; color: var(--text-bright); }
+  .mock-composer { position: absolute; left: 10px; right: 10px; bottom: 10px; height: 34px; border-radius: 10px; border: 1px solid var(--border-strong); background: var(--bg-tertiary); }
+  .mock-web { position: absolute; inset: 0; background: linear-gradient(180deg, #f4f2ec 0 26px, #fbfaf7 26px); }
+  .mock-web .url { position: absolute; left: 8px; right: 8px; top: 5px; height: 16px; border-radius: 8px; background: #e2dfd6; font: 10px/16px var(--mono); color: #6b6a63; padding: 0 8px; overflow: hidden; white-space: nowrap; }
+  .mock-web .blk { position: absolute; left: 12px; right: 30%; top: 40px; height: 12px; background: #d9d5ca; border-radius: 3px; box-shadow: 0 22px 0 #e6e3da, 0 40px 0 #e6e3da, 0 58px 0 #e6e3da; }
+  .mock-web .native { position: absolute; right: 8px; bottom: 6px; font: 10px var(--mono); color: #9c9990; }
+  .mock-term { position: absolute; inset: 0; background: #151514; padding: 8px 10px; font: 11px/1.55 var(--mono); color: #b7d8b0; white-space: pre; overflow: hidden; }
+  .mock-file { font: 11px/1.6 var(--mono); color: var(--text-secondary); white-space: pre; }
+
+  .empty-pane { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 8px; color: var(--text-muted); }
+  .empty-pane .pick { display: flex; flex-wrap: wrap; gap: 4px; justify-content: center; max-width: 90%; }
+  .empty-pane .pick button { background: var(--bg-tertiary); border: 1px solid var(--border); color: var(--text); border-radius: 5px; font-size: 11px; padding: 2px 7px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+  .empty-pane .pick button:hover { color: var(--text-bright); border-color: var(--border-strong); }
+  .empty-pane .pick .ico { width: 10px; height: 10px; border-radius: 2px; }
+
+  /* drop zone 预览 */
+  .drop-preview { position: fixed; pointer-events: none; z-index: 40; border-radius: 8px; background: rgba(110,168,254,0.16); border: 1.5px solid var(--accent); transition: left 90ms, top 90ms, width 90ms, height 90ms; display: none; }
+  .drop-preview .lbl { position: absolute; left: 50%; top: 50%; transform: translate(-50%,-50%); font-size: 11.5px; color: var(--text-bright); background: rgba(20,20,19,0.85); padding: 3px 9px; border-radius: 5px; white-space: nowrap; }
+  .window.drag-out { outline: 2px dashed rgba(110,168,254,0.55); outline-offset: 6px; }
+
+  .toast { position: fixed; left: 50%; bottom: 28px; transform: translateX(-50%) translateY(20px); opacity: 0; background: #0f0f0e; color: var(--text-bright); border: 1px solid var(--border-strong); border-radius: 8px; padding: 8px 14px; font-size: 12.5px; transition: all 180ms; pointer-events: none; z-index: 100; }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+
+  .statusbar { display: flex; gap: 14px; margin-top: 8px; font: 11.5px var(--mono); color: var(--text-muted); }
+  .preset-ico { display: inline-grid; gap: 1.5px; width: 14px; height: 11px; }
+  .preset-ico i { background: currentColor; border-radius: 1px; opacity: 0.8; }
+</style>
+</head>
+<body>
+<div class="doc">
+
+<h1>中间画布：任意分屏布局</h1>
+<p class="lede">
+  把中间区域从「标签页 + 最多两格分屏」升级成一块可以随意切分的画布：左右、上下、四宫格、九宫格、十六宫格，或者不规则的组合都可以。本页上半部分是可以直接上手操作的原型，下半部分是数据模型、交互规则和实施计划。
+</p>
+
+<div class="note">
+  <b>原型怎么玩：</b>
+  把顶部 tab <b>拖到某一格的边缘</b>，就在那一侧切出新格；<b>拖到格子中央</b>，就替换这一格的内容（被换下来的内容回到 tab 栏）。拖动时 tab 本身跟着鼠标走，不透明，颜色介于当前 tab 和其他 tab 之间；<b>拖到窗口外</b>松手就是新开窗口。
+  拖格子的标题栏可以挪动整格，拖回 tab 栏就把它移出画布。（原型演示的是早期的画布内落点；App 里拖动改为窗口总览，见 3.1。）格子之间的缝隙可以拖动来调整大小，<b>双击缝隙</b>会把两边恢复成等分。
+  快捷键：<span class="kbd">⌘\</span> 向右切分，<span class="kbd">⌘⇧\</span> 向下切分，<span class="kbd">⌘⇧↩</span> 放大或还原当前格，<span class="kbd">⌘W</span> 关闭当前格，<span class="kbd">⌥⌘←↑→↓</span> 在格子之间移动焦点。
+</div>
+
+<div class="stage-wrap">
+  <div class="toolbar">
+    <span class="label">预设布局</span>
+    <button class="btn" data-preset="1x1"><span class="preset-ico" style="grid-template-columns:1fr"><i></i></span>单屏</button>
+    <button class="btn" data-preset="1x2"><span class="preset-ico" style="grid-template-columns:1fr 1fr"><i></i><i></i></span>左右</button>
+    <button class="btn" data-preset="2x1"><span class="preset-ico" style="grid-template-rows:1fr 1fr"><i></i><i></i></span>上下</button>
+    <button class="btn" data-preset="main+2"><span class="preset-ico" style="grid-template-columns:1.4fr 1fr;grid-template-rows:1fr 1fr"><i style="grid-row:span 2"></i><i></i><i></i></span>主 + 2</button>
+    <button class="btn" data-preset="2x2"><span class="preset-ico" style="grid-template-columns:1fr 1fr"><i></i><i></i><i></i><i></i></span>四宫格</button>
+    <button class="btn" data-preset="3x3"><span class="preset-ico" style="grid-template-columns:repeat(3,1fr)"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>九宫格</button>
+    <button class="btn" data-preset="4x4"><span class="preset-ico" style="grid-template-columns:repeat(4,1fr)"><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i></span>十六宫格</button>
+    <button class="btn sep" id="btn-equalize">全部等分</button>
+    <button class="btn" id="btn-reset">重置</button>
+  </div>
+
+  <div class="window" id="win">
+    <div class="titlebar">
+      <div class="traffic"><i></i><i></i><i></i></div>
+      <div class="strip" id="strip"></div>
+      <div class="newtab" id="newtab" title="新建会话">＋</div>
+    </div>
+    <div class="canvas" id="canvas"></div>
+  </div>
+  <div class="statusbar" id="status"></div>
+</div>
+
+<div class="drop-preview" id="preview"><span class="lbl"></span></div>
+<div class="toast" id="toast"></div>
+
+<h2>1. 目标与边界</h2>
+<ul>
+  <li><b>任意数量、任意形状</b>：格数不设硬上限，真正的限制是每格的最小尺寸（见 §4）。在 1440×900 的窗口里大约能放下 4×4。</li>
+  <li><b>任何内容都能进格子</b>：会话（chat）、网页、终端、文件预览、程序视图，都是同一种「格子内容」。</li>
+  <li><b>布局就是一个 tab</b>：多格画布在顶部 tab 栏里显示为一个布局 tab，上面画着格数徽标。原型里为了演示简化成「画布常驻，tab 栏放没进画布的内容」，真实产品里可以同时存在多个布局 tab，各自记住自己的切分方式。</li>
+  <li><b>不做的事</b>：不做浮动或重叠的窗口（那是画中画 PiP 已经覆盖的场景），也不做跨窗口共享同一格。</li>
+</ul>
+
+<h2>2. 数据模型：n 叉切分树</h2>
+<p>布局用一棵树表示。叶子是格子（pane），中间节点是切分（split）。一个切分节点可以有任意多个子节点，每个子节点带一个比例值。这样九宫格就是「一个纵向切分，下面挂三个横向切分，每个横向切分再挂三格」，不需要二叉树那样层层嵌套。</p>
+<pre>type LayoutNode =
+  | { kind: "pane";  id: PaneId; content: TabRef | null }        // null = 空格
+  | { kind: "split"; id: string; dir: "row" | "col";
+      children: LayoutNode[]; sizes: number[] };                 // sizes 之和为 1
+
+type CanvasLayout = {
+  root: LayoutNode;
+  focusedPaneId: PaneId;
+  zoomedPaneId?: PaneId;          // 放大某一格时其余格不卸载，只是隐藏
+};</pre>
+<p>每次修改之后都要做一遍<b>规范化</b>，这样树永远保持最简形状：</p>
+<ul>
+  <li>只剩一个子节点的切分，用这个子节点替换掉它自己。</li>
+  <li>方向和父节点相同的切分，把它的子节点直接并进父节点，比例相乘。所以连续向右切三次得到的是一层三等分，而不是三层嵌套。</li>
+  <li>比例重新归一，并按最小尺寸夹紧。</li>
+</ul>
+<p>这个模型取代现在 <code>center-tab-groups.ts</code> 里的 <code>MAX_CENTER_TAB_GROUP_MEMBERS = 2</code> 分组模型。旧的两格分组可以无损迁移：迁移后就是一个 <code>row</code> 切分下挂两个格子。</p>
+
+<h2>3. 交互规则</h2>
+<h3>3.1 拖动时进入窗口总览</h3>
+<p>拖放走一个仿照 macOS 调度中心和 iPad 后台切换的窗口总览。标签被竖直拖出 tab 栏，或者格子顶部的「•••」把手开始移动时，中间区域退成页面底色，tab 栏里的每个窗口（单个标签，或一个分屏组）都缩成一张卡片，按网格排开，尽量放大，但不超过区域宽度的一半。卡片保持窗口自己的分屏：格子用和画布同一棵布局树、同一套几何计算画出来，每格显示它上次出现在屏幕上时的样子，三格合在一起就是一张三分屏卡片，不拆开显示。被拖的标签会从自己的卡片里拿掉，拿掉后没有标签的卡片不显示。</p>
+<p>缩略图按标签存在内存和 IndexedDB 里，只保留当前主题下的（切换主题会全部丢弃，重启时也不恢复其他主题下存的，否则卡片和它放大成的真实窗口主题不同，会闪一下），重启后还在（启动时标签列表暂时为空不会触发清理）：任何一次打开总览之前，先截下屏幕上的格子，被拖标签自己的格子也截（截图时它的浮动预览先隐藏）；切换窗口或改布局后停 900ms 再截一次；App 失去焦点或被隐藏时截一次；5 秒没有操作时每 30 秒再截一次，所以重启后看到的也是较新的画面。页面类格子走 <code>window:capture-region</code> IPC，只允许窗口自己的主页面截自己的区域，返回最宽 720px 的 JPEG；网页从它自己的视图截，所以不在屏幕上的网页也是最新的。网页视图里只有网页本身，不含上面 App 的工具栏，所以屏幕上的网页格子会先截整个格子区域，再把网页画进它的内容区（<code>[data-web-frame]</code>）；工具栏那一条会存下来（内存和 IndexedDB），之后网页不在屏幕上时也用它拼在网页截图上面，这样每张图都和格子的比例一致。卡片就是整个窗口缩小后的样子：卡片对应整个中间区域，单格窗口贴着中间卡片（1rem 圆角），分屏的每一格是自己的小卡片，在格位里缩进 1px（16px 圆角）。位置、缩进和圆角都按卡片自己的比例画，所以缩放只是等比缩放，落地时圆角和边都不会跳。截图前两帧会隐藏格子的「•••」把手，缩略图里只有内容。从没截到过的格子只在正中显示标签的图标，就像调度中心显示应用图标那样；名字由卡片下方的说明显示，格子里不再重复。和调度中心一样，不专门标出当前窗口：用按钮或捏合打开时，当前窗口从它各格所在的位置缩进自己的卡片，其他卡片淡入；关闭时，卡片再放大回中间区域。缩放用 framer-motion 的布局动画实现：缩放中的卡片先放在窗口自己的位置（整个中间区域），framer-motion 用 340ms 把它移进网格里的位置，或者反过来移出去；这期间由一个占位块保住它在网格里的位置，卡片的其他布局变化都不做动画。点卡片会先切换到那个窗口再放大，卡片落位时底下已经是实时画面；按 Esc 或双指张开，则把当前窗口放大回去；点空白处没有反应。拖动时打开的总览以淡入出现，因为被拖的标签已经离开了它的卡片。合并的落点只有一次放大，而且在松手时就开始，不等合并提交：提交要先等桌面端取消转移（约 50ms），再渲染新的分屏（约 40ms），以前这约 90ms 里被拖的小窗已经消失、卡片却没变。松手时总览保持打开，记下这次落点和拖动的标签，并设置 <code>landing</code>；被放上去的卡片按原样显示那个窗口，从网格位置在 340&nbsp;ms 内以统一比例放大到整个中间区域，和点选卡片一样，它是 transform 动画，等待期间照常播放。放大开始时，这个窗口就在总览下面被激活，和点选卡片一样，所以到它让出位置时，各个窗格已经挂载并加载好内容。<code>commitCanvasDrop</code> 把合并交给 <code>landOverview</code>，后者先拿着合并不提交，并把落点标记为 <code>landed</code>。一旦标记为 landed、放大也已开始（松手后约十分之一秒，桌面端取消转移之后），总览读出正在放大的卡片里每个窗格的位置，换算到画布自身未缩放的坐标，连同放大的起点矩形、曲线和已走过的时间一起交给 <code>captureCanvasLanding</code>，然后关闭，关闭时在同一个 tick 里提交合并（兜底计时器提前关闭时也会提交，只是没有动画）。app shell 像播放其他布局变化一样播放这次记录：窗口的各个窗格把真实几何从卡片里的位置过渡到分屏里的位置，拖进来的标签按最终尺寸从放下的那一侧进入（平移出去，并用 <code>clip-path</code> 在画布边缘裁掉），时长同为 300&nbsp;ms，所以两边的分界线一起移动，内容也不会重新换行。在未缩放状态下量完之后，画布根元素接过放大：用和卡片相同的平移加缩放关键帧，并直接沿用卡片动画自己的 <code>startTime</code>，两者走同一个时钟，曲线无缝衔接。卡片的放大在创建时就显式设定这个开始时间：否则合成线程已经在播放，主线程看到的仍是 pending，画布无从知道它走到了哪里，放大的是真实内容而不是截图（截图是小尺寸 JPEG，放大到整屏会糊）。期间根元素上的 <code>data-canvas-landing</code> 让中间列周围保持页面底色；落地时其他卡片在 80&nbsp;ms 内淡出，交接前就已消失。提示文字随之淡出但保留位置，松手时网格不会重新居中而跳动。放大和分屏同时进行。不会出现一半是静止截图、另一半在变化的情况，那样看起来像卡住了。合并失败（桌面端保留了这个标签）时总览直接关闭；落地播放期间不显示拖动提示。标签栏里分屏显示在它第一个窗格的标签所在位置，所以 <code>dockCanvas</code> 把并进来的标签挪到目标窗口前面（<code>placeDockedTabs</code>）：无论放在哪一侧，分屏都占着目标窗口原来的位置，不会跳到被拖标签原来的地方。分屏标签显示聚焦窗格的名字；聚焦窗格变化，或者刚合并成分屏时，图标和名字在 200ms 内上浮出现。被拖的标签一离开标签栏，它的槽位按宽度收拢（<code>data-drag-out</code>：flex-basis、宽度和左右内边距收到 0，并收回 8px 间距，沿用拖动自己的 160ms 过渡），后面的标签和 + 按钮随之左移；回到标签栏上方时槽位重新撑开。合并落点或移到别的窗口时槽位保持收拢，标签离开前不会闪回；只有标签留在原处时才重新撑开（拖动结束后由 <code>data-slot-reopen</code> 提供过渡）。被拖的标签同时展开成跟随指针的小窗：上面是它的标签，下面是它最近一次的画面，宽 240px，高按画布比例（110 到 190px），200ms 展开；拖回标签栏上方时收回成标签（140ms），再交还给真正的标签。从没截过图的标签保持标签样子，拖动途中拿到画面时再展开。指针下的卡片会稍微放大。</p>
+<table>
+  <tr><th>松手位置</th><th>结果</th></tr>
+  <tr><td>tab 栏内</td><td>重新排序；拖的是格子时，把它移出画布、恢复为独立标签。</td></tr>
+  <tr><td>某张卡片左右各 1/4 宽</td><td>和这个窗口合并，放在整个窗口的左边 / 右边。</td></tr>
+  <tr><td>某张卡片中间那一列的上半 / 下半</td><td>和这个窗口合并，放在整个窗口的上面 / 下面。卡片稍微放大，这一半高亮，底部提示写明和谁合并、放哪边。</td></tr>
+  <tr><td>卡片之间的空白</td><td>单独打开；拖的是格子就移出分屏。</td></tr>
+  <tr><td>右侧 Resources 面板</td><td>把网页绑定成会话资源。</td></tr>
+  <tr><td>窗口以外的任何地方</td><td>新开一个窗口承载这个内容。</td></tr>
+</table>
+<p>合并调用 <code>dockCanvas(拖动的标签, 卡片里的标签, "root", 方向)</code>：别的窗口的标签会并进来；格子拖到自己窗口的卡片上，就是挪到这个窗口的那一半。拖动时卡片之间留着一个空位，表示这个标签单独放置的位置（总览 store 里的 <code>slot</code>；起初在被拖窗口原来的位置，拖出分屏里的一格时在那个窗口之后），卡片按「现有卡片加一个空位」计算大小，所以拿起卡片不会改变其他卡片的大小。指针不在卡片上时，若空位比任何卡片都离指针更近，空位就不动，否则移到离指针最近的卡片旁边、指针所在的那一侧；距离按卡片的布局位置计算（offset，不含 framer-motion 的 transform），卡片弹开途中不会把空位带走。指针在空白处时空位显示描边。放在那里，或卡片以外的任何地方，就在空位处单独打开这个标签：落点带着 <code>before</code>（空位后面那张卡片在标签栏里的第一个标签），<code>commitCanvasDrop</code> 把标签（<code>moveTab</code>，格子先从分屏拆出）或整个窗口（<code>moveGroup</code>）挪到那里，标签栏和总览顺序一致；只有从分屏拆出的格子会被激活。总览保持打开、转为浏览：<code>holdOverviewLanding</code> 把它切到浏览模式，放下提交后 <code>commitCanvasDrop</code> 清空 <code>sourceIds</code>，这个标签的卡片就回来了。浏览时卡片同样可以拿起来拖（和调度中心里拖窗口一样）：在卡片上按下并移动 6px，总览就变成拖动模式，被拖的是这个窗口的全部标签（按在分屏卡片的某一格上则只拖那一格的标签），一份和卡片同样大小的副本跟着指针走（和调度中心里拖窗口一样；移到卡片上时变半透明，露出要合并的那一半），放下时和其他拖动一样经过 <code>overviewDropAt</code>：落在卡片某一侧就像从标签栏拖来一样合并落地，落在空白处会把窗口移到空位（从分屏里拿出的格子在那里单独成一个窗口），除合并以外都继续浏览（<code>browseOverview</code>）；Esc 取消。两种模式用同一块区域排卡片（浏览时也保留提示条的位置，只是隐藏），卡片在两种模式下都是 button，切换时图片不会重新加载；切换模式不会重播淡入（<code>data-opened-as</code>）；空白处只给提示条上色，不再给整个总览上色。网格变化时（拿起、放回、拆分或合并卡片），卡片用 framer-motion 的布局弹簧动画移动并缩放到新位置，新出现的卡片在落点处放大淡入；入场动画也由 framer-motion 负责，只在卡片挂载时播放，切换模式不会重播。总览只盖住中间区域，所以 tab 栏照样能排序，Resources 照样能接网页，拖出窗口照样新开窗口。按 <span class="kbd">Esc</span> 取消，拖回 tab 栏就回到普通排序。总览是原生视图的遮挡层，网页视图会藏到它下面。格子内部不再有落点：直接在当前画面上放，下半边和角落很难分清。</p>
+<p>不拖动也能打开同一个总览：点 tab 栏右端主菜单左边的按钮，或者像 Safari 的标签总览那样，在中间区域或 tab 栏上双指捏合。点卡片切换到那个窗口，效果和点标签一样；按 <span class="kbd">Esc</span>、双指张开或点总览以外的地方都会关闭；点卡片之间的空白处没有反应，浏览时底部的提示条隐藏但保留位置（只有拖动时才显示，用来说明标签会落到哪里）。自己处理捏合缩放的内容（上下文图）会先拦下这个手势，不触发总览。网页是独立的原生视图，App 收不到它的滚轮事件：网页标签的会话里有一个预加载脚本（<code>main/web-views/webtab-preload.js</code>，在隔离环境里运行，不向网页暴露任何东西）监听真实的捏合滚轮事件，只在手势开始时网页处于正常大小（<code>visualViewport.scale</code> 为 1）时，请外壳打开总览。双指张开像 Safari 一样原生放大网页，每个网页标签允许 1× 到 3× 的视觉缩放；网页放大时双指捏合只把它缩回原大，再捏一次才打开总览。</p>
+<p>拖动的视觉效果：被拖的 tab 就是那个元素本身，用 <code>transform</code> 跟着鼠标走，离开 tab 栏以后照样跟着，原来的位置留出空位。它完全不透明，背景色是 <code>color-mix(in srgb, 当前tab色 50%, bg-tertiary)</code>，外加一圈细边和一层阴影。落点的效果由 drop 预览框直接表达。</p>
+
+<h3>3.2 格子本身</h3>
+<ul>
+  <li><b>把手</b>：格子没有标题栏。顶部正中一个 iPadOS 分屏式的「•••」把手，可点范围 88×22px，比三个点本身大。按下把手不会选中下面的文字。拖它挪动格子，规则同 3.1。指针移上去，把手从顶边垂下一小片灰色底片，两肩带弧度地接到顶边：它从一条窄缝向下、向两侧长开，带一点回弹。静止时三个灰点就是窗口按钮本身，它们依次散开、长大，填上 macOS 的红黄绿，长满后再淡入按钮上的符号；离开把手时整个过程倒放。按钮的作用：红色关闭这个标签本身（走标签栏的关闭流程，会先保存打开的文件）；黄色把格子收回标签栏；绿色把它单独打开。在绿灯上停 0.25 秒，这一片继续往下展开成贴靠菜单，和把手连成一块，不另起悬浮小窗；指针离开把手就收起。菜单随把手变宽从底片里向下长出；关闭时先保留 200ms 向上折回，再让把手变窄、按钮变回灰点。右键把手，或在绿灯上按 ↓，打开不会自动收起的菜单。按在按钮上拖动超过 6px 就是拖格子，不会触发按钮；拖动开始后才捕获指针。</li>
+  <li><b>调整大小</b>：缝隙平时什么都不画，指针停在缝上时，正中才出现一小段灰色短条，像 macOS 平铺窗口之间那样；整条缝隙都能拖。拖动缝隙只影响相邻的两格，拖到格子小于 240×160px 时停住，本来就更小的格子不会被继续压缩。窗口窄于 900px 时，侧栏平时浮在聊天上面；但画布分屏时，收起的侧栏占自己的列，不会盖住格子。拖到这一组切分的 1/3、1/2、2/3 附近（10px 内）会吸住，缝隙中点显示比例。双击缝隙恢复这两格等分；聚焦缝隙后用方向键每次调 2%。</li>
+  <li><b>填满</b>：<span class="kbd">⌃⌥F</span>、<span class="kbd">⌘⇧↩</span> 或菜单里的「填满」，把当前格临时铺满画布，再按一次还原。其他格不卸载。</li>
+  <li><b>收回格子</b>（黄灯、<span class="kbd">⌘W</span>）：只关格子，不关里面的会话；内容回到 tab 栏。格子关掉后，它在树里的空间让给相邻的兄弟格。</li>
+  <li><b>布局动画</b>：窗口按钮、贴靠菜单、填满和还原上次布局造成的布局变化，都像 macOS 移动窗口一样带动画（<code>lib/tabs/canvas/canvas-transition.ts</code>）。变化前，画布按 tab id 记下每个格子的矩形，并留一份静态副本；app shell 在执行这次变化的那次提交的 layout effect 里播放，首帧绘制之前就开始。格子按 tab id 对应，所以会话从对等格子换到单独的聊天外壳时也能连贯移动。分屏期间聊天外壳隐藏着，停在最后获得焦点的会话上；分屏解散时，它和布局在同一个 tick 里切到留下的会话，而不是等路由几次渲染之后才切，所以第一帧就是这个会话。只有切换后才到达的消息才会淡入；已经加载好的会话直接显示。同理，单条消息只在它到达后一秒内播放出现动画；会话在分屏格子或聊天外壳里重新挂载时，已有的消息直接显示，不会从透明淡入。留下的格子用 Web Animations API 在 300&nbsp;ms 内把真实几何（<code>left</code>、<code>top</code>、<code>width</code>、<code>height</code>）从旧矩形过渡到新矩形，文字随宽度重新换行而不是被拉伸，格子的内联 <code>calc()</code> 几何保持不动。新出现的格子淡入。离开的格子由副本播放退场：红灯淡出并下沉（180&nbsp;ms），盖在接手它位置的格子上；黄灯像 macOS 的神灯效果一样折进标签栏里它的标签（600&nbsp;ms）：布局变化前，桌面端先给格子拍一张全分辨率静态图（<code>captureRegion</code> 带 <code>full</code>；变化最多等它 160&nbsp;ms），之后每帧把这张图按 2&nbsp;px 一行画到同一个 canvas 上，每行拉伸到漏斗在该高度的两边之间，弯成以标签底边为颈口的漏斗，无论格子内容多重，每帧开销都很小；拿不到静态图时（普通浏览器）改为把格子副本切成若干横条，每帧用射影 <code>matrix3d</code> 把每条映射到一个四边形；靠近标签的边先收窄，然后格子从颈口往上倾入，越靠近颈口压得越紧，并在颈口处裁掉，不会画到标签上；整个标签按钮在接住格子时底色亮一下，接手位置的格子晚 90&nbsp;ms 开始展开；从分屏收起的格子变化前没有自己的标签按钮，新按钮先从原来所在的标签旁边滑出来，后面的标签同时滑开让位（260&nbsp;ms，只动 transform 和 opacity，App 还在排版这次变化时合成线程也能流畅播放），折叠瞄准按钮最终的位置，晚 80&nbsp;ms 开始，按钮完全滑出后才到达标签栏；折叠用自己的时钟，每帧最多前进 34&nbsp;ms，主线程忙时动画暂停而不是跳过一段；横条兜底时内容越重的格子切的条数越少（6 到 20 条），标签不在格子上方时副本改为向标签缩小（340&nbsp;ms）；被绿灯或填满挡住的格子在放大的格子下面淡出。被保存提示拦住的红灯关闭，等标签真正关掉再播放；记下后 1.5&nbsp;s 内没有对应提交就作废。格子移动期间画布按拖动处理：网页格子显示快照而不是原生视图，聊天只重排可见的行。格子边框和分隔线在移动期间淡出，结束后淡回。「减少动态效果」打开时不播放动画。拖动分隔线不做动画，尺寸本来就跟着指针。</li>
+  <li><b>空格</b>：格数比内容多就会出现空格，里面列出 tab 栏的内容，点一下就能填进去。</li>
+  <li><b>焦点</b>：同一时间只有一个格子获得焦点，键盘输入、⌘W、贴靠快捷键和右侧栏的上下文都跟着焦点格走。</li>
+</ul>
+
+<h3>3.3 贴靠菜单</h3>
+<p>菜单结构对应 macOS 绿色按钮的菜单，每一项是一个小画布图示，蓝色块是这一格会去的位置。指向图示时，菜单里的提示行说出名字和快捷键（不用原生 title）；平时提示「按住 Option 显示四分之一」。</p>
+<ul>
+  <li><b>移动与调整大小</b>（只作用于这一格）：左半边、右半边、上半边、下半边；按住 Option 换成四个四分之一。去半边时，其他格子保持原来的顺序和排列挤进另一半；去的四分之一已经被一格完整占着时，两格交换位置。</li>
+  <li><b>填满与排列</b>：先是填满，然后是整块画布的左右、左 + 右侧上下、四宫格。这一格放在第一位，其他内容按阅读顺序依次填入；内容多出来退回 tab 栏，格子多出来留成空格。</li>
+  <li><b>还原上次布局</b>：退出填满；不在填满时，回到这次贴靠、排列、拖放、等分、关闭或拖动缝隙之前的布局。记录按涉及的标签和分组查找，所以把格子拖出分屏以后也能还原回去。</li>
+  <li><b>均分大小</b>。</li>
+  <li><b>更多布局</b>（展开）：上下、单屏、九宫格、十六宫格，已保存的布局，以及「保存布局…」。</li>
+</ul>
+<p>右键把手打开同一个菜单。</p>
+
+<h3>3.4 快捷键</h3>
+<p>macOS 的 Fn⌃ 组合归系统，画布用 <span class="kbd">⌃⌥</span>：</p>
+<table>
+  <tr><th>按键</th><th>作用</th></tr>
+  <tr><td><span class="kbd">⌃⌥←</span> <span class="kbd">⌃⌥→</span> <span class="kbd">⌃⌥↑</span> <span class="kbd">⌃⌥↓</span></td><td>焦点格去左、右、上、下半边</td></tr>
+  <tr><td><span class="kbd">⌃⌥⇧←</span> / <span class="kbd">⌃⌥⇧→</span></td><td>排列成左右，焦点格在左 / 在右；只有一格时另一边留成空格</td></tr>
+  <tr><td><span class="kbd">⌃⌥⇧↑</span> / <span class="kbd">⌃⌥⇧↓</span></td><td>排列成上下，焦点格在上 / 在下</td></tr>
+  <tr><td><span class="kbd">⌃⌥F</span></td><td>填满 / 退出填满</td></tr>
+  <tr><td><span class="kbd">⌃⌥R</span></td><td>还原上次布局</td></tr>
+  <tr><td><span class="kbd">⌘\</span> / <span class="kbd">⌘⇧\</span></td><td>向右 / 向下切出一个空格</td></tr>
+  <tr><td><span class="kbd">⌥⌘</span> + 方向键</td><td>把焦点移到那个方向最近的格子</td></tr>
+</table>
+
+<h3>3.5 标签栏里的布局标签</h3>
+<p>分屏窗口在标签栏里只占一个标签，宽度和普通标签一样，做法和 Chrome、Arc 的分屏相同。它显示当前聚焦那一格的图标和标题（随焦点变化），后面是分屏布局的小缩略图（聚焦那一格填深色）和总格数；所有格子在窗口总览里看。标签上的关闭按钮关闭整个分屏窗口，会先保存打开的文件；只关一格，用那一格把手上的红色按钮。分屏里关掉一格、分屏仍在时，这一格在点击的同一时刻移除：分屏的标签不变，没有标签栏退场动画要等，关闭动画由画布播放。</p>
+
+<h3>3.6 拖动的生命周期</h3>
+<p>画布以后要承载各种小窗口应用，拖动必须在任何情况下都能干净结束，并且不打扰其他格子：</p>
+<ul>
+  <li><b>同一个收尾</b>：格子拖动的松手、Esc、pointercancel、窗口失焦、计算落点出错，都走同一个清理，只执行一次：移除拖动标签和落点预览，恢复把手，释放指针捕获，清掉 <code>data-canvas-dragging</code>。查找落点出错时按「没有落点」处理，不会跳过清理。</li>
+  <li><b>漏掉的松手</b>：在系统窗口拖动区（标签栏空白处）、原生网页视图或别的应用上松手，页面收不到 pointerup。每个拖动（标签、格子、分隔线）都向 <code>setCanvasDragging(true, owner)</code> 登记自己的 cancel / release；之后第一次「没有按键按下」的 pointermove 就当作松手，在那里结束拖动。拖动还挂着时又来一次按下，旧拖动先取消。拖动期间整个窗口暂时没有 <code>-webkit-app-region: drag</code> 区域，系统不会吞掉松手。</li>
+  <li><b>状态不写在把手的内联样式里</b>：被拖的格子带 <code>data-pane-dragging</code> 属性，CSS 据此隐藏它的把手；新的拖动开始前清掉所有残留的这个属性。</li>
+  <li><b>按下把手不改焦点</b>：按下只准备拖动，不提交 store、不切换活动标签和路由；点一下（打开菜单）才聚焦。按下时阻止默认行为，不会选中下面格子的文字。</li>
+  <li><b>分隔线每帧只重绘</b>：拖动中用 <code>previewCanvas</code> 只改内存里的树（不规范化、不持久化、不切焦点），每帧最多一次；松手时 <code>setCanvas</code> 提交一次。</li>
+  <li><b>原生网页先截图再隐藏</b>：拖动或格子过小时，网页视图要换成快照。先截图，截图到手（最多等 160ms）再隐藏原生视图，不会先闪一下「网页已暂停」。</li>
+  <li><b>落点预览不闪</b>：不加背景模糊，位置变化用 120ms 缓出，没有回弹。</li>
+</ul>
+
+<h2>4. 尺寸与性能约束</h2>
+<table>
+  <tr><th>内容类型</th><th>最小宽 × 高</th><th>格子太小时的处理</th></tr>
+  <tr><td>会话</td><td>280 × 200</td><td>隐藏侧边信息，输入框压缩成单行</td></tr>
+  <tr><td>网页</td><td>320 × 200</td><td>低于这个尺寸时原生视图冻结成截图</td></tr>
+  <tr><td>终端</td><td>200 × 120</td><td>xterm 自己重新计算行列数</td></tr>
+  <tr><td>文件或程序</td><td>200 × 120</td><td>—</td></tr>
+</table>
+<p>再往下压，就进入「迷你态」：格子只显示标题和类型，点一下就放大。原型里把宽度小于 150px 或高度小于 110px 的格子当作迷你态来演示。</p>
+<div class="note warn">
+  <b>网页格子是难点。</b>网页是 Electron 的原生 <code>WebContentsView</code>，永远盖在 DOM 上面，所以：
+  <ol style="margin:6px 0 0">
+    <li>每个网页格子都要通过现有的 <code>registerVisibleWebTabBounds</code> 上报自己的 bounds，缝隙拖动时要按帧同步；</li>
+    <li>拖拽开始时，把所有网页格子冻结成 <code>capturePage</code> 截图并隐藏原生视图，松手后再恢复，否则 drop 预览框和被拖的 tab 会被网页挡住；</li>
+    <li>十六格全是网页时，同时存活的 WebContents 太多，需要一个上限（比如最多 8 个活跃，其余冻结成截图，点一下再激活）。</li>
+  </ol>
+</div>
+
+<h2>5. 持久化</h2>
+<ul>
+  <li>布局树序列化后跟窗口状态一起存（参见 <code>window-state</code> 设计），格子里只存 <code>TabRef</code>，不存内容本身。</li>
+  <li>重启后恢复布局；已经失效的 <code>TabRef</code> 变成空格，不让整个布局崩掉。</li>
+  <li>可以把当前布局存成命名预设（比如「研究：会话 + 3 个网页」），这项放到第三期再做。</li>
+</ul>
+
+<h2>6. 实施计划</h2>
+<table>
+  <tr><th>阶段</th><th>内容</th><th>涉及文件</th></tr>
+  <tr><td>P0 拖动手感</td><td>tab 本身跟着鼠标走，拖出 tab 栏也跟着；拖动时不透明、用中间色；去掉蓝色 New window 提示条；拖动时冻结网页视图。</td><td><code>use-tab-pointer-drag.ts</code>、<code>center-tabs.module.css</code>、<code>center-tab-strip.tsx</code>、<code>check-center-tabs.mjs</code></td></tr>
+  <tr><td>P1 布局树</td><td>新增 <code>lib/tabs/canvas/canvas-layout.ts</code>，包含纯函数的切分、移除、规范化、移动、预设、缝隙调整，并配完整单测；把现有两格分组迁移过来；渲染层改成递归的 <code>CanvasNode</code> 组件。</td><td><code>center-tab-groups.ts</code>、<code>store/layout.ts</code>、<code>app-shell.tsx</code></td></tr>
+  <tr><td>P2 拖放分屏</td><td>五向 drop zone 加画布外沿、drop 预览框，拖格子标题栏，拖回 tab 栏；同步修订「分屏只能从右键菜单进入」这条设计约束。</td><td><code>tab-drag-coordinator.ts</code>（<code>resolveTabDropIntent</code> 增加 pane zone 这种 intent）</td></tr>
+  <tr><td>P3 多网页格</td><td>多个 WebContents 的 bounds 同步、活跃数上限、截图冻结。</td><td><code>web-tab-pane.tsx</code>、<code>lib/desktop/*</code>、desktop 主进程</td></tr>
+  <tr><td>P4 完善</td><td>预设菜单、快捷键、放大、命名预设、持久化。</td><td>—</td></tr>
+</table>
+
+<h2>7. 采用的交互约定</h2><p>产品画布不显示常驻布局工具栏，也不预留工具栏高度。布局操作都在格子把手的贴靠菜单里；拖放与快捷键直接可用。下方原型中的工具栏仅用于演示布局操作。</p>
+<p>多格画布作为一个布局标签；同一内容只占一个格子；按住 ⌥ 拖到格子中间替换内容，被替换的内容回到顶部标签栏。关闭最后一格后保留空布局，原内容仍在标签栏。</p>
+<h2>实现状态</h2>
+<p>代码实现：布局树与旧两格迁移、预设、空格选择内容、五向拖放与外沿插入、格子拖回标签栏、分隔线调整与双击等分、放大还原、快捷键、命名预设及窗口持久化。拖动时原标签保持不透明并跟随指针；原生网页显示截图，结束后恢复。最多同时显示 8 个原生网页视图，其余以截图显示，点击切换；这不终止后台网页进程。跨窗口传输包含布局树，并保留传输体积与结构限制。</p>
+<p>macOS 式贴靠已实现：画布边与角的半边、四分之一和顶边填满，格子内左右竖条与上下两半拆分、⌥ 替换，落点预览总盖住指针并标出去向，拖回原处显示「留在原处」；「•••」把手与悬停打开的贴靠菜单（移动与调整大小、排列、还原上次布局、更多布局），⌃⌥ 快捷键，缝隙在 1/3、1/2、2/3 吸附；下方嵌入的交互原型仍演示早先的中央替换和常驻工具栏，以正文为准。</p>
+<p>渲染通过递归布局计算得到格子与分隔线坐标，内容宿主保持稳定，避免调整树结构时重新挂载文件编辑器、终端和会话。放大仅隐藏其他格子。</p>
+</div>
+
+<script>
+(() => {
+  // ───────────── 内容库 ─────────────
+  const ITEMS = {
+    c1: { kind: "chat", title: "重构拖拽引擎" },
+    c2: { kind: "chat", title: "周报整理" },
+    c3: { kind: "chat", title: "论文 related work" },
+    w1: { kind: "web", title: "Electron WebContentsView", url: "electronjs.org/docs/api/web-contents-view" },
+    w2: { kind: "web", title: "arXiv 2509.01234", url: "arxiv.org/abs/2509.01234" },
+    w3: { kind: "web", title: "GitHub · OpenProgram", url: "github.com/FuzzyKuji/OpenProgram" },
+    t1: { kind: "term", title: "zsh — apps/web" },
+    t2: { kind: "term", title: "pytest -k webtab" },
+    f1: { kind: "file", title: "canvas-layout.ts" },
+    p1: { kind: "prog", title: "weekly_report 程序" },
+  };
+  const KIND_LABEL = { chat: "会话", web: "网页", term: "终端", file: "文件", prog: "程序" };
+  const KIND_LETTER = { chat: "C", web: "W", term: ">", file: "F", prog: "P" };
+  let seq = 0;
+  const nid = (p) => p + (++seq);
+
+  // ───────────── 状态 ─────────────
+  let strip, root, focused, zoomed;
+  function reset() {
+    strip = ["c2", "w2", "t1", "c3", "w3", "t2", "f1", "p1"];
+    root = split("row", [pane("c1"), pane("w1")], [0.55, 0.45]);
+    focused = root.children[0].id;
+    zoomed = null;
+  }
+  function pane(content) { return { kind: "pane", id: nid("p"), content: content ?? null }; }
+  function split(dir, children, sizes) {
+    return { kind: "split", id: nid("s"), dir, children, sizes: sizes || children.map(() => 1 / children.length) };
+  }
+
+  // ───────────── 树操作（纯逻辑，对应 P1 的 canvas-layout.ts） ─────────────
+  function findParent(node, id, parent = null) {
+    if (node.id === id) return { node, parent };
+    if (node.kind === "split") for (const c of node.children) { const r = findParent(c, id, node); if (r) return r; }
+    return null;
+  }
+  function panes(node, out = []) {
+    if (node.kind === "pane") out.push(node); else node.children.forEach((c) => panes(c, out));
+    return out;
+  }
+  function normalize(node) {
+    if (node.kind === "pane") return node;
+    let kids = [], sizes = [];
+    node.children.forEach((c, i) => {
+      const n = normalize(c);
+      if (n.kind === "split" && n.dir === node.dir) {
+        n.children.forEach((cc, j) => { kids.push(cc); sizes.push(node.sizes[i] * n.sizes[j]); });
+      } else { kids.push(n); sizes.push(node.sizes[i]); }
+    });
+    if (kids.length === 1) return kids[0];
+    const sum = sizes.reduce((a, b) => a + b, 0) || 1;
+    node.children = kids; node.sizes = sizes.map((s) => s / sum);
+    return node;
+  }
+  function removePane(id) {
+    if (root.kind === "pane") { root = pane(null); focused = root.id; return; }
+    const { parent } = findParent(root, id);
+    const i = parent.children.findIndex((c) => c.id === id);
+    const freed = parent.sizes[i];
+    parent.children.splice(i, 1); parent.sizes.splice(i, 1);
+    const nb = Math.min(i, parent.sizes.length - 1);
+    parent.sizes[nb] += freed;           // 空间让给相邻兄弟
+    root = normalize(root);
+    if (focused === id || !findParent(root, focused)) focused = panes(root)[0].id;
+    if (zoomed === id) zoomed = null;
+  }
+  // 在 target 的 side 一侧插入新格；target 为 "root" 时切整个画布
+  function insertAt(targetId, side, content) {
+    const dir = side === "left" || side === "right" ? "row" : "col";
+    const before = side === "left" || side === "top";
+    const np = pane(content);
+    if (targetId === "root") {
+      const old = root;
+      const n = old.kind === "split" && old.dir === dir ? old : split(dir, [old], [1]);
+      const share = 1 / (n.children.length + 1);
+      n.sizes = n.sizes.map((s) => s * (1 - share));
+      if (before) { n.children.unshift(np); n.sizes.unshift(share); } else { n.children.push(np); n.sizes.push(share); }
+      root = normalize(n);
+    } else {
+      const { node, parent } = findParent(root, targetId);
+      if (parent && parent.dir === dir) {
+        const i = parent.children.indexOf(node);
+        const half = parent.sizes[i] / 2;
+        parent.sizes[i] = half;
+        parent.children.splice(before ? i : i + 1, 0, np);
+        parent.sizes.splice(before ? i : i + 1, 0, half);
+      } else {
+        const s = split(dir, before ? [np, node] : [node, np], [0.5, 0.5]);
+        if (!parent) root = s; else parent.children[parent.children.indexOf(node)] = s;
+      }
+      root = normalize(root);
+    }
+    focused = np.id;
+    return np;
+  }
+  function gridPreset(rows, cols, custom) {
+    const contents = panes(root).map((p) => p.content).filter(Boolean);
+    let node;
+    if (custom === "main+2") {
+      node = split("row", [pane(), split("col", [pane(), pane()])], [0.58, 0.42]);
+    } else {
+      const mk = () => split("row", Array.from({ length: cols }, () => pane()));
+      node = rows === 1 ? mk() : split("col", Array.from({ length: rows }, mk));
+    }
+    node = normalize(node);
+    const ps = panes(node);
+    ps.forEach((p, i) => { p.content = contents[i] ?? null; });
+    contents.slice(ps.length).forEach((c) => strip.push(c));
+    root = node; focused = ps[0].id; zoomed = null;
+  }
+  function equalize(node) {
+    if (node.kind === "split") { node.sizes = node.children.map(() => 1 / node.children.length); node.children.forEach(equalize); }
+  }
+
+  // ───────────── 渲染 ─────────────
+  const $strip = document.getElementById("strip");
+  const $canvas = document.getElementById("canvas");
+  const $status = document.getElementById("status");
+  const $preview = document.getElementById("preview");
+  const $win = document.getElementById("win");
+  const $toast = document.getElementById("toast");
+  const ICON = {
+    zoom: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M9.5 2.5h4v4M6.5 13.5h-4v-4M13.5 2.5 9 7M2.5 13.5 7 9"/></svg>',
+    unzoom: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="M13 7H9V3M3 9h4v4M9 7l4.5-4.5M7 9l-4.5 4.5"/></svg>',
+    splitR: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M8 2.5v11"/></svg>',
+    splitD: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="2" y="2.5" width="12" height="11" rx="1.5"/><path d="M2 8h12"/></svg>',
+    close: '<svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m4 4 8 8M12 4l-8 8"/></svg>',
+  };
+  const icoHTML = (kind) => `<span class="ico ${kind}">${KIND_LETTER[kind]}</span>`;
+
+  function body(content) {
+    if (!content) {
+      const opts = strip.map((k) => `<button data-fill="${k}">${icoHTML(ITEMS[k].kind)}${ITEMS[k].title}</button>`).join("");
+      return `<div class="empty-pane"><div>空格：把 tab 拖进来，或者点一个</div><div class="pick">${opts || "<i>tab 栏里没有剩余内容</i>"}</div></div>`;
+    }
+    const it = ITEMS[content];
+    switch (it.kind) {
+      case "chat": return `<div class="mock-bubble">${it.title}，帮我看一下</div><div class="mock-line" style="width:88%"></div><div class="mock-line" style="width:72%"></div><div class="mock-line" style="width:80%"></div><div class="mock-line" style="width:45%"></div><div class="mock-composer"></div>`;
+      case "web": return `<div class="mock-web"><div class="url">${it.url}</div><div class="blk"></div><div class="native">原生 WebContentsView</div></div>`;
+      case "term": return `<div class="mock-term">$ ${it.title.includes("pytest") ? "pytest -k webtab -q\n........\n8 passed in 1.42s" : "pnpm --filter web dev\n▲ ready on :3000\n✓ compiled canvas-layout"}\n$ ▍</div>`;
+      case "file": return `<div class="mock-file">export function insertAt(\n  root: LayoutNode,\n  target: PaneId,\n  side: Side,\n  content: TabRef,\n): LayoutNode {\n  …\n}</div>`;
+      case "prog": return `<div class="mock-line" style="width:60%"></div><div class="mock-line" style="width:90%"></div><div class="mock-line" style="width:70%"></div>`;
+    }
+  }
+
+  function renderNode(node) {
+    if (node.kind === "pane") {
+      const it = node.content ? ITEMS[node.content] : null;
+      const el = document.createElement("div");
+      el.className = "pane" + (node.id === focused ? " focused" : "");
+      el.dataset.pane = node.id;
+      el.innerHTML = `
+        <div class="pane-head" data-head="${node.id}">
+          ${it ? icoHTML(it.kind) : ""}<span class="ttl">${it ? it.title : "空格"}</span>
+          <span class="act" data-act="splitR" title="向右切分 ⌘\\">${ICON.splitR}</span>
+          <span class="act" data-act="splitD" title="向下切分 ⌘⇧\\">${ICON.splitD}</span>
+          <span class="act keep" data-act="zoom" title="放大 ⌘⇧↩">${zoomed === node.id ? ICON.unzoom : ICON.zoom}</span>
+          <span class="act keep" data-act="close" title="关闭格子（内容回到 tab 栏）">${ICON.close}</span>
+        </div>
+        <div class="pane-body" data-kind="${it ? KIND_LABEL[it.kind] + " · " + it.title : "空格"}">${body(node.content)}</div>`;
+      return el;
+    }
+    const el = document.createElement("div");
+    el.className = "node " + node.dir;
+    node.children.forEach((c, i) => {
+      if (i > 0) {
+        const d = document.createElement("div");
+        d.className = "divider"; d.dataset.split = node.id; d.dataset.index = i;
+        el.appendChild(d);
+      }
+      const child = renderNode(c);
+      child.style.flex = `${node.sizes[i]} 1 0`;
+      el.appendChild(child);
+    });
+    return el;
+  }
+
+  function render() {
+    $strip.innerHTML = "";
+    strip.forEach((k) => {
+      const it = ITEMS[k];
+      const t = document.createElement("div");
+      t.className = "tab"; t.dataset.tab = k;
+      t.innerHTML = `${icoHTML(it.kind)}<span class="ttl">${it.title}</span>`;
+      $strip.appendChild(t);
+    });
+    $canvas.innerHTML = "";
+    const shown = zoomed ? findParent(root, zoomed).node : root;
+    const r = renderNode(shown);
+    r.style.flex = "1 1 0"; r.style.height = "100%";
+    $canvas.appendChild(r);
+    requestAnimationFrame(markCompact);
+    const ps = panes(root);
+    const webs = ps.filter((p) => p.content && ITEMS[p.content].kind === "web").length;
+    $status.textContent = `格子 ${ps.length}  ·  空格 ${ps.filter((p) => !p.content).length}  ·  网页原生视图 ${webs}  ·  tab 栏 ${strip.length}${zoomed ? "  ·  已放大" : ""}`;
+  }
+  function markCompact() {
+    document.querySelectorAll(".pane").forEach((p) => {
+      const r = p.getBoundingClientRect();
+      p.classList.toggle("tiny", r.width < 150 || r.height < 110);
+      p.classList.toggle("compact", r.width < 260 || r.height < 180);
+    });
+  }
+
+  function toast(msg) {
+    $toast.textContent = msg; $toast.classList.add("show");
+    clearTimeout(toast.t); toast.t = setTimeout(() => $toast.classList.remove("show"), 1800);
+  }
+
+  // ───────────── 格子按钮与点击 ─────────────
+  $canvas.addEventListener("pointerdown", (e) => {
+    const p = e.target.closest(".pane");
+    if (p && focused !== p.dataset.pane) { focused = p.dataset.pane; document.querySelectorAll(".pane").forEach((x) => x.classList.toggle("focused", x === p)); }
+  }, true);
+  $canvas.addEventListener("click", (e) => {
+    const fill = e.target.closest("[data-fill]");
+    if (fill) {
+      const id = e.target.closest(".pane").dataset.pane;
+      const k = fill.dataset.fill;
+      findParent(root, id).node.content = k; strip = strip.filter((x) => x !== k); render(); return;
+    }
+    const act = e.target.closest("[data-act]");
+    if (!act) return;
+    const id = act.closest(".pane").dataset.pane;
+    doAction(act.dataset.act, id);
+  });
+  function doAction(a, id) {
+    const node = findParent(root, id).node;
+    if (a === "close") { if (node.content) strip.push(node.content); removePane(id); }
+    if (a === "zoom") zoomed = zoomed === id ? null : id;
+    if (a === "splitR" || a === "splitD") { zoomed = null; insertAt(id, a === "splitR" ? "right" : "bottom", strip.shift() ?? null); }
+    render();
+  }
+  $canvas.addEventListener("dblclick", (e) => {
+    const d = e.target.closest(".divider");
+    if (d) { const { node } = findParent(root, d.dataset.split); const i = +d.dataset.index; const s = (node.sizes[i - 1] + node.sizes[i]) / 2; node.sizes[i - 1] = node.sizes[i] = s; render(); return; }
+    const h = e.target.closest(".pane-head");
+    if (h && !e.target.closest("[data-act]")) doAction("zoom", h.dataset.head);
+  });
+
+  // ───────────── 缝隙拖动 ─────────────
+  $canvas.addEventListener("pointerdown", (e) => {
+    const d = e.target.closest(".divider");
+    if (!d) return;
+    e.preventDefault();
+    const { node } = findParent(root, d.dataset.split);
+    const i = +d.dataset.index;
+    const parentEl = d.parentElement;
+    const rect = parentEl.getBoundingClientRect();
+    const horiz = node.dir === "row";
+    const total = (horiz ? rect.width : rect.height) - (node.children.length - 1) * 6;
+    const start = horiz ? e.clientX : e.clientY;
+    const a0 = node.sizes[i - 1], b0 = node.sizes[i];
+    const minFrac = (horiz ? 110 : 80) / total;
+    d.classList.add("active"); d.setPointerCapture(e.pointerId);
+    const kids = [...parentEl.children].filter((c) => !c.classList.contains("divider"));
+    const move = (ev) => {
+      const delta = ((horiz ? ev.clientX : ev.clientY) - start) / total;
+      const a = Math.min(Math.max(a0 + delta, minFrac), a0 + b0 - minFrac);
+      node.sizes[i - 1] = a; node.sizes[i] = a0 + b0 - a;
+      kids[i - 1].style.flex = `${node.sizes[i - 1]} 1 0`; kids[i].style.flex = `${node.sizes[i]} 1 0`;
+      markCompact();
+    };
+    const up = () => { d.classList.remove("active"); d.removeEventListener("pointermove", move); d.removeEventListener("pointerup", up); render(); };
+    d.addEventListener("pointermove", move); d.addEventListener("pointerup", up);
+  });
+
+  // ───────────── 拖拽：tab 与格子标题栏共用 ─────────────
+  let drag = null;
+  document.addEventListener("pointerdown", (e) => {
+    if (e.button !== 0) return;
+    const tab = e.target.closest(".tab");
+    const head = !e.target.closest("[data-act]") && e.target.closest(".pane-head");
+    if (!tab && !head) return;
+    drag = { src: tab ? "strip" : "pane", key: tab ? tab.dataset.tab : null, paneId: head ? head.dataset.head : null,
+             el: tab || null, x0: e.clientX, y0: e.clientY, started: false };
+    if (head) { const n = findParent(root, drag.paneId).node; if (!n.content) { drag = null; return; } drag.key = n.content; }
+  });
+  document.addEventListener("pointermove", (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x0, dy = e.clientY - drag.y0;
+    if (!drag.started) {
+      if (Math.hypot(dx, dy) < 5) return;
+      drag.started = true;
+      if (drag.src === "pane") {
+        // 从格子拖出来时，生成一个同样样式的 tab 当作"被拖的 tab 本体"
+        const it = ITEMS[drag.key];
+        const t = document.createElement("div");
+        t.className = "tab";
+        t.innerHTML = `${icoHTML(it.kind)}<span class="ttl">${it.title}</span>`;
+        t.style.position = "fixed"; t.style.left = (e.clientX - 60) + "px"; t.style.top = (e.clientY - 15) + "px"; t.style.width = "168px";
+        document.body.appendChild(t);
+        drag.el = t; drag.floating = true; drag.x0 = e.clientX; drag.y0 = e.clientY;
+      }
+      drag.el.classList.add("dragging");
+      document.body.style.cursor = "grabbing";
+    }
+    drag.el.style.transform = `translate(${e.clientX - drag.x0}px, ${e.clientY - drag.y0}px)`;
+    drag.target = resolveDrop(e.clientX, e.clientY);
+    showPreview(drag.target);
+    if (drag.src === "strip" && drag.target.type === "strip") reorderShift(e.clientX);
+  });
+  document.addEventListener("pointerup", () => {
+    if (!drag) return;
+    const d = drag; drag = null;
+    document.body.style.cursor = "";
+    $preview.style.display = "none"; $win.classList.remove("drag-out");
+    if (d.floating) d.el.remove();
+    if (!d.started) return;
+    commitDrop(d, d.target);
+  });
+
+  function resolveDrop(x, y) {
+    const wr = $win.getBoundingClientRect();
+    if (x < wr.left || x > wr.right || y < wr.top || y > wr.bottom) return { type: "window" };
+    const sr = document.querySelector(".titlebar").getBoundingClientRect();
+    if (y <= sr.bottom + 6) return { type: "strip" };
+    const cr = $canvas.getBoundingClientRect();
+    // 整画布切分只认最外圈 6px（含画布 4px 内边距），避免抢走「切某一格下半」的松手
+    const EDGE = 6;
+    if (!zoomed) {
+      if (x - cr.left < EDGE) return { type: "root", side: "left" };
+      if (cr.right - x < EDGE) return { type: "root", side: "right" };
+      if (y - cr.top < EDGE) return { type: "root", side: "top" };
+      if (cr.bottom - y < EDGE) return { type: "root", side: "bottom" };
+    }
+    const el = document.elementFromPoint(x, y)?.closest(".pane");
+    if (!el) return { type: "none" };
+    const r = el.getBoundingClientRect();
+    const fx = (x - r.left) / r.width, fy = (y - r.top) / r.height;
+    let side = "center";
+    if (!zoomed) {
+      // 中央 40% 的方块是「替换」，其余按离哪条边最近划成四块，边缘区更大更好命中
+      const inCenter = fx > 0.3 && fx < 0.7 && fy > 0.3 && fy < 0.7;
+      if (!inCenter) {
+        const m = Math.min(fx, 1 - fx, fy, 1 - fy);
+        side = m === fx ? "left" : m === 1 - fx ? "right" : m === fy ? "top" : "bottom";
+      }
+    }
+    if (drag.src === "pane" && el.dataset.pane === drag.paneId) return { type: "none" };
+    return { type: "pane", paneId: el.dataset.pane, side, rect: r };
+  }
+
+  function showPreview(t) {
+    $win.classList.toggle("drag-out", t.type === "window");
+    const lbl = $preview.querySelector(".lbl");
+    let r;
+    if (t.type === "pane") {
+      const b = t.rect;
+      r = { left: b.left, top: b.top, width: b.width, height: b.height };
+      if (t.side === "left") r.width /= 2;
+      if (t.side === "right") { r.left += b.width / 2; r.width /= 2; }
+      if (t.side === "top") r.height /= 2;
+      if (t.side === "bottom") { r.top += b.height / 2; r.height /= 2; }
+      const empty = !findParent(root, t.paneId).node.content;
+      lbl.textContent = t.side === "center" ? (empty ? "放进这一格" : "替换这一格") : { left: "切到左边", right: "切到右边", top: "切到上方", bottom: "切到下方" }[t.side];
+    } else if (t.type === "root") {
+      const b = $canvas.getBoundingClientRect();
+      const n = root.kind === "split" ? root.children.length + 1 : 2;
+      r = { left: b.left, top: b.top, width: b.width, height: b.height };
+      if (t.side === "left") r.width = b.width / n;
+      if (t.side === "right") { r.width = b.width / n; r.left = b.right - r.width; }
+      if (t.side === "top") r.height = b.height / n;
+      if (t.side === "bottom") { r.height = b.height / n; r.top = b.bottom - r.height; }
+      lbl.textContent = "在整个画布" + { left: "左侧", right: "右侧", top: "上方", bottom: "下方" }[t.side] + "加一整列/行";
+    } else if (t.type === "window") {
+      r = null; $preview.style.display = "none"; return;
+    } else if (t.type === "strip" && drag.src === "pane") {
+      const b = document.querySelector(".titlebar").getBoundingClientRect();
+      r = { left: b.left + 70, top: b.top + 3, width: b.width - 110, height: b.height - 6 };
+      lbl.textContent = "移出画布，放回 tab 栏";
+    } else { $preview.style.display = "none"; return; }
+    Object.assign($preview.style, { display: "block", left: r.left + "px", top: r.top + "px", width: r.width + "px", height: r.height + "px" });
+  }
+
+  function reorderShift(x) {
+    const tabs = [...$strip.querySelectorAll(".tab")].filter((t) => t !== drag.el);
+    let idx = tabs.length;
+    for (let i = 0; i < tabs.length; i++) { const r = tabs[i].getBoundingClientRect(); if (x < r.left + r.width / 2) { idx = i; break; } }
+    drag.insertIndex = idx;
+    const w = drag.el.getBoundingClientRect().width + 2;
+    const from = strip.indexOf(drag.key);
+    tabs.forEach((t, i) => {
+      const orig = i >= from ? i + 1 : i;      // 原始位置（含被拖 tab）
+      let shift = 0;
+      if (orig > from && i < idx) shift = -w;
+      if (orig < from && i >= idx) shift = w;
+      t.style.transform = shift ? `translateX(${shift}px)` : "";
+    });
+  }
+
+  function takeFromSource(d) {
+    if (d.src === "strip") strip = strip.filter((k) => k !== d.key);
+    else { const n = findParent(root, d.paneId)?.node; if (n) n.content = null; }
+  }
+  function cleanupEmptySource(d) {
+    if (d.src === "pane" && findParent(root, d.paneId) && !findParent(root, d.paneId).node.content) removePane(d.paneId);
+  }
+
+  function commitDrop(d, t) {
+    const title = ITEMS[d.key].title;
+    if (!t || t.type === "none") { render(); return; }
+    if (t.type === "strip") {
+      if (d.src === "strip") {
+        const i = strip.indexOf(d.key); strip.splice(i, 1);
+        strip.splice(d.insertIndex ?? i, 0, d.key);
+      } else { takeFromSource(d); strip.push(d.key); cleanupEmptySource(d); }
+    } else if (t.type === "window") {
+      takeFromSource(d); cleanupEmptySource(d);
+      toast(`「${title}」已在新窗口打开`);
+    } else if (t.type === "root") {
+      takeFromSource(d); cleanupEmptySource(d);
+      insertAt("root", t.side, d.key);
+    } else if (t.type === "pane") {
+      if (!findParent(root, t.paneId)) { render(); return; }
+      if (t.side === "center") {
+        const target = findParent(root, t.paneId).node;
+        const displaced = target.content;
+        takeFromSource(d);
+        target.content = d.key;
+        if (displaced) strip.push(displaced);
+        focused = target.id;
+        cleanupEmptySource(d);
+      } else {
+        takeFromSource(d);
+        insertAt(t.paneId, t.side, d.key);
+        cleanupEmptySource(d);
+      }
+    }
+    render();
+  }
+
+  // ───────────── 工具栏与快捷键 ─────────────
+  document.querySelectorAll("[data-preset]").forEach((b) => b.addEventListener("click", () => {
+    const p = b.dataset.preset;
+    if (p === "main+2") gridPreset(0, 0, "main+2");
+    else { const [r, c] = p.split("x").map(Number); gridPreset(r, c); }
+    render();
+  }));
+  document.getElementById("btn-equalize").addEventListener("click", () => { equalize(root); render(); });
+  document.getElementById("btn-reset").addEventListener("click", () => { reset(); render(); });
+  document.getElementById("newtab").addEventListener("click", () => {
+    const k = "c" + (Object.keys(ITEMS).length + 1);
+    ITEMS[k] = { kind: "chat", title: "新会话 " + k.slice(1) }; strip.push(k); render();
+  });
+  document.addEventListener("keydown", (e) => {
+    if (!(e.metaKey || e.ctrlKey)) return;
+    if (e.key === "\\" || e.code === "Backslash") { e.preventDefault(); doAction(e.shiftKey ? "splitD" : "splitR", focused); }
+    else if (e.key === "Enter" && e.shiftKey) { e.preventDefault(); doAction("zoom", focused); }
+    else if (e.key.toLowerCase() === "w") { e.preventDefault(); doAction("close", focused); }
+    else if (e.altKey && e.key.startsWith("Arrow")) {
+      e.preventDefault();
+      const cur = document.querySelector(`[data-pane="${focused}"]`)?.getBoundingClientRect();
+      if (!cur) return;
+      const cx = cur.left + cur.width / 2, cy = cur.top + cur.height / 2;
+      const dir = { ArrowLeft: [-1, 0], ArrowRight: [1, 0], ArrowUp: [0, -1], ArrowDown: [0, 1] }[e.key];
+      let best = null, bd = Infinity;
+      document.querySelectorAll(".pane").forEach((p) => {
+        const r = p.getBoundingClientRect(); const x = r.left + r.width / 2 - cx, y = r.top + r.height / 2 - cy;
+        if (x * dir[0] + y * dir[1] <= 5) return;
+        const dist = Math.hypot(x, y) + Math.abs(dir[0] ? y : x) * 2;
+        if (dist < bd) { bd = dist; best = p; }
+      });
+      if (best) { focused = best.dataset.pane; render(); }
+    }
+  });
+  window.addEventListener("resize", markCompact);
+
+  reset(); render();
+})();
+</script>
+<p>把窗格拖到顶部标签栏时，显示与画布停靠一致的蓝色圆角落点预览。提示覆盖标签栏实际范围，移出或取消时消失；在范围内松手后恢复为独立标签。</p></body>
+</html>

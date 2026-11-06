@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>占用与压缩</title>
+<style>
+  :root {
+    --bg: #f7f7f5; --surface: #fff; --text: #202124; --muted: #6b7280;
+    --line: #deded9; --blue: #2563eb; --blue-soft: #eff6ff;
+    --green: #15803d; --green-soft: #f0fdf4; --amber: #a16207;
+    --amber-soft: #fffbeb; --red: #b42318; --red-soft: #fef2f2;
+    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+  main { max-width: 980px; margin: 0 auto; padding: 48px 24px 96px; }
+  header { max-width: 760px; margin-bottom: 32px; }
+  .eyebrow { color: var(--blue); font: 600 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
+  h1 { margin: 10px 0 12px; font-size: clamp(30px, 5vw, 44px); line-height: 1.12; letter-spacing: -.03em; }
+  h2 { margin: 0 0 12px; font-size: 21px; }
+  h3 { margin: 18px 0 8px; font-size: 16px; }
+  p { margin: 0 0 12px; }
+  code { font-family: var(--mono); font-size: .9em; background: #eeeeeb; padding: 2px 5px; border-radius: 4px; }
+  .meta { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: var(--surface); color: var(--muted); font-size: 12px; }
+  .pill.ok { color: var(--green); border-color: #bbdfc5; background: var(--green-soft); }
+  .pill.warn { color: var(--amber); border-color: #e8d39a; background: var(--amber-soft); }
+  .card { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
+  .card strong { display: block; margin-bottom: 6px; }
+  .card p { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; margin: 0; }
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
+  section { margin-top: 42px; }
+  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); }
+  th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
+  th { color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; background: #f1f1ee; }
+  tr:last-child td { border-bottom: 0; }
+  .note { border-left: 4px solid var(--blue); background: var(--blue-soft); padding: 14px 16px; margin: 12px 0; }
+  .warning { border-left-color: var(--amber); background: var(--amber-soft); }
+  ul, ol { margin: 8px 0 0; padding-left: 20px; }
+  li { margin: 5px 0; }
+  .tree { padding: 16px 18px; background: #202124; color: #e5e7eb; border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre; }
+  .path { font-family: var(--mono); font-size: 13px; color: var(--muted); }
+  .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; align-items: stretch; gap: 10px; }
+  .flow .step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; font-size: 14px; }
+  .flow .arrow { align-self: center; color: var(--muted); font-family: var(--mono); }
+  .states { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
+  .ring-mock { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 10px; }
+  .ring-mock svg { display: block; }
+  @media (max-width: 760px) {
+    main { padding: 28px 16px 64px; }
+    .grid, .grid-2, .flow, .states { grid-template-columns: 1fr; }
+    .flow .arrow { transform: rotate(90deg); justify-self: center; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    * { transition: none !important; }
+  }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">上下文 · 占用 &amp; 压缩</div>
+    <h1>占用与压缩</h1>
+    <p>写给实现占用圆环、<code>/context</code> 面板和压缩管道的人。圆环、面板、压缩报告读同一份「模型下一轮实际读到的视图」。压缩不移动 HEAD，所以「HEAD 没变」不能当成「图没变」。</p>
+    <div class="meta">
+      <span class="pill">读者：实现</span>
+      <span class="pill ok">斜杠 /compact 已能发出去</span>
+      <span class="pill warn">闲时自动压：产品未定，不做</span>
+    </div>
+  </header>
+
+  <section>
+    <h2>范围</h2>
+    <div class="grid-2">
+      <article class="card">
+        <strong>做</strong>
+        <p>一根占用尺子；无效压缩不再装成功；圆环接入进行中；面板可以立刻压；四种系统行自动压和手动共用。</p>
+      </article>
+      <article class="card">
+        <strong>不做</strong>
+        <p>不改 <code>insert_summary_node</code> 的不删旧轮设计。不做闲时自动压。不改 DAG 渲染管线。snip 仍只砍这一次要发出去的 history，不写回 DAG。</p>
+      </article>
+    </div>
+  </section>
+
+  <section>
+    <h2>01 · 一根尺子</h2>
+    <p>模型下一轮读到的是 <code>rendered_history</code>：当前有效摘要 + 没被盖住的尾巴。圆环、面板、压缩报告都按这张视图计。</p>
+    <div class="grid">
+      <article class="card">
+        <strong>计数入口</strong>
+        <p><code>session_stats.compute_breakdown</code> 只吃 <code>rendered_history</code>。Messages 按折叠后计，带着 thinking / tool 块。这就是圆环和面板的分项。</p>
+      </article>
+      <article class="card">
+        <strong>压缩报告</strong>
+        <p><code>tokens_before</code> / <code>tokens_after</code> 走同一入口的总量（<code>estimate_total_used</code>），不再用只算可见正文的 <code>estimate_history_tokens</code>。</p>
+      </article>
+      <article class="card">
+        <strong>服务端缓存</strong>
+        <p>压缩不移动 HEAD。占用缓存不能只看 HEAD。图变了（压缩落地）必须重算，不能把压缩前的 measured / 分类快照钉住。</p>
+      </article>
+    </div>
+    <div class="note warning">
+      已压缩会话再 <code>/compact</code> 时，报告可以是 40.7k，面板却仍显示 Messages 125k——那是缓存把折叠前的实测钉住了，不是摘要没写入。
+    </div>
+    <h3>谁用哪张视图</h3>
+    <table>
+      <thead><tr><th>路径</th><th>视图</th><th>规则</th></tr></thead>
+      <tbody>
+        <tr>
+          <td><code>session_stats.compute_breakdown</code></td>
+          <td><code>rendered_history</code></td>
+          <td>唯一占用尺子。圆环和面板都从这里来。</td>
+        </tr>
+        <tr>
+          <td><code>engine.compact</code></td>
+          <td>同一把尺子的总量</td>
+          <td>压缩前后各估一次，写入 <code>compaction_finished</code>。</td>
+        </tr>
+        <tr>
+          <td><code>refresh_context_stats</code></td>
+          <td>重算 breakdown + 总量</td>
+          <td>压缩成功或手动压结束都要走。basis 翻成 <code>estimated</code>。</td>
+        </tr>
+        <tr>
+          <td><code>GET /api/sessions/{id}/context</code></td>
+          <td>当前占用快照</td>
+          <td>只在「图没变」时复用快照。压缩算图变，即使 HEAD 没动。</td>
+        </tr>
+        <tr>
+          <td><code>session_context_stats</code> 的 measured 复用</td>
+          <td>上一次真实请求</td>
+          <td>只在 HEAD 相同<strong>且</strong>占用代数未变时保留。压缩会加一代。</td>
+        </tr>
+        <tr>
+          <td><code>_get_messages</code> / <code>get_branch</code></td>
+          <td>未折叠枝</td>
+          <td>聊天记录缓存，不是占用。占用路径禁止走这里。</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>02 · 压缩什么时候算做成了</h2>
+    <p>一次会话最多一条 active summary。再压是替换，不是叠。DAG 只追加，不删旧节点，HEAD 不动。</p>
+    <div class="flow" aria-label="发请求前的压缩">
+      <div class="step"><strong>prepare</strong><br>按 rendered 拼 prompt，算 budget_pct</div>
+      <div class="arrow">→</div>
+      <div class="step"><strong>≥ 80% 则 compact</strong><br>LLM 写摘要，追加 summary 节点</div>
+      <div class="arrow">→</div>
+      <div class="step"><strong>snip 兜底</strong><br>摘要仍超才砍这一次要发出去的 history</div>
+      <div class="arrow">→</div>
+      <div class="step"><strong>再 prepare</strong><br>这次请求读 summary + 尾巴</div>
+    </div>
+    <h3>四种结果</h3>
+    <table>
+      <thead><tr><th>结果</th><th>条件</th><th>事件</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>开始</td>
+          <td>已经决定要打摘要 LLM</td>
+          <td><code>compaction_started</code></td>
+        </tr>
+        <tr>
+          <td>成功</td>
+          <td>摘要写入，<code>summarised_count &gt; 0</code></td>
+          <td><code>compaction_finished</code>（无 <code>no_op</code>）</td>
+        </tr>
+        <tr>
+          <td>无可压</td>
+          <td>rendered 已 ≤ keep 尾巴，或 <code>cut_idx ≤ 0</code> / 盖住 0 条 / insert 返回 None</td>
+          <td><code>compaction_finished</code> 带 <code>no_op: true</code>。调 LLM 之前能看出来的，不发 started、不烧摘要。</td>
+        </tr>
+        <tr>
+          <td>失败</td>
+          <td>摘要调用或管道异常</td>
+          <td><code>compaction_failed</code></td>
+        </tr>
+      </tbody>
+    </table>
+    <div class="note">
+      触发仍是三条：手动 <code>/compact</code> 或面板按钮；发请求前 budget ≥ 80%；413 / prompt_too_long 抢救。圆环按占用比例着色，不另发建议态。
+    </div>
+  </section>
+
+  <section>
+    <h2>03 · 圆环参与生命周期</h2>
+    <div class="states" aria-label="圆环两态">
+      <article class="card">
+        <div class="ring-mock" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 12 12">
+            <circle cx="6" cy="6" r="5" fill="none" stroke="#d1d5db" stroke-width="2"/>
+            <circle cx="6" cy="6" r="5" fill="none" stroke="#16a34a" stroke-width="2" stroke-dasharray="20 12" stroke-linecap="round" transform="rotate(-90 6 6)"/>
+          </svg>
+        </div>
+        <strong>平常</strong>
+        <p>中性底环，进度弧按占用比例着色。点开面板。数字来自同一把尺子。</p>
+      </article>
+      <article class="card">
+        <div class="ring-mock" aria-hidden="true">
+          <svg width="20" height="20" viewBox="0 0 12 12">
+            <circle cx="6" cy="6" r="5" fill="none" stroke="#d1d5db" stroke-width="2"/>
+            <circle cx="6" cy="6" r="5" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="8 24" stroke-linecap="round" transform="rotate(-90 6 6)"/>
+          </svg>
+        </div>
+        <strong>正在压</strong>
+        <p><code>compaction_started</code> 到 finished / failed：圆环忙碌态。面板按钮禁用。</p>
+      </article>
+    </div>
+    <p style="margin-top:16px">面板底部有「Compact now / 立即压缩」。点击发 <code>{action:"compact", session_id}</code>，和斜杠 <code>/compact</code> 同一条 WS。没有 session 或正在压时禁用。</p>
+  </section>
+
+  <section>
+    <h2>04 · 四种系统行</h2>
+    <p>自动压和手动压走 <code>chat-handlers.ts</code> 同一分支。文案双语。</p>
+    <table>
+      <thead><tr><th>事件</th><th>英文</th><th>中文</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>started</td>
+          <td>正在压缩上下文…</td>
+          <td>正在压缩上下文…</td>
+        </tr>
+        <tr>
+          <td>finished</td>
+          <td>上下文已压缩：覆盖 N 条较早消息，X → Y token</td>
+          <td>上下文已压缩：盖住 N 条旧消息，X → Y tokens</td>
+        </tr>
+        <tr>
+          <td>failed</td>
+          <td>上下文压缩失败［：错误］</td>
+          <td>上下文压缩失败[: error]</td>
+        </tr>
+        <tr>
+          <td>finished + <code>no_op</code></td>
+          <td>上下文已压缩，没有可继续合并的较早消息。</td>
+          <td>当前上下文已是压缩后状态，没有可压缩的旧消息</td>
+        </tr>
+      </tbody>
+    </table>
+  </section>
+
+  <section>
+    <h2>验收</h2>
+    <ol>
+      <li>压缩成功后，圆环和面板总量明显回落，并与 <code>compaction_finished.tokens_after</code> 同口径。</li>
+      <li>已压缩会话再压：不烧摘要 LLM，系统行是「无可压」，不是「盖住 0 条，X → X」。</li>
+      <li>低占用和高占用都没有建议外框；进度弧仍按比例着色。点「立即压缩」能发出 compact。</li>
+      <li>压缩进行中圆环忙碌，按钮禁用；结束回到平常态。</li>
+    </ol>
+  </section>
+
+  <section>
+    <h2>文件</h2>
+    <div class="tree">openprogram/runtime/context/
+├── session_stats.py     占用尺子（rendered_history）
+├── engine.py            compact / no_op / tokens_before|after
+├── summarize.py         find_cut_index；调 LLM 前可短路
+└── persistence.py       rendered_history；insert 不删旧轮
+
+openprogram/interfaces/server/
+├── server.py                          占用代数、refresh、measured 复用
+├── ws_actions/chat/commands.py        手动 compact 结束后 refresh
+├── ws_actions/chat/context_usage.py   每次实测请求后 refresh（含自动压缩）
+└── routes/files/tree.py               GET /context
+
+apps/web/
+├── components/chat/badges/context-badge.tsx
+├── components/chat/badges/context-breakdown-panel.tsx
+└── lib/runtime-bridge/session/chat-handlers.ts</div>
+    <p class="path" style="margin-top:16px">本页路径：<code>docs/reference/design/context/occupancy-status.html</code></p>
+  </section>
+
+  <section>
+    <h2>实现状态</h2>
+    <p>正文是目标设计。落地进度：</p>
+    <ul>
+      <li>斜杠可选参数立即执行、无 session 提示、started / 成功 / 失败系统行：已有。</li>
+      <li>自动压先 compact 再 snip：已有。</li>
+      <li>一根尺子（折叠后计 + 压缩后 refresh + 与 tokens_after 同口径）：已落地。</li>
+      <li>no_op 事件与第四种系统行：已落地。</li>
+      <li>圆环忙碌态、面板立即压缩：已落地。圆环没有建议外框。</li>
+      <li>闲时自动压：不做。</li>
+    </ul>
+  </section>
+</main>
+</body>
+</html>

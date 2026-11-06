@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>存储一致性</title>
+  <style>
+    :root{color-scheme:dark;--bg:#11120f;--panel:#191a16;--line:#34362d;--text:#e8e6dc;--muted:#aaa99f;--ok:#8fca8b;--warn:#e1b36c;--bad:#e98b83}
+    *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:14px/1.6 ui-sans-serif,system-ui,sans-serif}main{max-width:1040px;margin:auto;padding:48px 24px 72px}h1{font-size:32px;line-height:1.2;margin:.2em 0}h2{margin-top:38px;border-bottom:1px solid var(--line);padding-bottom:8px}h3{margin:0 0 8px}.sub,.muted{color:var(--muted)}.lead,.card,.note{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px 18px}.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(250px,1fr));gap:12px}.table{overflow:auto;border:1px solid var(--line);border-radius:10px}table{width:100%;border-collapse:collapse;min-width:720px}th,td{text-align:left;vertical-align:top;padding:10px 12px;border-bottom:1px solid var(--line)}th{color:var(--muted)}code{color:#d7c58f}.ok{color:var(--ok)}.warn{color:var(--warn)}.bad{color:var(--bad)}ol,ul{padding-left:22px}.flow{display:grid;grid-template-columns:auto 1fr;gap:8px 12px}.flow b{color:var(--warn)}
+  </style>
+</head>
+<body><main>
+  <p class="sub">OpenProgram / SessionStore / 实施交接</p>
+  <h1>存储一致性</h1>
+  <p class="sub">本页规范 <code>meta.json</code>、内存 <code>_index</code> 与 <code>index.json</code> 的时间和并发合同，以及 merged heads 和 store 锁范围。各部分保留独立的验收边界。</p>
+
+  <div class="lead"><b>确定方案。</b> <code>updated_at</code> 表示最后一次会话内容追加时间，不表示任意元数据持久化时间。内存注册表的读、改、快照由独立锁保护；磁盘原子写串行化，但不在注册表锁内执行文件 I/O。延迟 flush 只能清除自己快照之前的 dirty 状态，不能覆盖并发更新。</div>
+
+  <h2>注册表时间与不变量</h2>
+  <div class="table"><table><thead><tr><th>位置</th><th>禁止的行为</th><th>目标不变量</th></tr></thead><tbody>
+    <tr><td><code>_persist_meta</code></td><td>每次写 <code>meta.json</code> 都赋值 <code>time.time()</code>。</td><td>改名、置顶、已读、分支标记、HEAD 持久化不得改变会话内容排序时间；append 路径显式推进。</td></tr>
+    <tr><td><code>_index</code></td><td>更新和 <code>list_sessions()</code> 复制不受同一把锁保护。</td><td>读者获得行字典的点时快照；并发创建、更新、删除不产生迭代异常或撕裂字段。</td></tr>
+    <tr><td>deferred flush</td><td>timer 受锁保护，但快照序列化和其他直接保存路径未形成统一协议。</td><td>旧快照不得晚于新快照落盘；写入期间的新 mutation 必须保留 dirty 并由后续 flush 保存。</td></tr>
+  </tbody></table></div>
+
+  <h2>参考机制与取舍</h2>
+  <div class="grid">
+    <section class="card"><h3>现有 SessionMemoryIndex</h3><p>节点和 session meta 已有自己的内部锁。采用其“锁内更新、锁外文件 I/O”边界，不增加事务框架。</p></section>
+    <section class="card"><h3>stdlib threading</h3><p>采用一把 registry state lock 加一把 write lock。前者保护 dict、dirty、timer；后者只保证磁盘快照按取得顺序写入。</p></section>
+    <section class="card"><h3>atomic_write_text</h3><p>继续负责单次文件替换的原子性；不新增数据库、文件锁或第三方依赖。</p></section>
+  </div>
+  <p class="note"><b>采用：</b>显式内容时钟、行级浅拷贝快照、串行原子写。<b>修改：</b><code>_persist_meta</code> 不再隐式更新时间。<b>拒绝：</b>对所有 SessionStore 操作加全局锁、每次 append 同步写 registry、把 <code>updated_at</code> 拆成新字段并迁移全部消费者。</p>
+
+  <h2>目标状态流</h2>
+  <div class="flow">
+    <b>1</b><div>append message/node 显式生成一个时间值，并写入 session meta 与 registry entry。</div>
+    <b>2</b><div>rename/pin/read/branch/head 等路径只持久化已有 <code>updated_at</code>，不自行推进。</div>
+    <b>3</b><div>registry mutation 在 state lock 内完成；<code>list_sessions</code> 在同一锁内复制每行后再过滤和排序。</div>
+    <b>4</b><div>保存者先取得 write lock，再在 state lock 内捕获 JSON 快照并清除该快照覆盖的 dirty，随后释放 state lock 执行原子写。</div>
+    <b>5</b><div>若写入期间发生新 mutation，它重新设置 dirty；timer 或退出 flush 保存后续快照。</div>
+  </div>
+
+  <h2>失败、并发与兼容</h2>
+  <ul>
+    <li>磁盘写失败保留现有 warning；内存状态仍可服务当前进程，后续 mutation/flush 可再次保存。</li>
+    <li><code>list_sessions</code> 返回副本，调用方修改返回行不得反向修改 registry。</li>
+    <li>创建时调用方提供的历史 <code>updated_at</code> 保持原值；重建旧 index 不迁移 schema。</li>
+    <li>排序仍按 <code>updated_at</code> 降序，缺失值仍按 0 处理；wire shape 和字段集合不变。</li>
+    <li>不在 registry state lock 内执行 <code>atomic_write_text</code>，避免列表读取被磁盘延迟阻塞。</li>
+  </ul>
+
+  <h2>明确排除</h2>
+  <ul>
+    <li>注册表合同不修改节点 DAG 的并发模型。<code>mark_merged</code> 和位置注册表分别由后文的原子更新与锁范围合同约束。</li>
+    <li>不处理 Windows、系统 credential store、孤儿文件、认证改动和其他审计项。</li>
+    <li>不引入 SQLite、跨进程 registry 锁或新的后台服务。</li>
+  </ul>
+
+  <h2>验收矩阵</h2>
+  <div class="table"><table><thead><tr><th>公共入口</th><th>场景</th><th>可观察断言</th></tr></thead><tbody>
+    <tr><td><code>update_session</code></td><td>创建两会话后改名、置顶、标已读</td><td>目标会话的 meta/index <code>updated_at</code> 不变，列表顺序不变。</td></tr>
+    <tr><td><code>append_message</code></td><td>追加一条内容</td><td>meta/index 同时推进，列表按新时间排序。</td></tr>
+    <tr><td><code>list_sessions</code></td><td>调用方修改返回行</td><td>后续列表结果不受影响。</td></tr>
+    <tr><td>deferred flush</td><td>旧快照写入期间并发更新</td><td>后续 flush 后 <code>index.json</code> 包含新字段，不被旧保存清除 dirty。</td></tr>
+    <tr><td>并发注册表访问</td><td>并发 update/list/flush</td><td>无迭代异常，JSON 始终可解析，最终内存与磁盘一致。</td></tr>
+  </tbody></table></div>
+
+  <h2 id="cache-snapshot">缓存快照更新</h2>
+<p>缓存重建和首次加载在读取历史与元数据之前获取磁盘指纹，重建后的索引只记录这个已获取的指纹。读取期间的原子替换会改变磁盘指纹，下一次公共读取因此再次重建。旧快照不得使用较新的磁盘指纹标记为已同步。动态 DAG 上下文和终止状态沿用现有存储与锁。</p>
+<p>验收使用两个真实 SessionStore 实例：读取旧快照之后、标记同步之前完成历史或元数据写入；随后 get_nodes 或 get_session 能看到新值。覆盖已有缓存和首次加载，取消重试保留原有时限并读取真实取消状态。</p>
+<h2>Windows 会话目录删除</h2><p>显式删除会话、过期会话清理和容量清理共用平台删除适配器。普通 Git 对象因 Windows 只读属性导致删除失败时，清除该属性并仅重试该次删除一次。其他权限失败保持调用方原有的尽力处理行为；不修改 ACL，也不跟随链接改变目标权限。缺失历史的清理条件和归档保留规则保持不变。</p><p>验收通过公开 SessionStore reopen 和 delete_session 入口使用只读 Git 对象。原生 Windows 单元回归检查目录确实消失，而非仅从索引移除。实现遵循标准 <a href="https://docs.python.org/3/library/shutil.html#rmtree-example">shutil 只读文件删除示例</a>，使用兼容 Python 3.11 的错误回调与只读属性检查。</p><p>适配器和公开回归已通过独立规格与质量审查。原生验收由 Windows 单元 CI 执行，本地模拟不能替代。</p><h2>Merged heads 原子更新</h2>
+<p><code>mark_merged(session_id, head_ids)</code> 是集合并集操作。并发 merge 可以来自子 agent 完成、task runner 和 Web 分支操作；两个调用必须保留双方写入，不能由后写者覆盖先写者。</p>
+<h3>状态合同</h3><table><thead><tr><th>属性</th><th>要求</th></tr></thead><tbody><tr><td>原子性</td><td>读取现有列表、去重追加、写回 <code>idx.meta</code> 在同一个 <code>idx._lock</code> 临界区完成。</td></tr><tr><td>顺序</td><td>保留既有顺序；每个调用按输入顺序追加此前不存在的非空、strip 后 ID。</td></tr><tr><td>幂等</td><td>重复 ID 不产生重复项；没有新增值时不写磁盘。</td></tr><tr><td>持久化</td><td>锁内只更新内存；<code>_persist_meta</code> 在锁外执行，避免文件 I/O 持有 index 状态锁。并发调用最终至少有一个持久化快照包含完整并集。</td></tr></tbody></table>
+<div class="note">本节约束 <code>mark_merged</code> 的 read-modify-write。它不扩展为通用 transaction API，不修改 branch naming、DAG 节点删除或 session index flush 协议。</div>
+<h3>验收</h3><ul><li>两个线程在同一旧快照上并发追加不同 head，最终内存和重载后的磁盘均包含两者。</li><li>空白、重复输入保持当前清理与幂等语义。</li><li>持久化不在 <code>idx._lock</code> 内发生；异常和现有调用方行为保持。</li></ul>
+</section>
+<section id="lock-scope"><h2>Store 锁范围</h2>
+<p><code>SessionStore._lock</code> 仅保护会话位置映射和 LRU 缓存结构。<code>_open</code>、位置索引持久化和 <code>delete_session</code> 不得在该锁内执行目录扫描、原子写、fsync 或递归删除，避免一个会话的慢 I/O 阻塞其他会话。</p>
+<h3>并发合同</h3><table><thead><tr><th>资源</th><th>锁</th><th>要求</th></tr></thead><tbody>
+<tr><td><code>_locations</code>、<code>_sessions</code> 和 LRU 顺序</td><td><code>_lock</code></td><td>仅在读取、修改或复制这些内存结构时持有；不允许在锁内进行文件系统 I/O。</td></tr>
+<tr><td>单个 <code>session_id</code> 的首次加载、重建、删除和缓存失效</td><td>每会话 <code>RLock</code></td><td>同一会话串行，不同会话可并行。不创建通用 transaction 层。</td></tr>
+<tr><td><code>locations.json</code> 发布</td><td>专用写锁</td><td>专用写锁串行化快照获取和发布；在全局状态锁内更新并复制快照，释放状态锁后落盘，防止旧快照后写覆盖新快照。</td></tr>
+<tr><td><code>SessionMemoryIndex</code> 持久化</td><td>现有 <code>_persist_lock</code> → <code>idx._lock</code></td><td>保持现有锁序和 stale rebuild 语义；不在 <code>idx._lock</code> 内进行 I/O。</td></tr>
+</tbody></table>
+<div class="note">本节仅约束 store 全局锁的 I/O 范围。不改 SessionStore 文件格式、LRU 容量、删除语义、跨进程 stale 检测或 Windows 行为。</div>
+<h3>验收</h3><ul>
+<li>会话 A 的 <code>read_meta/list_history</code> 被阻塞时，会话 B 的缓存读取在有界时间内完成。</li>
+<li>会话 A 的递归删除被阻塞时，会话 B 的读取不等待 A。</li>
+<li>同一会话的并发首次加载只发布一个缓存对象；删除与加载不交错发布已删除对象。</li>
+<li>两个会话并发更新位置映射后，重载的 <code>locations.json</code> 包含两项。</li>
+</ul>
+</section>
+  <h2>实现状态与证据</h2>
+  <div class="table"><table><thead><tr><th>文件</th><th>职责</th></tr></thead><tbody>
+    <tr><td><code>openprogram/state/store/session/session_store.py</code></td><td>时间语义、registry state/write 锁、快照与延迟 flush。</td></tr>
+    <tr><td><code>openprogram/state/store/session/session_node_writer.py</code></td><td>node append 的单一 activity timestamp 与 meta/index 同步。</td></tr>
+    <tr><td><code>tests/component/store/test_session_index_consistency.py</code></td><td>排序时间、返回快照和并发写入的公共回归。</td></tr>
+  </tbody></table></div>
+  <p class="note"><span class="ok">注册表时间与快照合同已实现并完成独立审查。</span> 规格审查与质量审查均通过；最终 gate 证据记录在任务台账。</p>
+<p>原子 merged heads 与 store 锁范围在此集中维护设计合同和验收要求；文档合并本身不新增它们的实现或平台验收结论。</p></main></body></html>

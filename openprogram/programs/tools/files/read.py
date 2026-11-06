@@ -1,0 +1,254 @@
+"""read function — read a file from disk and return its contents."""
+
+from __future__ import annotations
+
+import os
+import mimetypes
+
+from openprogram.programs._host.runtime import function
+from openprogram.state.worktree.path_resolve import resolve_path
+import logging
+
+_log = logging.getLogger(__name__)
+
+
+MAX_LINES_DEFAULT = 2000
+MAX_LINE_LENGTH = 2000
+PDF_PAGES_DEFAULT = 20
+PDF_MAX_CHARS = 100_000
+_BINARY_EXTENSIONS = {".docx", ".docm", ".pptx", ".pptm", ".xlsx", ".xlsm", ".zip", ".png", ".jpg", ".jpeg", ".gif", ".webp", ".bmp", ".ico"}
+
+_DESCRIPTION = (
+    "Read a file from disk and return its contents as text, with line numbers "
+    "in `cat -n` style (1-based).\n"
+    "\n"
+    "- Paths MUST be absolute.\n"
+    "- By default reads up to 2000 lines from the top. Use `offset` and `limit` "
+    "to page through larger files.\n"
+    "- Individual lines longer than 2000 characters are truncated with an ellipsis.\n"
+    "- PDF files are read as extracted text, one `[page N]` block per page. "
+    "For PDFs `offset` and `limit` are PAGES (1-based; default: first "
+    f"{PDF_PAGES_DEFAULT} pages).\n"
+    "- Other binary files return type/size metadata and establish the read baseline. Use document tools to inspect their contents."
+)
+
+
+def _is_pdf(file_path: str) -> bool:
+    """PDF by extension, or by the %PDF magic for extensionless files."""
+    if file_path.lower().endswith(".pdf"):
+        return True
+    try:
+        with open(file_path, "rb") as f:
+            return f.read(5) == b"%PDF-"
+    except OSError:
+        return False
+
+
+def _is_binary(file_path: str) -> bool:
+    if os.path.splitext(file_path)[1].lower() in _BINARY_EXTENSIONS:
+        return True
+    try:
+        with open(file_path, "rb") as stream:
+            sample = stream.read(8192)
+        return b"\0" in sample
+    except OSError:
+        return False
+
+
+def _read_pdf(file_path: str, offset: int, limit: int) -> str:
+    """Extract text page by page via pypdf. ``offset``/``limit`` are
+    page-based here (1-based first page / page count); a caller leaving
+    the line default gets the first PDF_PAGES_DEFAULT pages."""
+    try:
+        from pypdf import PdfReader
+    except ImportError:
+        return (
+            "Error: PDF reading is unavailable in this installation; "
+            "reinstall the complete OpenProgram release."
+        )
+
+    try:
+        reader = PdfReader(file_path)
+        total = len(reader.pages)
+    except Exception as e:
+        return f"Error reading {file_path}: {type(e).__name__}: {e}"
+
+    start = max(1, offset) - 1
+    pages = PDF_PAGES_DEFAULT if limit == MAX_LINES_DEFAULT else max(1, limit)
+    end = min(total, start + pages)
+    if start >= total:
+        return (f"# {file_path} (PDF, {total} pages)\n"
+                f"(empty range: offset {offset} is past the last page)")
+
+    chunks: list[str] = []
+    chars = 0
+    truncated_at: int | None = None
+    any_text = False
+    for i in range(start, end):
+        try:
+            text = (reader.pages[i].extract_text() or "").strip()
+            # pypdf leaves unpaired surrogates behind on math-font
+            # glyphs (U+1D4xx split in a broken CMap). A lone
+            # surrogate poisons every later utf-8 encode — history
+            # persistence and the provider payload both crash on it.
+            # errors="replace" turns the bad code points into "?".
+            text = text.encode("utf-8", "replace").decode("utf-8")
+        except Exception:
+            text = ""
+        if text:
+            any_text = True
+        chunks.append(f"[page {i + 1}]\n{text}" if text
+                      else f"[page {i + 1}]\n(no text on this page)")
+        chars += len(chunks[-1])
+        if chars > PDF_MAX_CHARS:
+            truncated_at = i + 1
+            break
+
+    if not any_text:
+        return (f"Error: {file_path}: PDF 无文本层 — pages {start + 1}-{end} "
+                f"of {total} contain no extractable text (likely a scanned "
+                "image PDF; OCR is required to read it).")
+
+    shown_end = truncated_at or end
+    header = (f"# {file_path} (PDF, pages {start + 1}-{shown_end} of {total}; "
+              "offset/limit are pages)")
+    body = "\n\n".join(chunks)
+    if truncated_at is not None:
+        body += (f"\n\n…[truncated at page {truncated_at}: output exceeded "
+                 f"{PDF_MAX_CHARS} chars — use offset={truncated_at + 1} "
+                 "to continue]")
+    return header + "\n" + body
+
+
+def _mark_read_baseline(file_path: str) -> None:
+    """Record this file's on-disk state as the agent's read-before-edit
+    baseline (Claude-Code-style): a later edit/write validates against
+    it so the agent can't clobber a concurrent user change unseen.
+    Fingerprints the WHOLE file even on a paged read — the contract is
+    about the file changing on disk, not the page. No-op outside a turn.
+    """
+    try:
+        from openprogram.state.store.snapshot import read_tracking as _rt
+        _rt.mark_seen(file_path)
+    except Exception:
+        # The read baseline is bookkeeping; without it a later edit asks for a re-read.
+        _log.debug("read baseline not recorded for %s", file_path, exc_info=True)
+
+
+def execute(file_path: str,
+            offset: int | None = 1,
+            limit: int | None = MAX_LINES_DEFAULT) -> str:
+    """Read a file and return its contents with line numbers.
+
+    Args:
+        file_path: Absolute path of the file to read.
+        offset: Line number to start reading from (1-based). Null uses default 1.
+            For PDF files this is the first PAGE to read.
+        limit: Maximum number of lines to return. Null uses default 2000.
+            For PDF files this is the number of PAGES (default 20).
+    """
+    # Strict tool schemas represent omitted optional arguments as null.
+    # Normalize these pagination defaults before either text or PDF handling.
+    offset = 1 if offset is None else offset
+    limit = MAX_LINES_DEFAULT if limit is None else limit
+
+    # An SSH conversation reads the remote disk.
+    from ._remote import remote_target
+    _remote_fs = remote_target()
+    if _remote_fs is not None:
+        from . import _remote
+        return _remote.read(_remote_fs, file_path, offset, limit)
+
+    # Worktree-aware resolution: relative paths bind to the active
+    # worktree root when one is set; absolute paths outside the
+    # worktree get a soft warning but still proceed (D6).
+    resolved_path, outside_warning = resolve_path(file_path)
+    file_path = resolved_path
+    if not os.path.isabs(file_path):
+        return f"Error: file_path must be absolute, got {file_path!r}"
+    if not os.path.exists(file_path):
+        try:
+            from openprogram.state import attachments as _attachments
+            from openprogram.runtime.execution.run_control import get_current_session_id
+
+            session_id = get_current_session_id()
+            alias = _attachments.resolve_session_attachment(
+                file_path,
+                session_id,
+                _attachments.readable_roots(session_id),
+            )
+            if alias is not None:
+                file_path = str(alias)
+        except Exception:
+            # Attachment aliasing is optional; the path is read as given.
+            _log.debug("attachment alias unresolved for %s", file_path, exc_info=True)
+    from openprogram.host.sandbox import validate_read_path
+    violation = validate_read_path(file_path)
+    if violation:
+        return f"Error: sandbox policy: {violation}"
+    if not os.path.exists(file_path):
+        return f"Error: file not found: {file_path}"
+    if os.path.isdir(file_path):
+        return f"Error: {file_path} is a directory, not a file"
+
+    if _is_pdf(file_path):
+        _mark_read_baseline(file_path)
+        out = _read_pdf(file_path, offset, limit)
+        if outside_warning:
+            out = f"{outside_warning}\n{out}"
+        return out
+
+    if _is_binary(file_path):
+        _mark_read_baseline(file_path)
+        try:
+            info = os.stat(file_path)
+            media_type = mimetypes.guess_type(file_path)[0] or "application/octet-stream"
+        except OSError as exc:
+            return f"Error reading {file_path}: {type(exc).__name__}: {exc}"
+        out = f"# {file_path} (binary, {info.st_size} bytes, {media_type})"
+        if outside_warning:
+            out = f"{outside_warning}\n{out}"
+        return out
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            lines = f.readlines()
+    except Exception as e:
+        return f"Error reading {file_path}: {type(e).__name__}: {e}"
+
+    _mark_read_baseline(file_path)
+
+    total = len(lines)
+    start = max(1, offset) - 1
+    end = min(total, start + max(1, limit))
+    selected = lines[start:end]
+
+    out_lines = []
+    for i, line in enumerate(selected, start=start + 1):
+        text = line.rstrip("\n")
+        if len(text) > MAX_LINE_LENGTH:
+            text = text[:MAX_LINE_LENGTH] + "…[truncated]"
+        out_lines.append(f"{i:>6}\t{text}")
+
+    header = f"# {file_path} (lines {start + 1}-{end} of {total})"
+    if outside_warning:
+        header = f"{outside_warning}\n{header}"
+    if not out_lines:
+        return header + "\n(empty range)"
+    return header + "\n" + "\n".join(out_lines)
+
+
+# Workflows import ``execute`` as a normal Python function; model tool
+# dispatch uses the separately registered ``read`` AgentTool.
+read = function(
+    name="read",
+    accept_edits_safe=True,
+    description=_DESCRIPTION,
+    max_result_chars=200_000,
+    persist_full=False,
+    toolset=["core", "research"],
+    path_params={"file_path": "read"},
+)(execute)
+
+
+__all__ = ["execute", "read"]

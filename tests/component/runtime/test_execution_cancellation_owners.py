@@ -1,0 +1,892 @@
+"""Live-owner cancellation: tokens, waiters, process stand-ins, finalizers."""
+
+from __future__ import annotations
+
+import atexit
+import subprocess
+import sys
+import threading
+import time
+
+import pytest
+
+from openprogram.runtime.conversation import run_control
+from openprogram.runtime.execution.run_control import tokens as run_control_tokens
+from openprogram.runtime.execution.run_control import cancellation as run_control_cancellation
+from openprogram.runtime.execution.run_control import owners as run_control_owners
+from openprogram.runtime.execution import run_control as execution_run_control
+from openprogram.runtime.execution.run_control import owners as execution_owners
+from openprogram.runtime.agent.questions import (
+    PendingQuestion,
+    get_question_registry,
+)
+from openprogram.state.store.session.nodes import Call, ROLE_CODE
+from openprogram.runtime.execution import AttemptStore, CapabilitySet, ExecutionStore
+from openprogram.runtime.execution.control import RuntimeControlService
+from openprogram.runtime.execution.driver import DriverRegistry
+from openprogram.runtime.execution.waits import DurableWaitStore
+from openprogram.state.store import SessionNodeWriter
+from openprogram.state.store.session.session_store import SessionStore
+
+
+@pytest.fixture
+def store(tmp_path, monkeypatch) -> SessionStore:
+    value = SessionStore(tmp_path / "sessions-git")
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: value)
+    import openprogram.state.store.session.session_store as store_module
+
+    monkeypatch.setattr(store_module.shared, "_default_store", value)
+    try:
+        yield value
+    finally:
+        _drain_runtime_control()
+        timer = value._index_timer
+        try:
+            value._flush_index()
+        finally:
+            if timer is not None:
+                timer.join(timeout=1.0)
+            atexit.unregister(value._flush_index)
+
+
+def _drain_runtime_control() -> None:
+    with run_control_tokens._cancel_flags_lock:
+        run_control_tokens._current_tokens.clear()
+        run_control.turns._cancel_cleanup_leases.clear()
+    for owner in run_control_owners._owners.values():
+        owner.retired = True
+        if owner.token is not None:
+            owner.token.retire()
+    threads = list(run_control_owners._grace_threads.values())
+    run_control_owners._owners.clear()
+    run_control_owners._session_index.clear()
+    for thread in threads:
+        thread.join(timeout=1.0)
+    run_control_owners._grace_threads.clear()
+    run_control_owners._finalizing.clear()
+
+
+@pytest.fixture(autouse=True)
+def clean_runtime_control():
+    _drain_runtime_control()
+    run_control_cancellation.set_after_intent_hook(None)
+    run_control_owners.set_execution_update_hook(None)
+    run_control.clear_turn_context()
+    execution_owners.CANCEL_GRACE_S = 0.05
+    registry = get_question_registry()
+    registry._events.clear()
+    yield
+    _drain_runtime_control()
+    execution_owners.CANCEL_GRACE_S = 4.0
+    run_control_cancellation.set_after_intent_hook(None)
+    run_control_owners.set_execution_update_hook(None)
+    run_control.clear_turn_context()
+
+
+def _append_execution(store, session_id, execution_id, *, status="running"):
+    store.create_session(session_id, "main")
+    SessionNodeWriter(store, session_id).append(
+        Call(
+            id=execution_id,
+            role=ROLE_CODE,
+            name="cancellation_probe",
+            output="partial output",
+            metadata={"status": status, "execution_kind": "agent_method"},
+        )
+    )
+
+
+def _node(store, session_id, execution_id):
+    return next(node for node in store.get_nodes(session_id) if node.id == execution_id)
+
+
+def _wait_status(store, session_id, execution_id, wanted, timeout=2.0):
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        status = _node(store, session_id, execution_id).metadata["status"]
+        if status == wanted:
+            return status
+        time.sleep(0.02)
+    return _node(store, session_id, execution_id).metadata["status"]
+
+
+def _canonical_running_execution(tmp_path, monkeypatch, execution_id="exec-1"):
+    import openprogram.runtime.execution as execution_module
+
+    canonical = ExecutionStore(tmp_path / "execution.sqlite3")
+    revision = canonical.create_revision(manifest={"entrypoint": "agent"})
+    execution = canonical.create_execution(
+        execution_id=execution_id,
+        run_id=f"run-{execution_id}",
+        session_id="question-cancel",
+        revision_id=revision.revision_id,
+        capabilities=CapabilitySet(),
+    )
+    attempts = AttemptStore(canonical)
+    leased, reserved = attempts.lease(
+        execution_id,
+        expected_version=execution.status_version,
+        owner_id="question-owner",
+        ttl_seconds=30,
+    )
+    _active, running = attempts.activate(
+        leased.attempt_id,
+        generation=leased.generation,
+        expected_execution_version=reserved.status_version,
+    )
+    service = RuntimeControlService(canonical, attempts, DriverRegistry())
+    monkeypatch.setattr(execution_module, "default_store", lambda: canonical)
+    monkeypatch.setattr(execution_module, "default_control_service", lambda: service)
+    return canonical, running
+
+
+def test_token_trips_and_durable_question_wait_is_cancelled(tmp_path, monkeypatch):
+    session_id = "question-cancel"
+    canonical, running = _canonical_running_execution(tmp_path, monkeypatch)
+    event = threading.Event()
+    run_control.register_cancel_event(
+        session_id,
+        event,
+        execution_id="exec-1",
+    )
+    execution_run_control.set_current_session_id(session_id)
+    execution_run_control.set_current_execution_id("exec-1")
+    wait = DurableWaitStore(canonical).open_wait(
+        wait_id="q1",
+        execution_id=running.execution_id,
+        attempt_id=running.current_attempt_id,
+        generation=running.owner_lease["generation"],
+        kind="ask",
+        request={
+            "prompt": "continue?",
+            "options": [],
+            "multi": False,
+            "allow_custom": True,
+            "detail": "",
+            "schema": {},
+            "questions": [],
+        },
+        policy_snapshot={"version": 1},
+        expires_at=time.time() + 60,
+    )
+    question = PendingQuestion(
+        id="q1",
+        session_id=session_id,
+        kind="ask",
+        prompt="continue?",
+        execution_id="exec-1",
+    )
+    registry = get_question_registry()
+    waiter = registry.register(question)
+    outcomes: list[str] = []
+
+    def blocked() -> None:
+        waiter.wait(2)
+        result = get_question_registry().consume("q1")
+        outcomes.append(result[0] if result else "missing")
+
+    thread = threading.Thread(target=blocked)
+    thread.start()
+    execution_run_control.mark_cancelled(session_id, execution_id="exec-1")
+    record = canonical.get_execution("exec-1")
+    assert record is not None
+    record = record.to_dict()
+    registry.wake(wait.wait_id)
+    thread.join(2)
+
+    assert event.is_set()
+    assert outcomes == ["cancelled"]
+    assert record["status"] in {"cancelling", "cancelled"}
+    assert record["reason_code"] == "cancel.user"
+
+
+def test_ask_requires_declared_durable_wait(store):
+    from openprogram.runtime.agent.runtime import Runtime
+    from openprogram.runtime.agent.questions import DurableWaitSafePointRequired
+
+    session_id = "ask-cancelled"
+    _append_execution(store, session_id, "exec-1")
+    execution_run_control.set_current_session_id(session_id)
+    execution_run_control.set_current_execution_id("exec-1")
+    runtime = Runtime()
+    with pytest.raises(DurableWaitSafePointRequired):
+        runtime.ask("continue?", timeout=2)
+
+
+def test_grace_terminates_only_that_execution_owner(store):
+    session_id = "grace-kill"
+    store.create_session(session_id, "main")
+    SessionNodeWriter(store, session_id).append(
+        Call(
+            id="exec-a",
+            role=ROLE_CODE,
+            name="cancellation_probe",
+            output="a",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    SessionNodeWriter(store, session_id).append(
+        Call(
+            id="exec-b",
+            role=ROLE_CODE,
+            name="cancellation_probe",
+            output="b",
+            predecessor="exec-a",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    proc_a = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    proc_b = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    terminated: list[str] = []
+
+    def terminate_a() -> bool:
+        terminated.append("a")
+        proc_a.kill()
+        proc_a.wait(timeout=2)
+        return proc_a.poll() is not None
+
+    execution_run_control.register_execution_owner(
+        "exec-a",
+        session_id,
+        is_alive=lambda: proc_a.poll() is None,
+        terminate=terminate_a,
+        process=proc_a,
+    )
+    execution_run_control.register_execution_owner(
+        "exec-b",
+        session_id,
+        is_alive=lambda: proc_b.poll() is None,
+        terminate=lambda: False,
+        process=proc_b,
+    )
+    execution_owners.CANCEL_GRACE_S = 0.05
+    execution_run_control.cancel_execution("exec-a")
+    assert _wait_status(store, session_id, "exec-a", "cancelled") == "cancelled"
+    assert "a" in terminated
+    assert proc_a.poll() is not None
+    assert proc_b.poll() is None
+    assert _node(store, session_id, "exec-b").metadata["status"] == "running"
+    proc_b.kill()
+    proc_b.wait(timeout=2)
+
+
+def test_parent_finalizer_writes_cancelled_when_child_never_runs_finally(store):
+    session_id = "parent-finalize"
+    _append_execution(store, session_id, "exec-1")
+    proc = subprocess.Popen(
+        [sys.executable, "-c", "import time; time.sleep(30)"],
+    )
+    finally_ran: list[bool] = []
+
+    def terminate() -> bool:
+        proc.kill()
+        proc.wait(timeout=2)
+        return proc.poll() is not None
+
+    def finalize() -> None:
+        finally_ran.append(True)
+
+    execution_run_control.register_execution_owner(
+        "exec-1",
+        session_id,
+        is_alive=lambda: proc.poll() is None,
+        terminate=terminate,
+        finalize=finalize,
+        process=proc,
+    )
+    execution_owners.CANCEL_GRACE_S = 0.05
+    execution_run_control.cancel_execution("exec-1")
+    assert _wait_status(store, session_id, "exec-1", "cancelled") == "cancelled"
+    assert proc.poll() is not None
+    assert finally_ran == [True]
+    assert _node(store, session_id, "exec-1").output == "partial output"
+
+
+def test_unkillable_owner_stays_cancelling(store):
+    session_id = "unkillable"
+    _append_execution(store, session_id, "exec-1")
+    diagnostics_before = []
+
+    def terminate() -> bool:
+        return False
+
+    execution_run_control.register_execution_owner(
+        "exec-1",
+        session_id,
+        is_alive=lambda: True,
+        terminate=terminate,
+    )
+    execution_owners.CANCEL_GRACE_S = 0.05
+    record = execution_run_control.cancel_execution("exec-1")
+    time.sleep(0.2)
+    node = _node(store, session_id, "exec-1")
+    assert record["status"] == "cancelling"
+    assert node.metadata["status"] == "cancelling"
+    assert node.metadata["status"] != "running"
+    owner = run_control_owners._owners["exec-1"]
+    assert owner.diagnostics
+    assert not owner.retired
+    diagnostics_before.append(list(owner.diagnostics))
+    assert diagnostics_before[0]
+
+
+def test_cooperative_owner_exit_writes_cancelled(store):
+    session_id = "coop-exit"
+    _append_execution(store, session_id, "exec-1")
+    live = True
+
+    execution_run_control.register_execution_owner(
+        "exec-1",
+        session_id,
+        is_alive=lambda: live,
+        token=execution_run_control.CancellationToken(session_id, "exec-1"),
+    )
+    record = execution_run_control.cancel_execution("exec-1")
+    assert record["status"] == "cancelling"
+    assert _node(store, session_id, "exec-1").metadata["status"] == "cancelling"
+
+    live = False
+    execution_run_control.retire_execution_owner("exec-1")
+    for thread in list(run_control_owners._grace_threads.values()):
+        thread.join(1)
+
+    assert _node(store, session_id, "exec-1").metadata["status"] == "cancelled"
+    assert "exec-1" not in run_control_owners._owners
+    assert not execution_run_control.owner_is_alive("exec-1")
+
+
+def test_root_waits_for_live_descendant_before_cancelled(store):
+    session_id = "descendant-finalize"
+    store.create_session(session_id, "main")
+    writer = SessionNodeWriter(store, session_id)
+    writer.append(
+        Call(
+            id="root",
+            role=ROLE_CODE,
+            name="root",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    writer.append(
+        Call(
+            id="child",
+            role=ROLE_CODE,
+            name="child",
+            caller="root",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    child_live = True
+    updates: list[dict] = []
+    run_control_owners.set_execution_update_hook(updates.append)
+    execution_run_control.register_execution_owner(
+        "child",
+        session_id,
+        is_alive=lambda: child_live,
+    )
+
+    record = execution_run_control.cancel_execution("root")
+
+    assert record["status"] == "cancelling"
+    assert _node(store, session_id, "root").metadata["status"] == "cancelling"
+    assert _node(store, session_id, "child").metadata["status"] == "cancelling"
+
+    child_live = False
+    execution_run_control.retire_execution_owner("child")
+
+    assert _wait_status(store, session_id, "child", "cancelled") == "cancelled"
+    assert _wait_status(store, session_id, "root", "cancelled") == "cancelled"
+    assert any(
+        update["execution_id"] == "root" and update["status"] == "cancelled"
+        for update in updates
+    )
+
+
+def test_root_finalizes_after_live_grandchild_retires(store):
+    session_id = "deep-descendant-finalize"
+    store.create_session(session_id, "main")
+    writer = SessionNodeWriter(store, session_id)
+    writer.append(
+        Call(
+            id="root",
+            role=ROLE_CODE,
+            name="root",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    writer.append(
+        Call(
+            id="child",
+            role=ROLE_CODE,
+            name="child",
+            caller="root",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    writer.append(
+        Call(
+            id="grandchild",
+            role=ROLE_CODE,
+            name="grandchild",
+            caller="child",
+            metadata={"status": "running", "execution_kind": "agent_method"},
+        )
+    )
+    grandchild_live = True
+    execution_run_control.register_execution_owner(
+        "grandchild",
+        session_id,
+        is_alive=lambda: grandchild_live,
+    )
+
+    record = execution_run_control.cancel_execution("root")
+
+    assert record["status"] == "cancelling"
+    assert _node(store, session_id, "root").metadata["status"] == "cancelling"
+    assert _node(store, session_id, "grandchild").metadata["status"] == "cancelling"
+
+    grandchild_live = False
+    execution_run_control.retire_execution_owner("grandchild")
+
+    assert (
+        _wait_status(
+            store,
+            session_id,
+            "grandchild",
+            "cancelled",
+        )
+        == "cancelled"
+    )
+    assert _wait_status(store, session_id, "root", "cancelled") == "cancelled"
+
+
+def test_grace_retries_until_owner_terminates(store):
+    session_id = "retry-terminate"
+    _append_execution(store, session_id, "exec-1")
+    live = True
+    attempts = 0
+
+    def terminate() -> bool:
+        nonlocal attempts, live
+        attempts += 1
+        if attempts < 3:
+            return False
+        live = False
+        return True
+
+    execution_run_control.register_execution_owner(
+        "exec-1",
+        session_id,
+        is_alive=lambda: live,
+        terminate=terminate,
+    )
+    execution_owners.CANCEL_GRACE_S = 0.02
+
+    execution_run_control.cancel_execution("exec-1")
+
+    assert _wait_status(store, session_id, "exec-1", "cancelled") == "cancelled"
+    assert attempts >= 3
+
+
+def test_grace_retries_after_transient_finalize_failure(
+    store,
+    monkeypatch,
+):
+    session_id = "retry-finalize"
+    _append_execution(store, session_id, "exec-1")
+    live = True
+    original_update = store.update_node
+    failures = 0
+
+    def flaky_update(session_id, node_id, *, metadata=None, **kwargs):
+        nonlocal failures
+        if (metadata or {}).get("status") == "cancelled" and failures == 0:
+            failures += 1
+            raise OSError("transient persistence failure")
+        return original_update(
+            session_id,
+            node_id,
+            metadata=metadata,
+            **kwargs,
+        )
+
+    monkeypatch.setattr(store, "update_node", flaky_update)
+
+    def terminate() -> bool:
+        nonlocal live
+        live = False
+        return True
+
+    execution_run_control.register_execution_owner(
+        "exec-1",
+        session_id,
+        is_alive=lambda: live,
+        terminate=terminate,
+    )
+    execution_owners.CANCEL_GRACE_S = 0.02
+
+    execution_run_control.cancel_execution("exec-1")
+
+    assert _wait_status(store, session_id, "exec-1", "cancelled") == "cancelled"
+    assert failures == 1
+
+
+def test_late_owner_registration_reconciles_persisted_cancel(store):
+    session_id = "late-owner"
+    _append_execution(store, session_id, "exec-1")
+    assert execution_run_control.cancel_execution("exec-1")["status"] == "cancelled"
+    live = True
+    token = execution_run_control.CancellationToken(session_id, "exec-1")
+
+    def terminate() -> bool:
+        nonlocal live
+        live = False
+        return True
+
+    execution_owners.CANCEL_GRACE_S = 0.02
+    execution_run_control.register_execution_owner(
+        "exec-1",
+        session_id,
+        token=token,
+        is_alive=lambda: live,
+        terminate=terminate,
+    )
+
+    assert token.is_cancelled()
+    deadline = time.time() + 30
+    while live and time.time() < deadline:
+        time.sleep(0.02)
+    assert not live
+    assert not execution_run_control.owner_is_alive("exec-1")
+
+
+def test_known_owner_registration_does_not_scan_unrelated_sessions(monkeypatch):
+    blocked = threading.Event()
+    release = threading.Event()
+    calls: list[str] = []
+
+    class _Store:
+        def list_sessions(self, **_kwargs):
+            return [{"id": "unrelated-owner"}, {"id": "target-owner"}]
+
+        def get_nodes(self, session_id):
+            calls.append(session_id)
+            if session_id == "unrelated-owner":
+                blocked.set()
+                release.wait(2)
+            return []
+
+    store = _Store()
+    monkeypatch.setattr(
+        "openprogram.runtime.context.session_db.default_db",
+        lambda: store,
+    )
+    from openprogram.runtime.jobs import store as job_store
+
+    job_lookups: list[tuple[str, str]] = []
+    monkeypatch.setattr(
+        job_store,
+        "load_job",
+        lambda session_id, execution_id: job_lookups.append((session_id, execution_id))
+        or None,
+    )
+
+    event = threading.Event()
+    result: list[bool] = []
+    done = threading.Event()
+
+    def claim() -> None:
+        result.append(
+            run_control.claim_cancel_event(
+                "target-owner",
+                event,
+                execution_id="exec-canonical",
+            )
+        )
+        done.set()
+
+    thread = threading.Thread(target=claim)
+    thread.start()
+    try:
+        assert done.wait(30)
+        assert not blocked.is_set()
+        assert calls == ["target-owner"]
+        assert job_lookups == [("target-owner", "exec-canonical")]
+        assert result == [True]
+    finally:
+        release.set()
+        run_control.unregister_cancel_event(
+            "target-owner",
+            event,
+            execution_id="exec-canonical",
+        )
+        thread.join(timeout=1)
+
+
+def test_known_owner_registration_skips_job_runner_cache_miss_scan(monkeypatch):
+    from openprogram.runtime.jobs.runner import JobRunner
+
+    entered = threading.Event()
+    release = threading.Event()
+    done = threading.Event()
+    result: list[bool] = []
+    job_lookups: list[tuple[str, str]] = []
+
+    class _Root:
+        def exists(self):
+            return True
+
+        def iterdir(self):
+            entered.set()
+            release.wait(2)
+            return iter(())
+
+    class _Store:
+        root_path = _Root()
+
+        def get_nodes(self, session_id):
+            assert session_id == "known-session"
+            return []
+
+        def list_sessions(self, **_kwargs):
+            raise AssertionError("known lookup must not enumerate sessions")
+
+    runner = JobRunner.__new__(JobRunner)
+    runner._lock = threading.RLock()
+    runner._jobs = {}
+    store = _Store()
+    monkeypatch.setattr("openprogram.runtime.jobs.runner.shared._runner", runner)
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: store)
+    monkeypatch.setattr("openprogram.state.store.default_store", lambda: store)
+    from openprogram.runtime.jobs import store as job_store
+
+    monkeypatch.setattr(
+        job_store,
+        "load_job",
+        lambda session_id, execution_id: job_lookups.append((session_id, execution_id))
+        or None,
+    )
+
+    event = threading.Event()
+
+    def claim() -> None:
+        result.append(
+            run_control.claim_cancel_event(
+                "known-session",
+                event,
+                execution_id="exec-not-in-runner",
+            )
+        )
+        done.set()
+
+    thread = threading.Thread(target=claim)
+    thread.start()
+    try:
+        assert done.wait(30)
+        assert not entered.is_set()
+        assert job_lookups == [("known-session", "exec-not-in-runner")]
+        assert result == [True]
+    finally:
+        release.set()
+        run_control.unregister_cancel_event(
+            "known-session",
+            event,
+            execution_id="exec-not-in-runner",
+        )
+        thread.join(timeout=1)
+
+
+def test_forced_tool_passes_canonical_execution_id(monkeypatch):
+    from openprogram.runtime.conversation.turn_runtime import forced_tool
+    from openprogram.runtime.conversation import surface_context
+
+    monkeypatch.delenv("OPENPROGRAM_AGENTIC_TIMEOUT_S", raising=False)
+
+    captured: dict = {}
+    released = []
+    terminal: list[tuple[str, str]] = []
+    runner_out = {"ok": True}
+
+    class _Tool:
+        name = "wc"
+        _is_agent_method = True
+
+    monkeypatch.setattr(
+        "openprogram.programs.agent_tools",
+        lambda names=None: [_Tool()],
+    )
+    monkeypatch.setattr(
+        "openprogram.programs._host.runtime.get",
+        lambda name, *a, **k: _Tool() if name == _Tool.name else None,
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.conversation.process_runner.run_agent_method_in_subprocess",
+        lambda **kw: captured.update(kw) or dict(runner_out),
+    )
+    page_context = {"context_id": "page-context", "surfaces": []}
+    monkeypatch.setattr(surface_context, "capture_pages", lambda: page_context)
+    monkeypatch.setattr(
+        surface_context,
+        "release_bindings",
+        lambda context: released.append(context),
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.execution.run_control.set_current_session_id",
+        lambda sid: object(),
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.execution.run_control.reset_current_session_id",
+        lambda t: None,
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.conversation.run_control.clear_cancel",
+        lambda sid: None,
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.execution.run_control.mark_execution_terminal",
+        lambda execution_id, status: terminal.append((execution_id, status)),
+    )
+    records: dict[str, dict] = {}
+
+    class _DB:
+        @staticmethod
+        def invalidate_cache(session_id):
+            return None
+
+        @staticmethod
+        def update_session(*args, **kwargs):
+            return None
+
+        @staticmethod
+        def get_nodes(session_id):
+            return [
+                type("Node", (), {"id": node_id, "metadata": metadata})()
+                for node_id, metadata in records.items()
+            ]
+
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", _DB)
+
+    forced_tool.dispatch_forced_tool_call(
+        session_id="s1",
+        anchor_msg_id="user1|node:forcednode",
+        tool_name="wc",
+        tool_input={"text": "hi"},
+        execution_id="forcednode",
+    )
+    assert captured["execution_id"] == "forcednode"
+    assert terminal == []
+
+    captured.clear()
+    forced_tool.dispatch_forced_tool_call(
+        session_id="s1",
+        anchor_msg_id="|node:fromanchor",
+        tool_name="wc",
+        tool_input={"text": "hi"},
+    )
+    assert captured["execution_id"] is None
+
+    runner_out.clear()
+    runner_out.update({"killed": True, "signal": 9})
+    forced_tool.dispatch_forced_tool_call(
+        session_id="s1",
+        anchor_msg_id="|node:unexpected",
+        tool_name="wc",
+        tool_input={},
+    )
+    assert terminal == []
+
+    runner_out.clear()
+    runner_out.update(
+        {
+            "error": "agentic subprocess timed out after 300 seconds",
+            "killed": True,
+            "timed_out": True,
+        }
+    )
+    forced_tool.dispatch_forced_tool_call(
+        session_id="s1",
+        anchor_msg_id="|node:timedout",
+        tool_name="wc",
+        tool_input={},
+    )
+    assert terminal == []
+
+    records["requested"] = {
+        "status": "cancelling",
+        "cancellation_requested_at": 1.0,
+    }
+    runner_out.clear()
+    runner_out.update({"killed": True, "signal": 9})
+    forced_tool.dispatch_forced_tool_call(
+        session_id="s1",
+        anchor_msg_id="|node:requested",
+        tool_name="wc",
+        tool_input={},
+    )
+    assert terminal == []
+
+
+def test_forced_tool_exit_does_not_retire_successor_token(monkeypatch):
+    from openprogram.runtime.conversation.turn_runtime import forced_tool
+
+    class _Tool:
+        name = "wc"
+        _is_agent_method = True
+
+    class _DB:
+        @staticmethod
+        def invalidate_cache(_session_id):
+            return None
+
+    successor = {}
+
+    def run_then_handover(**_kwargs):
+        successor["token"] = run_control.begin_turn(
+            "direct-session",
+            "successor_reply",
+        )
+        return {"runtime_msg_id": None}
+
+    monkeypatch.setattr(
+        "openprogram.programs._host.runtime.get",
+        lambda name, *args, **kwargs: _Tool() if name == _Tool.name else None,
+    )
+    monkeypatch.setattr(
+        "openprogram.runtime.conversation.process_runner.run_agent_method_in_subprocess",
+        run_then_handover,
+    )
+    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", _DB)
+
+    result = forced_tool.dispatch_forced_tool_call(
+        session_id="direct-session",
+        anchor_msg_id="",
+        tool_name="wc",
+        tool_input={},
+    )
+
+    token = successor["token"]
+    assert result["ok"] is True
+    assert execution_run_control.current_token("direct-session") is token
+    assert token.retired is False
+    run_control.end_turn("direct-session", token)
+
+
+def test_register_on_cancelled_execution_does_not_retrip(store):
+    """A retry that reuses a cancelled execution id must start clean."""
+    session_id = "retry-cancelled"
+    execution_id = "user-1_reply"
+    _append_execution(store, session_id, execution_id, status="cancelled")
+    ev = threading.Event()
+    token = execution_run_control.CancellationToken(session_id, execution_id)
+    token._event = ev
+    execution_run_control.register_execution_owner(
+        execution_id,
+        session_id,
+        token=token,
+    )
+    assert ev.is_set() is False
+    assert token.is_cancelled() is False

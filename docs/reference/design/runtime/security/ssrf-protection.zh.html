@@ -1,0 +1,199 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Runtime 出站 URL 与 SSRF 防护</title>
+<style>
+  :root{--bg:#151611;--pan:#1d1f18;--pan-2:#23251d;--bd:#34372b;--tx:#d2cfbd;--dim:#9c9988;
+    --ink:#f5f2e8;--acc:#e09348;--blue:#6a9cf7;--green:#6ab95f;--purple:#ad82ed;--red:#ec6374;--code:#10110d}
+  *{box-sizing:border-box}html{scroll-behavior:smooth}
+  body{margin:0;background:var(--bg);color:var(--tx);font:16px/1.78 -apple-system,BlinkMacSystemFont,
+    "Segoe UI",sans-serif;padding:52px 30px 120px;text-rendering:optimizeLegibility}
+  .wrap{max-width:1240px;margin:auto}h1,h2,h3{color:var(--ink);text-wrap:balance}
+  h1{font-family:"Avenir Next Condensed","Arial Narrow",sans-serif;font-size:42px;line-height:1.12;
+    letter-spacing:.015em;margin:0 0 14px}h2{font-size:23px;line-height:1.35;margin:50px 0 14px;scroll-margin-top:92px}
+  h3{font-size:18px;line-height:1.45;margin:34px 0 11px;scroll-margin-top:92px}
+  p{margin:0 0 14px}.sub,.lead{color:var(--dim);max-width:80ch}.sub{font-size:17px;line-height:1.7}
+  .eyebrow{color:var(--acc);font:700 12px/1.4 Menlo,monospace;letter-spacing:.16em;margin:0 0 13px}
+  .toc{position:sticky;top:12px;z-index:20;display:flex;gap:8px;flex-wrap:wrap;margin:28px 0 42px;
+    padding:10px;background:color-mix(in srgb,var(--bg) 88%,transparent);border:1px solid var(--bd);
+    border-radius:14px;backdrop-filter:blur(14px)}
+  .toc a{color:var(--tx);text-decoration:none;border:1px solid transparent;border-radius:8px;padding:7px 12px;
+    font-size:14px;font-weight:600;background:var(--pan)}.toc a:hover{color:var(--ink);border-color:var(--acc)}
+  a:focus-visible{outline:3px solid var(--blue);outline-offset:3px}
+  .band{display:grid;grid-template-columns:150px minmax(0,1fr);gap:24px;align-items:start;border:1px solid var(--bd);
+    border-top:4px solid var(--blue);border-radius:14px;padding:24px;background:var(--pan);margin:54px 0 18px;
+    scroll-margin-top:92px}.band.ref{border-top-color:var(--purple)}.band.plan{border-top-color:var(--green)}
+  .part{color:var(--blue);font:700 13px/1.4 Menlo,monospace;letter-spacing:.12em;text-transform:uppercase}
+  .band.ref .part{color:var(--purple)}.band.plan .part{color:var(--green)}
+  .band b{display:block;color:var(--ink);font-size:21px;line-height:1.35;margin-bottom:7px}.band p{margin:0;max-width:84ch}
+  .num{display:inline-block;color:var(--dim);font:600 12px/1 Menlo,monospace;margin-right:10px;letter-spacing:.08em}
+  .note{border-left:4px solid var(--acc);padding:10px 0 10px 17px;color:var(--dim);max-width:92ch;margin:18px 0;
+    font-size:15.5px}.note.red{border-left-color:var(--red)}.note.green{border-left-color:var(--green)}.note b{color:var(--ink)}
+  code{background:var(--code);color:#efaa67;padding:2px 6px;border-radius:5px;font:13.5px/1.5 Menlo,monospace;
+    overflow-wrap:anywhere}.tbl{overflow:auto;border:1px solid var(--bd);border-radius:14px;background:var(--pan);
+    margin:16px 0 25px;scrollbar-color:var(--dim) var(--code)}
+  table{width:100%;border-collapse:separate;border-spacing:0;min-width:940px;font-size:14.5px;line-height:1.62}
+  th{text-align:left;color:#aaa795;background:var(--pan-2);font-size:12.5px;letter-spacing:.075em;padding:13px 16px;
+    border-bottom:1px solid var(--bd);white-space:nowrap}td{padding:14px 16px;vertical-align:top;border-bottom:1px solid #2b2d24}
+  th:first-child,td:first-child{position:sticky;left:0;z-index:2;background:var(--pan);box-shadow:1px 0 var(--bd)}
+  th:first-child{z-index:3;background:var(--pan-2)}tr:last-child td{border-bottom:0}tr:hover td{background:#22241c}
+  tr:hover td:first-child{background:#22241c}td b{color:var(--ink)}.yes{color:#79c970}.no{color:#f07384}.partial{color:#efa457}
+  .flow{display:grid;grid-template-columns:1fr 44px 1fr 44px 1fr;gap:10px;align-items:stretch;margin:20px 0 28px}
+  .box{border:1px solid var(--bd);border-radius:13px;background:var(--pan);padding:18px}.box h3{margin:0 0 8px}
+  .arrow{display:grid;place-items:center;color:var(--acc);font-size:28px}.small{font-size:13.5px;color:var(--dim)}
+  ul{padding-left:24px;max-width:92ch}li{margin:9px 0}a{color:#8bb2fb;text-underline-offset:3px}
+  @media(max-width:820px){body{padding:32px 16px 80px;font-size:16px}h1{font-size:34px}h2{font-size:21px;margin-top:42px}
+    .toc{position:static;margin-bottom:34px}.band{grid-template-columns:1fr;gap:8px;padding:19px;margin-top:42px}
+    .flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg);height:26px}table{min-width:820px}}
+  @media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+</style>
+</head>
+<body><main class="wrap">
+<p class="eyebrow">安全设计 · Runtime 网络</p>
+<h1>Runtime 出站 URL 与 SSRF 防护</h1>
+<p class="sub">证据快照：2026-08-12，Runtime 实现截至 Task 10 整合修复（Task 1–8 基点 <code>80c377fa</code>）。本文依次介绍 OpenProgram 现状、其他项目和 OpenProgram 后续计划；实现行为与未来工作分别标注。</p>
+
+<nav class="toc">
+  <a href="#current">01 当前状态</a><a href="#surfaces">02 边界</a>
+  <a href="#references">03 其他项目</a><a href="#decision">04 决策</a>
+  <a href="#implementation">05 证据</a><a href="#future">06 后续计划</a>
+</nav>
+
+<section class="band" id="current"><span class="part">第一部分 · 当前</span><div><b>OpenProgram 当前状态</b>
+<p>Runtime 拥有的 HTTP 请求使用注册表键控 URL 策略和托管传输。实现验证全部 DNS 结果，只连接批准的 peer，显式处理重定向，将凭据限制在声明的 origin，限制响应资源，并在发现未分类使用方或活动非托管 SDK 传输时使静态验证失败。</p></div></section>
+
+<h2><span class="num">01</span>已实现边界</h2>
+<div class="tbl"><table>
+<tr><th>组件</th><th>已实现职责</th><th>明确不负责</th></tr>
+<tr><td><code>openprogram/host/security/url_policy.py</code></td><td>URL/origin 规范化；scheme、userinfo、host、port 验证；全部 A/AAAA 分类；精确 owner 例外；稳定脱敏 reason code</td><td>不发送网络请求，不推断调用方信任类别</td></tr>
+<tr><td><code>openprogram/host/security/safe_http.py</code></td><td>不可变的 42 使用方注册表；同步/异步 peer 约束传输；保留 Host/SNI；手动重定向；凭据、header、MIME、解码正文、编码、超时、代理及原子下载约束</td><td>不接受调用方创建的策略对象，不暴露 <code>verify=False</code></td></tr>
+<tr><td>使用方 adapter</td><td>选择一个不可变注册键；配置服务或回调还提供 owner 配置的精确 origin</td><td>不得另写私网地址分类器或通过原始客户端重试</td></tr>
+<tr><td><code>runtime_http_audit.py</code>, <code>doctor</code>以及 <code>scripts/check_runtime_http.py</code></td><td>有界脱敏拒绝状态、精确 owner 例外/代理报告、AST 清单、SDK 处置验证和过期排除检测</td><td>不显示 userinfo、query、fragment、凭据、peer 响应正文或含 token 的路径</td></tr>
+</table></div>
+
+<h2 id="surfaces"><span class="num">02</span>Runtime 使用方与独立边界</h2>
+<div class="tbl"><table>
+<tr><th>边界</th><th>当前处理</th><th>本功能中的状态</th></tr>
+<tr><td>任意及派生 Runtime URL</td><td><code>web_fetch</code>、附件、生成资产、图片结果下载、目录、市场和更新元数据使用公共或精确服务策略的托管客户端</td><td class="yes">纳入</td></tr>
+<tr><td>固定/配置 API</td><td>网页搜索、图片 API、channel REST、TTS、provider 列表/探测/OAuth、Web 模型列表、MCP HTTP/SSE 和本地探测使用固定或 owner 配置的精确 origin</td><td class="yes">纳入</td></tr>
+<tr><td>第三方 SDK</td><td>Provider/MCP 客户端注入托管传输；精确 origin REST adapter 保持托管；无法注入的 Bedrock、Slack/Discord gateway 和 edge-tts SDK 路径关闭失败</td><td class="yes">纳入并分类</td></tr>
+<tr><td>浏览器导航、popup、Service Worker 和子资源</td><td>由浏览器控制设计及 owner 出站隔离管理</td><td class="no">排除</td></tr>
+<tr><td>沙箱任意代码、插件代码、外部 provider CLI 和包管理器</td><td>由沙箱、插件信任、子进程和安装边界管理</td><td class="no">排除</td></tr>
+<tr><td>Owner 控制面存活探测</td><td>仅 loopback 的有限排除按精确调用类型、owner、原因和数量列入清单</td><td class="partial">已分类，不宣称属于 Runtime URL fetch</td></tr>
+</table></div>
+<div class="note"><b>功能矩阵范围与状态。</b> 已实现控制仅覆盖 Runtime 拥有的 HTTP fetch。在整合仓库门禁通过后，矩阵对该限定功能记录 <code>◐</code> 。浏览器、任意代码、插件、外部 CLI 和包管理器子进程仍是独立边界。</div>
+
+<section class="band ref" id="references"><span class="part">第二部分 · 参考</span><div><b>其他项目如何设计此边界</b>
+<p>比较保留功能矩阵全部十二个外部列及 OWASP。权限提示、hostname 规则、应用 URL 验证、策略代理和操作系统网络沙箱是不同控制；上游包装器和协议库不重复计为独立实现。</p></div></section>
+
+<h2><span class="num">03</span>参考机制</h2>
+<div class="note"><b>证据边界。</b> 矩阵使用固定快照。当前官方文档直接链接作为设计背景，不反向修改固定版本分数。快照中未确认的能力标为未确认，不宣称普遍不存在。</div>
+<div class="tbl"><table>
+<tr><th>项目</th><th>应用 URL fetch 证据</th><th>网络或权限边界</th><th>采用、调整或拒绝</th></tr>
+<tr><td><b>Hermes</b></td><td>共享 <code>url_safety</code> 覆盖 Web、浏览器、vision 和 gateway media。DNS 失败关闭；拒绝 loopback、RFC1918、link-local、CGNAT、metadata、reserved、multicast 和 unspecified 结果；逐跳检查重定向；URL 脱敏，媒体流式处理且有限额。</td><td>进程级 <code>allow_private_urls</code> 开关同时放宽多个入口。应用检查仍不能替代操作系统网络隔离。</td><td>采用共享失败关闭验证、完整地址集、重定向检查、脱敏与限额。将全局开关改为精确使用方范围内的服务 origin 例外。</td></tr>
+<tr><td><b>OpenClaw</b></td><td>默认拒绝私有、内部和特殊用途目标，支持精确/通配 hostname 例外，并在导航、交互引发加载及最终 URL 处检查。文档指出推测导航和浏览器子资源风险。</td><td>官方文档说明请求拦截不是网络防火墙：重定向、popup、Service Worker 和后台资源仍可能需要出站隔离或策略代理。</td><td>采用严格默认值和显式例外。浏览器拦截作为独立验收边界，不计为 Runtime fetch 证据。</td></tr>
+<tr><td><b>Claude Code</b></td><td><code>WebFetch(domain:...)</code> 支持 allow/deny。请求前将 hostname 发到 Anthropic 安全阻止列表，结果缓存精确五分钟；owner 可禁用 preflight。</td><td>Bash 沙箱使用子进程继承的 Seatbelt/bubblewrap HTTP/SOCKS 代理。代理信任客户端 hostname 且不检查 TLS 内容，因此宽泛域名和 domain fronting 仍有风险。</td><td>采用分层工具授权和子进程出站策略；不将 hostname 权限视为 DNS/IP/连接时 SSRF 证据。</td></tr>
+<tr><td><b>Codex</b></td><td>审计的主线不以一条 WebFetch 字符串检查替代网络边界。</td><td><code>codex-network-proxy</code> 提供 HTTP/SOCKS5 代理、精确/受限通配域、私网解析拒绝、有限只读方法、MITM header hook、Unix socket 控制和结构化审计；操作系统沙箱限制 loopback 绕过。</td><td>采用结构化拒绝原因、审计和托管策略；保留了解使用方的 Runtime 安全客户端，不只依赖子进程代理。</td></tr>
+<tr><td><b>CodeBuddy 2.109.3</b></td><td><code>WebFetch</code> 应用安全中心域名策略，拒绝 IP 字面值、 <code>localhost</code>和部分私有范围。企业微信媒体使用官方 CDN allowlist，禁用重定向。</td><td>沙箱 <code>allowedDomains</code> 与 WebFetch 权限取交集。审计 bundle 的普通 WebFetch 只检查 host 字面值；快照未确认完整 hostname A/AAAA、peer 绑定或逐跳重定向约束。</td><td>采用固定 channel 服务 allowlist 和权限/网络策略交集；拒绝普通 fetch 仅保护 IP 字面值。</td></tr>
+<tr><td><b>Gemini CLI</b></td><td>官方工具文档警告 <code>web_fetch</code> 能访问 localhost/私网；Plan Mode 可要求确认。本地 0.35.3 core 含 IP 分类与 DNS 工具，但该警告表明它们不构成通用 WebFetch 私网边界。</td><td>用户确认是权限决策，不限制实际连接 peer。</td><td>采用明确风险文档；拒绝以确认替代确定性目标约束。</td></tr>
+<tr><td><b>OpenCode</b></td><td><code>webfetch</code> 权限使用完整请求 URL，支持 allow、ask、deny。当前官方权限文档不能证明私网 IP 分类、完整 DNS、逐跳重定向或 peer 绑定。</td><td><code>shell</code> 使用主机用户网络权限；官方说明字符串规则是尽力处理，不是网络隔离。</td><td>采用统一资源权限语义；获准 URL 仍必须通过独立传输策略。</td></tr>
+<tr><td><b>pi-mono</b></td><td>固定快照未确认核心产品内置任意 URL fetch；网络能力主要来自 shell、安装器或用户扩展。</td><td>核心快照未确认 OS 出站策略；第三方 <code>pi-sandbox</code> 不计为内置 pi-mono 行为。</td><td>不作为 Runtime SSRF 算法参考；扩展边界支持将第三方代码排除在安全客户端完成范围外。</td></tr>
+<tr><td><b>pi-ai</b></td><td>这是协议参考源码，不是可运行产品，没有 session 或 Runtime URL 使用方。</td><td>不适用。</td><td>排除产品级 SSRF 结论，但保留矩阵列以维护审计单位区别。</td></tr>
+<tr><td><b>weclaw</b></td><td>固定快照是到外部 ACP/CLI Agent 的消息桥接，未确认独立通用 URL fetch。</td><td>主要继承启动 CLI 的工具和网络权限；不将受委托产品的控制重复算给 weclaw。</td><td>保留 channel media 和外部进程启动作为相关边界；不作为通用安全 HTTP 参考。</td></tr>
+<tr><td><b>cc-internal / cx-internal / gm-internal</b></td><td><code>cc-internal</code> 和 <code>cx-internal</code> 包装上游启动器； <code>gm-internal</code> 大量复用 Gemini CLI。审计包未确认独立加强通用 URL fetch 策略。</td><td>继承大部分 Claude Code、Codex 或 Gemini CLI 的权限和网络行为。增加认证或 endpoint 本身不构成 SSRF 边界。</td><td>仅审计其新增 endpoint、凭据转发和配置差异；不重复计算为三个独立安全设计。</td></tr>
+<tr><td><b>OWASP</b></td><td>区分已知服务 allowlist 与任意公共目标验证，限制协议，验证全部 A/AAAA，可信服务优先使用 allowlist。</td><td>单次 DNS preflight 仍有 DNS pinning 和检查/使用时差风险，因此也建议网络控制。</td><td>采用独立信任类别和连接时 peer 约束；拒绝只靠单个 preflight DNS 结果。</td></tr>
+</table></div>
+<p class="small">一手来源：
+<a href="https://github.com/NousResearch/hermes-agent/blob/main/tools/url_safety.py">Hermes url_safety.py</a>,
+<a href="https://hermes-agent.nousresearch.com/docs/user-guide/security/">Hermes 安全</a>,
+<a href="https://docs.openclaw.ai/gateway/security">OpenClaw 安全</a>,
+<a href="https://code.claude.com/docs/en/sandboxing">Claude Code 沙箱</a>,
+<a href="https://code.claude.com/docs/en/data-usage">Claude Code WebFetch 安全检查</a>,
+<a href="https://github.com/openai/codex/blob/main/codex-rs/network-proxy/README.md">Codex 网络代理</a>,
+<a href="https://opencode.ai/v2/docs/permissions">OpenCode 权限</a>,
+<a href="https://github.com/google-gemini/gemini-cli/blob/main/docs/reference/tools.md">Gemini CLI 工具</a>以及
+<a href="https://cheatsheetseries.owasp.org/cheatsheets/Server_Side_Request_Forgery_Prevention_Cheat_Sheet.html">OWASP SSRF 防护</a>.</p>
+<p class="small">固定版本本地快照证据： <code>@tencent-ai/codebuddy-code@2.109.3 dist/codebuddy.js,
+CHANGELOG.md, dist/web-ui/docs/cn/cli/permissions.md</code>; <code>@google/gemini-cli@0.35.3 core/dist/src/utils/fetch.js</code>;
+<code>references/pi-mono@3eb002766fff</code>; <code>references/weclaw@10711d0c6b7e</code>；以及 <code>references/pi-ai</code>.</p>
+
+<h2 id="decision"><span class="num">04</span>采用、调整与拒绝的选择</h2>
+<div class="tbl"><table>
+<tr><th>决策</th><th>机制</th><th>原因</th></tr>
+<tr><td class="yes">采用</td><td>一个纯 URL/IP 策略；全部 DNS 地址通过；DNS 失败关闭；每次重定向重新判断；错误只含 origin；限制解码正文</td><td>统一覆盖 Runtime 的目标、重定向、凭据与资源边界。</td></tr>
+<tr><td class="yes">采用</td><td>区分不可信公共、固定公共服务、配置服务及 loopback 回调四种信任类别</td><td>保留 owner 配置的 localhost/私网服务可用性，不给任意公共使用方私网权限。</td></tr>
+<tr><td class="yes">采用</td><td>Claude Code/CodeBuddy 权限与网络分层、Codex 结构化拒绝原因、CodeBuddy 固定 channel media allowlist</td><td>权限回答谁可请求资源；传输策略回答哪个 peer 接收连接与凭据。</td></tr>
+<tr><td class="partial">调整</td><td>Hermes 进程级 <code>allow_private_urls</code></td><td>替换为精确使用方加规范 origin 或规范私有/本地 CIDR；metadata 和 link-local 仍不可例外。</td></tr>
+<tr><td class="partial">调整</td><td>OpenClaw 浏览器拦截与 Codex 全进程出站代理</td><td>浏览器控制保持独立门禁；策略代理是可选、owner 声明、独立 peer 约束且 doctor 可见，不允许直接 fallback。</td></tr>
+<tr><td class="no">拒绝</td><td>仅 URL 字符串检查、单次 DNS preflight、隐式重定向、继承环境代理、禁用 TLS 验证或原始客户端 fallback</td><td>每项都留下目标、重绑定、凭据或绕过路径。</td></tr>
+<tr><td class="no">拒绝</td><td>以用户确认或 hostname allow/deny 实现目标约束</td><td>两者均不验证全部解析地址，也不约束连接 peer。</td></tr>
+<tr><td class="no">拒绝</td><td>对所有 HTTP 客户端实施仅公共目标规则</td><td>这会破坏显式配置的本地模型 endpoint、MCP server 和内网服务。</td></tr>
+<tr><td class="no">拒绝</td><td>将 Origin/Host、CORS、owner 认证、浏览器检查或沙箱网络算作 Runtime SSRF 完成</td><td>这些控制保护不同方向或执行边界。</td></tr>
+</table></div>
+
+<section class="band plan" id="implementation"><span class="part">第三部分 · 计划</span><div><b>OpenProgram 计划状态与后续工作</b>
+<p>Runtime URL fetch 截至 Task 8 已完成。本节先记录实现证据，再列独立后续边界。矩阵保持 <code>◐</code> ，因为这些独立边界不在范围内。</p></div></section>
+
+<h2><span class="num">05</span>已完成计划：实现证据</h2>
+<div class="flow">
+  <div class="box"><h3>以注册表键标识的调用方</h3><div class="small">42 个不可变使用方<br>四种信任类别<br>精确配置或回调 origin</div></div>
+  <div class="arrow">›</div>
+  <div class="box"><h3>纯策略决策</h3><div class="small">规范 URL 和 origin<br>一组完整 DNS 结果<br>精确例外与 reason code</div></div>
+  <div class="arrow">›</div>
+  <div class="box"><h3>托管传输</h3><div class="small">批准的 IP peer<br>原始 Host、SNI 和证书<br>手动重定向与有界响应</div></div>
+</div>
+
+<h3>05.1 传输与策略行为</h3>
+<ul>
+  <li>公共请求仅允许注册表声明的方法、scheme 和 port；全部地址必须为 global，显式拒绝 metadata、loopback、private、link-local、CGNAT、multicast、reserved、unspecified、文档/测试、映射、歧义和无效目标。</li>
+  <li>同步与异步 <code>httpcore</code> backend 只连接批准的 IP 元组，验证实际 socket peer，保留规范 hostname 用于 HTTP Host、TLS SNI 与证书验证。连接池身份包含使用方、信任类别、规范 origin、批准 IP 和代理身份。</li>
+  <li>手动重定向且每跳重新决策；跨 origin 配置服务重定向失败，公共请求凭据被移除，拒绝 URL userinfo；日志/公开错误不含 query、fragment、token 路径、cookie 或 peer 控制正文。</li>
+  <li>限制 header、MIME、content encoding、解码字节、connect/read/write/pool/overall 超时和临时文件生命周期。下载仅在完整验证、flush、 <code>fsync</code>及可安全清理的完成之后替换目标。</li>
+</ul>
+
+<h3>05.2 使用方与 SDK 处置证据</h3>
+<div class="tbl"><table>
+<tr><th>处置</th><th>使用方</th><th>约束</th></tr>
+<tr><td>注入传输</td><td><code>provider.openai.sdk</code>, <code>provider.anthropic.sdk</code>, <code>provider.google.sdk</code>, <code>mcp.configured.http</code>, <code>mcp.configured.sse</code></td><td>公开 SDK 构造接收限定范围的托管客户端或工厂；真实 SDK 链测试到达受约束 backend。</td></tr>
+<tr><td>精确 origin</td><td>Telegram、WeChat、Feishu、Matrix、Slack、Discord、固定/配置 TTS 和其他固定/配置 REST 使用方</td><td>附加凭据前冻结规范 owner/随附 origin；重定向不能把凭据转到其他 origin。</td></tr>
+<tr><td>派生 URL 提取</td><td>附件、生成资产和图片结果使用方</td><td>SDK/上游响应提供 URL，随后 Runtime 通过专用托管注册使用方下载或上传。</td></tr>
+<tr><td>禁用</td><td><code>provider.amazon_bedrock.sdk</code>, <code>channel.slack.gateway_sdk</code>, <code>channel.discord.gateway_sdk</code>, <code>tts.edge_sdk</code></td><td>启动或调用以 <code>UNMANAGED_TRANSPORT</code> 失败，发生在导入/使用无法注入网络 SDK 前。Bedrock 同时覆盖注册 stream 和模型列表入口，早于 boto3/botocore 凭据或客户端活动。</td></tr>
+</table></div>
+
+<h3>05.3 Owner 例外、策略代理、doctor 和清单</h3>
+<p>Owner 配置只接受注册使用方加一个规范 origin 或规范私有/本地 CIDR。拒绝通配、后缀、凭据、未知字段、公共/默认路由网段、metadata、link-local 和使用方不允许的例外形式。既有 owner 认证设置路径是唯一变更权限。</p>
+<p>只有 owner 配置设置 <code>enforces_target_policy: true</code>才可用策略代理。Runtime 先判断目标，独立约束代理 peer，通过 doctor/audit 报告委托，绝不直接重试。</p>
+<div class="tbl"><table>
+<tr><th>清单排除</th><th>Owner 与限定原因</th></tr>
+<tr><td><code>security/safe_http.py</code></td><td>Runtime 托管传输；唯一允许的直接 <code>httpcore</code> pool/proxy 构造</td></tr>
+<tr><td><code>programs/applications/browser/chrome.py</code></td><td>浏览器控制；精确 browser opener 构造和 loopback CDP 存活连接</td></tr>
+<tr><td><code>cli/commands/mcp.py</code></td><td>Owner 控制面；仅认证 backend opener</td></tr>
+<tr><td><code>cli/ink.py</code>, <code>cli/commands/doctor.py</code>, <code>cli/commands/rescue.py</code></td><td>Owner 控制面；仅精确 loopback worker 存活 socket</td></tr>
+</table></div>
+<p>未注册 raw 调用、活动非托管 SDK、没有分类使用方的注册项或过期排除均使检查失败。Doctor 暴露稳定的 <code>runtime-http-registry</code>, <code>runtime-http-owner-exceptions</code>,
+<code>runtime-http-policy-proxy</code>, <code>runtime-http-recent-denials</code>以及 <code>runtime-http-unmanaged-transport</code> 标签。</p>
+
+<h3>05.4 验证快照</h3>
+<div class="tbl"><table>
+<tr><th>命令</th><th>记录结果</th></tr>
+<tr><td><code>uv run --extra dev pytest -q tests/security</code></td><td class="yes"><code>804 passed</code></td></tr>
+<tr><td><code>uv run --with pip --with boto3 pytest -q tests/meta_functions tests/providers tests/unit tests/webui tests/integration/programs/test_mcp_client.py</code></td><td class="yes"><code>3482 passed, 12 skipped, 1 xfailed</code></td></tr>
+<tr><td><code>uv run --extra dev --with boto3 pytest -q</code></td><td class="yes"><code>4923 passed, 14 skipped, 2 deselected, 1 xfailed</code></td></tr>
+<tr><td><code>uv run python scripts/check_runtime_http.py</code></td><td class="yes"><code>unregistered=0 active_unmanaged=0 registry_without_consumer=0 stale_exclusions=0</code></td></tr>
+<tr><td><code>uv run python scripts/check_feature_matrix.py docs/reference/design/feature-matrix.html</code></td><td class="yes"><code>features=160 openprogram_score=78 openprogram_gaps=73 openprogram_only=6</code></td></tr>
+</table></div>
+<div class="note"><b>发布门禁。</b> 已具备策略解析/地址测试、真实同步/异步 socket/TLS peer 测试、DNS 重绑定防护、重定向/凭据 origin 测试、响应/解压/超时清理、全使用方迁移、四类 SDK 处置且零活动非托管传输、仅 owner 精确例外、doctor/audit/静态约束和 42 行兼容合同。声明 dev 与可选 provider 依赖后，完整仓库命令通过。功能矩阵记录 <code>◐</code> ，因为验证范围是 Runtime 拥有的 HTTP，不包括独立浏览器、任意代码、插件、外部 CLI 和包管理器边界。</div>
+
+<h2 id="future"><span class="num">06</span>OpenProgram 后续计划</h2>
+<div class="tbl"><table>
+<tr><th>后续边界</th><th>宣称完成前必需工作</th></tr>
+<tr><td>浏览器导航及页面派生流量</td><td>为每个 backend 定义/测试导航、popup、Service Worker、后台资源、重定向、下载、CDP 和浏览器 profile 策略；拦截不足时使用强制出站边界。</td></tr>
+<tr><td>插件与任意代码网络</td><td>信任/沙箱模型与 Runtime 安全 HTTP 独立；如需限制这些进程网络，增加 OS 或策略代理出站边界。</td></tr>
+<tr><td>禁用的第三方 SDK 网络功能</td><td>仅在 SDK 支持托管传输注入或 owner 强制策略代理具有同等测试后启用；不得用未验证 SDK 保证替代禁用处置。</td></tr>
+</table></div>
+<p class="small">相关文档： <a href="sandbox-architecture.zh.html">沙箱设计</a>,
+<a href="../../providers/network-proxy.html">网络代理设计</a>以及
+<a href="../../feature-matrix.zh.html">功能矩阵</a>.</p>
+</main></body></html>
