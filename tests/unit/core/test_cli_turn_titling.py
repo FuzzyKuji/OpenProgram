@@ -56,6 +56,34 @@ def _agent():
     return SimpleNamespace(id="main")
 
 
+def test_resumed_cli_turn_keeps_the_prior_inputs_with_the_followup(
+    tmp_db: SessionDB, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    seen = []
+
+    def reply(*, content):
+        seen.append(content)
+        return "B is 94 minutes."
+
+    monkeypatch.setattr(
+        "openprogram.runtime.agent_registry.runtime_registry.get_runtime_for",
+        lambda agent: SimpleNamespace(exec=reply),
+    )
+    first = "Find science fiction movies under 100 minutes. A: comedy, 88; B: sci-fi, 94."
+    followup = "Change it to 90 minutes."
+    _run_turn_with_history(_agent(), "movies", first)
+    _run_turn_with_history(_agent(), "movies", followup)
+
+    assert seen[0] == [{"type": "text", "text": first}]
+    # A server that keeps only the latest user text part must still receive
+    # both the source data and the earlier answer with the new request.
+    latest_part = seen[1][-1]["text"]
+    assert first in latest_part
+    assert "B is 94 minutes." in latest_part
+    assert followup in latest_part
+    assert tmp_db.get_messages("movies")[-2]["content"] == followup
+
+
 def test_cli_first_turn_stamps_phase1_title_no_lock(tmp_db: SessionDB) -> None:
     _run_turn_with_history(_agent(), "s1", "What is the weather today?")
 

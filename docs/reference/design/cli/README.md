@@ -9,6 +9,8 @@ How it fits together today:
 - **One slash-command registry.** Built-in commands, plugin commands, MCP prompts and skills are merged into one registry with one format, so `/` lists the same commands in the TUI and in the Web composer.
 - **Transcript in the terminal.** Tool calls fold into one line, `ctrl+o` opens the full transcript, file edits render as diffs, and input typed during a run is queued.
 
+The in-process CLI sends a resumed conversation’s history and current message together as one text part. This keeps their relationship intact on backends that trim older text parts. The session stores the user’s original message separately from this request formatting.
+
 ## Documents
 
 - [`naming.md`](naming.md) — the naming rule every `openprogram` subcommand follows.

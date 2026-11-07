@@ -87,10 +87,21 @@ def _run_turn_with_history(
 
     rendered_history = _render_history_plain(messages[:-1], _HISTORY_CHAR_BUDGET)
 
-    exec_content: list[dict] = []
+    prompt = message
     if rendered_history:
-        exec_content.append({"type": "text", "text": rendered_history})
-    exec_content.append({"type": "text", "text": message})
+        # Some OpenAI-compatible servers turn each text part into a separate
+        # user message and discard older parts to fit their context window.
+        prompt = (
+            f"Conversation history:\n{rendered_history}\n\n"
+            f"Latest user message:\n{message}\n\n"
+            "Use the latest message to update the preceding request. Keep the "
+            "source data and unchanged requirements, and recompute the answer. "
+            "When the supplied information is sufficient, return the answer "
+            "as ordinary chat text. Saving or sending the answer, scheduling "
+            "work, and updating a goal are separate actions; take such actions "
+            "only when the user's request calls for them."
+        )
+    exec_content = [{"type": "text", "text": prompt}]
 
     try:
         rt = _runtimes.get_runtime_for(agent)
