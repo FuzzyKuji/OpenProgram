@@ -177,17 +177,6 @@ def remove(binding_id: str) -> Optional[dict[str, Any]]:
         return dict(removed)
 
 
-def remove_for_agent(agent_id: str) -> int:
-    """Drop every binding that points at ``agent_id``. Returns count."""
-    with _lock:
-        rows = _read()
-        kept = [r for r in rows if r["agent_id"] != agent_id]
-        n = len(rows) - len(kept)
-        if n:
-            _write(kept)
-        return n
-
-
 def remove_for_account(channel: str, account_id: str) -> int:
     """Drop every binding scoped to (channel, account_id)."""
     with _lock:
@@ -259,13 +248,3 @@ def list_for_agent(agent_id: str) -> list[dict[str, Any]]:
     """All bindings that currently route to ``agent_id``."""
     with _lock:
         return [dict(r) for r in _read() if r["agent_id"] == agent_id]
-
-
-def list_for_account(channel: str, account_id: str) -> list[dict[str, Any]]:
-    with _lock:
-        return [
-            dict(r) for r in _read()
-            if r["match"].get("channel") == channel
-            and r["match"].get("account_id") == account_id
-        ]
-

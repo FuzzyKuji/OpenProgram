@@ -65,6 +65,8 @@ class URLTrustClass(str, Enum):
     FIXED_PUBLIC_SERVICE = "fixed_public_service"
     CONFIGURED_SERVICE = "configured_service"
     LOOPBACK_CALLBACK = "loopback_callback"
+    # A fetch the owner's own turn asked for: no address, port or method limits.
+    OWNER_TOOL = "owner_tool"
 
 
 @dataclass(frozen=True)
@@ -376,6 +378,8 @@ def _validate_addresses(
     callback_origin: str | None,
     proxy_resolved: bool = False,
 ) -> None:
+    if trust_class == URLTrustClass.OWNER_TOOL:
+        return
     for address in addresses:
         if _is_metadata(normalized, address):
             raise URLPolicyError("METADATA_ADDRESS", normalized.safe_url)
@@ -488,17 +492,21 @@ def evaluate_url(
         if normalized.origin != normalize_origin(callback_origin):
             raise URLPolicyError("CALLBACK_ORIGIN_MISMATCH", normalized.safe_url)
 
+    owner_tool = trust_class == URLTrustClass.OWNER_TOOL
     proxy_resolved = (
         proxy_resolves
         and trust_class
-        in {URLTrustClass.UNTRUSTED_PUBLIC, URLTrustClass.FIXED_PUBLIC_SERVICE}
+        in {URLTrustClass.UNTRUSTED_PUBLIC, URLTrustClass.FIXED_PUBLIC_SERVICE, URLTrustClass.OWNER_TOOL}
         and not _is_ip_literal(normalized.hostname)
+        # The owner's fetch of a local name goes straight there, not through a proxy.
+        and not (owner_tool and _is_local_name(normalized.hostname))
     )
-    if proxy_resolved:
+    if proxy_resolved and not owner_tool:
         if normalized.hostname in _METADATA_HOSTS:
             raise URLPolicyError("METADATA_ADDRESS", normalized.safe_url)
         if _is_local_name(normalized.hostname):
             raise URLPolicyError("NON_GLOBAL_ADDRESS", normalized.safe_url)
+    if proxy_resolved:
         addresses = _resolve_for_proxy(normalized, resolver)
     else:
         addresses = _resolve(normalized, resolver)

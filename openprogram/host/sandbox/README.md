@@ -24,6 +24,9 @@ approval layer. Callers that already hold a policy pass it explicitly to
 What the boundary is for every available platform backend:
 
 * writes are confined to the working directory plus configured roots
+* inside them, files that something outside the sandbox runs later (shell
+  startup files, the repository's git hooks and config, OpenProgram's own
+  state) stay read-only; see ``protected_writes``
 * reads are open EXCEPT the credential globs in ``deny_read``
 * the network is off unless ``sandbox.network`` is on
 * the child environment is an allowlist, so API keys do not reach it
@@ -36,7 +39,7 @@ What the boundary is for every available platform backend:
 
 - **`network_policy.py`** — Destination policy for managed sandbox HTTP proxies
 - **`network_runner.py`** — Per-command authenticated HTTP proxy with a proxy-only macOS child sandbox
-- **`protected_paths.py`** — The never-writable paths, resolved without importing anything heavy
+- **`protected_writes.py`** — Writes a sandboxed command may never make, whatever its writable roots
 - **`recoverable_delete.py`** — Best-effort recoverable deletion for local agent child processes
 
 _Auto-generated from `__init__.py` docstring — keep that as the source of truth; re-run `python scripts/gen_dir_readmes.py` from the repo root to refresh._

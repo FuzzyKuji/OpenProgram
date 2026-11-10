@@ -245,6 +245,35 @@ html[data-sidebar-closed] #sidebar .rail-toggle-open { opacity: 1; }
    so it neither shows its cursor nor starts a drag. */
 .rail-resize-handle[data-off] { pointer-events: none; }
 .rail-resize-handle[data-edge="right"] { right: -8px; }
+.rail-resize-handle:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -7px; }
+/* The same short grip as a split's divider, centred in the 8px gap between
+   the two cards (the handle itself centres on the chat card's edge). It
+   turns the accent colour while a drag rests on the default width. */
+.rail-resize-handle::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 4px;
+  height: 36px;
+  border-radius: var(--radius-full);
+  background: transparent;
+  transform: translate(-50%, -50%);
+  transition: background var(--motion-medium) var(--ease-standard), height var(--motion-medium) var(--ease-standard);
+  pointer-events: none;
+}
+.rail-resize-handle[data-edge="left"]::after { left: calc(50% + 4px); }
+.rail-resize-handle[data-edge="right"]::after { left: calc(50% - 4px); }
+.rail-resize-handle:hover::after,
+.rail-resize-handle:focus-visible::after {
+  height: 48px;
+  background: var(--pane-divider-hover);
+}
+.rail-resize-handle[data-resizing="true"]::after {
+  height: 48px;
+  background: var(--pane-divider-active);
+  box-shadow: var(--pane-divider-active-ring);
+}
+.rail-resize-handle[data-snapped]::after { background: var(--accent-blue); }
 
 /* Column resize handle */
 /* Zero layout width — main content sits flush against the sidebar's own

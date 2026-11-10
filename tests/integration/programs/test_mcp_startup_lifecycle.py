@@ -91,7 +91,7 @@ def test_public_health_ready_while_optional_mcp_waits_then_shutdown_drains(app_f
         try:
             await asyncio.wait_for(entered.wait(), _HANG_CEILING_SECONDS)
             await asyncio.wait_for(asyncio.shield(entering), _HANG_CEILING_SECONDS)
-            assert (await _request(app, "/healthz")).json() == {"status": "ok"}
+            assert (await _request(app, "/healthz")).json()["status"] == "ok"
             statuses = (await _request(app, "/api/mcp/servers")).json()["servers"]
             assert len(statuses) == 1
             assert statuses[0]["ready"] is False and statuses[0]["tool_count"] == 0

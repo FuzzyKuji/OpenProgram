@@ -15,7 +15,7 @@
    Colours per theme live in ../themes/; the shadcn colour bridge and
    Tailwind's utility names in shadcn.css and tailwind.css here.
    Which component sits on which tier, and the rules that keep it so:
-   docs/reference/design/ui/visual-system/design-tokens.md. `npm run check` (scripts/ui/check-design-tokens.mjs)
+   docs/reference/design/ui/visual-system/design-tokens.html. `npm run check` (scripts/ui/check-design-tokens.mjs)
    fails the build on a value written outside the tiers. */
 @import "./layout.css";
 @import "./controls.css";

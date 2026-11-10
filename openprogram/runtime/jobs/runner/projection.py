@@ -1,6 +1,9 @@
 """JobRunner projection operations."""
 from __future__ import annotations
+from openprogram.runtime.execution.model import RESTART_NOT_CONTINUED, UNFINISHED_BEFORE_SESSION_LOGS
 from openprogram.runtime.jobs.runner import shared
+
+_ENDED_BY_RESTART = "Stopped after a restart: the run that started this agent has ended."
 
 
 class ProjectionOperations:
@@ -49,6 +52,7 @@ class ProjectionOperations:
         if job is not None and not shared.is_terminal(job.status):
             projection_fields = terminal_fields or shared._terminal_fields(
                 status, execution.reason_code or status.value,
+                error=_ENDED_BY_RESTART if execution.reason_code == RESTART_NOT_CONTINUED else None,
             )
             try:
                 shared._store_write_terminal(
@@ -87,6 +91,10 @@ class ProjectionOperations:
                 # retries the JobStore write before releasing admission.
                 self._dispatch_wake.set()
                 return
+        if execution.reason_code == UNFINISHED_BEFORE_SESSION_LOGS:
+            # The migration closed this run from an older profile. It holds no
+            # admission here and has no Job input to find one from.
+            return
         canonical_job = self._canonical_job(execution.execution_id)
         if canonical_job is None or not canonical_job.admission_id:
             raise RuntimeError("terminal Job projection has no immutable admission")
@@ -216,7 +224,10 @@ class ProjectionOperations:
 
 
     def _project_existing_canonical_terminals(self) -> list[tuple[str, str]]:
-        """Close projection gaps after canonical finish before a crash."""
+        """Close projection gaps left by a crash or by an ending made straight in the store.
+
+        Returns each Job this pass ended, for its card and status to follow.
+        """
         completed: list[tuple[str, str]] = []
         pending_ids: set[str] = set()
         pending_list = getattr(self._governor, "pending_finalizations", None)
@@ -251,6 +262,10 @@ class ProjectionOperations:
                         owner_generation[1] if owner_generation is not None else None
                     ),
                 )
+                if not shared.is_terminal(job.status):
+                    projected = shared._store_load(execution.session_id, job.id)
+                    if projected is not None and shared.is_terminal(projected.status):
+                        completed.append((job.id, execution.session_id))
         return completed
 
 

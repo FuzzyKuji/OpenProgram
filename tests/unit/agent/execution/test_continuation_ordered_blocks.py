@@ -4,7 +4,7 @@ from __future__ import annotations
 import hashlib
 from types import SimpleNamespace
 
-from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1, canonical_json_bytes
+from tests.support.agent_journal import journal_continuation
 from openprogram.runtime.conversation.checkpoint import AgentContinuation, runtime_contract_snapshot
 from openprogram.runtime.conversation.turn_runtime.loop_runner import (
     _ordered_block_from_content,
@@ -266,39 +266,7 @@ def test_seed_appends_remaining_tools_when_display_ends_on_first_tool_of_decisio
     assert ordered[2]["result"] == "ok"
 
 
-def _blob_checkpoint(state: AgentCheckpointV1):
-    payload_raw = canonical_json_bytes(dict(state.payload))
-    digest = hashlib.sha256(payload_raw).hexdigest()
-    main = {
-        "ref": f"execstate://sha256/{digest}",
-        "sha256": digest,
-        "byte_length": len(payload_raw),
-        "media_type": "application/json",
-        "schema_version": 1,
-    }
-    blobs = dict(state.blob_payloads)
-    blobs[main["ref"]] = payload_raw
-
-    class _Store:
-        def get_state_blob(self, execution_id, ref):
-            raw = blobs.get(ref)
-            if raw is None:
-                return None
-            return {
-                "ref": ref,
-                "sha256": hashlib.sha256(raw).hexdigest(),
-                "byte_length": len(raw),
-                "media_type": "application/json",
-                "schema_version": 1,
-                "payload": raw,
-            }
-
-    return _Store(), SimpleNamespace(
-        execution_id="exec-1", state_refs={"agent_checkpoint": main},
-    )
-
-
-def test_from_checkpoint_exposes_decoded_turn_display():
+def test_from_checkpoint_rebuilds_display_from_the_journal():
     request = _request()
     last = AssistantMessage(
         content=[
@@ -312,48 +280,20 @@ def test_from_checkpoint_exposes_decoded_turn_display():
         tool_call_id="call-3", tool_name="web_use",
         content=[TextContent(text="Counter: 3")], timestamp=1,
     )
-    snapshot = _snapshot(request)
-    state = AgentCheckpointV1.build(
-        safe_point={
-            "kind": "agent.tool.action.after", "step_id": "after_tool:p",
-            "phase": "after_tool", "sentinel": "resume-from-checkpoint",
-        },
-        frontier=[{"step_id": "after_tool:p", "phase": "after_tool", "branch_id": "main"}],
-        turn={
-            "user_message_id": "user-1", "assistant_message_id": "user-1_reply",
-            "base_history_head_id": "user-1",
-        },
-        assistant_message=last.model_dump(mode="json"),
-        tool_results=[last_result.model_dump(mode="json")],
-        resolved_snapshot=snapshot,
-        provider_action_id="provider-action",
-        tool_call_ids=["call-3"],
-        next_tool_index=1,
-        repeat_failures={},
-        completed_actions=[
-            {"action_id": "provider-action", "input_hash": "context-hash"},
-            {"action_id": "tool-action-1", "input_hash": "tool-hash"},
-        ],
-        terminal_effect_receipts=[
-            {
-                "effect_id": "effect-provider", "frontier_step_id": "provider:p",
-                "action_id": "provider-action", "outcome": "committed",
-                "receipt": {"provider_request_id": "saved-request"},
-            },
-            {
-                "effect_id": "effect-tool", "frontier_step_id": "after_tool:p",
-                "action_id": "tool-action-1", "outcome": "committed",
-                "receipt": {"tool_call_id": "call-3"},
-            },
-        ],
-        turn_display=_display_cards(),
+    earlier = AssistantMessage(
+        content=[ToolCall(id="call-1", name="web_use", arguments={"command": "observe"})],
+        api="openai-completions", provider="openai", model="fake",
+        timestamp=1, stop_reason="toolUse",
     )
-    store, checkpoint = _blob_checkpoint(state)
-    continuation = AgentContinuation.from_checkpoint(
-        store=store, checkpoint=checkpoint, request=request,
+    earlier_result = ToolResultMessage(
+        tool_call_id="call-1", tool_name="web_use",
+        content=[TextContent(text="Counter: 1")], timestamp=1,
     )
-    assert [card.get("tool_call_id") for card in continuation.display if card.get("type") == "tool"] == [
-        "call-1", "call-2", "call-3",
-    ]
+    continuation = journal_continuation(
+        request, decision=last, snapshot=_snapshot(request), tool_results=(last_result,),
+        earlier=((earlier, (earlier_result,)),),
+    )
+    tools = [card for card in continuation.display if card.get("type") == "tool"]
+    assert [card["tool_call_id"] for card in tools] == ["call-1", "call-3"]
+    assert tools[0]["result"] == "Counter: 1"
     assert continuation.assistant_message.content[0].text == "Counter is 3"
-    assert continuation.display[1]["result"] == "Counter: 1"

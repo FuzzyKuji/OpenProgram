@@ -37,6 +37,12 @@ Layer = Literal["L0", "L1", "L2"]
 _channel_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "_channel_var", default="",
 )
+# Only a conversation turn sets this (loop_runner): "" for a chat read in the
+# App, a channel name when the reply also goes there, None for everything else
+# that builds a prompt (Programs, verifiers, sub-agents, accounting).
+_chat_delivery_var: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
+    "_chat_delivery_var", default=None,
+)
 # Session-dag.md §7: the tool-runtime block, the deferred-tool catalog and the
 # plan-mode reminder used to be hand-appended by the dispatcher after calling
 # the assembler. They are components like everything else; the per-call inputs
@@ -145,9 +151,11 @@ def assemble_sections(
     tools: Optional[list] = None,
     additional_working_dirs: Optional[list] = None,
     plan_mode: bool = False,
+    chat_delivery: Optional[str] = None,
 ) -> list[tuple[str, str]]:
     """:func:`assemble`, with each block paired with its component name."""
     token = _channel_var.set(channel)
+    t_delivery = _chat_delivery_var.set(chat_delivery)
     t_tools = _tools_var.set(tools)
     t_dirs = _working_dirs_var.set(additional_working_dirs)
     t_plan = _plan_mode_var.set(plan_mode)
@@ -170,6 +178,7 @@ def assemble_sections(
         _plan_mode_var.reset(t_plan)
         _working_dirs_var.reset(t_dirs)
         _tools_var.reset(t_tools)
+        _chat_delivery_var.reset(t_delivery)
         _channel_var.reset(token)
 
 
@@ -242,6 +251,7 @@ def build_system_prompt(
     tools: Optional[list] = None,
     additional_working_dirs: Optional[list] = None,
     plan_mode: bool = False,
+    chat_delivery: Optional[str] = None,
 ) -> str:
     """Compose the system prompt from registered L0 + L1-project components.
 
@@ -252,7 +262,8 @@ def build_system_prompt(
     ``channel`` (e.g. "telegram", "discord") is threaded through to builders
     that emit platform-specific rendering guidance. ``tools`` drives the
     tool-runtime block and the deferred-tool catalog; ``plan_mode`` appends
-    the plan-mode reminder."""
+    the plan-mode reminder. ``chat_delivery`` marks a conversation turn (see
+    ``_chat_delivery_var``); only those are told they are messaging someone."""
     try:
         sections = assemble_sections(
             agent, ["L0", "L1"],
@@ -260,6 +271,7 @@ def build_system_prompt(
             tools=tools,
             additional_working_dirs=additional_working_dirs,
             plan_mode=plan_mode,
+            chat_delivery=chat_delivery,
         )
         if not sections:
             return ""
@@ -407,8 +419,8 @@ def environment_block(tools: Optional[list] = None,
     if additional_working_dirs:
         lines.append("Also writable: " + ", ".join(additional_working_dirs))
     rules = _PLATFORM_RULES.get(channel or "", "")
-    if rules == _WEB_RULES:
-        rules = rules.format(guide=_GUIDES / "a2ui.md")
+    if channel == "web":
+        rules = _web_rules()
     if rules:
         lines.append(rules)
     return "<environment>\n" + "\n".join(lines) + "\n</environment>"
@@ -416,6 +428,37 @@ def environment_block(tools: Optional[list] = None,
 
 def _build_environment(agent: Any) -> str:
     return environment_block(_tools_var.get(), _working_dirs_var.get(), _channel_var.get())
+
+
+def _always_on_chat_turn(agent: Any) -> bool:
+    """A conversation turn of an always-on Agent."""
+    if _chat_delivery_var.get() is None:
+        return False
+    return bool((_attr(agent, "always_on", None) or {}).get("enabled"))
+
+
+def _build_messaging(agent: Any) -> str:
+    return (_GUIDES / "messaging.md").read_text(encoding="utf-8").strip()
+
+
+_CHANNEL_NAMES = {"telegram": "Telegram", "discord": "Discord", "slack": "Slack", "wechat": "WeChat"}
+_CHANNEL_SURFACE = (
+    "This conversation is also delivered to {app} and read in that app. Write standard Markdown, "
+    "which is converted for it; this replaces any formatting note above. Keep to one or two sentences "
+    "unless asked for more. Never use tables or drawings: write each row as its own line. There are no "
+    "buttons here: offer choices as a short numbered list and ask for the number. Do not send the user "
+    "to a screen they cannot see from here; give a link, a file or the content itself."
+)
+
+
+def _build_chat_surface(agent: Any) -> str:
+    """Comes after ``environment``, whose drawing guide it narrows."""
+    delivery = _chat_delivery_var.get()
+    if delivery:
+        return _CHANNEL_SURFACE.format(app=_CHANNEL_NAMES.get(delivery, delivery.title()))
+    if _channel_var.get() == "web" and delivery == "":
+        return "Draw only when the user asks or a picture is the answer; this overrides the drawing advice above."
+    return ""
 
 
 def _build_date(agent: Any) -> str:
@@ -451,15 +494,11 @@ _PLATFORM_RULES: dict[str, str] = {
     "web": "",
 }
 
-# The OpenProgram web/desktop chat renders A2UI (https://a2ui.org) surfaces
-# from ```a2ui fences; apps/web/lib/chat/markdown/a2ui.ts is the renderer. The format
-# lives in guides/a2ui.md, read when a reply needs a surface.
-_WEB_RULES = (
-    "Replies render as Markdown, including tables, code fences and LaTeX. For a laid-out "
-    "view (metrics, a checklist, a comparison) you may add an A2UI surface; read {guide} "
-    "for the format first."
-)
-_PLATFORM_RULES["web"] = _WEB_RULES
+# The OpenProgram web/desktop chat draws ```visual blocks (HTML/SVG in a
+# sandboxed view, apps/web/lib/chat/markdown/visual.ts). Drawing is on by
+# default, so the guide is part of the prompt rather than a file to read first.
+def _web_rules() -> str:
+    return (_GUIDES / "visuals.md").read_text(encoding="utf-8").strip()
 
 
 
@@ -485,28 +524,21 @@ def _build_deferred_catalog(agent: Any) -> str:
     return deferred_catalog_text(deferred) or ""
 
 
-# Text adapted from Anthropic's Claude Code plan-mode attachment
-# (``references/claude-code-leaked/src/utils/messages.ts``) — the opening
-# "Plan mode is active... supercedes any other instructions" sentence is
-# theirs, kept because it phrases the override priority unambiguously.
 _PLAN_MODE_TEXT = (
     "<plan-mode>\n"
-    "Plan mode is active. The user indicated that they do not "
-    "want you to execute yet — you MUST NOT make any edits, "
-    "run any non-readonly tools (including changing configs, "
-    "running shell commands, or making commits), or otherwise "
-    "make any changes to the system. This supercedes any other "
-    "instructions you have received.\n\n"
-    "Workflow:\n"
-    "1. Explore the codebase with read, glob, grep until you "
-    "understand the existing structure.\n"
-    "2. Draft a concrete implementation plan.\n"
-    "3. Submit the plan via `exit_plan_mode(plan=...)` for "
-    "user approval. Do NOT ask the user about the plan in "
-    "free-form text — exit_plan_mode IS how you ask.\n\n"
-    "If the user rejects the plan, revise it based on the "
-    "rejection message and call exit_plan_mode again. Stay in "
-    "plan mode until exit_plan_mode succeeds.\n"
+    "This conversation is in plan mode: investigate and propose, "
+    "but change nothing. Use read-only tools only. Do not edit "
+    "files, run shell commands, change configuration or commit. "
+    "These limits take priority over every other instruction "
+    "until a plan is approved.\n\n"
+    "Steps:\n"
+    "1. Read the relevant code with read, glob and grep.\n"
+    "2. Write a specific plan.\n"
+    "3. Send it with `exit_plan_mode(plan=...)`. That call is the "
+    "approval request, so do not also ask in your reply.\n\n"
+    "After a rejection, change the plan to answer the reason given "
+    "and send it again. You stay in plan mode until a plan is "
+    "approved.\n"
     "</plan-mode>"
 )
 
@@ -574,8 +606,11 @@ register(ContextComponent("base", "L0", 10, _build_base))
 # Output style shapes how replies are written; the agent's own instructions
 # come after it and win on any conflict.
 register(ContextComponent("output_style", "L0", 20, _build_output_style))
+# Constant text, so ordinary turns of an always-on chat keep their cache.
+register(ContextComponent("messaging", "L0", 25, _build_messaging, _always_on_chat_turn))
 register(ContextComponent("inline_prompt", "L0", 30, _build_inline))
 register(ContextComponent("environment", "L1", 10, _build_environment))
+register(ContextComponent("chat_surface", "L1", 12, _build_chat_surface, _always_on_chat_turn))
 register(ContextComponent("agents_md", "L1", 20, _build_agents_md))
 register(ContextComponent("memory", "L1", 30, _build_memory))
 # Order 35 in L1 is the conversation package's "open_work" section, which

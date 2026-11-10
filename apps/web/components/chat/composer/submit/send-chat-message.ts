@@ -351,7 +351,7 @@ export function sendChatMessage({
   const acceptedAt = Date.now();
   const optimisticMessageId = getPendingUserMessageId(sessionId ?? "");
   if (sessionId && optimisticMessageId) {
-    appendLocalUserTurn(sessionId, optimisticMessageId, text, undefined, acceptedAt, "pending", textElements);
+    appendLocalUserTurn(sessionId, optimisticMessageId, text, undefined, acceptedAt, "pending", textElements, requestId);
     noteTakeLatest({
       sessionId,
       scrollerKey: scrollerKey ?? defaultScrollerKey(sessionId, background),

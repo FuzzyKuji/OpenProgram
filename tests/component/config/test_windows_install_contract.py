@@ -41,7 +41,7 @@ def test_windows_installer_exposes_the_isolated_cli_on_user_path() -> None:
     assert 'Join-Path $env:LOCALAPPDATA "OpenProgram\\bin"' in installer
     assert 'Join-Path $binDir "openprogram.cmd"' in installer
     assert '-m openprogram %*' in installer
-    assert '[Environment]::SetEnvironmentVariable("Path", $updated, "User")' in installer
+    assert '$environmentKey.SetValue("Path", $updated, $kind)' in installer
     assert '& $PY -m openprogram programs install $source' in installer
 
 
@@ -50,12 +50,11 @@ def test_windows_release_installer_replaces_stale_launchers_atomically() -> None
         ROOT / "scripts" / "release" / "install-release.ps1"
     ).read_text(encoding="utf-8")
 
-    launcher_section = installer[installer.index("$LauncherPs1 =") :]
-    assert 'OPENPROGRAM_IMMUTABLE_RUNTIME = "1"' in launcher_section
-    assert 'Publish-CliLaunchers $LauncherTemporary $LauncherPs1 $CmdTemporary $LauncherCmd' in launcher_section
-    assert 'Move-Atomic $Entry.Source $Entry.Target $Entry.Previous' in installer
-    assert '"openprogram.previous.$($Entry.Extension)"' in installer
-    assert 'Move-Atomic $Entry.Rollback $Entry.Target' in installer
+    launcher_section = installer[installer.index("$LauncherCmd =") :]
+    assert 'set "OPENPROGRAM_IMMUTABLE_RUNTIME=1"' in launcher_section
+    assert 'Publish-CliLauncher $CmdTemporary $LauncherCmd' in launcher_section
+    assert 'Move-Atomic $Source $Target (Join-Path $Directory "openprogram.previous.cmd")' in installer
+    assert 'Remove-PowerShellLaunchers $Directory' in installer
     assert 'if (-not (Test-Path -LiteralPath $LauncherCmd' not in launcher_section
     assert "ConvertTo-CmdBatchLiteral $PythonBin" in launcher_section
     assert '"$CmdPython" -I -B -m openprogram %*' in launcher_section
@@ -181,3 +180,34 @@ def test_desktop_upgrade_helper_stops_embedded_process_and_removes_long_file(
         if worker.poll() is None:
             worker.kill()
             worker.wait(timeout=5)
+
+
+def test_windows_release_installer_reads_the_architecture_on_old_dotnet() -> None:
+    """Windows PowerShell on .NET Framework before 4.7.1 has no
+    RuntimeInformation.OSArchitecture; strict mode stopped the installer on
+    it ("The property 'OSArchitecture' cannot be found"). The read is guarded
+    and falls back to the native processor the environment names."""
+    installer = (
+        ROOT / "scripts" / "release" / "install-release.ps1"
+    ).read_text(encoding="utf-8")
+
+    function = installer[installer.index("function Get-OSArchitecture"):installer.index("$Architecture = Get-OSArchitecture")]
+    assert function.index("try {") < function.index("::OSArchitecture") < function.index("} catch {")
+    assert "$env:PROCESSOR_ARCHITEW6432" in function
+    assert '"AMD64" { return "x64" }' in function
+    assert '"ARM64" { return "arm64" }' in function
+    assert installer.count("::OSArchitecture") == 1
+
+
+def test_windows_release_installer_names_a_release_without_windows_packages() -> None:
+    """A release built without Windows assets answered with a bare
+    "release download failed with HTTP 404"; it says what is missing and
+    where the source installation is."""
+    installer = (
+        ROOT / "scripts" / "release" / "install-release.ps1"
+    ).read_text(encoding="utf-8")
+
+    download = installer[installer.index('Download-ReleaseFile "$ReleaseUrl/$ArchiveName" $Archive') - 200:]
+    assert '-match "HTTP 404"' in download[:600]
+    assert "has no Windows $Arch package" in download[:900]
+    assert "install.html#development-checkout" in download[:900]

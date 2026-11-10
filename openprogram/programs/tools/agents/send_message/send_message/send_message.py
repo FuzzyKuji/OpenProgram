@@ -19,7 +19,7 @@ Delivery is always asynchronous: the call returns immediately with a
 delivery id; the target runs in the background and its reply comes back
 to the sender automatically (the task runner's followup).
 
-Design: docs/reference/design/runtime/collaboration/agent-collaboration.md. This
+Design: docs/reference/design/runtime/collaboration/agent-collaboration.html. This
 module is the entry point: the @function binding plus the main delivery
 flow. Concern-specific pieces live alongside: ``prompt.py`` (LLM-facing
 description), ``addressing.py`` (`to` parsing + branch-name lookup),
@@ -113,11 +113,9 @@ def _send_message_impl(
     generations = current_chain_generations()
     limit = max_messages()
     if limit and messages >= limit:
-        return (
-            f"[send_message refused] this chain has passed {messages} "
-            f"messages, the maximum ({limit}). Finish the work here "
-            "instead of delegating further."
-        )
+        from openprogram.runtime.permissions import refusal
+        raise refusal.agent_budget("send_message", "messages", limit,
+                                   "finish the work here instead of delegating further")
 
     chosen_agent = (agent_id or "").strip() or parent_agent or "main"
     kind, _, _ = _parse_to(to)
@@ -219,6 +217,7 @@ def _send_message_impl(
             chain_generations=generations,
             caller_chain_generations=generations,
             authority=caller_authority,
+            message_origin="agent_delivery",
         )
     except Exception as e:  # noqa: BLE001
         return f"[send_message error] {type(e).__name__}: {e}"

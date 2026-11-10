@@ -15,7 +15,9 @@
   transition: grid-template-columns var(--motion-medium) cubic-bezier(0.165, 0.84, 0.44, 1);
 }
 .split[data-rail="collapsed"] {
-  grid-template-columns: var(--rail-collapsed-w) minmax(0, 1fr);
+  /* The main sidebar's collapsed card: 46px plus this rail's border, which
+     leaves a 30px square row with its icon where the open row has it. */
+  grid-template-columns: 47px minmax(0, 1fr);
 }
 
 .rail {
@@ -85,6 +87,11 @@
   flex-shrink: 0;
 }
 
+/* A 20px glyph overflows the 16px slot evenly, as in the main sidebar. */
+.icon > svg {
+  flex-shrink: 0;
+}
+
 .label {
   display: flex;
   align-items: center;
@@ -120,28 +127,26 @@
   margin: 6px 0;
 }
 
-/* Collapsed: an icon column like the main sidebar's. Labels, search and
-   nested rows go; each top-level row becomes a 32px square. */
-.rail[data-collapsed] {
-  padding-left: 6px;
-  padding-right: 6px;
-  align-items: center;
+/* A collapsible rail never rearranges its rows. The column narrows and each
+   row, already 100% wide, narrows with it and covers its own text. The text
+   keeps its full width so it is cut off rather than re-wrapped or ellipsized. */
+.rail[data-collapsible] .item {
+  overflow: hidden;
 }
+.rail[data-collapsible] .text {
+  flex: none;
+  width: calc(var(--sidebar-width) - 66px);
+}
+
+/* Collapsed: an icon column like the main sidebar's. Search, group labels
+   and nested rows go. */
 .rail[data-collapsed] .search,
 .rail[data-collapsed] .groupLabel,
-.rail[data-collapsed] .text,
-.rail[data-collapsed] .trailing,
 .rail[data-collapsed] .nested {
   display: none;
 }
 .rail[data-collapsed] .item {
-  width: 32px;
   height: var(--ui-list-h);
   min-height: 0;
   align-items: center;
-  justify-content: center;
-  padding: 6px;
-}
-.rail[data-collapsed] .separator {
-  width: 32px;
 }

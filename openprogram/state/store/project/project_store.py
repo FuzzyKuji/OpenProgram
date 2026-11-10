@@ -1,10 +1,10 @@
 """Project entity memory — the second half of the entity layer.
 
 The entity (实体) tier of OpenProgram memory has two kinds of
-git-backed stores (see ``docs/design/memory/overview.md`` §2):
+stores (see ``docs/design/memory/overview.md`` §2):
 
-  * **Session-Git** (already built, ``git_session.py``) — one repo per
-    conversation, every turn a commit.
+  * **Session log** (``state/store/session``) — one append-only log per
+    conversation.
   * **Project-Git** (this module) — one repo per *project*, where a
     project is a long-lived working unit bound to a filesystem
     directory. Agent file edits in that directory get committed here.
@@ -19,8 +19,7 @@ Every session belongs to exactly one project. Two cases:
     ``<state>/projects/default/`` holds those chats and the personal
     memory, so there is never a session with no project home.
 
-A bound project's git repo is created on first use, mirroring how
-``GitSession`` lazily ``git init``s a session repo on first write. Every
+A bound project's git repo is created on first use. Every
 project's chats, memory and settings live in ``<state>/projects/<id>/``
 (see :mod:`.layout`).
 
@@ -29,7 +28,7 @@ metadata (name, path, sessions, status). The registry is the index;
 the git repos are the truth.
 
 Cross-platform: all git calls go through ``git -C <path> ...`` via
-subprocess (no cwd dependence), same as ``git_session._run``.
+subprocess (no cwd dependence).
 """
 from __future__ import annotations
 
@@ -71,10 +70,6 @@ def projects_dir() -> Path:
 
 def _registry_path() -> Path:
     return projects_dir() / "projects.json"
-
-
-def _default_project_path() -> Path:
-    return projects_dir() / "default"
 
 
 # Project record
@@ -141,9 +136,8 @@ class Project:
 class ProjectGit:
     """Wraps the git repo backing a project's working directory.
 
-    Lazy like ``GitSession``: construction is cheap, disk work happens
-    in :meth:`ensure_init`. The difference from a session repo: a
-    project repo is often a *pre-existing user repo* we must NOT
+    Lazy: construction is cheap, disk work happens in
+    :meth:`ensure_init`. A project repo is often a *pre-existing user repo* we must NOT
     clobber. So :meth:`ensure_init` only ``git init``s when there is no
     ``.git`` yet, and never rewrites the user's git identity — instead
     agent commits carry an explicit author/committer so they're
@@ -203,7 +197,7 @@ class ProjectGit:
                 self._run("commit", "--allow-empty", "-m",
                           "openprogram: project init", "--quiet")
             # Make OpenProgram's own footprint invisible to the user's
-            # git. A project-bound session repo lives at
+            # git. A project-bound session lives at
             # ``<project>/.openprogram/sessions/<id>/`` — i.e. INSIDE the
             # user's working tree — so without this it shows up as an
             # untracked dir in ``git status`` and, worse, gets swept into
@@ -485,7 +479,7 @@ class ProjectGit:
             })
         return commits
 
-    # -- git plumbing (mirrors git_session._run) --
+    # -- git plumbing --
 
     def _run(self, *args: str, check: bool = True, timeout: float = 30.0) -> str:
         cmd = ["git", "-C", str(self.path), *args]
@@ -593,7 +587,7 @@ def _new_project_id() -> str:
 
 def ensure_footprint_ignored(project_path: str | Path) -> None:
     """Write ``<project>/.openprogram/.gitignore`` = ``*`` so the user's
-    git ignores OpenProgram's entire footprint (the session repos we
+    git ignores OpenProgram's entire footprint (the sessions we
     store at ``<project>/.openprogram/sessions/<id>/`` live INSIDE the
     user's working tree).
 

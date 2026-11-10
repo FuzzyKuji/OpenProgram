@@ -90,6 +90,8 @@ export const Sidebar = memo(function Sidebar() {
     maxWidth: 480,
     defaultWidth: 288,
     direction: 1,
+    storageKey: "openprogram.left-sidebar-width",
+    maxWindowShare: 0.3,
   });
   const [favCollapsed, setFavCollapsed] = useState(false);
   // 下面滚动区一旦向下滚动就为 true —— 驱动固定 New chat 行底部的

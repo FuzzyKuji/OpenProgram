@@ -1,856 +1,188 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram Stable Release Automatic Updates</title>
-<style>
-  :root {
-    color-scheme: dark;
-    --bg: #0b0e14;
-    --surface: #111722;
-    --surface-2: #161e2b;
-    --surface-3: #0d121b;
-    --border: #283344;
-    --border-strong: #3a4a61;
-    --text: #d8e0ec;
-    --muted: #8f9caf;
-    --title: #f6f8fb;
-    --blue: #6aa6ff;
-    --cyan: #50d5d0;
-    --green: #78d69a;
-    --amber: #f0b866;
-    --red: #ff7d91;
-    --violet: #b59aff;
-    --mono: ui-monospace, "SFMono-Regular", Menlo, Monaco, Consolas, monospace;
-    --sans: Inter, ui-sans-serif, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-    --radius: 16px;
-  }
+<title>Stable release automatic updates</title>
+<meta name="description" content="Which releases count as updates, and how Desktop and the managed CLI verify and apply them.">
+<h1>Stable release automatic updates</h1>
+<p>An update is a complete stable GitHub Release verified against its manifest. New commits are not updates. The update unit is the whole product: wheel, Web, Programs, OCR, Browser and models are never updated separately. The macOS App and terminal installs take a whole package; Windows and Linux Apps take a signed <a href="#official-replay">sealed version</a>.</p>
 
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body {
-    margin: 0;
-    background:
-      radial-gradient(circle at 18% -5%, rgba(80, 213, 208, .10), transparent 31rem),
-      radial-gradient(circle at 92% 5%, rgba(181, 154, 255, .10), transparent 28rem),
-      var(--bg);
-    color: var(--text);
-    font: 15px/1.65 var(--sans);
-  }
-  a { color: var(--blue); text-underline-offset: 3px; }
-  a:hover { color: #9fc6ff; }
-  code {
-    padding: 2px 6px;
-    border: 1px solid rgba(106, 166, 255, .16);
-    border-radius: 6px;
-    background: rgba(106, 166, 255, .07);
-    color: #a9ccff;
-    font: .84em/1.5 var(--mono);
-  }
-  pre {
-    margin: 0;
-    padding: 18px;
-    overflow: auto;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface-3);
-    color: #c9d4e3;
-    font: 12px/1.7 var(--mono);
-  }
-  button { font: inherit; }
-  :focus-visible { outline: 2px solid var(--cyan); outline-offset: 3px; }
+<h2 id="architecture">From Release to platform</h2>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 388" role="img" aria-label="GitHub latest accepts only non-draft, non-prerelease vX.Y.Z tags. The Release gate requires unique assets. The manifest gate checks version, bytes and SHA-256. Install type and architecture then pick a route. Desktop on macOS, and on Windows or Linux when the shell must change, selects the exact installer, streams it to a resumable .part file, verifies bytes and SHA-256, on Windows also checks Authenticode for this App's line, and opens the installer for the user to confirm. The managed CLI on macOS, Linux or Windows fetches the installer from the immutable tag, verifies archive and capability manifest, runs a version probe and isolated worker cold start, then macOS and Linux switch current and Windows replaces its launchers; the user restarts a running worker.">
+  <defs><marker id="au-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="34">GitHub latest</text>
+  <text class="t-soft" x="0" y="58">non-draft, non-prerelease</text>
+  <text class="t-soft" x="0" y="78" translate="no">vX.Y.Z</text>
+  <line class="ln" x1="144" y1="28" x2="216" y2="28" marker-end="url(#au-a)"/>
+  <text class="t-big" x="228" y="34">Release gate</text>
+  <text class="t-soft" x="228" y="58">unique assets</text>
+  <line class="ln" x1="360" y1="28" x2="438" y2="28" marker-end="url(#au-a)"/>
+  <text class="t-big" x="450" y="34">Manifest gate</text>
+  <text class="t-soft" x="450" y="58">version, bytes, SHA-256</text>
+  <path class="ln" d="M514 74V144" marker-end="url(#au-a)"/>
+  <path class="ln" d="M514 116H166V144" marker-end="url(#au-a)"/>
+  <text class="t-soft" x="330" y="104">install type + architecture</text>
+  <rect class="tile" x="0" y="156" width="332" height="224" rx="8"/>
+  <text class="t-big" x="16" y="190">Desktop</text>
+  <text class="t-soft" x="16" y="212">macOS · Windows, Linux when the shell changes</text>
+  <text class="t-note" x="16" y="244">1  Select the exact installer</text>
+  <text class="t-note" x="16" y="268">2  Stream to a resumable .part file</text>
+  <text class="t-note" x="16" y="292">3  Verify bytes and SHA-256</text>
+  <text class="t-note" x="16" y="316">4  Windows: Authenticode check for this App's line</text>
+  <text class="t-note" x="16" y="340">5  Open installer; the user confirms</text>
+  <rect class="tile" x="348" y="156" width="332" height="224" rx="8"/>
+  <text class="t-big" x="364" y="190">Managed CLI and server</text>
+  <text class="t-soft" x="364" y="212">macOS · Linux · Windows</text>
+  <text class="t-note" x="364" y="244">1  Fetch installer from the immutable tag</text>
+  <text class="t-note" x="364" y="268">2  Verify archive and capability manifest</text>
+  <text class="t-note" x="364" y="292">3  Version probe, isolated worker cold start</text>
+  <text class="t-note" x="364" y="316">4  macOS, Linux: switch current</text>
+  <text class="t-note" x="384" y="340">Windows: replace launchers</text>
+  <text class="t-note" x="364" y="364">5  The user restarts a running worker</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>GitHub latest</strong><small>Non-draft, non-prerelease, <code translate="no">vX.Y.Z</code></small></li>
+  <li><strong>Release gate</strong><small>Unique assets</small></li>
+  <li><strong>Manifest gate</strong><small>Version, bytes, SHA-256</small></li>
+  <li><strong>Desktop</strong><small>macOS; Windows and Linux when the shell changes</small><small>Select the exact installer; stream to a resumable <code translate="no">.part</code> file; verify bytes and SHA-256; on Windows check Authenticode for this App's line; open the installer for the user to confirm</small></li>
+  <li class="flow-end"><strong>Managed CLI and server</strong><small>macOS, Linux, Windows</small><small>Fetch the installer from the immutable tag; verify archive and capability manifest; version probe and isolated worker cold start; macOS, Linux: switch <code translate="no">current</code>; Windows: replace launchers; the user restarts a running worker</small></li>
+</ol>
+</figure>
 
-  .page {
-    display: grid;
-    grid-template-columns: 220px minmax(0, 1fr);
-    gap: 44px;
-    width: min(1280px, calc(100% - 40px));
-    margin: 0 auto;
-    padding: 42px 0 100px;
-  }
-  .rail {
-    position: sticky;
-    top: 24px;
-    align-self: start;
-    max-height: calc(100vh - 48px);
-    overflow: auto;
-  }
-  .rail-mark {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 24px;
-    color: var(--title);
-    font: 700 13px var(--mono);
-  }
-  .rail-mark::before {
-    width: 11px;
-    height: 11px;
-    border: 3px solid var(--cyan);
-    border-radius: 50%;
-    content: "";
-    box-shadow: 8px 7px 0 -4px var(--violet);
-  }
-  .rail nav { display: grid; gap: 4px; }
-  .rail a {
-    padding: 7px 10px;
-    border-left: 2px solid transparent;
-    color: var(--muted);
-    text-decoration: none;
-    font-size: 12px;
-  }
-  .rail a:hover,
-  .rail a[aria-current="true"] {
-    border-left-color: var(--cyan);
-    color: var(--title);
-    background: rgba(80, 213, 208, .05);
-  }
-  .rail-note {
-    margin-top: 24px;
-    padding: 13px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface);
-    color: var(--muted);
-    font-size: 11px;
-  }
-  main { min-width: 0; }
-  section { scroll-margin-top: 24px; margin-top: 70px; }
-  .hero { margin-top: 0; }
-  .eyebrow {
-    margin: 0 0 11px;
-    color: var(--cyan);
-    font: 700 11px var(--mono);
-    letter-spacing: .14em;
-    text-transform: uppercase;
-  }
-  h1, h2, h3 { color: var(--title); }
-  h1 {
-    max-width: 820px;
-    margin: 0;
-    font-size: clamp(36px, 6vw, 72px);
-    line-height: 1.02;
-    letter-spacing: -.045em;
-  }
-  .lede {
-    max-width: 840px;
-    margin: 24px 0 0;
-    color: #b9c5d5;
-    font-size: clamp(17px, 2vw, 21px);
-    line-height: 1.55;
-  }
-  .status-strip {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 10px;
-    margin-top: 32px;
-  }
-  .status-cell {
-    min-height: 104px;
-    padding: 16px;
-    border: 1px solid var(--border);
-    border-radius: 13px;
-    background: rgba(17, 23, 34, .84);
-  }
-  .status-cell .k {
-    color: var(--muted);
-    font: 10px var(--mono);
-    letter-spacing: .11em;
-    text-transform: uppercase;
-  }
-  .status-cell .v { margin-top: 9px; color: var(--title); font-weight: 680; }
-  .status-cell .detail { margin-top: 3px; color: var(--muted); font-size: 12px; }
-  .status-cell.ready { border-top: 3px solid var(--green); }
-  .status-cell.pending { border-top: 3px solid var(--amber); }
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Install type</th><th scope="col">Path</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">managed_release</code></th><td>The route above. Immutable markers take precedence</td></tr>
+<tr><th scope="row"><code translate="no">source_checkout</code></th><td>Explicit Git ref: preflight, checkout, dependencies and build, probe, restart. Never shown as a stable Release</td></tr>
+<tr><th scope="row"><code translate="no">unknown</code></th><td>Stable error pointing to the official installer or a source checkout. PyPI, binary and Git paths are not guessed</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">openprogram upgrade</code> applies; <code translate="no">--check</code> reports current and latest read-only; <code translate="no">--dry-run</code> prints the plan. <code translate="no">pip_wheel</code> is not an install type: developer wheels are build inputs only.</p>
 
-  .brief {
-    display: grid;
-    grid-template-columns: 1.3fr 1fr 1fr;
-    gap: 12px;
-    margin-top: 18px;
-  }
-  .brief article,
-  .panel,
-  .decision,
-  .boundary,
-  .evidence-card,
-  .reference-card {
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-  }
-  .brief article { padding: 18px; }
-  .brief h2 {
-    margin: 0 0 7px;
-    color: var(--muted);
-    font: 700 10px var(--mono);
-    letter-spacing: .12em;
-    text-transform: uppercase;
-  }
-  .brief p { margin: 0; font-size: 13px; }
+<h2>Desktop installers</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Platform</th><th scope="col">Asset</th></tr></thead>
+<tbody>
+<tr><th scope="row">macOS</th><td><code translate="no">OpenProgram-&lt;version&gt;-mac-&lt;arch&gt;.dmg</code>, falling back to <code translate="no">-unsigned.dmg</code>. Saved to a location the user picks. The running App is never replaced</td></tr>
+<tr><th scope="row">Windows</th><td>Only when the release needs a newer shell: <code translate="no">OpenProgram-&lt;version&gt;-win-&lt;arch&gt;.exe</code>, or <code translate="no">-unsigned.exe</code> on an App built unsigned. Opens the per-user NSIS wizard</td></tr>
+<tr><th scope="row">Linux</th><td>Only when the release needs a newer shell. deb: saved and opened. AppImage: replaces the running file and restarts when its folder is writable</td></tr>
+</tbody>
+</table>
 
-  .section-head {
-    display: grid;
-    grid-template-columns: 58px minmax(0, 1fr);
-    gap: 16px;
-    align-items: start;
-    margin-bottom: 22px;
-  }
-  .section-num {
-    padding-top: 6px;
-    color: var(--cyan);
-    font: 700 12px var(--mono);
-  }
-  .section-head h2 {
-    margin: 0;
-    font-size: clamp(24px, 3vw, 34px);
-    line-height: 1.2;
-    letter-spacing: -.025em;
-  }
-  .section-head p { max-width: 780px; margin: 7px 0 0; color: var(--muted); }
+<h2 id="desktop-states">Settings → General → Application</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">State</th><th scope="col">Shows</th></tr></thead>
+<tbody>
+<tr><th scope="row">Not checked</th><td>Cache absent or expired. Automatic checks default on</td></tr>
+<tr><th scope="row">Checking</th><td>All windows share one in-flight Promise. Check button disabled</td></tr>
+<tr><th scope="row">Up to date</th><td>Same or lower version. Stable downgrades are not offered</td></tr>
+<tr><th scope="row">Update available</th><td>Version, date, plain-text notes summary. Full notes open only the fixed GitHub Release page</td></tr>
+<tr><th scope="row">Downloading</th><td>Bytes and percent, published at most every 250 ms, with a guaranteed final state</td></tr>
+<tr><th scope="row">Retryable error</th><td>Keeps verified release metadata, so retry needs no new check. <code translate="no">errorKind</code> is <code translate="no">rate-limited</code>, <code translate="no">network</code> or <code translate="no">failed</code></td></tr>
+<tr><th scope="row">Not published</th><td>A newer release exists with no file for this computer. The current App keeps working</td></tr>
+</tbody>
+</table>
+<p class="note">Plain Web shows the CLI instruction instead.</p>
 
-  .decision-grid,
-  .boundary-grid,
-  .evidence-grid,
-  .reference-grid,
-  .file-grid {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .decision { padding: 18px; }
-  .decision .label,
-  .boundary .label,
-  .evidence-card .label {
-    color: var(--muted);
-    font: 700 10px var(--mono);
-    letter-spacing: .1em;
-    text-transform: uppercase;
-  }
-  .decision h3,
-  .boundary h3,
-  .evidence-card h3,
-  .reference-card h3 { margin: 8px 0 6px; font-size: 16px; }
-  .decision p,
-  .boundary p,
-  .evidence-card p,
-  .reference-card p { margin: 0; color: #b0bdcf; font-size: 13px; }
-  .decision.desktop { border-top: 3px solid var(--blue); }
-  .decision.cli { border-top: 3px solid var(--green); }
-  .decision.complete { border-top: 3px solid var(--cyan); }
-  .decision.dev { border-top: 3px solid var(--violet); }
+<h2>Scheduling</h2>
+<p>Automatic checks only discover. Manual checks always refresh. Development mode does not check automatically.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">When</th><th scope="col">Next check</th></tr></thead>
+<tbody>
+<tr><th scope="row">App start (packaged)</th><td>30 s later, or the cached due time</td></tr>
+<tr><th scope="row">After success</th><td><code translate="no">lastSuccessAt</code> + 24 h</td></tr>
+<tr><th scope="row">After failure</th><td><code translate="no">lastAttemptAt</code> + 6 h</td></tr>
+<tr><th scope="row">Resume or settings change</th><td>Clear the old timer, check at most once, reschedule</td></tr>
+</tbody>
+</table>
+<details>
+<summary><code translate="no">update-state.json</code></summary>
+<p>Schema 1. Holds <code translate="no">automaticChecks</code>, <code translate="no">lastAttemptAt</code>, <code translate="no">lastSuccessAt</code> and the latest verified release metadata. Written with a temporary file and rename; POSIX sets the mode, Windows inherits the user-directory ACL.</p>
+<p>Invalid JSON, unknown schemas, future timestamps, version or architecture mismatches and missing releases are normalized and rewritten. A write failure must not leave hidden in-memory setting changes.</p>
+</details>
 
-  .diagram {
-    padding: 22px;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface-3);
-  }
-  .diagram svg { display: block; width: 100%; height: auto; }
-  .diagram-mobile { display: none; }
-  .diagram-caption { margin: 12px 0 0; color: var(--muted); font-size: 12px; }
-  .legend { display: flex; flex-wrap: wrap; gap: 16px; margin-top: 14px; color: var(--muted); font-size: 11px; }
-  .legend span { display: inline-flex; align-items: center; gap: 7px; }
-  .legend i { width: 20px; height: 2px; background: var(--blue); }
-  .legend .verified i { background: var(--green); }
-  .legend .boundary-line i { height: 8px; border-top: 2px dashed var(--amber); background: none; }
+<h2 id="trust-boundaries">Trust boundaries</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Boundary</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">GitHub responses</th><td>Untrusted. HTTPS, fixed hosts, at most 5 redirects validated per hop, size limit, 30 s request timeout, 60 s download idle timeout. Requires <code translate="no">draft === false</code>, <code translate="no">prerelease === false</code>, tag <code translate="no">vX.Y.Z</code>, unique asset names and manifest basenames, GitHub size equal to manifest bytes.</td></tr>
+<tr><th scope="row">Network path</th><td>Chromium's network stack, so the system proxy applies. On API 403, 429, 5xx or no answer: the <code translate="no">releases/latest</code> redirect plus <code translate="no">release-manifest.json</code>. If that fails too, an optional <code translate="no">update-source.json</code>, only with an Ed25519 signature from a built-in key</td></tr>
+<tr><th scope="row">Renderer IPC</th><td>Exposes only state, check, boolean settings, download, open release, subscribe. Accepts no URL, path, hash, repository or command. Public state strips asset name, URL and SHA-256. Closing a window aborts nothing</td></tr>
+<tr><th scope="row">Downloaded files</th><td>Random exclusive temporary files, short writes handled, deleted on any mismatch. CLI verifies in a new version directory and rejects archive path traversal. A launcher failure keeps the old <code translate="no">current</code></td></tr>
+<tr><th scope="row">Installer child process</th><td>Pinned repository and version. Allowed environment only: PATH, HOME, temp, locale, proxy, XDG, OpenProgram state. No provider or API credentials, no archive or checksum overrides. <code translate="no">--json</code> emits one JSON document</td></tr>
+</tbody>
+</table>
 
-  .path-columns { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-  .path-card {
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-  }
-  .path-head { padding: 18px 20px; border-bottom: 1px solid var(--border); }
-  .path-head.desktop { background: linear-gradient(110deg, rgba(106,166,255,.12), transparent); }
-  .path-head.cli { background: linear-gradient(110deg, rgba(120,214,154,.12), transparent); }
-  .path-head h3 { margin: 0; font-size: 19px; }
-  .path-head p { margin: 5px 0 0; color: var(--muted); font-size: 12px; }
-  .steps { list-style: none; margin: 0; padding: 5px 20px 18px; counter-reset: step; }
-  .steps li {
-    position: relative;
-    padding: 15px 0 15px 40px;
-    border-bottom: 1px solid rgba(40, 51, 68, .75);
-    counter-increment: step;
-  }
-  .steps li:last-child { border-bottom: 0; }
-  .steps li::before {
-    position: absolute;
-    left: 0;
-    top: 15px;
-    width: 25px;
-    height: 25px;
-    display: grid;
-    place-items: center;
-    border: 1px solid var(--border-strong);
-    border-radius: 50%;
-    color: var(--cyan);
-    content: counter(step);
-    font: 700 10px var(--mono);
-  }
-  .steps strong { display: block; color: var(--title); font-size: 13px; }
-  .steps span { display: block; margin-top: 3px; color: var(--muted); font-size: 12px; }
+<h2>Failures</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">What happened</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Offline, timeout, rate limit</th><td>Falls back to the web route first. Automatic: record and back off 6 h. Manual: retryable error with a plain reason. The App keeps running</td></tr>
+<tr><th scope="row">Invalid Release or manifest</th><td>Rejected before download. No fallback to a wheel, source archive, other architecture or older version. The last valid metadata may stay</td></tr>
+<tr><th scope="row">Stall, size, hash or Windows signature error</th><td>A dropped download retries and resumes through its <code translate="no">.part</code> file, across restarts. A size, hash or signature mismatch deletes the file and restores retry. An unverified file is never opened</td></tr>
+<tr><th scope="row">CLI archive, cold start or launcher failure</th><td>Non-zero exit before the final switch. The previous version stays selected (<code translate="no">current</code> on macOS and Linux, launchers on Windows)</td></tr>
+<tr><th scope="row">Switch done, worker still old</th><td>The command says so and prints the restart instruction. Running requests are not interrupted</td></tr>
+</tbody>
+</table>
 
-  .state-review {
-    display: grid;
-    grid-template-columns: 190px minmax(0, 1fr);
-    min-height: 440px;
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-  }
-  .state-tabs {
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
-    padding: 14px;
-    border-right: 1px solid var(--border);
-    background: var(--surface-3);
-  }
-  .state-tab {
-    width: 100%;
-    padding: 10px 12px;
-    border: 1px solid transparent;
-    border-radius: 9px;
-    background: transparent;
-    color: var(--muted);
-    text-align: left;
-    cursor: pointer;
-    font-size: 12px;
-  }
-  .state-tab[aria-selected="true"] {
-    border-color: var(--border-strong);
-    background: var(--surface-2);
-    color: var(--title);
-  }
-  .state-stage { display: grid; place-items: center; padding: 24px; }
-  .update-state { display: none; width: min(100%, 620px); }
-  .update-state.active { display: block; }
-  .settings-shell {
-    overflow: hidden;
-    border: 1px solid #334159;
-    border-radius: 13px;
-    background: #101722;
-    box-shadow: 0 18px 50px rgba(0,0,0,.24);
-  }
-  .settings-title {
-    padding: 11px 16px;
-    border-bottom: 1px solid #283449;
-    color: #96a4b8;
-    font: 10px var(--mono);
-    letter-spacing: .1em;
-    text-transform: uppercase;
-  }
-  .settings-body { padding: 20px; }
-  .settings-body h3 { margin: 0 0 18px; font-size: 17px; }
-  .setting-row {
-    display: flex;
-    justify-content: space-between;
-    gap: 18px;
-    padding: 13px 0;
-    border-top: 1px solid #253044;
-  }
-  .setting-row:first-of-type { border-top: 0; }
-  .setting-row .name { color: #95a3b7; font-size: 12px; }
-  .setting-row .value { color: var(--title); font-size: 12px; text-align: right; }
-  .toggle {
-    width: 34px;
-    height: 19px;
-    padding: 2px;
-    border-radius: 999px;
-    background: var(--cyan);
-  }
-  .toggle::after { display: block; width: 15px; height: 15px; margin-left: 15px; border-radius: 50%; background: #061012; content: ""; }
-  .state-message {
-    margin-top: 14px;
-    padding: 12px 13px;
-    border-left: 3px solid var(--blue);
-    border-radius: 0 8px 8px 0;
-    background: rgba(106, 166, 255, .08);
-    color: #c5d2e3;
-    font-size: 12px;
-  }
-  .state-message.ok { border-color: var(--green); background: rgba(120,214,154,.08); }
-  .state-message.error { border-color: var(--red); background: rgba(255,125,145,.08); }
-  .progress-track { height: 7px; margin-top: 9px; overflow: hidden; border-radius: 999px; background: #273144; }
-  .progress-track span { display: block; width: 62%; height: 100%; background: linear-gradient(90deg, var(--blue), var(--cyan)); }
-  .mock-actions { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 15px; }
-  .mock-button { padding: 7px 11px; border: 1px solid #3a4960; border-radius: 8px; background: #182233; color: #dce4ef; font-size: 11px; }
-  .mock-button.primary { border-color: transparent; background: var(--blue); color: #08111f; font-weight: 700; }
-  .state-note { margin: 14px 0 0; color: var(--muted); font-size: 12px; }
+<details>
+<summary>References</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Reference</th><th scope="col">Use</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://docs.github.com/en/rest/releases/releases#get-the-latest-release">GitHub Releases API</a></th><td>Adopted for metadata, notes and assets; clients still validate independently</td></tr>
+<tr><th scope="row"><a href="https://www.electronjs.org/docs/latest/tutorial/updates">Electron update lifecycle</a></th><td>Adapted: check, available, download, error. Ends by opening the verified installer</td></tr>
+<tr><th scope="row"><a href="https://www.electronjs.org/docs/latest/api/auto-updater/">Electron <code translate="no">autoUpdater</code></a></th><td>Not used. No built-in Linux updater, and it does not fit opening a verified installer</td></tr>
+<tr><th scope="row"><a href="https://www.electron.build/docs/features/auto-update/"><code translate="no">electron-updater</code></a></th><td>Not used. No new updater package: Electron, Node, Python and shell cover it</td></tr>
+</tbody>
+</table>
+</details>
 
-  .schedule {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 0;
-    margin-top: 16px;
-  }
-  .schedule article {
-    position: relative;
-    padding: 18px 16px;
-    border-top: 2px solid var(--border-strong);
-  }
-  .schedule article::before {
-    position: absolute;
-    top: -7px;
-    left: 16px;
-    width: 11px;
-    height: 11px;
-    border: 2px solid var(--bg);
-    border-radius: 50%;
-    background: var(--cyan);
-    content: "";
-  }
-  .schedule strong { display: block; color: var(--title); font-size: 12px; }
-  .schedule span { display: block; margin-top: 4px; color: var(--muted); font-size: 11px; }
+<details>
+<summary>Code</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">File</th><th scope="col">Holds</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/self-update/update-service.js"><code translate="no">update-service.js</code></a></th><td>Metadata, state, cache, scheduling, asset selection, download, hash, public projection</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/self-update/windows-signature.js"><code translate="no">windows-signature.js</code></a></th><td>Authenticode status, subject, thumbprint</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main.js"><code translate="no">apps/desktop/main.js</code></a></th><td>Timer, resume, IPC, multi-window broadcast</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/preload.js"><code translate="no">main/preload.js</code></a></th><td>Fixed renderer bridge</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/settings/sections/general-section.tsx"><code translate="no">general-section.tsx</code></a></th><td>Settings states and Web fallback</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/cli/commands/upgrade.py"><code translate="no">commands/upgrade.py</code></a></th><td>Install-type routing, Release gate, dry-run, JSON, installer execution</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/github_release/github.py"><code translate="no">github_release/github.py</code></a></th><td>Stable metadata, manifest, immutable installer retrieval</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/install-release.sh"><code translate="no">scripts/install-release.sh</code></a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/install-release.ps1"><code translate="no">.ps1</code></a></th><td>Published compatibility entry points; fetch the real installer from the same tag</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/install-release.sh"><code translate="no">scripts/release/install-release.sh</code></a>, <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/install-release.ps1"><code translate="no">.ps1</code></a></th><td>Download, verify, cold start, launcher staging, atomic activation</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/official/assets.py"><code translate="no">official/assets.py</code></a></th><td>Release asset format: packing, signing, verification, unpacking</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/official/replay.py"><code translate="no">official/replay.py</code></a></th><td>Replays the owner's commits onto a verified release and drops them on failure</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/create-update-assets.py"><code translate="no">create-update-assets.py</code></a></th><td>Builds one platform's assets and finalizes the signed release directory</td></tr>
+<tr><th scope="row"><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/.github/workflows/release.yml"><code translate="no">release.yml</code></a></th><td>Artifact publication and the latest-endpoint gate</td></tr>
+</tbody>
+</table>
+</details>
 
-  .boundary { padding: 18px; }
-  .boundary.remote { border-left: 3px solid var(--amber); }
-  .boundary.renderer { border-left: 3px solid var(--blue); }
-  .boundary.files { border-left: 3px solid var(--green); }
-  .boundary.state { border-left: 3px solid var(--violet); }
-  .contract-list { margin: 10px 0 0; padding-left: 18px; color: #b0bdcf; font-size: 12px; }
-  .contract-list li { margin: 5px 0; }
+<h2 id="official-replay">Official updates on a version store</h2>
+<p>An installation on the version store updates from signed release assets and replays the owner's own commits onto the release.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Assets</th><td>Every release publishes <code translate="no">version-&lt;platform&gt;.tar.zst</code>, <code translate="no">base-&lt;platform&gt;.tar.zst</code>, <code translate="no">toolchain-&lt;platform&gt;.tar.zst</code>, <code translate="no">repo.bundle</code>, <code translate="no">SHA256SUMS</code> and <code translate="no">update-manifest.json</code> with its Ed25519 signature, so a machine that skipped releases can still update. A client downloads only what it lacks: a base it already holds is skipped, and the toolchain is fetched only for owner commits to build. The version archive leaves out the venv's links and the seal, because they name the build machine; unpacking recreates the venv with the build's own command and seals the version here</td></tr>
+<tr><th scope="row">Fetch</th><td>Bare <code translate="no">openprogram upgrade</code> resolves the latest release, verifies manifest, signature and sums in memory, then downloads this platform's files to <code translate="no">&lt;runtime&gt;/downloads/&lt;release&gt;</code>, each held to its signed size and hash, resuming on the next run. <code translate="no">--from &lt;directory&gt;</code> applies files already on the computer</td></tr>
+<tr><th scope="row">Verification</th><td>Signature before the manifest is parsed, sums against the manifest, each asset this platform uses against the sums. The bundle moves <code translate="no">refs/heads/release</code> forward only, so an older signed release cannot replace a newer one. A build with no trusted key accepts no release</td></tr>
+<tr><th scope="row">Replay</th><td>The owner's commits are <code translate="no">release..local</code>, so the squashed official line is enough. Oldest first, each is cherry-picked in <code translate="no">work/official-&lt;release&gt;</code>. A conflict is saved to <code translate="no">unreplayable/&lt;release&gt;/</code> and the others continue. A commit the release already has is skipped. The candidate builds on the release's own version, so an untouched Web bundle is cloned</td></tr>
+<tr><th scope="row">Failure</th><td>A build or trial failure saves the newest commit and tries the rest, at most 5 retries before going straight to the unmodified release. Lack of disk drops nothing. A failed switch does not retry. A release needing a <code translate="no">shell_compat</code> or Python minor outside the installed shell waits for the shell update and moves nothing</td></tr>
+</tbody>
+</table>
 
-  .failure-list {
-    overflow: hidden;
-    border: 1px solid var(--border);
-    border-radius: var(--radius);
-    background: var(--surface);
-  }
-  .failure-row {
-    display: grid;
-    grid-template-columns: 1fr 1.4fr 1fr;
-    gap: 0;
-    border-top: 1px solid var(--border);
-  }
-  .failure-row:first-child { border-top: 0; }
-  .failure-row > div { padding: 13px 16px; font-size: 12px; }
-  .failure-row > div + div { border-left: 1px solid var(--border); }
-  .failure-row .case { color: var(--title); font-weight: 650; }
-  .failure-row .result { color: var(--muted); }
-  .failure-row .preserve { color: var(--green); }
+<h2 id="implementation-evidence">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Status</th></tr></thead>
+<tbody>
+<tr><th scope="row">Desktop path</th><td>Implemented. <code translate="no">npm run check --workspace apps/desktop</code>. Windows and Linux routes are tested with stand-ins; never exercised on a published release</td></tr>
+<tr><th scope="row">Managed CLI path</th><td>Implemented. <code translate="no">pytest tests/component/config/test_formal_release_updates.py tests/component/config/test_distribution_release</code></td></tr>
+<tr><th scope="row">Security and failure paths</th><td>Verified. <code translate="no">apps/desktop/tests/check-update-service.js</code></td></tr>
+<tr><th scope="row">Release gate</th><td>Every stable release passes runtime, CLI, Desktop, manifest and checksum checks before publication. These prove what was published, not behaviour on a running client</td></tr>
+<tr><th scope="row">Installed client</th><td>Open: discovery, opening the installer, long runs and sleep/resume, operated on a real install; Authenticode with a real certificate on an official runner; real GitHub responses, a real proxy</td></tr>
+<tr><th scope="row">Version-store assets and replay</th><td>Implemented, tested with a local directory as the release source. <code translate="no">pytest -q tests/component/self_update/official/test_replay.py</code></td></tr>
+<tr><th scope="row">Version-store release path</th><td>Implemented and passing end to end on macOS against a local server imitating GitHub (update, resume, go back, refusals). Installed copies trust the official signing key. Not yet in service: the Release workflow's asset steps have not run, and Linux activation needs one more run</td></tr>
+<tr><th scope="row">Upgrading from v0.6.6 or earlier</th><td>No updater before v0.7.0: install the current DMG once by hand. CLI and server rerun the public installer once</td></tr>
+</tbody>
+</table>
 
-  .route {
-    display: grid;
-    grid-template-columns: 1fr 48px 1.2fr;
-    gap: 10px;
-    align-items: center;
-    margin-bottom: 10px;
-  }
-  .route .from,
-  .route .to { padding: 14px 16px; border: 1px solid var(--border); border-radius: 11px; background: var(--surface); }
-  .route .from { color: var(--title); font: 12px var(--mono); }
-  .route .arrow { color: var(--cyan); text-align: center; }
-  .route .to strong { display: block; color: var(--title); font-size: 13px; }
-  .route .to span { color: var(--muted); font-size: 11px; }
-
-  .reference-card { padding: 18px; }
-  .reference-card .choice {
-    display: inline-flex;
-    margin-bottom: 7px;
-    padding: 3px 7px;
-    border-radius: 6px;
-    background: rgba(120,214,154,.10);
-    color: var(--green);
-    font: 700 10px var(--mono);
-  }
-  .reference-card .choice.modified { background: rgba(240,184,102,.10); color: var(--amber); }
-  .reference-card .choice.rejected { background: rgba(255,125,145,.10); color: var(--red); }
-
-  .file-card {
-    display: block;
-    padding: 15px 16px;
-    border: 1px solid var(--border);
-    border-radius: 12px;
-    background: var(--surface);
-    color: inherit;
-    text-decoration: none;
-  }
-  .file-card:hover { border-color: var(--border-strong); color: inherit; }
-  .file-card .path { color: var(--blue); font: 11px var(--mono); word-break: break-all; }
-  .file-card p { margin: 6px 0 0; color: var(--muted); font-size: 12px; }
-
-  .evidence-card { padding: 18px; }
-  .evidence-card.pass { border-top: 3px solid var(--green); }
-  .evidence-card.pending { border-top: 3px solid var(--amber); }
-  .evidence-card code { display: inline-block; max-width: 100%; margin-top: 9px; overflow-wrap: anywhere; }
-  .release-handoff {
-    margin-top: 16px;
-    padding: 18px;
-    border: 1px solid rgba(240, 184, 102, .35);
-    border-radius: var(--radius);
-    background: rgba(240, 184, 102, .06);
-  }
-  .release-handoff h3 { margin: 0 0 7px; color: var(--amber); }
-  .release-handoff p { margin: 0; }
-
-  .footer {
-    display: flex;
-    justify-content: space-between;
-    gap: 24px;
-    margin-top: 70px;
-    padding-top: 20px;
-    border-top: 1px solid var(--border);
-    color: var(--muted);
-    font-size: 11px;
-  }
-
-  @media (max-width: 980px) {
-    .page { grid-template-columns: 1fr; width: min(100% - 28px, 900px); padding-top: 20px; }
-    .rail {
-      position: sticky;
-      top: 0;
-      z-index: 10;
-      max-height: none;
-      margin: 0 -14px;
-      padding: 10px 14px;
-      overflow-x: auto;
-      border-bottom: 1px solid var(--border);
-      background: rgba(11, 14, 20, .94);
-      backdrop-filter: blur(14px);
-    }
-    .rail-mark, .rail-note { display: none; }
-    .rail nav { display: flex; width: max-content; gap: 4px; }
-    .rail a { border-left: 0; border-bottom: 2px solid transparent; white-space: nowrap; }
-    .rail a:hover, .rail a[aria-current="true"] { border-left-color: transparent; border-bottom-color: var(--cyan); }
-    .status-strip, .brief { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-    .brief article:first-child { grid-column: 1 / -1; }
-    .path-columns { grid-template-columns: 1fr; }
-  }
-
-  @media (max-width: 680px) {
-    .page { width: min(100% - 24px, 640px); gap: 26px; }
-    .rail { margin: 0 -12px; padding-left: 12px; padding-right: 12px; }
-    .hero { padding-top: 8px; }
-    .status-strip, .brief, .decision-grid, .boundary-grid, .evidence-grid, .reference-grid, .file-grid { grid-template-columns: 1fr; }
-    .brief article:first-child { grid-column: auto; }
-    .section-head { grid-template-columns: 38px minmax(0, 1fr); }
-    .diagram svg { display: none; }
-    .diagram-mobile { display: grid; gap: 8px; }
-    .diagram-mobile div { padding: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--surface); font-size: 12px; }
-    .diagram-mobile strong { color: var(--title); }
-    .state-review { grid-template-columns: 1fr; }
-    .state-tabs { flex-direction: row; overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--border); }
-    .state-tab { width: auto; white-space: nowrap; }
-    .state-stage { padding: 14px; }
-    .setting-row { align-items: flex-start; }
-    .schedule { grid-template-columns: 1fr; gap: 0; }
-    .schedule article { border-top: 0; border-left: 2px solid var(--border-strong); }
-    .schedule article::before { top: 22px; left: -7px; }
-    .failure-row { grid-template-columns: 1fr; }
-    .failure-row > div + div { border-left: 0; border-top: 1px dashed var(--border); }
-    .route { grid-template-columns: 1fr; }
-    .route .arrow { transform: rotate(90deg); }
-    .footer { flex-direction: column; }
-  }
-
-  @media (prefers-reduced-motion: reduce) {
-    html { scroll-behavior: auto; }
-    *, *::before, *::after { animation-duration: .01ms !important; transition-duration: .01ms !important; }
-  }
-</style>
-</head>
-<body>
-<div class="page" data-document="automatic-updates">
-  <aside class="rail" aria-label="Document contents">
-    <div class="rail-mark">OpenProgram / Updates</div>
-    <nav>
-      <a href="#overview">Conclusion</a>
-      <a href="#architecture">System paths</a>
-      <a href="#platform-paths">Platform behavior</a>
-      <a href="#desktop-states">Settings states</a>
-      <a href="#scheduling">Scheduling and cache</a>
-      <a href="#trust-boundaries">Trust boundaries</a>
-      <a href="#failures">Failure semantics</a>
-      <a href="#routing">Installation types</a>
-      <a href="#references">Design choices</a>
-      <a href="#source-map">Implementation entry points</a>
-      <a href="#implementation-evidence">Implementation evidence</a>
-    </nav>
-    <div class="rail-note">Authoritative design · current state<br>Describes only implemented contracts and explicitly identified release acceptance.</div>
-  </aside>
-
-  <main>
-    <section class="hero" id="overview">
-      <p class="eyebrow">Distribution architecture · stable channel</p>
-      <h1>Stable release automatic updates</h1>
-      <p class="lede">OpenProgram considers only complete, stable GitHub Releases verified against the manifest to be installable updates. Desktop automatically discovers and verifies platform installers: DMG on macOS and Authenticode-signed EXE on Windows; managed CLI/server verifies the complete runtime before switching atomically. New repository commits do not constitute user updates.</p>
-
-      <div class="status-strip" aria-label="Implementation status">
-        <div class="status-cell ready"><div class="k">Design</div><div class="v">Established</div><div class="detail">One stable channel, one Release contract</div></div>
-        <div class="status-cell ready"><div class="k">Implementation</div><div class="v">Merged into main</div><div class="detail">Desktop, managed CLI, Release gate</div></div>
-        <div class="status-cell ready"><div class="k">Updater since</div><div class="v">v0.7.0</div><div class="detail">First stable release that carries the updater; earlier Desktop installs upgrade once by hand</div></div>
-        <div class="status-cell ready"><div class="k">Dependency</div><div class="v">0 new updater packages</div><div class="detail">Native Electron/Node, Python, and shell capabilities</div></div>
-      </div>
-
-      <div class="brief">
-        <article id="question"><h2>Question</h2><p>How can a production installation discover and apply new versions without tracking <code>main</code>, reducing product functionality, or losing a working version on failure?</p></article>
-        <article id="audience"><h2>Audience</h2><p>Developers and release maintainers responsible for Release, Desktop, CLI/server, Settings, and installation documentation.</p></article>
-        <article id="scope"><h2>Scope</h2><p>macOS/Windows Desktop, macOS/Linux/Windows managed CLI/server, and explicit routing for source checkouts.</p></article>
-        <article id="exclusions"><h2>Exclusions</h2><p>Windows sandboxing, macOS signing, Linux Desktop, PyPI product installation, and background replacement of a running application.</p></article>
-      </div>
-    </section>
-
-    <section aria-labelledby="decisions-title">
-      <div class="section-head"><div class="section-num">01</div><div><h2 id="decisions-title">Product contracts to preserve</h2><p>Platform actions differ, but version sources, complete-product definitions, and verification results must agree.</p></div></div>
-      <div class="decision-grid">
-        <article class="decision complete"><div class="label">Release unit</div><h3>The update unit is the complete product</h3><p>Do not update the wheel, Web, Program, OCR, Browser, or models separately. Every supported artifact satisfies the unified capability manifest and includes a pinned CPython.</p></article>
-        <article class="decision desktop"><div class="label">Desktop</div><h3>Automatic checks; open the installer after verification</h3><p>The main process selects the DMG or EXE for the current platform and architecture and verifies bytes and SHA-256; Windows also verifies Authenticode. The renderer cannot provide URLs, hashes, or filenames.</p></article>
-        <article class="decision cli"><div class="label">CLI / server</div><h3>Explicit command, atomic runtime switch</h3><p><code>openprogram upgrade</code> verifies the Release, runtime, capabilities, and cold start, then finally replaces <code>current</code>; it does not automatically restart the existing worker.</p></article>
-        <article class="decision dev"><div class="label">Development</div><h3>Source installations retain the Git workflow</h3><p>Source checkouts continue to use explicit refs, preflight, build, and probe, without presenting a development branch as a stable Release.</p></article>
-      </div>
-    </section>
-
-    <section id="architecture" aria-labelledby="architecture-title">
-      <div class="section-head"><div class="section-num">02</div><div><h2 id="architecture-title">From GitHub Release to platform action</h2><p>The two user paths separate after strict verification. Any missing, duplicate, or inconsistent data stops processing before download or installation.</p></div></div>
-      <div class="diagram">
-        <svg viewBox="0 0 1040 470" role="img" aria-labelledby="update-architecture-title update-architecture-desc">
-          <title>Automatic update architecture</title>
-          <desc>GitHub latest Release passes stable-version, manifest, asset, and architecture validation, then enters either Desktop platform-installer verification and download or the managed CLI complete-runtime atomic-switch path.</desc>
-          <defs>
-            <marker id="arrow-blue" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#6aa6ff"/></marker>
-            <marker id="arrow-green" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#78d69a"/></marker>
-          </defs>
-          <g font-family="ui-monospace, monospace">
-            <rect x="35" y="48" width="190" height="72" rx="12" fill="#161e2b" stroke="#3a4a61"/>
-            <text x="130" y="76" text-anchor="middle" fill="#f6f8fb" font-size="14">GitHub latest</text>
-            <text x="130" y="98" text-anchor="middle" fill="#8f9caf" font-size="11">non-draft · non-prerelease</text>
-            <rect x="300" y="48" width="200" height="72" rx="12" fill="#161e2b" stroke="#f0b866" stroke-width="1.5"/>
-            <text x="400" y="76" text-anchor="middle" fill="#f6f8fb" font-size="14">Release gate</text>
-            <text x="400" y="98" text-anchor="middle" fill="#8f9caf" font-size="11">vX.Y.Z · unique assets</text>
-            <rect x="575" y="48" width="200" height="72" rx="12" fill="#161e2b" stroke="#f0b866" stroke-width="1.5"/>
-            <text x="675" y="76" text-anchor="middle" fill="#f6f8fb" font-size="14">Manifest gate</text>
-            <text x="675" y="98" text-anchor="middle" fill="#8f9caf" font-size="11">version · bytes · sha256</text>
-            <rect x="850" y="48" width="155" height="72" rx="12" fill="#161e2b" stroke="#3a4a61"/>
-            <text x="928" y="76" text-anchor="middle" fill="#f6f8fb" font-size="14">Platform route</text>
-            <text x="928" y="98" text-anchor="middle" fill="#8f9caf" font-size="11">install type + arch</text>
-            <path d="M225 84H300" stroke="#6aa6ff" stroke-width="2" marker-end="url(#arrow-blue)"/>
-            <path d="M500 84H575" stroke="#6aa6ff" stroke-width="2" marker-end="url(#arrow-blue)"/>
-            <path d="M775 84H850" stroke="#6aa6ff" stroke-width="2" marker-end="url(#arrow-blue)"/>
-            <path d="M928 120V185H290V225" fill="none" stroke="#6aa6ff" stroke-width="2" marker-end="url(#arrow-blue)"/>
-            <path d="M928 120V185H750V225" fill="none" stroke="#78d69a" stroke-width="2" marker-end="url(#arrow-green)"/>
-            <text x="350" y="177" fill="#6aa6ff" font-size="11">Desktop · macOS arm64/x64 · Windows x64</text>
-            <text x="760" y="177" fill="#78d69a" font-size="11">managed CLI · macOS/Linux/Windows</text>
-            <rect x="95" y="225" width="390" height="190" rx="14" fill="#111722" stroke="#6aa6ff"/>
-            <text x="120" y="258" fill="#f6f8fb" font-size="15">Desktop main process</text>
-            <text x="120" y="287" fill="#8f9caf" font-size="11">1 · select exact platform/architecture installer</text>
-            <text x="120" y="311" fill="#8f9caf" font-size="11">2 · stream to exclusive random .part file</text>
-            <text x="120" y="335" fill="#8f9caf" font-size="11">3 · verify exact bytes + SHA-256</text>
-            <text x="120" y="359" fill="#8f9caf" font-size="11">4 · Windows Authenticode, then open installer</text>
-            <text x="120" y="390" fill="#6aa6ff" font-size="11">User confirms the visible platform installation</text>
-            <rect x="555" y="225" width="390" height="190" rx="14" fill="#111722" stroke="#78d69a"/>
-            <text x="580" y="258" fill="#f6f8fb" font-size="15">Managed CLI installer</text>
-            <text x="580" y="287" fill="#8f9caf" font-size="11">1 · fetch installer from immutable tag</text>
-            <text x="580" y="311" fill="#8f9caf" font-size="11">2 · verify archive + capability manifest</text>
-            <text x="580" y="335" fill="#8f9caf" font-size="11">3 · version probe + isolated worker cold start</text>
-            <text x="580" y="359" fill="#8f9caf" font-size="11">4 · os.replace current symlink</text>
-            <text x="580" y="390" fill="#78d69a" font-size="11">User explicitly restarts running worker</text>
-            <line x1="260" y1="22" x2="260" y2="442" stroke="#f0b866" stroke-dasharray="6 7" opacity=".75"/>
-            <text x="270" y="440" fill="#f0b866" font-size="10">remote metadata becomes trusted only after validation</text>
-          </g>
-        </svg>
-        <div class="diagram-mobile">
-          <div><strong>1 · GitHub latest</strong><br>Accept only non-draft, non-prerelease, <code>vX.Y.Z</code>.</div>
-          <div><strong>2 · Release + manifest gate</strong><br>Verify unique assets, version, bytes, SHA-256, and platform architecture.</div>
-          <div><strong>3A · Desktop</strong><br>Verify the platform installer; Windows additionally verifies Authenticode; the user then confirms installation.</div>
-          <div><strong>3B · managed CLI</strong><br>Verify the complete runtime and cold start, then atomically switch <code>current</code>.</div>
-        </div>
-        <div class="legend"><span><i></i>metadata / Desktop</span><span class="verified"><i></i>Complete runtime installation</span><span class="boundary-line"><i></i>Trust boundaries</span></div>
-        <p class="diagram-caption">The renderer never receives asset URLs, filenames, or hashes; CLI subprocesses inherit only the minimum environment required for installation.</p>
-      </div>
-    </section>
-
-    <section id="platform-paths" aria-labelledby="paths-title">
-      <div class="section-head"><div class="section-num">03</div><div><h2 id="paths-title">Desktop and CLI completion boundaries</h2><p>“Check,” “download,” and “install” each correspond to verifiable actions. The two platforms use different replacement mechanisms.</p></div></div>
-      <div class="path-columns">
-        <article class="path-card">
-          <div class="path-head desktop"><h3>macOS Desktop</h3><p>Automatic discovery + complete download + explicit installation handoff</p></div>
-          <ol class="steps">
-            <li><strong>Startup scheduling</strong><span>A packaged app first checks 30 seconds after startup; development mode does not check automatically.</span></li>
-            <li><strong>Strict selection</strong><span>Match only the complete unsigned DMG for the current <code>process.arch</code>.</span></li>
-            <li><strong>Safe saving</strong><span>User-selected destination; random exclusive temporary file; streaming size/hash verification.</span></li>
-            <li><strong>Open installation media</strong><span>Open the DMG after successful verification. The app does not replace the running <code>.app</code>.</span></li>
-          </ol>
-        </article>
-        <article class="path-card">
-          <div class="path-head desktop"><h3>Windows Desktop</h3><p>Automatic discovery + complete download + signature verification + explicit installation handoff</p></div>
-          <ol class="steps">
-            <li><strong>Startup scheduling</strong><span>A packaged app checks automatically after startup; development mode does not check automatically.</span></li>
-            <li><strong>Strict selection</strong><span>Accept only the exactly named <code>OpenProgram-&lt;version&gt;-win-x64.exe</code>.</span></li>
-            <li><strong>Dual verification</strong><span>Verify size/SHA-256 while streaming; after saving, require Authenticode status Valid.</span></li>
-            <li><strong>Open the installer</strong><span>After verification, open the per-user NSIS wizard without silently replacing the running application.</span></li>
-          </ol>
-        </article>
-        <article class="path-card">
-          <div class="path-head cli"><h3>macOS / Linux CLI &amp; server</h3><p>Explicit execution + complete runtime verification + atomic activation</p></div>
-          <ol class="steps">
-            <li><strong>Check</strong><span><code>openprogram upgrade --check</code> reports current and latest versions read-only.</span></li>
-            <li><strong>Versioned installer</strong><span>Read the script from the verified immutable tag and pin repository/version.</span></li>
-            <li><strong>Isolated acceptance</strong><span>Checksum, capability manifest, version probe, and worker cold start must all succeed.</span></li>
-            <li><strong>Activate</strong><span>After preparing the launcher, use <code>os.replace</code> to switch <code>current</code>; the user explicitly restarts the worker.</span></li>
-          </ol>
-        </article>
-      </div>
-    </section>
-
-    <section id="desktop-states" aria-labelledby="states-title">
-      <div class="section-head"><div class="section-num">04</div><div><h2 id="states-title">Settings → General → Application</h2><p>The following are actual information states in the same Settings section, not separate product versions. Use the buttons or left/right arrow keys to switch.</p></div></div>
-      <div class="state-review">
-        <div class="state-tabs" role="tablist" aria-label="Update status">
-          <button class="state-tab" role="tab" aria-selected="false" aria-controls="state-idle" id="tab-idle" data-target="idle">Not checked</button>
-          <button class="state-tab" role="tab" aria-selected="false" aria-controls="state-checking" id="tab-checking" data-target="checking">Checking</button>
-          <button class="state-tab" role="tab" aria-selected="false" aria-controls="state-current" id="tab-current" data-target="current">Up to date</button>
-          <button class="state-tab" role="tab" aria-selected="true" aria-controls="state-available" id="tab-available" data-target="available">Update available</button>
-          <button class="state-tab" role="tab" aria-selected="false" aria-controls="state-downloading" id="tab-downloading" data-target="downloading">Downloading</button>
-          <button class="state-tab" role="tab" aria-selected="false" aria-controls="state-error" id="tab-error" data-target="error">Retryable error</button>
-        </div>
-        <div class="state-stage">
-          <article class="update-state" id="state-idle" role="tabpanel" aria-labelledby="tab-idle" data-update-state="idle"><div class="settings-shell"><div class="settings-title">Application</div><div class="settings-body"><h3>OpenProgram</h3><div class="setting-row"><span class="name">Current version</span><span class="value">0.7.0</span></div><div class="setting-row"><span class="name">Automatically check for updates</span><span class="toggle" aria-hidden="true"></span></div><div class="state-message">Not checked yet</div><div class="mock-actions"><span class="mock-button primary">Check now</span></div></div></div><p class="state-note">The cache is absent or expired. Automatic checks are enabled by default.</p></article>
-          <article class="update-state" id="state-checking" role="tabpanel" aria-labelledby="tab-checking" data-update-state="checking"><div class="settings-shell"><div class="settings-title">Application</div><div class="settings-body"><h3>OpenProgram</h3><div class="setting-row"><span class="name">Current version</span><span class="value">0.7.0</span></div><div class="setting-row"><span class="name">Automatically check for updates</span><span class="toggle" aria-hidden="true"></span></div><div class="state-message">Checking GitHub Releases…</div><div class="mock-actions"><span class="mock-button">Check now · disabled</span></div></div></div><p class="state-note">All windows reuse one in-flight Promise, preventing concurrent metadata requests.</p></article>
-          <article class="update-state" id="state-current" role="tabpanel" aria-labelledby="tab-current" data-update-state="up-to-date"><div class="settings-shell"><div class="settings-title">Application</div><div class="settings-body"><h3>OpenProgram</h3><div class="setting-row"><span class="name">Current version</span><span class="value">0.7.1</span></div><div class="setting-row"><span class="name">Latest stable release</span><span class="value">0.7.1</span></div><div class="state-message ok">OpenProgram is up to date</div><div class="mock-actions"><span class="mock-button">Check now</span><span class="mock-button">View release notes</span></div></div></div><p class="state-note">The same or a lower version is shown as up to date; stable downgrades are disallowed.</p></article>
-          <article class="update-state active" id="state-available" role="tabpanel" aria-labelledby="tab-available" data-update-state="available"><div class="settings-shell"><div class="settings-title">Application</div><div class="settings-body"><h3>OpenProgram</h3><div class="setting-row"><span class="name">Current version</span><span class="value">0.7.0</span></div><div class="setting-row"><span class="name">Available version</span><span class="value">0.7.1 · stable</span></div><div class="setting-row"><span class="name">Published</span><span class="value">GitHub Release date</span></div><div class="state-message ok">A complete update for this platform is available.</div><div class="mock-actions"><span class="mock-button primary">Download and open installer</span><span class="mock-button">View release notes</span></div></div></div><p class="state-note">Release Notes appear as plain-text summaries inside the app; the full body opens only the fixed GitHub Release page.</p></article>
-          <article class="update-state" id="state-downloading" role="tabpanel" aria-labelledby="tab-downloading" data-update-state="downloading"><div class="settings-shell"><div class="settings-title">Application</div><div class="settings-body"><h3>OpenProgram</h3><div class="setting-row"><span class="name">Downloading</span><span class="value">1.52 GB / 2.45 GB · 62%</span></div><div class="state-message">Downloading and verifying the complete installer<div class="progress-track"><span></span></div></div><div class="mock-actions"><span class="mock-button">Download in progress · disabled</span></div></div></div><p class="state-note">The main process publishes progress at most every 250ms and guarantees a final state on completion.</p></article>
-          <article class="update-state" id="state-error" role="tabpanel" aria-labelledby="tab-error" data-update-state="error"><div class="settings-shell"><div class="settings-title">Application</div><div class="settings-body"><h3>OpenProgram</h3><div class="setting-row"><span class="name">Available version</span><span class="value">0.7.1</span></div><div class="state-message error">Download checksum mismatch. The temporary file was removed.</div><div class="mock-actions"><span class="mock-button primary">Retry download</span><span class="mock-button">Check now</span><span class="mock-button">View release notes</span></div></div></div><p class="state-note">An error state retains verified release metadata, so users can retry directly without checking again.</p></article>
-        </div>
-      </div>
-    </section>
-
-    <section id="scheduling" aria-labelledby="schedule-title">
-      <div class="section-head"><div class="section-num">05</div><div><h2 id="schedule-title">Scheduling, persistence, and recovery</h2><p>Automatic checks affect discovery only; they do not trigger unattended installation. Manual checks always force a refresh.</p></div></div>
-      <div class="schedule" aria-label="Automatic-check timeline">
-        <article><strong>Startup + 30s</strong><span>First packaged-app schedule; calculate the due time first if a cache exists.</span></article>
-        <article><strong>Successful check + 24h</strong><span><code>lastSuccessAt</code> determines the next automatic check.</span></article>
-        <article><strong>Failed check + 6h</strong><span><code>lastAttemptAt</code> provides failure backoff, avoiding continuous GitHub requests.</span></article>
-        <article><strong>Resume / settings change</strong><span>Clear the old timer, check immediately at most once, then reschedule.</span></article>
-      </div>
-      <div class="decision-grid" style="margin-top:16px">
-        <article class="decision"><div class="label">Persisted schema 1</div><h3><code>update-state.json</code></h3><p>Save automaticChecks, lastAttemptAt, lastSuccessAt, and the latest verified release metadata using a temporary file plus rename. POSIX can specify file mode; Windows inherits the current user-directory ACL.</p></article>
-        <article class="decision"><div class="label">Repair</div><h3>Corrupt state cannot control scheduling</h3><p>Invalid JSON, unknown schemas, future timestamps, version/architecture mismatches, and missing releases are normalized and rewritten. A write failure must not commit hidden in-memory setting changes.</p></article>
-      </div>
-    </section>
-
-    <section id="trust-boundaries" aria-labelledby="trust-title">
-      <div class="section-head"><div class="section-num">06</div><div><h2 id="trust-title">Trust boundaries</h2><p>Verification occurs in the privileged process; the lower-privilege UI receives only projected display state.</p></div></div>
-      <div class="boundary-grid">
-        <article class="boundary remote"><div class="label">Remote metadata</div><h3>GitHub responses are untrusted by default</h3><p>HTTPS, fixed host, at most 5 redirects, per-hop validation, size limit, and body idle timeout; also require <code>draft === false</code> and <code>prerelease === false</code>.</p><ul class="contract-list"><li>The tag must be <code>vX.Y.Z</code></li><li>Asset names and manifest basenames are unique</li><li>GitHub size matches manifest bytes</li></ul></article>
-        <article class="boundary renderer"><div class="label">Renderer IPC</div><h3>The renderer cannot choose remote targets</h3><p>Preload exposes only <code>getState</code>, <code>check</code>, boolean settings, <code>download</code>, <code>openRelease</code>, and state subscriptions.</p><ul class="contract-list"><li>Accept no URL, path, hash, repository, or command</li><li>Public state strips asset name/URL/SHA-256</li><li>Closing a window cannot abort a check or download</li></ul></article>
-        <article class="boundary files"><div class="label">Downloaded files</div><h3>Do not activate before verification finishes</h3><p>Desktop uses random exclusive temporary files and handles short writes; Windows inherits directory ACLs and additionally verifies Authenticode. CLI verifies the complete runtime in a new version directory before replacing <code>current</code>.</p><ul class="contract-list"><li>Delete temporary files immediately on size/hash/signature mismatch</li><li>Reject archive path traversal</li><li>Launcher preparation failure preserves the old current</li></ul></article>
-        <article class="boundary state"><div class="label">Child process</div><h3>The versioned installer uses a minimal environment</h3><p>Managed upgrade pins the repository and target version, passing only allowed entries such as PATH/HOME/temp/locale/proxy/XDG/OpenProgram state.</p><ul class="contract-list"><li>Do not inherit provider/API credentials</li><li>Do not inherit archive/checksum source overrides</li><li><code>--json</code> always emits a single JSON document</li></ul></article>
-      </div>
-    </section>
-
-    <section id="failures" aria-labelledby="failures-title">
-      <div class="section-head"><div class="section-num">07</div><div><h2 id="failures-title">Failure semantics</h2><p>Every error states where processing stopped and what was preserved; vague “update failed” messages do not replace transaction boundaries.</p></div></div>
-      <div class="failure-list">
-        <div class="failure-row"><div class="case">Offline, timeout, GitHub rate limit</div><div class="result">Automatic checks record the error and back off for 6 hours; manual checks show a retryable error.</div><div class="preserve">The app and current version keep running</div></div>
-        <div class="failure-row"><div class="case">Invalid Release / manifest</div><div class="result">Reject the response without downloading; do not fall back to a wheel, source archive, another architecture, or an older version.</div><div class="preserve">The latest valid metadata may be retained</div></div>
-        <div class="failure-row"><div class="case">Installer body stall / size / hash / Windows signature error</div><div class="result">Abort the response, close the file, delete the random temporary file, and restore the retry action.</div><div class="preserve">Never open an unverified file</div></div>
-        <div class="failure-row"><div class="case">CLI archive / cold start / launcher failure</div><div class="result">The installer exits nonzero without performing the final <code>current</code> replacement.</div><div class="preserve">The old runtime remains current</div></div>
-        <div class="failure-row"><div class="case">Switch succeeded, but the worker still runs the old version</div><div class="result">The command explicitly reports the active runtime update and prints an explicit restart instruction.</div><div class="preserve">Running requests are not implicitly interrupted</div></div>
-      </div>
-    </section>
-
-    <section id="routing" aria-labelledby="routing-title">
-      <div class="section-head"><div class="section-num">08</div><div><h2 id="routing-title">Installation type determines the update path</h2><p>Installation detection identifies only the current execution mode; it does not create product variants with different functionality.</p></div></div>
-      <div class="route"><div class="from">managed_release</div><div class="arrow">→</div><div class="to"><strong>Official GitHub Release</strong><span>Desktop bridge or complete runtime installer; immutable markers take precedence.</span></div></div>
-      <div class="route"><div class="from">source_checkout</div><div class="arrow">→</div><div class="to"><strong>Explicit Git ref pipeline</strong><span>Preflight, checkout, dependencies/build, and probe; restart according to the development contract when needed.</span></div></div>
-      <div class="route"><div class="from">unknown</div><div class="arrow">→</div><div class="to"><strong>Stable error</strong><span>Do not guess PyPI, binary, or Git paths; direct the user to the official installer or a source checkout.</span></div></div>
-      <p class="diagram-caption"><code>pip_wheel</code> is not an official product installation type. Developer wheels may be build inputs, but do not provide an incomplete ordinary-user product.</p>
-    </section>
-
-    <section id="references" aria-labelledby="references-title">
-      <div class="section-head"><div class="section-num">09</div><div><h2 id="references-title">Reference implementations and adoption</h2><p>References establish platform constraints and state models; the final approach follows OpenProgram’s unsigned Desktop and complete-runtime contracts.</p></div></div>
-      <div class="reference-grid">
-        <article class="reference-card"><span class="choice">Adopt</span><h3><a href="https://docs.github.com/en/rest/releases/releases#get-the-latest-release">GitHub Releases API</a></h3><p>Latest stable metadata, Release Notes, and assets. Clients still independently validate stable fields, tags, unique assets, and manifests.</p></article>
-        <article class="reference-card"><span class="choice modified">Adapt</span><h3><a href="https://www.electronjs.org/docs/latest/tutorial/updates">Electron update lifecycle</a></h3><p>Adopt the check / available / download / error state model; Desktop completes by opening the verified platform installer, without automatic replacement.</p></article>
-        <article class="reference-card"><span class="choice rejected">Not currently adopted</span><h3><a href="https://www.electronjs.org/docs/latest/api/auto-updater/">Electron autoUpdater</a></h3><p>Native macOS automatic installation requires signing, and Electron provides no built-in Linux updater; these do not match current artifacts and platform contracts.</p></article>
-        <article class="reference-card"><span class="choice rejected">No new dependencies</span><h3><a href="https://www.electron.build/docs/features/auto-update/">electron-updater</a></h3><p>The existing Release manifest, Node/Electron APIs, Python, and shell cover this phase; a new package cannot change the current Desktop installation boundary.</p></article>
-      </div>
-    </section>
-
-    <section id="source-map" aria-labelledby="source-title">
-      <div class="section-head"><div class="section-num">10</div><div><h2 id="source-title">Implementation entry points</h2><p>Links point to current main-branch public compatibility entry points and official implementations; design conclusions do not depend on copied code on this page.</p></div></div>
-      <div class="file-grid">
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/self-update/update-service.js"><span class="path">apps/desktop/main/self-update/update-service.js</span><p>Desktop metadata, state, cache, scheduling, platform asset selection, download, hash, and public projection.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/self-update/windows-signature.js"><span class="path">apps/desktop/main/self-update/windows-signature.js</span><p>Windows updater Authenticode status, certificate subject, and thumbprint verification.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main.js"><span class="path">apps/desktop/main.js</span><p>Automatic-check timer, resume, IPC handlers, and multi-window state broadcast.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/preload.js"><span class="path">apps/desktop/main/preload.js</span><p>Fixed renderer bridge without URL parameters.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/settings/sections/general-section.tsx"><span class="path">apps/web/components/settings/sections/general-section.tsx</span><p>Desktop update status and CLI-instruction fallback for ordinary Web.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/cli/commands/upgrade.py"><span class="path">openprogram/interfaces/cli/commands/upgrade.py</span><p>Installation-type routing, managed Release gate, dry-run/JSON, and installer execution.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/operations/self_update/github_release/github.py"><span class="path">openprogram/operations/self_update/github_release/github.py</span><p>GitHub stable metadata, manifest, and immutable installer retrieval.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/install-release.sh"><span class="path">scripts/install-release.sh</span><p>Preserve the published macOS/Linux URL compatibility entry point; download the official implementation from the same immutable tag.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/install-release.ps1"><span class="path">scripts/install-release.ps1</span><p>Preserve the published Windows PowerShell URL compatibility entry point; download the official implementation from the same immutable tag.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/install-release.sh"><span class="path">scripts/release/install-release.sh</span><p>macOS/Linux complete-runtime download, verification, cold start, launcher staging, and atomic activation.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/install-release.ps1"><span class="path">scripts/release/install-release.ps1</span><p>Windows ZIP download, verification, cold start, launcher staging, and atomic activation.</p></a>
-        <a class="file-card" href="https://github.com/FuzzyKuji/OpenProgram/blob/main/.github/workflows/release.yml"><span class="path">.github/workflows/release.yml</span><p>Complete artifact publication and the latest-endpoint gate after creating a Release.</p></a>
-      </div>
-    </section>
-
-    <section id="implementation-evidence" aria-labelledby="evidence-title">
-      <div class="section-head"><div class="section-num">11</div><div><h2 id="evidence-title">Implementation status and acceptance evidence</h2><p>Implemented facts and facts still requiring Release-environment verification are recorded separately. This page does not retain dated change logs or commit lists.</p></div></div>
-      <div class="evidence-grid">
-        <article class="evidence-card pass"><div class="label">Implemented</div><h3>Complete Desktop path</h3><p>Stable metadata, platform/architecture selection, state cache, 24h/6h scheduling, minimal IPC, verified download, Windows Authenticode, Settings states, and Web fallback are implemented.</p><code>npm run check --workspace apps/desktop</code></article>
-        <article class="evidence-card pass"><div class="label">Implemented</div><h3>Complete managed CLI path</h3><p>The Release manifest gate, immutable installer, environment isolation, dry-run/JSON, real old→new current switching, and old-version retention on launcher failure are covered.</p><code>uv run pytest -q tests/component/config/test_formal_release_updates.py tests/component/config/test_distribution_release.py</code></article>
-        <article class="evidence-card pass"><div class="label">Verified</div><h3>Security and failure paths</h3><p>Per-hop host validation, metadata/download stall abort, short writes, random exclusive temporary files, checksum/size cleanup, concurrent Promises, and state repair are verified.</p><code>apps/desktop/tests/check-update-service.js</code></article>
-        <article class="evidence-card pass"><div class="label">Verified</div><h3>Documentation and release gates</h3><p>Bilingual installation/upgrade documentation, Release latest verification, documentation build, links, Desktop/Web/TypeScript, and workflow static gates are included in release checks.</p><code>python -m scripts.docs_site.checklinks</code></article>
-        <article class="evidence-card pass"><div class="label">Release gate</div><h3>Release artifact checks</h3><p>Every stable release passes the Release gate for runtime, CLI, Desktop, manifest and checksum artifacts before it is published. Artifact checks prove what was published; they do not stand in for acceptance on a running client.</p></article>
-        <article class="evidence-card pending"><div class="label">Installed-client acceptance</div><h3>Real client update interactions</h3><p>Version discovery, opening the platform installer, long-running behavior and sleep/resume scheduling have not yet been verified by operating an installed client; release-artifact smoke tests do not replace these interactions. Windows must additionally pass the Authenticode gate with a real certificate on an official release runner.</p></article>
-        <article class="evidence-card pass"><div class="label">One-time migration</div><h3>Upgrading from v0.6.6 and earlier</h3><p>Desktop builds before v0.7.0 have no updater: install the current DMG once by hand, and later releases update automatically. CLI and server installs rerun the public installer once.</p></article>
-      </div>
-      <div class="release-handoff"><h3>What remains</h3><p>The Desktop and managed CLI paths, their security and failure handling, and the release gates are implemented and verified. The open item is interactive acceptance on an installed client, plus the Windows Authenticode gate on an official release runner.</p></div>
-    </section>
-
-    <footer class="footer"><span>Canonical design: distribution / automatic updates</span><span>Design stays synchronized with code · View history through Git</span></footer>
-  </main>
-</div>
-
-<script>
-  (function () {
-    var tabs = Array.from(document.querySelectorAll('.state-tab'));
-    var panels = Array.from(document.querySelectorAll('.update-state'));
-    function activate(tab, moveFocus) {
-      tabs.forEach(function (item) {
-        var selected = item === tab;
-        item.setAttribute('aria-selected', String(selected));
-        item.tabIndex = selected ? 0 : -1;
-      });
-      panels.forEach(function (panel) {
-        panel.classList.toggle('active', panel.id === 'state-' + tab.dataset.target);
-      });
-      if (moveFocus) tab.focus();
-    }
-    tabs.forEach(function (tab, index) {
-      tab.addEventListener('click', function () { activate(tab, false); });
-      tab.addEventListener('keydown', function (event) {
-        var next = index;
-        if (event.key === 'ArrowRight' || event.key === 'ArrowDown') next = (index + 1) % tabs.length;
-        else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') next = (index - 1 + tabs.length) % tabs.length;
-        else if (event.key === 'Home') next = 0;
-        else if (event.key === 'End') next = tabs.length - 1;
-        else return;
-        event.preventDefault();
-        activate(tabs[next], true);
-      });
-    });
-    activate(document.querySelector('.state-tab[aria-selected="true"]'), false);
-    var links = Array.from(document.querySelectorAll('.rail nav a'));
-    var sections = links.map(function (link) { return document.querySelector(link.getAttribute('href')); }).filter(Boolean);
-    if ('IntersectionObserver' in window) {
-      var observer = new IntersectionObserver(function (entries) {
-        entries.forEach(function (entry) {
-          if (!entry.isIntersecting) return;
-          links.forEach(function (link) {
-            link.setAttribute('aria-current', String(link.getAttribute('href') === '#' + entry.target.id));
-          });
-        });
-      }, { rootMargin: '-15% 0px -75% 0px' });
-      sections.forEach(function (section) { observer.observe(section); });
-    }
-  }());
-</script>
-</body>
-</html>
+<p class="note">Out of scope: Windows sandboxing, PyPI product installation, background replacement of a running application.</p>

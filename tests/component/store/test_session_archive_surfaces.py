@@ -116,6 +116,30 @@ def test_archive_endpoint_hides_the_session(client, store) -> None:
     assert [x["id"] for x in store.list_sessions()] == ["alpha"]
 
 
+def test_archive_endpoints_stop_and_restore_automatic_goals_once(client, store, monkeypatch) -> None:
+    from openprogram.runtime.conversation.always_on import runtime
+    calls = []
+    monkeypatch.setattr(runtime, "archive_changed", lambda sid, archived: calls.append((sid, archived)))
+
+    client.post("/api/sessions/archive", json={"session_id": "beta"})
+    client.post("/api/sessions/archive", json={"session_id": "beta"})  # already archived
+    client.post("/api/sessions/unarchive", json={"session_id": "beta"})
+
+    assert calls == [("beta", True), ("beta", False)]
+
+
+def test_cli_archive_without_a_worker_stops_automatic_goals(store, monkeypatch, capsys) -> None:
+    from openprogram.interfaces.cli.commands.sessions import _cmd_session_archive
+    from openprogram.runtime.conversation.always_on import runtime
+    calls = []
+    monkeypatch.setattr(runtime, "archive_changed", lambda sid, archived: calls.append((sid, archived)))
+
+    _cmd_session_archive("beta", True)
+    _cmd_session_archive("beta", False)
+
+    assert calls == [("beta", True), ("beta", False)]
+
+
 def test_unarchive_endpoint_restores_the_session(client, store) -> None:
     store.set_archived("beta", True)
 

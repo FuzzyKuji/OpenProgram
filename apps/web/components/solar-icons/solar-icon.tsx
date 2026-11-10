@@ -26,17 +26,41 @@ import { motion, useAnimation, useReducedMotion, type Transition, type Variants 
 
 import { cn } from "@/lib/utils";
 import type { AnimatedNavIconHandle } from "@/components/animated-icons/_shared";
-import { HOVER_POP, HOVER_SPRING, followHostHover } from "@/components/ui/hover-pop";
+import { HOVER_FILL_SCALE, HOVER_POP, HOVER_POP_FILL, HOVER_SPRING, followHostHover } from "@/components/ui/hover-pop";
 import { SOLAR_BODIES, SOLAR_VIEWBOXES, type SolarIconName } from "./bodies";
+import { SOLAR_INK } from "./ink-bounds";
 
-export type SolarMotionPreset = "pop" | "fly" | "nudge" | "pulse" | "none";
+export type SolarMotionPreset = "pop" | "nudge" | "pulse" | "none";
 
 const PRESETS: Record<Exclude<SolarMotionPreset, "none">, Variants> = {
   pop: HOVER_POP,
-  fly: { normal: { x: 0, y: 0 }, animate: { x: 1.5, y: -1.5 } },
   nudge: { normal: { x: 0 }, animate: { x: 1.5 } },
   pulse: { normal: { scale: 1 }, animate: { scale: [0.5, 1.15, 1] } },
 };
+
+/** The motions of a filled glyph (fit="fill"): a pop grows the
+ *  box to exactly 18 px (HOVER_FILL_SCALE) instead of 1.12 times. */
+const FILL_PRESETS: Record<Exclude<SolarMotionPreset, "none">, Variants> = {
+  ...PRESETS,
+  pop: HOVER_POP_FILL,
+};
+
+/** How a glyph sits in its box. "viewBox" (the default) draws the whole
+ *  view box, so a Solar glyph's ink is 20/24 of the box. "fill" crops the
+ *  view box to a square around the glyph's ink (ink-bounds.ts, generated),
+ *  so its longer side is the box's side, centred; the box is `size` px
+ *  whatever CSS the surrounding control sets for svgs. Only the composer
+ *  and the popups it opens use "fill". */
+export type SolarIconFit = "viewBox" | "fill";
+
+/** The view box that makes a glyph's ink fill a square box. */
+export function solarFillViewBox(name: SolarIconName): string {
+  const ink = SOLAR_INK[name];
+  if (!ink) return SOLAR_VIEWBOXES[name] ?? "0 0 24 24";
+  const side = Math.max(ink.width, ink.height);
+  const round = (value: number) => Math.round(value * 1000) / 1000;
+  return [round(ink.x + ink.width / 2 - side / 2), round(ink.y + ink.height / 2 - side / 2), round(side), round(side)].join(" ");
+}
 
 const SPRING: Transition = HOVER_SPRING;
 const PULSE: Transition = { duration: 0.32, ease: "easeOut" };
@@ -46,16 +70,19 @@ export interface SolarIconProps extends HTMLAttributes<HTMLSpanElement> {
   size?: number;
   /** Hover micro-motion. Defaults to `pop`. */
   motionPreset?: SolarMotionPreset;
+  /** How the glyph sits in its box; see SolarIconFit. */
+  fit?: SolarIconFit;
 }
 
 export const SolarIcon = forwardRef<AnimatedNavIconHandle, SolarIconProps>(function SolarIcon(
-  { name, size = 16, motionPreset = "pop", className, onMouseEnter, onMouseLeave, ...props },
+  { name, size = 16, motionPreset = "pop", fit = "viewBox", className, onMouseEnter, onMouseLeave, ...props },
   ref,
 ) {
   const controls = useAnimation();
   const isControlledRef = useRef(false);
   const reduced = useReducedMotion();
   const animated = motionPreset !== "none" && !reduced;
+  const filled = fit === "fill";
 
   useImperativeHandle(ref, () => {
     isControlledRef.current = true;
@@ -92,14 +119,15 @@ export const SolarIcon = forwardRef<AnimatedNavIconHandle, SolarIconProps>(funct
       <motion.svg
         width={size}
         height={size}
-        viewBox={SOLAR_VIEWBOXES[name] ?? "0 0 24 24"}
+        viewBox={filled ? solarFillViewBox(name) : SOLAR_VIEWBOXES[name] ?? "0 0 24 24"}
         fill="currentColor"
         aria-hidden="true"
         xmlns="http://www.w3.org/2000/svg"
-        style={{ display: "block", flexShrink: 0 }}
+        style={filled ? { display: "block", flexShrink: 0, width: size, height: size, overflow: "visible" } : { display: "block", flexShrink: 0 }}
+        data-icon-fit={filled ? "fill" : undefined}
         initial="normal"
         animate={controls}
-        variants={motionPreset === "none" ? undefined : PRESETS[motionPreset]}
+        variants={motionPreset === "none" ? undefined : (filled ? FILL_PRESETS : PRESETS)[motionPreset]}
         transition={motionPreset === "pulse" ? PULSE : SPRING}
         dangerouslySetInnerHTML={{ __html: SOLAR_BODIES[name] }}
       />

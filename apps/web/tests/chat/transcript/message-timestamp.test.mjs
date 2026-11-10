@@ -5,7 +5,6 @@ import {
   validMessageTimestamp,
   withMessageTimestamp,
 } from "../../../lib/session-store/messages/message-timestamp.ts";
-import { messagePatchUnchanged } from "../../../lib/session-store/messages/message-patch.ts";
 
 test("already-stamped tree keeps identity", () => {
   const child = { id: "c", role: "assistant", content: "x", timestamp: 11 };
@@ -43,7 +42,7 @@ test("missing child timestamp is filled; parent and lists are new", () => {
   assert.equal(withMessageTimestamp(out), out);
 });
 
-test("updateMessage-style spread keeps stamped children", () => {
+test("a patched row keeps stamped children", () => {
   const child = { id: "c", role: "assistant", content: "x", timestamp: 5 };
   const cur = {
     id: "p",
@@ -53,17 +52,11 @@ test("updateMessage-style spread keeps stamped children", () => {
     runtimeChildren: [child],
   };
   const patch = { content: "hello" };
-  assert.equal(messagePatchUnchanged(cur, patch), false);
   const next = withMessageTimestamp({ ...cur, ...patch });
   assert.equal(next.content, "hello");
   assert.equal(next.timestamp, 5);
   assert.equal(next.runtimeChildren, cur.runtimeChildren);
   assert.equal(next.runtimeChildren[0], child);
-});
-
-test("identical stream patch still short-circuits before stamp", () => {
-  const cur = { id: "m1", role: "assistant", content: "hello", timestamp: 1 };
-  assert.equal(messagePatchUnchanged(cur, { content: "hello" }), true);
 });
 
 test("validMessageTimestamp rejects junk", () => {

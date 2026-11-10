@@ -5,7 +5,8 @@ import os
 
 import pytest
 
-from openprogram.runtime.permissions.policy import _match_rule
+from openprogram.runtime.permissions.policy import match_rule
+
 from openprogram.runtime.permissions.modes import PermissionRules
 from openprogram.runtime.conversation.session_config import SessionRunConfig
 from openprogram.runtime.permissions.rule import (
@@ -15,6 +16,10 @@ from openprogram.runtime.permissions.rule import (
     parse_rule,
 )
 from openprogram.state.store.project import project_store
+
+
+def _match_rule(rules, tool_name, args):
+    return match_rule(rules, tool_name, args)[0]
 
 
 def test_raw_windows_path_rule_preserves_separators():

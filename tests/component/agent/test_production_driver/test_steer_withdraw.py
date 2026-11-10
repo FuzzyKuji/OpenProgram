@@ -18,7 +18,7 @@ def _running_turn(tmp_path, execution_id):
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="owner-steer", ttl_seconds=30,
+        owner_id="owner-steer",
     )
     active, running = attempts.activate(
         leased.attempt_id, generation=leased.generation,
@@ -107,7 +107,7 @@ def test_steer_withdrawn_after_the_driver_chose_it_does_not_fail_the_safe_point(
     assert store.get_execution(execution.execution_id).status is ExecutionStatus.RUNNING
 
 
-def test_the_only_steer_withdrawn_mid_commit_leaves_a_plain_checkpoint(tmp_path, monkeypatch):
+def test_the_only_steer_withdrawn_at_the_boundary_is_ignored(tmp_path, monkeypatch):
     from openprogram.runtime.conversation.production_driver import safe_points
 
     store, execution, active, queue, provider_step = _running_turn(tmp_path, "exec-withdraw-sole")
@@ -130,4 +130,4 @@ def test_the_only_steer_withdrawn_mid_commit_leaves_a_plain_checkpoint(tmp_path,
     assert queue == []
     assert {store.get_command(f"steer-{name}").rejection_code for name in ("first", "second")} == {"withdrawn"}
     current = store.get_execution(execution.execution_id)
-    assert current.status is ExecutionStatus.RUNNING and current.checkpoint_head_id
+    assert current.status is ExecutionStatus.RUNNING

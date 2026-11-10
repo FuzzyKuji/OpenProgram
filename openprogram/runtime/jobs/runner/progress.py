@@ -108,7 +108,7 @@ class ProgressOperations:
         hits: list[tuple[str, shared.Job]] = []
         from openprogram.state.store.session.placement import iter_session_dirs
         for sid, sdir in iter_session_dirs(store.root_path):
-            if (sdir / "jobs.json").exists():
+            if store.state_file_at(sdir, "jobs.json").exists():
                 found = shared._store_load(sid, job_id)
                 if found is not None:
                     hits.append((sid, found))
@@ -122,91 +122,6 @@ class ProgressOperations:
             if found.caller_session_id and found.caller_session_id != sid:
                 return sid
         return hits[0][0]
-
-
-    def _poll_progress(
-        self, job: shared.Job, stop_ev: shared.threading.Event,
-    ) -> None:
-        """Watch the session for sub-agent messages while the job is
-        running and stream the latest message preview into the
-        placeholder attach card so the chat row reflects progress
-        instead of a static "(running)".
-
-        Best-effort and idle-safe: snapshots the current high-water
-        seq as the baseline, then every ~1.5s scans for new nodes
-        past that mark. The latest text-bearing node's output (first
-        ~300 chars) becomes the attach pointer's preview. Skips itself
-        (the placeholder) and runtime-display rows. Broadcasts a
-        session reload so the chat view refreshes without polling.
-        """
-        if not job.attach_pointer_id or not job.parent_session_id:
-            return
-        try:
-            from openprogram.runtime.context.session_db import default_db
-            from openprogram.state.store import SessionNodeWriter
-            db = default_db()
-            target_session = job.parent_session_id
-            card_session = job.caller_session_id or target_session
-            target_pair = db._open(target_session)  # noqa: SLF001
-            card_pair = db._open(card_session)  # noqa: SLF001
-            if target_pair is None or card_pair is None:
-                return
-            _git, idx = target_pair
-            try:
-                baseline_seq = max(
-                    (n.seq for n in idx.all_nodes() if n.seq is not None),
-                    default=-1,
-                )
-            except Exception:
-                baseline_seq = -1
-            last_patched_id: shared.Optional[str] = None
-            shim = SessionNodeWriter(db, card_session)
-        except Exception:
-            return
-        while not stop_ev.is_set():
-            if stop_ev.wait(1.5):
-                break
-            try:
-                pair2 = db._open(target_session)  # noqa: SLF001
-                card_pair2 = db._open(card_session)  # noqa: SLF001
-                if pair2 is None or card_pair2 is None:
-                    continue
-                _, idx2 = pair2
-                latest = None
-                for n in idx2.all_nodes():
-                    if (n.seq or 0) <= baseline_seq:
-                        continue
-                    if n.id == job.attach_pointer_id:
-                        continue
-                    md = n.metadata or {}
-                    if md.get("display") == "runtime":
-                        continue
-                    if not (n.output or "").strip():
-                        continue
-                    latest = n
-                if latest is None or latest.id == last_patched_id:
-                    continue
-                preview = str(latest.output or "").strip()
-                if not preview:
-                    continue
-                if len(preview) > 600:
-                    preview = preview[:600].rstrip() + "…"
-                node = card_pair2[1].nodes_by_id.get(job.attach_pointer_id)
-                if not node:
-                    continue
-                shim.update(job.attach_pointer_id, output=preview)
-                last_patched_id = latest.id
-                self.record_job_activity(job.id, "child_progress")
-                try:
-                    shared._broadcast_session_reload(
-                        card_session, reason="job_progress",
-                    )
-                except Exception:
-                    # UI nudge only; the next reload shows the preview.
-                    shared._log.debug("session %s reload not broadcast", card_session, exc_info=True)
-            except Exception:
-                # Live preview only; the attach card is finalized when the job ends.
-                shared._log.debug("progress preview not patched for job %s", job.id, exc_info=True)
 
 
     def _update_attach_card(
@@ -245,7 +160,7 @@ class ProgressOperations:
             pair = db._open(card_session)  # noqa: SLF001
             if pair is None:
                 return
-            _git, idx = pair
+            _session_log, idx = pair
             node = idx.nodes_by_id.get(job.attach_pointer_id)
             if not node:
                 return
@@ -325,7 +240,9 @@ class ProgressOperations:
             # sub-agent's history. Only retire on COMPLETED;
             # errored / cancelled jobs remain visible so the user
             # can see what failed.
-            if job.head_id and job.status == shared.JobStatus.COMPLETED:
+            # A /spawn the user waited on keeps its branch listed.
+            keeps_branch = job.wait and not attach.get("tool_call_id")
+            if job.head_id and job.status == shared.JobStatus.COMPLETED and not keeps_branch:
                 try:
                     db.mark_merged(target_session, [job.head_id])
                 except Exception:
@@ -344,16 +261,11 @@ class ProgressOperations:
                     metadata=md,
                 )
             except Exception:
-                # The graph reload below still runs.
+                # The context refresh below still runs.
                 shared._log.warning("attach card %s not updated for job %s", job.attach_pointer_id, job.id, exc_info=True)
-            # The attach node just changed what the session's graph holds,
-            # so both readers of that graph are told at the same point:
-            # the DAG re-pulls the session, and the context ring
-            # re-estimates. Firing here, at the write, is what keeps a
-            # sub-agent finishing from leaving a stale graph on screen.
-            shared._broadcast_session_reload(
-                card_session, reason="job_attach",
-            )
+            # The attach node just changed what the session's graph holds.
+            # The transcript publisher sends the card's change to every view
+            # holding it; the context ring re-estimates here, at the write.
             shared._refresh_context_stats(card_session)
         except Exception:
             # Card update is secondary to the job's own terminal status.
@@ -428,18 +340,23 @@ class ProgressOperations:
             try:
                 from openprogram.runtime.agent.turn_request import TurnRequest
                 from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+                from openprogram.runtime.conversation.session_config import conversation_permission
                 from openprogram.runtime.permissions.authority import runtime_authority
                 from openprogram.state.memory.policy import source_writable
                 memory_override = None if all(
                     source_writable(j.parent_session_id, j.head_id) for j in jobs
                 ) else {"mode": "read_only"}
+                marks = [(self._execution_store.get_job_agent_input(j.id) or {}).get("turn_request") or {} for j in jobs]
                 req = TurnRequest(
                     session_id=deliver_session,
+                    automation=next((mark["automation"] for mark in marks if mark.get("automation")), None),
+                    detached=any(mark.get("detached") for mark in marks),
                     memory_policy_override=memory_override,
                     user_text=notice_text(jobs),
                     notice=notice_items(jobs),
                     agent_id=job.agent_id or "main",
                     source="job_followup",
+                    **conversation_permission(deliver_session),
                     **runtime_authority(job, "job_followup"),
                     # branch_from is left at INHERIT_PARENT: the dispatcher
                     # resolves it to the delivery session's HEAD and advances

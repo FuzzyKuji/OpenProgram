@@ -65,6 +65,22 @@ test("confirmed selector sends bypass immediately and waits for write confirmati
   });
 });
 
+test("the menu lists the four modes with Bypass first and marked default", async () => {
+  await mounted(async ({ hook }) => {
+    assert.deepEqual(hook().options.map(o => o.value), ["bypass", "auto", "ask", "plan"]);
+    assert.deepEqual(hook().options.map(o => o.label), ["Bypass permissions", "Auto", "Manual", "Plan"]);
+    assert.deepEqual(hook().options.filter(o => o.isDefault).map(o => o.value), ["bypass"]);
+  });
+});
+
+test("Accept edits appears as the last row only while it is the current mode", async () => {
+  await mounted(async ({ hook, root, Probe }) => {
+    // The harness store does not notify subscribers, so render the confirmed mode explicitly.
+    await act(async () => root.render(createElement(Probe)));
+    assert.deepEqual(hook().options.map(o => o.value), ["bypass", "auto", "ask", "plan", "acceptEdits"]);
+  }, { mode: "acceptEdits", version: 4 });
+});
+
 test("a stale selector preserves the authoritative conflict without retrying", async () => {
   await mounted(async ({ requests, hook }) => {
     await act(async () => hook().set("bypass"));
@@ -84,8 +100,8 @@ test("unconfirmed sessions read before writing and ignore stale completion after
     h.sid = "session-two";
     h.settings = {};
     await act(async () => root.render(createElement(Probe)));
-    await act(async () => requests[1].resolve({ mode: "bypass", version: 3 }));
-    assert.equal(hook().mode, "auto");
+    await act(async () => requests[1].resolve({ mode: "plan", version: 3 }));
+    assert.equal(hook().mode, "bypass");
     assert.deepEqual(h.settings, {});
   }, null);
 });

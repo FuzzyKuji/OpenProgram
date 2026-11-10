@@ -1,5 +1,7 @@
 "use client";
 
+import { settingsSend } from "@/lib/settings/settings-request";
+
 import { useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import {
@@ -71,16 +73,10 @@ export function ModelList({
   const filtered = [...matched].sort((a, b) => Number(b.enabled) - Number(a.enabled));
 
   async function toggle(modelId: string, enabled: boolean) {
-    try {
-      await fetch(
-        `/api/providers/${encodeURIComponent(provider.id)}/models/${encodeURIComponent(modelId)}/toggle`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ enabled }),
-        },
-      );
-    } catch { /* ignore */ }
+    await settingsSend(`/api/providers/${encodeURIComponent(provider.id)}/models/${encodeURIComponent(modelId)}/toggle`, {
+      body: { enabled },
+      failure: text("Could not change this model. Try again.", "无法更改这个模型，请重试。"),
+    });
     onReload();
     queryClient.invalidateQueries({ queryKey: ["models-enabled"] });
     // The top-bar agent chip reads agentSettings, not the query cache —
@@ -90,18 +86,11 @@ export function ModelList({
 
   async function bulkToggle(enabled: boolean) {
     const targets = models.filter((m) => m.enabled !== enabled);
-    await Promise.all(
-      targets.map((m) =>
-        fetch(
-          `/api/providers/${encodeURIComponent(provider.id)}/models/${encodeURIComponent(m.id)}/toggle`,
-          {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ enabled }),
-          },
-        ),
-      ),
-    );
+    await Promise.all(targets.map((m) =>
+      settingsSend(`/api/providers/${encodeURIComponent(provider.id)}/models/${encodeURIComponent(m.id)}/toggle`, {
+        body: { enabled },
+        failure: text("Could not change every model. Try again.", "部分模型未能更改，请重试。"),
+      })));
     onReload();
     queryClient.invalidateQueries({ queryKey: ["models-enabled"] });
     refreshAgentChip();

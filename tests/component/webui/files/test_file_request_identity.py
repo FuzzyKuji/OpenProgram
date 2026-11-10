@@ -154,8 +154,8 @@ def test_copy_replay_and_terminal_recovery_are_durable(project, tmp_path):
     assert (project / "copy.txt").read_text(encoding="utf-8") == "before"
 
     from openprogram.state.store.file_operations import FileOperationStore
-    db_path = tmp_path / "empty-profile" / "file_operations.db"
-    store = FileOperationStore(db_path)
+    log_path = tmp_path / "empty-profile" / "file_operations.jsonl"
+    store = FileOperationStore(log_path)
     row, owner = store.begin("p1", "project_file_delete", "crash-key", "fp",
                               payload={"path": "missing.txt"},
                               before={"source": {"exists": True}},
@@ -166,15 +166,15 @@ def test_copy_replay_and_terminal_recovery_are_durable(project, tmp_path):
         "error_code": "RECOVERY_REQUIRED",
         "error": "file operation state cannot be reconciled safely",
     }, status="recovery_required", phase="recovery_required")
-    reopened = FileOperationStore(db_path)
+    reopened = FileOperationStore(log_path)
     replayed = reopened.replay(reopened.begin(
         "p1", "project_file_delete", "crash-key", "fp",
     )[0])
     assert replayed["status"] == "recovery_required"
     assert "in_flight" not in replayed
     from openprogram.host._platform.filesystem import user_private_metadata
-    assert user_private_metadata(db_path.stat(), exact_mode=0o600)
-    assert user_private_metadata(db_path.parent.stat(), exact_mode=0o700)
+    assert user_private_metadata(log_path.stat(), exact_mode=0o600)
+    assert user_private_metadata(log_path.parent.stat(), exact_mode=0o700)
 
 
 def test_inflight_after_image_is_not_assumed_to_be_our_write(project):
@@ -281,7 +281,7 @@ def test_turn_operation_status_reads_history_intent_by_turn_and_key(tmp_path, mo
     closure = journal.apply_rewind_operation(
         [], expected_head_id=None, target_head_id=None,
         get_head=lambda: None,
-        compare_and_set_head=lambda expected, target: expected is None and target is None,
+        compare_and_set_head=lambda expected, target, rollback=False: expected is None and target is None,
         idempotency_key=closure_key, target_msg_id="revert:turn-2",
     )
     assert closure["status"] == "committed"
@@ -421,14 +421,14 @@ def test_rewind_recovery_persists_error_code_for_status(tmp_path, monkeypatch):
         journal.apply_rewind_operation(
             [], expected_head_id=None, target_head_id=None,
             get_head=lambda: None,
-            compare_and_set_head=lambda expected, target: True,
+            compare_and_set_head=lambda expected, target, rollback=False: True,
             idempotency_key=stored_key, target_msg_id="revert:turn-r",
         )
 
     monkeypatch.setattr(checkpoint_store.manifest, "save", original_save)
     recovered = journal.recover_rewind_intents(
         get_head=lambda: "external",
-        compare_and_set_head=lambda intent, expected, target: False,
+        compare_and_set_head=lambda intent, expected, target, rollback=False: False,
     )
     assert recovered[0]["status"] == "recovery_required"
     assert recovered[0]["error_code"] == "RECOVERY_REQUIRED"
@@ -463,8 +463,8 @@ def test_file_operation_compaction_has_explicit_safe_retention(tmp_path):
         fingerprint,
     )
 
-    db_path = tmp_path / "state" / "file_operations.db"
-    store = FileOperationStore(db_path)
+    log_path = tmp_path / "state" / "file_operations.jsonl"
+    store = FileOperationStore(log_path)
     rows = []
     for index, status in enumerate(("completed", "conflict", "error", "in_flight", "recovery_required")):
         row, owner = store.begin("p", "action", f"key-{index}", fingerprint({"index": index}))
@@ -473,8 +473,10 @@ def test_file_operation_compaction_has_explicit_safe_retention(tmp_path):
             store.finish(row["operation_id"], {"status": status}, status=status, phase=status)
         rows.append(row["operation_id"])
     old = time.time() - FILE_OPERATION_TERMINAL_TTL_SECONDS - 1
-    with store._connect() as db:
-        db.execute("UPDATE file_operations SET updated_at=? WHERE status IN ('completed','conflict','error')", (old,))
+    with store._log.locked() as log:
+        for operation_id, row in list(log.records.items()):
+            if row["status"] in ("completed", "conflict", "error"):
+                log.put(operation_id, {**row, "updated_at": old})
     assert store.compact(now=time.time()) == 3
     assert store.get(rows[3]) is not None
     assert store.get(rows[4]) is not None

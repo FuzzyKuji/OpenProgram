@@ -90,7 +90,8 @@ def _screenshot(session_id: str, path: str) -> str:
     from openprogram.host.sandbox import validate_write_path
     violation = validate_write_path(path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("browser screenshot", violation)
     try:
         sess["page"].screenshot(path=path, full_page=True)
         return f"Saved screenshot → {path}"

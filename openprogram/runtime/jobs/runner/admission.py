@@ -1,6 +1,7 @@
 """JobRunner admission operations."""
 from __future__ import annotations
 from contextlib import nullcontext
+import dataclasses
 from dataclasses import replace
 from openprogram.runtime.jobs.types import mint_job_id
 from typing import Mapping
@@ -10,18 +11,60 @@ import time
 from openprogram.runtime.jobs.runner import shared
 
 
+def _scheduled_permission_snapshot(job: shared.Job) -> dict[str, shared.Any] | None:
+    """The policy of a sub-agent started by a scheduled run.
+
+    The run's turn lives in its own process, so the Worker has no row to read.
+    What it verified when it started that process says whose run this is, and
+    the conversation's settings are where the run took its own policy from.
+    """
+    from openprogram.runtime.conversation.session_config import conversation_permission
+    from openprogram.runtime.permissions.modes import VALID_PERMISSION
+    from openprogram.state.authority import normalize_authority
+
+    scheduled = shared.scheduled_caller.get()
+    if (scheduled is None or job.source != "agent_spawn"
+            or (job.caller_session_id or job.parent_session_id) != scheduled["session_id"]):
+        return None
+    authority = normalize_authority(job)
+    if (not authority or authority.get("authority_tier") != "owner"
+            or scheduled["authority_tier"] != "owner" or not scheduled["principal_id"]
+            or authority.get("principal_id") != scheduled["principal_id"]):
+        return None
+    permission = conversation_permission(scheduled["session_id"])
+    if permission["permission_mode"] not in VALID_PERMISSION:
+        return None
+    rules = permission["permission_rules"]
+    return {"mode": permission["permission_mode"],
+            "rules": dataclasses.asdict(rules) if dataclasses.is_dataclass(rules) else rules}
+
+
+def _started_by_detached_turn() -> bool:
+    """Whether the turn starting this Job has no window. A scheduled run's turn
+    lives in its own process, so the Worker admitting its sub-agents has only
+    the caller it verified to go by."""
+    from openprogram.runtime.agent.turn_request import get_turn_request
+    from openprogram.runtime.permissions.identity import detached_from_window
+
+    return detached_from_window(get_turn_request()) or shared.scheduled_caller.get() is not None
+
+
 class AdmissionOperations:
     @staticmethod
     def _canonical_input(job: shared.Job, *, run_id: str | None,
                          parent_execution_id: str | None = None,
                          permission_snapshot: Mapping[str, shared.Any] | None = None,
-                         usage_goal: Mapping[str, shared.Any] | None = None) -> tuple[str, str, dict[str, shared.Any]]:
+                         usage_goal: Mapping[str, shared.Any] | None = None,
+                         automation: str | None = None,
+                         detached: bool = False) -> tuple[str, str, dict[str, shared.Any]]:
         from openprogram.runtime.jobs.input import JobAgentInputV1
 
         immutable = JobAgentInputV1.from_job(job, run_id=run_id,
                                             parent_execution_id=parent_execution_id,
                                             permission_snapshot=permission_snapshot,
-                                            usage_goal=usage_goal).to_dict()
+                                            usage_goal=usage_goal,
+                                            automation=automation,
+                                            detached=detached).to_dict()
         payload = json.dumps(
             immutable,
             ensure_ascii=False,
@@ -71,6 +114,8 @@ class AdmissionOperations:
             return
         from openprogram.runtime.permissions.lifecycle import spawn_permission_snapshot
         permission_snapshot = spawn_permission_snapshot(self._execution_store, parent, job)
+        if parent is None and permission_snapshot is None:
+            permission_snapshot = _scheduled_permission_snapshot(job)
         if job.source == "self_update_continue":
             from openprogram.operations.self_update.control.continuation import permission_snapshot as update_permission
             permission_snapshot = update_permission(job)
@@ -90,9 +135,13 @@ class AdmissionOperations:
                 usage = request_context(caller_session)
                 if usage.goal_id:
                     usage_goal = {key: getattr(usage, key) for key in GOAL_FIELDS}
+        from openprogram.runtime.agent.turn_request import get_turn_request
+        from openprogram.runtime.permissions.identity import inherited_automation
         input_ref, input_hash, input_payload = self._canonical_input(
             job, run_id=run_id, parent_execution_id=parent.execution_id if parent else None,
             permission_snapshot=permission_snapshot, usage_goal=usage_goal,
+            automation=inherited_automation(get_turn_request()),
+            detached=_started_by_detached_turn(),
         )
         revision = self._execution_store.create_revision(
             revision_id=f"job-revision-{input_hash[:24]}",
@@ -327,6 +376,7 @@ class AdmissionOperations:
         source: str = "agent_spawn",
         profile_snapshot: shared.Optional[dict[str, shared.Any]] = None,
         response_format: shared.Optional[dict[str, shared.Any]] = None,
+        message_origin: shared.Optional[str] = None,
     ) -> str:
         """Create a Job entity, persist it, queue it on the pool.
 
@@ -417,6 +467,7 @@ class AdmissionOperations:
             source=source,
             profile_snapshot=profile_snapshot,
             response_format=response_format,
+            message_origin=message_origin,
             deferred_inbox=deferred_inbox,
             status=shared.JobStatus.PENDING,
             created_at=existing.created_at if existing is not None else time.time(),

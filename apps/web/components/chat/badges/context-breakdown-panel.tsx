@@ -14,7 +14,8 @@ import React, { useEffect, useMemo, useState } from "react";
 import { ArrowLeft, ChevronDown, ChevronRight, FoldVertical } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
 import { HoverTip } from "@/components/ui/tooltip";
-import { useSessionStore } from "@/lib/session-store";
+import { FillIcon } from "@/components/ui/fill-icon";
+import { selectViewRows, useSessionStore } from "@/lib/session-store";
 import { cn } from "@/lib/utils";
 import {
   CHECK_SLOT_PAD,
@@ -357,9 +358,10 @@ export function ContextBreakdownPanel({ sessionId, headId, onClose }: Props) {
   const recentlyCompacted = useSessionStore((s) => {
     if (!sessionId) return false;
     const order = s.messageOrder[sessionId] || [];
+    const rows = selectViewRows(sessionId)(s);
     let hasNewMessage = false;
     for (let i = order.length - 1; i >= 0; i -= 1) {
-      const message = s.messagesById[order[i]];
+      const message = rows[order[i]];
       if (!message) continue;
       if (message.role === "user" || message.role === "assistant") {
         hasNewMessage = true;
@@ -455,7 +457,7 @@ export function ContextBreakdownPanel({ sessionId, headId, onClose }: Props) {
       className={cn(itemCls(false), "w-full text-left text-text-muted",
         !canCompact && "cursor-default opacity-50 hover:bg-transparent")}
     >
-      <FoldVertical />
+      <FillIcon><FoldVertical /></FillIcon>
       <span className="flex-1">
         {compacting ? text("Compacting…", "正在压缩…") : text("Compact conversation", "压缩对话")}
       </span>
@@ -494,7 +496,7 @@ export function ContextBreakdownPanel({ sessionId, headId, onClose }: Props) {
             onClick={() => { setView(null); setHovered(null); }}
             className={cn(itemCls(false), "w-full text-left")}
           >
-            <ArrowLeft />
+            <FillIcon><ArrowLeft /></FillIcon>
             <span className="min-w-0 flex-1 truncate text-text-bright">{current.label}</span>
             <Trailing value={`${fmt(current.tokens)} · ${pct(current.tokens, totalUsed)}`} />
           </button>

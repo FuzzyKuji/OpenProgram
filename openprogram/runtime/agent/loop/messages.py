@@ -87,40 +87,6 @@ def bash_execution_to_text(msg: BashExecutionMessage) -> str:
     return text
 
 
-def create_branch_summary_message(summary: str, from_id: str, timestamp: str) -> BranchSummaryMessage:
-    from datetime import datetime
-    ts = int(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp() * 1000)
-    return BranchSummaryMessage(summary=summary, from_id=from_id, timestamp=ts)
-
-
-def create_compaction_summary_message(
-    summary: str,
-    tokens_before: int,
-    timestamp: str,
-) -> CompactionSummaryMessage:
-    from datetime import datetime
-    ts = int(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp() * 1000)
-    return CompactionSummaryMessage(summary=summary, tokens_before=tokens_before, timestamp=ts)
-
-
-def create_custom_message(
-    custom_type: str,
-    content: str | list[dict[str, Any]],
-    display: bool,
-    details: Any,
-    timestamp: str,
-) -> CustomMessage:
-    from datetime import datetime
-    ts = int(datetime.fromisoformat(timestamp.replace("Z", "+00:00")).timestamp() * 1000)
-    return CustomMessage(
-        custom_type=custom_type,
-        content=content,
-        display=display,
-        details=details,
-        timestamp=ts,
-    )
-
-
 def convert_to_llm(messages: list[Any]) -> list[dict[str, Any]]:
     """
     Transform AgentMessages (including custom types) to LLM-compatible messages.

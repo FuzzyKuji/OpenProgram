@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Sidebar Luma prototype</title>
+<meta name="description" content="Interactive prototype of the Luma sidebar.">
 <style>
   /* ===== Real tokens: apps/web/app/styles/themes/beige-light.css / beige-dark.css ===== */
   :root, [data-theme="light"] {
@@ -173,14 +174,13 @@
   </div>
 </div>
 
-<p class="note">
-  Every version is a <code>variant</code> the official <code>Sidebar</code> component ships; rows, group labels, sub-lists and the footer use the official metrics at a 14px root
+<p class="note">Every version is a <code>variant</code> the official <code>Sidebar</code> component ships; rows, group labels, sub-lists and the footer use the official metrics at a 14px root
   (row 31.5 / sub row 28 / radius 10.5 / icon 16).
-  <b>D</b> (shipped) drops the page to the deep tone and floats all three columns as cards.
-  <b>B</b> makes the rails the same borderless white raised card as the input box (<code>--bg-input</code> + <code>shadow-raised</code>, 7px gutter, 14px corners);
+  <b>D</b> (shipped) drops the page to the deep tone and floats all three columns as cards.</p>
+<p class="note"><b>B</b> makes the rails the same borderless white raised card as the input box (<code>--bg-input</code> + <code>shadow-raised</code>, 7px gutter, 14px corners);
   <b>A</b> keeps the current deeper cream + hairline shell and only swaps the row metrics;
   <b>C</b> floats the centre column and sinks the rails. Switch theme and ring to compare.
-</p>
+  The shipped kit is Nova and the current rail geometry is in <a href="sidebars-resizing.html">Sidebar widths and collapsed state</a>; this page compares the Luma variants.</p>
 
 <div class="stage">
   <p class="cap" id="cap"></p>

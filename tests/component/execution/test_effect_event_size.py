@@ -7,7 +7,6 @@ executions.db by several copies of every conversation.
 from __future__ import annotations
 
 import json
-from contextlib import closing
 
 from openprogram.runtime.execution.attempts import AttemptStore
 from openprogram.runtime.execution.effects import EffectClassification, EffectStatus, EffectStore
@@ -26,7 +25,7 @@ def test_effect_events_leave_the_context_on_the_effect_row(tmp_path):
     attempts = AttemptStore(executions)
     leased, reserved = attempts.lease(
         "exec", expected_version=execution.status_version,
-        owner_id="worker", ttl_seconds=30, attempt_id="attempt",
+        owner_id="worker", attempt_id="attempt",
     )
     attempts.activate(
         "attempt", generation=leased.generation,
@@ -47,11 +46,10 @@ def test_effect_events_leave_the_context_on_the_effect_row(tmp_path):
     )
 
     assert effects.get("eff").metadata["payload"]["context"] == context
-    with closing(executions._connect()) as connection:
-        rows = connection.execute(
-            "SELECT kind, payload_json FROM execution_events "
-            "WHERE execution_id = 'exec' AND kind LIKE 'effect.%'"
-        ).fetchall()
+    rows = executions._connect().rows(
+        "execution_events", execution_id="exec", order="sequence",
+        where=lambda row: row["kind"].startswith("effect."),
+    )
     assert [row["kind"] for row in rows] == [
         "effect.planned", "effect.dispatched", "effect.committed",
     ]
@@ -60,40 +58,3 @@ def test_effect_events_leave_the_context_on_the_effect_row(tmp_path):
         assert metadata == {"kind": "provider"}
         assert len(row["payload_json"]) < 5_000
 
-
-def test_upgrading_drops_the_context_older_events_copied(tmp_path):
-    import sqlite3
-
-    path = tmp_path / "executions.db"
-    executions = ExecutionStore(path)
-    revision = executions.create_revision(manifest={"entrypoint": "fixture"})
-    executions.create_execution(
-        execution_id="exec", run_id="run", session_id="session",
-        revision_id=revision.revision_id, capabilities=CapabilitySet(),
-    )
-    old_event = {"effect": {
-        "effect_id": "eff", "status": "committed",
-        "metadata": {"kind": "provider", "payload": {"context": "x" * 50_000}},
-    }}
-    with closing(sqlite3.connect(path)) as connection:
-        sequence = connection.execute(
-            "SELECT max(sequence) FROM execution_events WHERE execution_id = 'exec'"
-        ).fetchone()[0]
-        connection.execute(
-            "UPDATE execution_events SET kind = 'effect.committed', payload_json = ? "
-            "WHERE sequence = ?",
-            (json.dumps(old_event), sequence),
-        )
-        connection.execute("PRAGMA user_version = 15")
-        connection.commit()
-
-    ExecutionStore(path)
-
-    with closing(sqlite3.connect(path)) as connection:
-        payload = json.loads(connection.execute(
-            "SELECT payload_json FROM execution_events WHERE sequence = ?", (sequence,)
-        ).fetchone()[0])
-        version = connection.execute("PRAGMA user_version").fetchone()[0]
-    assert payload["effect"]["metadata"] == {"kind": "provider"}
-    assert payload["effect"]["status"] == "committed"
-    assert version == SCHEMA_VERSION

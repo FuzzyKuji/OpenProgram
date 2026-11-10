@@ -1,235 +1,120 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram theme system</title>
-<style>
-  :root {
-    --page: #f4f2ec;
-    --panel: #fffefa;
-    --ink: #252522;
-    --muted: #6f6d67;
-    --line: #d9d5cc;
-    --accent: #c15f3c;
-    --accent-soft: #f2ddd4;
-    --ok: #557a5d;
-    --code: #242422;
-    --code-ink: #eceae3;
-    --radius: 12px;
-    font-family: Inter, ui-sans-serif, system-ui, -apple-system, "PingFang SC", sans-serif;
-    color-scheme: light;
-  }
-  * { box-sizing: border-box; }
-  html { scroll-behavior: smooth; }
-  body { margin: 0; background: var(--page); color: var(--ink); line-height: 1.58; }
-  a { color: var(--accent); }
-  code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .9em; }
-  .shell { display: grid; grid-template-columns: 220px minmax(0, 980px); gap: 36px; max-width: 1280px; margin: 0 auto; padding: 40px 28px 88px; }
-  nav { position: sticky; top: 24px; align-self: start; }
-  nav strong { display: block; font-size: 14px; margin-bottom: 10px; }
-  nav a { display: block; padding: 6px 8px; border-radius: 7px; color: var(--muted); text-decoration: none; font-size: 13px; }
-  nav a:hover, nav a:focus-visible { color: var(--ink); background: var(--panel); outline: none; }
-  main { min-width: 0; }
-  header { padding: 8px 0 30px; border-bottom: 1px solid var(--line); }
-  h1 { margin: 0 0 8px; font-size: clamp(32px, 5vw, 50px); letter-spacing: -.035em; line-height: 1.05; }
-  h2 { margin: 0 0 14px; font-size: 25px; letter-spacing: -.02em; }
-  h3 { margin: 0 0 8px; font-size: 16px; }
-  p { margin: 0 0 12px; }
-  .lede { max-width: 760px; color: var(--muted); font-size: 16px; }
-  .meta { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 18px; }
-  .tag { padding: 4px 9px; border-radius: 999px; background: var(--panel); border: 1px solid var(--line); font-size: 12px; }
-  section { padding-top: 52px; }
-  .callout { padding: 18px 20px; background: var(--accent-soft); border-left: 3px solid var(--accent); border-radius: 0 var(--radius) var(--radius) 0; }
-  .flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 10px; margin-top: 22px; }
-  .flow article { position: relative; padding: 16px; min-height: 132px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-  .flow article:not(:last-child)::after { content: "→"; position: absolute; right: -11px; top: 48%; z-index: 2; color: var(--muted); }
-  .kicker { display: block; color: var(--accent); font: 600 11px/1.3 ui-monospace, monospace; letter-spacing: .04em; text-transform: uppercase; }
-  .flow p { margin: 8px 0 0; color: var(--muted); font-size: 13px; }
-  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-  .card { padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
-  .card p, .card li { color: var(--muted); font-size: 14px; }
-  ul { margin: 8px 0 0; padding-left: 20px; }
-  table { width: 100%; border-collapse: collapse; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; display: table; }
-  th, td { padding: 12px 14px; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; font-size: 13px; }
-  th { color: var(--muted); font-weight: 600; background: #eeece5; }
-  tr:last-child td { border-bottom: 0; }
-  .yes { color: var(--ok); font-weight: 650; }
-  .no { color: #9b4b3c; font-weight: 650; }
-  .token-groups { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-  .token-group { padding: 16px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
-  .token-group code { display: block; color: var(--muted); margin-top: 4px; overflow-wrap: anywhere; }
-  .demo-toolbar { display: flex; gap: 6px; flex-wrap: wrap; margin: 0 0 14px; }
-  .demo-toolbar button { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel); color: var(--ink); cursor: pointer; }
-  .demo-toolbar button[aria-pressed="true"] { background: var(--accent); border-color: var(--accent); color: #fff; }
-  .demo-toolbar button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }
-  .theme-demo { --d-bg:#191918; --d-panel:#252523; --d-text:#b8b5ad; --d-bright:#f0efea; --d-muted:#757370; --d-line:rgba(255,255,255,.1); --d-action:#d97757; --d-action-fg:#fff; --d-focus:rgba(240,239,234,.5); padding: 18px; background: var(--d-bg); color: var(--d-text); border-radius: var(--radius); }
-  .theme-demo[data-demo-theme="beige-light"] { --d-bg:#faf9f5; --d-panel:#fff; --d-text:#3d3d3a; --d-bright:#141413; --d-muted:#91908c; --d-line:#dedcd1; --d-action:#c15f3c; --d-focus:rgba(20,20,19,.45); }
-  .theme-demo[data-demo-theme="dark"] { --d-bg:#1e1e20; --d-panel:#252529; --d-text:#b6b6bb; --d-bright:#ededf0; --d-muted:#74747c; --d-line:rgba(255,255,255,.12); --d-action:#3b82f6; --d-focus:rgba(237,237,240,.5); }
-  .theme-demo[data-demo-theme="light"] { --d-bg:#fff; --d-panel:#f5f5f7; --d-text:#3a3a40; --d-bright:#131317; --d-muted:#8c8c94; --d-line:#dcdce2; --d-action:#2563eb; --d-focus:rgba(19,19,23,.45); }
-  .theme-demo[data-demo-theme="aurora"] { --d-bg:#171528; --d-panel:#241f3d; --d-text:#c4c0e0; --d-bright:#f2f0ff; --d-muted:#7b77a0; --d-line:rgba(180,165,255,.18); --d-action:#35b8a4; --d-action-fg:#0d1a1a; --d-focus:rgba(99,220,255,.6); }
-  .demo-strip { height: 40px; display: flex; gap: 7px; align-items: center; border-bottom: 1px solid var(--d-line); }
-  .demo-tab { height: 28px; padding: 0 12px; display: inline-flex; align-items: center; border-radius: 8px 8px 0 0; color: var(--d-muted); }
-  .demo-tab.active { color: var(--d-bright); background: var(--d-panel); outline: 2px solid var(--d-focus); outline-offset: -2px; }
-  .demo-content { display: grid; grid-template-columns: 1fr auto; gap: 14px; align-items: center; padding: 20px 4px 4px; }
-  .demo-content strong { color: var(--d-bright); }
-  .demo-content small { display: block; color: var(--d-muted); margin-top: 3px; }
-  .demo-action { border: 0; border-radius: 8px; padding: 8px 12px; background: var(--d-action); color: var(--d-action-fg); }
-  pre { padding: 16px 18px; background: var(--code); color: var(--code-ink); border-radius: var(--radius); overflow: auto; font-size: 12px; line-height: 1.6; }
-  .status-list { list-style: none; padding: 0; }
-  .status-list li { display: grid; grid-template-columns: 110px 1fr; gap: 14px; padding: 9px 0; border-bottom: 1px solid var(--line); }
-  .status-list strong { font-size: 13px; }
-  .status-list span { color: var(--muted); font-size: 13px; }
-  @media (max-width: 900px) { .shell { grid-template-columns: 1fr; } nav { position: static; display: flex; flex-wrap: wrap; } nav strong { width: 100%; } nav a { display: inline-block; } .flow { grid-template-columns: 1fr; } .flow article:not(:last-child)::after { content: "↓"; right: 18px; top: auto; bottom: -15px; } .token-groups { grid-template-columns: 1fr 1fr; } }
-  @media (max-width: 620px) { .shell { padding: 24px 16px 64px; } .grid, .token-groups { grid-template-columns: 1fr; } table { display: block; overflow-x: auto; white-space: nowrap; } .status-list li { grid-template-columns: 1fr; gap: 2px; } }
-  @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
-</style>
-</head>
-<body>
-<div class="shell">
-  <nav aria-label="Document sections">
-    <strong>Theme system</strong>
-    <a href="#contract">Design boundaries</a>
-    <a href="#flow">Settings to components</a>
-    <a href="#tokens">Token contract</a>
-    <a href="#preview">Three theme packs</a>
-    <a href="#frameworks">Option comparison</a>
-    <a href="#acceptance">Acceptance</a>
-    <a href="#status">Implementation status</a>
-  </nav>
-  <main>
-    <header>
-      <span class="kicker">OpenProgram / Web UI</span>
-      <h1>Themes are complete data sets; components read semantic tokens only</h1>
-      <p class="lede">This answers three questions: where themes are selected and persisted, which surfaces a setting affects, and how theme additions or edits avoid updating only some components, windows or states.</p>
-      <div class="meta"><span class="tag">Audience: Web / Desktop implementers</span><span class="tag">Status: current specification</span><span class="tag">Scope: colors, fonts and cross-window themes</span></div>
-    </header>
+<title>Theme system</title>
+<meta name="description" content="Themes are complete sets of token values; components read semantic tokens only.">
+<h1>Theme system</h1>
 
-    <section id="contract">
-      <h2>Design boundaries</h2>
-      <div class="callout"><strong>CSS custom properties remain the sole runtime mechanism.</strong> Do not introduce JS theme objects, CSS-in-JS or a second component skin system. Built-in themes must provide identical token sets; components must not branch on specific theme names such as <code>dark</code>, <code>light</code> .</div>
-      <div class="grid" style="margin-top:14px">
-        <article class="card"><h3>Included</h3><ul><li>Appearance and Font in Settings</li><li>First frame, React hydration and system color-scheme changes</li><li>Main window, desktop overlays and new windows</li><li>Surfaces, text, borders, states, focus, composer and DAG</li></ul></article>
-        <article class="card"><h3>Excluded</h3><ul><li>Changing component dimensions, layouts or interaction logic</li><li>Automatically rewriting saved user CSS overlays</li><li>Business logic conditional on theme names</li><li>Forcing application themes onto syntax highlighting or website content</li></ul></article>
-      </div>
-    </section>
+<p id="contract">CSS custom properties are the only runtime mechanism. Every built-in theme provides the same token set, and components never branch on a theme name.</p>
 
-    <section id="flow">
-      <h2>How settings affect components</h2>
-      <div class="flow">
-        <article><span class="kicker">1 · Select</span><h3>Settings</h3><p>Appearance has four layers: Mode, named theme pack, accent color and CSS overlay. Font options come from <code>font-pref.ts</code>.</p></article>
-        <article><span class="kicker">2 · Persist</span><h3>Browser preference</h3><p>Schema 3 writes to <code>agentic_theme_style</code> + <code>agentic_theme_mode</code>; accent and overlay belong to the same preferences family. Fonts also maintain a cookie for the first frame.</p></article>
-        <article><span class="kicker">3 · Apply</span><h3>HTML attributes</h3><p>The first-frame script and hook set <code>data-theme</code>, <code>data-custom-css</code>, accent tokens and <code>--font-sans</code>.</p></article>
-        <article><span class="kicker">4 · Resolve</span><h3>Complete token files</h3><p>Every theme pack defines the same token contract; accent overrides only three accent tokens; CSS overlays apply on top of the current pack.</p></article>
-        <article><span class="kicker">5 · Consume</span><h3>All components</h3><p>The Tailwind bridge, CSS modules and desktop overlays all read tokens without checking specific theme names.</p></article>
-      </div>
-    </section>
+<table class="stack">
+<thead><tr><th scope="col">Covers</th><th scope="col">Leaves alone</th></tr></thead>
+<tbody>
+<tr><td>Appearance and Font in Settings</td><td>Component dimensions, layout, interaction</td></tr>
+<tr><td>First frame, React hydration, system colour-scheme changes</td><td>Saved user CSS overlays (never auto-rewritten beyond the selector migration)</td></tr>
+<tr><td>Main window, desktop overlays, new windows</td><td>Business logic</td></tr>
+<tr><td>Surfaces, text, borders, states, focus, composer, DAG</td><td>Syntax highlighting, website content</td></tr>
+</tbody>
+</table>
 
-    <section id="diagnostics">
-      <h2>Diagnosing intermittent theme switches</h2>
-      <p>Desktop startup and system color-scheme updates prefer the complete valid <code>theme-prefs.json</code>  preferences saved by the main UI. Legacy browser-storage migration is used only when the file is missing or its mode/style is invalid. Raw browser-database byte scans cannot identify the latest record, must not override valid desktop preferences and must not restore cleared accent colors. After loading, the web page uses its own localStorage as authority and synchronizes the desktop cache.</p>
-      <p>The desktop main page records successful message-send times, first-screen initialization, settings changes, system color events, cross-window preference synchronization and HTML theme-attribute changes. Records contain only timestamps, fixed event names, theme enums and system light/dark state, excluding chat content, page URLs, CSS and user paths. Under desktop userData, <code>theme-events.json</code>  retains at most 64 records; write failures do not affect theme rendering. The log identifies the source of intermittent switches and does not establish that unknown triggers are fixed.</p>
-    </section>
+<h2 id="flow">From setting to component</h2>
+<ol>
+<li><strong>Select.</strong> Appearance: Mode (Auto, Light, Dark), theme pack, accent colour, CSS overlay. Font options come from <code translate="no">font-pref.ts</code>.</li>
+<li><strong>Persist.</strong> Schema 3: <code translate="no">agentic_theme_style</code> + <code translate="no">agentic_theme_mode</code>; <code translate="no">agentic_theme_accent</code>; <code translate="no">agentic_custom_css_enabled</code>; <code translate="no">agentic_tabrow_color</code>. Fonts also keep a cookie for the first frame.</li>
+<li><strong>Apply.</strong> The first-frame script and hook set <code translate="no">data-theme</code>, <code translate="no">data-custom-css</code>, accent tokens and <code translate="no">--font-sans</code>.</li>
+<li><strong>Resolve.</strong> The pack's token file. Accent overrides three tokens; the overlay sits on top.</li>
+<li><strong>Consume.</strong> The Tailwind bridge, CSS modules and desktop overlays read tokens.</li>
+</ol>
+<p class="note">Entry points: <code translate="no">apps/web/lib/prefs/appearance/theme-pref.ts</code>, <code translate="no">apps/web/app/globals.css</code>, <code translate="no">apps/web/app/styles/themes/</code>.</p>
 
-    <section id="tokens">
-      <h2>Complete token contract</h2>
-      <p>Theme files provide values; components define usage. The same purpose uses the same token name across every theme.</p>
-      <div class="token-groups">
-        <article class="token-group"><h3>Surface</h3><code>--bg-primary / secondary / tertiary</code><code>--bg-input / hover / selected</code><code>--surface-popover / tooltip</code></article>
-        <article class="token-group"><h3>Text</h3><code>--text-bright / primary</code><code>--text-secondary / muted</code><code>--nav-color / hover</code></article>
-        <article class="token-group"><h3>Boundary &amp; depth</h3><code>--border / border-light</code><code>--border-popover</code><code>--shadow-* / --scrim-*</code></article>
-        <article class="token-group"><h3>Action &amp; status</h3><code>--theme-accent</code><code>--theme-accent-fill / fill-hover</code><code>--accent-green / red / yellow</code><code>--success-soft / warning-soft / danger-soft</code></article>
-        <article class="token-group"><h3>Interaction</h3><code>--selection-bg / --focus-ring</code><code>--chip-bg / --chip-ring</code><code>--meter-fill / --meter-track</code></article>
-        <article class="token-group"><h3>Component-owned roles</h3><code>--composer-surface / shadow / filter</code><code>--provider-icon-bg</code><code>--dag-ghost</code></article>
-      </div>
-      <table style="margin-top:18px">
-        <thead><tr><th>Setting</th><th>Direct state</th><th>Affected scope</th><th>Prohibited</th></tr></thead>
-        <tbody>
-          <tr><td>Appearance</td><td><code>data-theme</code></td><td>Backgrounds, text, borders, shadows, state colors, tab focus, composer, popover, DAG and desktop overlays</td><td>Writing component-level <code>[data-theme="light"]</code></td></tr>
-          <tr><td>Accent</td><td><code>--accent-orange</code> / fill / hover</td><td>Primary-action color, selection borders and link colors on desktop error pages and directory listings</td><td>Adding a fourth accent token name</td></tr>
-          <tr><td>Font</td><td><code>--font-sans</code></td><td>body, button, input, select, textarea and optgroup, except explicit mono regions</td><td>Redeclaring system font stacks in ordinary components</td></tr>
-          <tr><td>CSS overlay</td><td><code>#user-custom-css</code> + <code>data-custom-css</code></td><td>Optional snippet over the current theme pack; unspecified values still come from that pack</td><td>Turning overlay into a fourth skin card</td></tr>
-        </tbody>
-      </table>
-      <table style="margin-top:18px">
-        <thead><tr><th>Theme families</th><th>Theme</th><th>Primary color</th><th>Scope</th></tr></thead>
-        <tbody>
-          <tr><td>Beige</td><td><code>beige-dark</code> / <code>beige-light</code></td><td>Orange / coral</td><td>Same component roles; only theme values change</td></tr>
-          <tr><td>Neutral</td><td><code>dark</code> / <code>light</code></td><td>Blue</td><td>Default Button, primary-action fills, selected states, links and accent borders</td></tr>
-          <tr><td>Aurora</td><td><code>aurora</code> / <code>aurora-light</code></td><td>Teal</td><td>Same component roles, with dark foreground for filled-element contrast</td></tr>
-          <tr><td>Vivid</td><td><code>vivid</code> / <code>vivid-light</code></td><td>Follows the tab-strip colour</td><td>Beige panels; the top tab strip takes a colour from Chrome's colour set, picked in Settings (<code>--tabrow-seed</code>), a pale tone of it in light mode; panels, text and the default accent derive from the same hue</td></tr>
-        </tbody>
-      </table>
-    </section>
+<h2 id="preview">Theme packs</h2>
+<table class="stack">
+<thead><tr><th scope="col">Pack</th><th scope="col"><code translate="no">data-theme</code></th><th scope="col"><code translate="no">--bg-primary</code></th><th scope="col"><code translate="no">--accent-fill</code></th><th scope="col">Primary</th></tr></thead>
+<tbody>
+<tr><th scope="row">Beige</th><td><code translate="no">beige-dark</code><br><code translate="no">beige-light</code></td><td><code translate="no">#191918</code><br><code translate="no">#fbfaf8</code></td><td><code translate="no">#d97757</code><br><code translate="no">#c15f3c</code></td><td>Orange</td></tr>
+<tr><th scope="row">Neutral</th><td><code translate="no">dark</code><br><code translate="no">light</code></td><td><code translate="no">#1e1e20</code><br><code translate="no">#ffffff</code></td><td><code translate="no">#3b82f6</code><br><code translate="no">#2563eb</code></td><td>Blue</td></tr>
+<tr><th scope="row">Aurora</th><td><code translate="no">aurora</code><br><code translate="no">aurora-light</code></td><td><code translate="no">#171528</code><br><code translate="no">#fbfaff</code></td><td><code translate="no">#35b8a4</code><br><code translate="no">#0f766e</code></td><td>Teal, dark foreground on fills</td></tr>
+<tr><th scope="row">Vivid</th><td><code translate="no">vivid</code><br><code translate="no">vivid-light</code></td><td colspan="2"><code translate="no">oklch</code> tones of <code translate="no">--tabrow-seed</code></td><td>Follows the tab-strip colour</td></tr>
+</tbody>
+</table>
+<p class="note">Vivid has Beige's panel layout. The strip colour is its own setting from Chrome's colour set, a pale tone of it in light mode. <code translate="no">custom</code> and <code translate="no">custom-light</code> remain as fallback ids and CSS files for old snippets, not as cards; <code translate="no">custom-light.css</code> matches beige-light.</p>
 
-    <section id="preview">
-      <h2>Built-in themes share one component structure</h2>
-      <div class="demo-toolbar" role="group" aria-label="Preview theme">
-        <button type="button" data-theme-button="beige-dark" aria-pressed="true">Warm dark</button>
-        <button type="button" data-theme-button="beige-light" aria-pressed="false">Warm light</button>
-        <button type="button" data-theme-button="dark" aria-pressed="false">Dark</button>
-        <button type="button" data-theme-button="light" aria-pressed="false">Light</button>
-        <button type="button" data-theme-button="aurora" aria-pressed="false">Aurora</button>
-      </div>
-      <div class="theme-demo" id="theme-demo" data-demo-theme="beige-dark">
-        <div class="demo-strip"><span class="demo-tab">New chat</span><span class="demo-tab active">Browser</span><span class="demo-tab">Terminal</span></div>
-        <div class="demo-content"><div><strong>Same tab, text hierarchy and button purposes</strong><small>Themes replace token values, not component structure or behavior.</small></div><button class="demo-action" type="button" tabindex="-1">Primary action</button></div>
-      </div>
-    </section>
+<h2 id="tokens">Token contract</h2>
+<p>Theme files give values, components define use, and one purpose has one token name in every theme.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Group</th><th scope="col">Tokens</th></tr></thead>
+<tbody>
+<tr><th scope="row">Surface</th><td><code translate="no">--bg-primary/secondary/tertiary</code> <code translate="no">--bg-input/hover/selected</code> <code translate="no">--surface-popover/tooltip</code></td></tr>
+<tr><th scope="row">Text</th><td><code translate="no">--text-bright/primary/secondary/muted</code> <code translate="no">--nav-color/hover</code></td></tr>
+<tr><th scope="row">Boundary, depth</th><td><code translate="no">--border</code> <code translate="no">--border-light</code> <code translate="no">--border-popover</code> <code translate="no">--shadow-*</code> <code translate="no">--scrim-*</code></td></tr>
+<tr><th scope="row">Action, status</th><td><code translate="no">--theme-accent</code> <code translate="no">--theme-accent-fill/fill-hover</code> <code translate="no">--accent-green/red/yellow</code> <code translate="no">--success-soft</code> <code translate="no">--warning-soft</code> <code translate="no">--danger-soft</code></td></tr>
+<tr><th scope="row">Interaction</th><td><code translate="no">--selection-bg</code> <code translate="no">--focus-ring</code> <code translate="no">--chip-bg/ring</code> <code translate="no">--meter-fill/track</code></td></tr>
+<tr><th scope="row">Component roles</th><td><code translate="no">--composer-surface/shadow</code> <code translate="no">--provider-icon-bg</code> <code translate="no">--dag-ghost</code></td></tr>
+</tbody>
+</table>
 
-    <section id="frameworks">
-      <h2>Implementation comparison</h2>
-      <table>
-        <thead><tr><th>Option</th><th>Adopted</th><th>Rationale and boundaries</th><th>Missing capability</th></tr></thead>
-        <tbody>
-          <tr><td>CSS custom properties + <code>data-theme</code></td><td class="yes">Adopted</td><td>Native cascading covers Web, CSS modules, Tailwind arbitrary values and same-origin desktop overlays.</td><td>CSS alone cannot validate missing theme tokens, so add a static contract check.</td></tr>
-          <tr><td>Tailwind <code>@theme</code></td><td class="yes">As a bridge</td><td>Expose CSS tokens as utility names without storing another set of color values.</td><td>Cannot dynamically generate CSS imports; a check script aligns theme files with TS ids.</td></tr>
-          <tr><td>JavaScript theme object / Context</td><td class="no">Rejected</td><td>Duplicates color values and cannot naturally cover native CSS, the first frame or Electron overlays.</td><td>No runtime per-component theme props.</td></tr>
-          <tr><td>Component-level <code>[data-theme]</code>  branches</td><td class="no">Rejected</td><td>New themes would inevitably miss edits; theme files should provide component-role tokens instead.</td><td>Components must not know built-in theme ids.</td></tr>
-          <tr><td><code>light-dark()</code> Only color-scheme</td><td class="no">Rejected</td><td>Expresses only light and dark, not the three Beige, Neutral and Aurora packs.</td><td>Keep explicit values for each theme.</td></tr>
-        </tbody>
-      </table>
-      <p style="margin-top:12px;color:var(--muted);font-size:13px">Specification basis:<a href="https://www.w3.org/TR/css-variables-1/">CSS Custom Properties Level 1</a>, <a href="https://www.w3.org/TR/css-color-adjust-1/#color-scheme-prop">CSS Color Adjustment color-scheme</a>. Existing implementation entry points: <code>apps/web/lib/prefs/appearance/theme-pref.ts</code>, <code>apps/web/app/globals.css</code>  and <code>apps/web/app/styles/themes/</code>.</p>
-    </section>
+<table class="stack">
+<thead><tr><th scope="col">Setting</th><th scope="col">Sets</th><th scope="col">Reaches</th><th scope="col">Never</th></tr></thead>
+<tbody>
+<tr><th scope="row">Appearance</th><td><code translate="no">data-theme</code></td><td>Backgrounds, text, borders, shadows, states, tab focus, composer, popovers, DAG, desktop overlays</td><td>Component-level <code translate="no">[data-theme="light"]</code></td></tr>
+<tr><th scope="row">Accent</th><td><code translate="no">--accent-orange</code> <code translate="no">--accent-fill</code> <code translate="no">--accent-orange-hover</code></td><td>Primary actions, selection borders, link colour on desktop error pages and directory listings. Empty means the pack's default.</td><td>A fourth accent token</td></tr>
+<tr><th scope="row">Font</th><td><code translate="no">--font-sans</code></td><td>body, button, input, select, textarea, optgroup, except explicit mono regions</td><td>System font stacks in ordinary components</td></tr>
+<tr><th scope="row">CSS overlay</th><td><code translate="no">#user-custom-css</code> + <code translate="no">data-custom-css</code></td><td>Sits on the current pack, behind the Enable switch; unset values come from the pack. Old <code translate="no">[data-theme=custom]</code> selectors are rewritten to <code translate="no">data-custom-css</code>.</td><td>A separate skin card</td></tr>
+</tbody>
+</table>
 
-    <section id="acceptance">
-      <h2>Acceptance criteria</h2>
-      <ul class="status-list">
-        <li><strong>Theme list</strong><span>Settings displays only Beige / Neutral / Aurora / Vivid; check scripts establish agreement between CSS imports, theme files and allowed desktop overlay values.</span></li>
-        <li><strong>Complete tokens</strong><span>Six built-in themes (three packs × light/dark) provide the same token set;<code>custom-light.css</code>  is only a legacy-snippet fallback with values matching beige-light.</span></li>
-        <li><strong>Pages in the centre card</strong><span>The App shell marks non-chat routes (<code>.page-col</code>) and non-chat panes (<code>[data-page-surface]</code>). A theme may restate <code>--bg-secondary</code>, <code>--bg-tertiary</code> and the tokens derived from them on <code>:root</code> for those scopes; beige-light sets them to the chat's <code>#fbfaf8</code> and a <code>#f3f1ec</code> control fill, so pages read as the chat does while the window frame, rails and chat pane keep the theme values.</span></li>
-        <li><strong>Accent color</strong><span>An independent picker overrides <code>--accent-orange</code> / <code>--accent-fill</code> / <code>--accent-orange-hover</code>; an empty value uses the current pack default. Desktop error-page and directory-listing link colors follow the override, while the window background remains the pack's <code>--bg-primary</code>.</span></li>
-        <li><strong>CSS overlay</strong><span>User CSS overlays the current pack, gated by the Enable switch; legacy <code>[data-theme=custom]</code>  selectors are rewritten to <code>data-custom-css</code>.</span></li>
-        <li><strong>Component isolation</strong><span>Outside theme files, no component CSS branches on specific built-in theme names.</span></li>
-        <li><strong>Cross-window consistency</strong><span>All six theme-pack ids pass unchanged to desktop overlays; desktop window backgrounds use that theme's <code>--bg-primary</code>.</span></li>
-        <li><strong>Font consistency</strong><span>Ordinary text and native form controls inherit the same <code>--font-sans</code>, with explicit exceptions for mono regions.</span></li>
-        <li><strong>Primary-color matrix</strong><span>Neutral light/dark themes use blue, Beige uses orange, Aurora uses teal, and Vivid follows its tab-strip colour; pack-default accents continue to come from CSS files.</span></li>
-        <li><strong>Active desktop tab</strong><span>In dark mode, the tab bar's <code>--tab-active-bg</code>  blends the content background with 12% white, shared by ordinary tabs and split groups. The selected background remains stable on hover; light mode and browser tabs retain the content background.</span></li>
-        <li><strong>Visible acceptance</strong><span>Inspect the main window, tabs, composer, popovers and desktop overlays in dark, light and aurora using the default installed App.</span></li>
-      </ul>
-    </section>
+<details>
+<summary id="focus">Focus, active tab, pages in the centre card</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Text entry, native select</th><td>One existing border in the accent colour on focus: no outline, offset ring, box-shadow or size change. Search and composer wrappers own the border; their inner editor has none. Navigation, checkboxes, radios, sliders and embedded third-party surfaces keep their own keyboard focus.</td></tr>
+<tr><th scope="row">Active desktop tab</th><td>In dark mode <code translate="no">--tab-active-bg</code> mixes the content background with 12% white, for ordinary tabs and split groups, stable on hover. Light mode and browser tabs use the content background.</td></tr>
+<tr><th scope="row">Pages in the centre card</th><td>The shell marks non-chat routes (<code translate="no">.page-col</code>) and panes (<code translate="no">[data-page-surface]</code>). A theme may restate <code translate="no">--bg-secondary</code>, <code translate="no">--bg-tertiary</code> and their derivatives for those scopes: beige-light uses <code translate="no">#fbfaf8</code> and <code translate="no">#f3f1ec</code>, so pages read like the chat while the frame, rails and chat pane keep theme values.</td></tr>
+<tr><th scope="row">Desktop window</th><td>All theme ids pass unchanged to overlays; the window background is the pack's <code translate="no">--bg-primary</code> even with an accent override.</td></tr>
+</tbody>
+</table>
+</details>
 
-    <p>Text-entry controls and native selects use one existing border in the theme accent color on focus. Focus adds no outline, offset ring or box-shadow frame and does not change control dimensions. Search and composer wrappers own their boundary; their inner editor stays borderless. Navigation, checkboxes, radios, sliders and embedded third-party document surfaces retain their own keyboard-focus treatments.</p>
+<details>
+<summary id="diagnostics">Diagnosing intermittent theme switches</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Desktop source of truth</th><td>A complete valid <code translate="no">theme-prefs.json</code> from the main UI. Legacy browser-storage migration runs only when the file is missing or its mode or style is invalid. Raw browser-database scans cannot find the latest record, so they never override it or restore a cleared accent.</td></tr>
+<tr><th scope="row">After load</th><td>The web page's localStorage is the authority and syncs the desktop cache</td></tr>
+<tr><th scope="row">Event log</th><td><code translate="no">theme-events.json</code> under desktop userData, at most 64 records: message sends, first-screen init, settings changes, system colour events, cross-window sync, HTML attribute changes</td></tr>
+<tr><th scope="row">Log contents</th><td>Timestamps, fixed event names, theme enums, system light or dark. No chat content, URLs, CSS or user paths. Write failures do not affect rendering.</td></tr>
+<tr><th scope="row">Limit</th><td>The log identifies a switch's source; it does not establish that an unknown trigger is fixed</td></tr>
+</tbody>
+</table>
+</details>
 
-    <section id="status">
-      <h2>Implementation status</h2>
-      <div class="card">
-        <p><strong>The current implementation uses Obsidian-style Appearance: Mode × named theme pack × accent color × CSS overlay.</strong></p>
-        <p>Schema 3's <code>THEME_STYLE_PAIRS</code>  remains the light/dark matrix of Beige / Neutral / Aurora / Vivid. Custom is no longer a fourth style card; existing <code>custom</code> / <code>custom-light</code>  migrates to beige, saved CSS enables the overlay, and old selectors are rewritten to <code>data-custom-css</code>. Accent color persists independently and overrides only three accent tokens. Composer, provider icons and DAG consume role tokens only. Desktop BrowserWindow backgrounds still use the pack's <code>--bg-primary</code>; error-page and directory-listing links use the accent override when present. Theme-contract checks are included in the complete Web checks.</p>
-      </div>
-    </section>
-  </main>
-</div>
-<script>
-  const demo = document.getElementById('theme-demo');
-  const buttons = [...document.querySelectorAll('[data-theme-button]')];
-  for (const button of buttons) {
-    button.addEventListener('click', () => {
-      demo.dataset.demoTheme = button.dataset.themeButton;
-      for (const item of buttons) item.setAttribute('aria-pressed', String(item === button));
-    });
-  }
-</script>
-<p>Windows tests use Node.js fileURLToPath to convert module URLs into local paths, avoiding an extra slash before drive paths; theme behavior and assertions remain unchanged.</p>
-</body>
-</html>
+<details>
+<summary id="frameworks">Options compared</summary>
+<table class="stack">
+<thead><tr><th scope="col">Option</th><th scope="col">Use</th><th scope="col">Why, and what it lacks</th></tr></thead>
+<tbody>
+<tr><th scope="row">CSS custom properties + <code translate="no">data-theme</code></th><td>Adopted</td><td>Cascades through Web, CSS modules, Tailwind arbitrary values and same-origin overlays. Cannot catch a missing token, hence the static check.</td></tr>
+<tr><th scope="row">Tailwind <code translate="no">@theme</code></th><td>Bridge only</td><td>Names tokens as utilities without a second set of values. Cannot generate imports; a script aligns theme files with TS ids.</td></tr>
+<tr><th scope="row">JS theme object, Context</th><td>Rejected</td><td>Duplicates values; misses native CSS, the first frame and Electron overlays</td></tr>
+<tr><th scope="row">Component <code translate="no">[data-theme]</code> branches</th><td>Rejected</td><td>Each new theme would miss edits</td></tr>
+<tr><th scope="row"><code translate="no">light-dark()</code></th><td>Rejected</td><td>Expresses only light and dark, not named packs</td></tr>
+</tbody>
+</table>
+<p class="note">Basis: <a href="https://www.w3.org/TR/css-variables-1/">CSS Custom Properties Level 1</a>, <a href="https://www.w3.org/TR/css-color-adjust-1/#color-scheme-prop">CSS Color Adjustment color-scheme</a>.</p>
+</details>
+
+<h2 id="acceptance">Acceptance</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Area</th><th scope="col">Requirement</th></tr></thead>
+<tbody>
+<tr><th scope="row">Settings</th><td>Lists Beige, Neutral, Aurora and Vivid</td></tr>
+<tr><th scope="row">Web checks</th><td><code translate="no">apps/web/scripts/settings/check-theme-contract.mjs</code> keeps CSS imports, theme files and allowed overlay values in agreement and every built-in theme on one token set</td></tr>
+<tr><th scope="row">Component CSS</th><td>Outside theme files, no branch on a built-in theme name</td></tr>
+<tr><th scope="row">Fonts</th><td>Ordinary text and native form controls inherit one <code translate="no">--font-sans</code></td></tr>
+<tr><th scope="row">Accents</th><td>Pack defaults come from the CSS files</td></tr>
+<tr><th scope="row">Installed App</th><td>Inspect the main window, tabs, composer, popovers and overlays in dark, light and aurora</td></tr>
+<tr><th scope="row">Windows tests</th><td>Node's <code translate="no">fileURLToPath</code> converts module URLs, avoiding an extra slash before drive paths</td></tr>
+</tbody>
+</table>
+
+<h2 id="status">Implementation status</h2>
+<p>Implemented: Mode × theme pack × accent × overlay, with <code translate="no">THEME_STYLE_PAIRS</code> as the light and dark matrix. Stored <code translate="no">custom</code> and <code translate="no">custom-light</code> migrate to beige, and saved CSS turns the overlay on. Composer, provider icons and DAG use role tokens only. Desktop first-paint details: <a href="unification-work.html#desktop-chrome">Desktop chrome</a>.</p>

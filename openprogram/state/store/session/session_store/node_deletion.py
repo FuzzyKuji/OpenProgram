@@ -7,8 +7,8 @@ in place. The pieces a node owns go with it: everything hung off it by
 call spawned). What merely came after it in the conversation stays and
 moves up.
 
-Nothing is unlinked at once. The node files move to a trash folder
-outside the session repo together with a journal of every edge, HEAD
+Nothing is unlinked at once. The node records move to a trash folder
+outside the session directory together with a journal of every edge, HEAD
 and branch-name change, so ``restore_deleted_nodes`` can put the graph
 back exactly. Trash older than ``TRASH_TTL`` is purged on the next
 delete in the same store.
@@ -64,11 +64,11 @@ class NodeDeletionOperations:
             pair = self._open(session_id)
             if pair is None:
                 raise NodeDeletionError(f"unknown session {session_id!r}")
-            git, idx = pair
-            with self._head_file_lock(git):
-                return self._delete_locked(session_id, git, idx, targets)
+            session_log, idx = pair
+            with self._head_file_lock(session_log):
+                return self._delete_locked(session_id, session_log, idx, targets)
 
-    def _delete_locked(self, session_id, git, idx, targets) -> dict:
+    def _delete_locked(self, session_id, session_log, idx, targets) -> dict:
         nodes = idx.nodes_by_id
         for nid in targets:
             node = nodes.get(nid)
@@ -136,15 +136,8 @@ class NodeDeletionOperations:
 
         op_id = shared.uuid.uuid4().hex[:12]
         trash = self._trash_root(session_id) / op_id
-        (trash / "history").mkdir(parents=True, exist_ok=True)
-        hist = git.path / "history"
-        moved = []
-        for nid in doomed:
-            for fpath in hist.glob(f"*-{nid}.json"):
-                os.replace(fpath, trash / "history" / fpath.name)
-                moved.append(fpath.name)
-        for row in reparented:
-            self._rewrite_predecessor(hist, row["id"], row["new"])
+        trash.mkdir(parents=True, exist_ok=True)
+        removed_nodes = [nodes[nid].to_dict() for nid in doomed if nid in nodes]
 
         journal = {
             "op_id": op_id,
@@ -152,7 +145,7 @@ class NodeDeletionOperations:
             "created_at": shared.time.time(),
             "targets": targets,
             "deleted": list(doomed),
-            "files": moved,
+            "nodes": removed_nodes,
             "reparented": reparented,
             "head": {"old": old_head, "new": new_head},
             "branch_moves": branch_moves,
@@ -161,10 +154,14 @@ class NodeDeletionOperations:
             trash / "journal.json",
             shared.json.dumps(journal, ensure_ascii=False, default=str))
 
+        session_log.delete_nodes(list(doomed))
+        for row in reparented:
+            session_log.patch_node(row["id"], {"predecessor": row["new"]})
+
         meta = dict(idx.meta)
         meta["branches"] = branches
         meta["head_id"] = new_head
-        self._commit_rebuild(git, idx, meta)
+        self._commit_rebuild(session_log, idx, meta)
         if new_head is None and old_head in doomed:
             tips = self.list_branches(session_id)
             if tips:
@@ -174,7 +171,7 @@ class NodeDeletionOperations:
                 shared.atomic_write_text(
                     trash / "journal.json",
                     shared.json.dumps(journal, ensure_ascii=False, default=str))
-                self._commit_rebuild(git, idx, meta)
+                self._commit_rebuild(session_log, idx, meta)
         return journal
 
     def restore_deleted_nodes(self, session_id: str, op_id: str) -> dict:
@@ -195,17 +192,16 @@ class NodeDeletionOperations:
             pair = self._open(session_id)
             if pair is None:
                 raise NodeDeletionError(f"unknown session {session_id!r}")
-            git, idx = pair
-            with self._head_file_lock(git):
-                hist = git.path / "history"
-                hist.mkdir(parents=True, exist_ok=True)
-                for name in journal.get("files") or []:
-                    src = trash / "history" / name
-                    if src.is_file() and not (hist / name).exists():
-                        os.replace(src, hist / name)
+            session_log, idx = pair
+            with self._head_file_lock(session_log):
+                for payload in journal.get("nodes") or []:
+                    if payload.get("id") not in idx.nodes_by_id:
+                        session_log.write_history(payload.get("seq", -1), payload.get("role", ""),
+                                          payload.get("id"), payload)
                 for row in journal.get("reparented") or []:
-                    self._rewrite_predecessor(
-                        hist, row["id"], row["old"], only_if=row["new"])
+                    node = idx.nodes_by_id.get(row["id"])
+                    if node is not None and node.predecessor == row["new"]:
+                        session_log.patch_node(row["id"], {"predecessor": row["old"]})
                 meta = dict(idx.meta)
                 meta["head_id"] = idx.head_id
                 head = journal.get("head") or {}
@@ -218,31 +214,17 @@ class NodeDeletionOperations:
                         branches.pop(to)
                     branches.setdefault(move["from"], move.get("entry"))
                 meta["branches"] = branches
-                self._commit_rebuild(git, idx, meta)
+                self._commit_rebuild(session_log, idx, meta)
         shutil.rmtree(trash, ignore_errors=True)
         return journal
 
-    def _rewrite_predecessor(self, hist, node_id, value, *, only_if=_ANY) -> None:
-        """Point ``node_id``'s history file at ``value``; with ``only_if``,
-        only while it still points where this op left it."""
-        for fpath in hist.glob(f"*-{node_id}.json"):
-            try:
-                payload = shared.json.loads(fpath.read_text(encoding="utf-8"))
-            except (OSError, ValueError):
-                continue
-            if only_if is not _ANY and payload.get("predecessor") != only_if:
-                continue
-            payload["predecessor"] = value
-            shared.atomic_write_text(
-                fpath, shared.json.dumps(payload, ensure_ascii=False, default=str))
-
-    def _commit_rebuild(self, git, idx, meta: dict) -> None:
-        """Write ``meta`` and rebuild the index from the history on disk."""
+    def _commit_rebuild(self, session_log, idx, meta: dict) -> None:
+        """Write ``meta`` and rebuild the index from the log."""
         with idx._persist_lock:
-            git.write_meta(meta)
-            idx.rebuild_from_paths(
-                git.list_history(), meta,
+            session_log.write_meta(meta)
+            idx.rebuild(
+                session_log.list_history(), meta,
                 shared._node_conv_predecessor, shared._node_caller,
             )
-            git.mark_synced()
+            session_log.mark_synced()
 

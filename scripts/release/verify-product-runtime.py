@@ -11,6 +11,7 @@ import io
 import json
 import os
 import platform
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -108,12 +109,15 @@ def _probe_rich_terminal() -> None:
         raise RuntimeError("built-in Rich terminal UI probe failed")
 
 
-def _probe_ink_terminal(root: Path) -> tuple[str, str]:
-    """Verify the self-contained Node + Ink frontend shipped in the runtime."""
+def _probe_ink_terminal(root: Path, tui: Path | None = None) -> tuple[str, str]:
+    """Verify the self-contained Node + Ink frontend shipped in the runtime.
+
+    A sealed version carries its own bundle, given as ``tui``.
+    """
     node_relative = "bin/node.exe" if os.name == "nt" else "bin/node"
     node = _relative_file(root, node_relative, "bundled Node.js")
     entry_relative = "assets/tui/index.cjs"
-    entry = _relative_file(root, entry_relative, "bundled Ink TUI")
+    entry = tui if tui is not None else _relative_file(root, entry_relative, "bundled Ink TUI")
     if sys.platform.startswith("linux"):
         pty_smoke = _relative_file(
             root,
@@ -187,6 +191,7 @@ def _probe(
     expected_openprogram_version: object,
     *,
     browser: bool = True,
+    tui: Path | None = None,
 ) -> dict[str, dict[str, object]]:
     _verify_openprogram_version(expected_openprogram_version)
     if os.name != "nt":
@@ -221,7 +226,7 @@ def _probe(
 
     _probe_pdf_tools()
     _probe_rich_terminal()
-    _probe_ink_terminal(root)
+    _probe_ink_terminal(root, tui)
 
     _probe_macos_window_control()
 
@@ -251,6 +256,75 @@ def _probe(
     return result
 
 
+def _git_launch_environment(root: Path) -> dict[str, str]:
+    """This process's environment with the bundled Git added the way launchers add it.
+
+    A PATH that already names the bundled Git keeps its order, so a launcher
+    that put another Git in front of it fails the check below.
+    """
+    git = root / "git"
+    command_directory = git / ("cmd" if os.name == "nt" else "bin")
+    environment = dict(os.environ)
+    existing = environment.get("PATH", "")
+    entries = [entry for entry in existing.split(os.pathsep) if entry]
+    if command_directory not in {Path(entry).resolve() for entry in entries}:
+        environment["PATH"] = os.pathsep.join([str(command_directory), *entries])
+    if os.name != "nt":
+        environment.setdefault("GIT_EXEC_PATH", str(git / "libexec" / "git-core"))
+        environment.setdefault("GIT_TEMPLATE_DIR", str(git / "share" / "git-core" / "templates"))
+    return environment
+
+
+def _probe_git(root: Path) -> None:
+    """The runtime carries the Git the product runs, and `git` selects it."""
+    bundled = _relative_dir(root, "git", "bundled Git")
+    environment = _git_launch_environment(root)
+    found = shutil.which("git", path=environment["PATH"])
+    if found is None or not Path(found).resolve().is_relative_to(bundled):
+        raise RuntimeError(f"bundled Git is not first on PATH: git resolves to {found}")
+
+    def run(*arguments: str) -> str:
+        result = subprocess.run([found, *arguments], capture_output=True, text=True, env=environment, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"bundled Git does not run: {result.stderr.strip() or result.stdout.strip()}")
+        return result.stdout.strip()
+
+    if not run("--version").startswith("git version"):
+        raise RuntimeError("bundled Git did not report a version")
+    if not Path(run("--exec-path")).resolve().is_relative_to(bundled):
+        raise RuntimeError("bundled Git runs helper programs from outside the runtime")
+    with tempfile.TemporaryDirectory(prefix="openprogram-git-probe-") as temp_dir:
+        run("init", "--quiet", temp_dir)
+        if not (Path(temp_dir) / ".git" / "HEAD").is_file():
+            raise RuntimeError("bundled Git could not create a repository")
+
+
+def _probe_compiled_import() -> None:
+    """A compiled package loads through this Python, signed or built on this machine.
+
+    A signed macOS Python refuses a module its signature does not vouch for,
+    unless library validation is off. Packages built on the user's machine are
+    only ever ad-hoc signed, so one is reproduced here.
+    """
+    module = importlib.import_module("_cffi_backend")
+    compiled = Path(getattr(module, "__file__", "") or "")
+    if compiled.suffix not in {".so", ".pyd"}:
+        raise RuntimeError(f"expected a compiled package, got: {compiled}")
+    if platform.system() != "Darwin":
+        return
+    with tempfile.TemporaryDirectory(prefix="openprogram-import-probe-") as temp_dir:
+        copy = Path(temp_dir) / compiled.name
+        shutil.copy2(compiled, copy)
+        subprocess.run(["codesign", "--force", "--sign", "-", "--timestamp=none", str(copy)],
+                       check=True, capture_output=True, timeout=30)
+        source = (f"import sys; sys.path.insert(0, {temp_dir!r}); import _cffi_backend as m; "
+                  f"assert m.__file__.startswith({temp_dir!r}), m.__file__")
+        result = subprocess.run([sys.executable, "-I", "-B", "-c", source],
+                                capture_output=True, text=True, timeout=30)
+        if result.returncode != 0:
+            raise RuntimeError(f"this Python refuses a module built on this machine: {result.stderr.strip()}")
+
+
 def _read_json(path: Path) -> dict:
     payload = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(payload, dict):
@@ -267,6 +341,13 @@ def main() -> int:
     parser.add_argument("--uv-version")
     parser.add_argument("--defer-browser", action="store_true")
     parser.add_argument("--allow-deferred-browser", action="store_true")
+    parser.add_argument("--probe-only", action="store_true",
+                        help="Probe a base through a version's venv; write and require no manifest")
+    parser.add_argument("--tui", type=Path, help="The version's terminal UI bundle")
+    parser.add_argument("--require-git", action="store_true",
+                        help="With --write: fail unless this runtime carries its own Git")
+    parser.add_argument("--compiled-import-only", action="store_true",
+                        help="Check only that this Python loads compiled packages, for use after signing")
     args = parser.parse_args()
 
     root = args.runtime_root.resolve()
@@ -275,6 +356,19 @@ def main() -> int:
     product = _read_json(product_path)
     if product.get("schema") != 1:
         raise RuntimeError("unsupported product manifest schema")
+
+    if args.compiled_import_only:
+        _probe_compiled_import()
+        print(f"verified compiled packages load through {sys.executable}")
+        return 0
+
+    if args.probe_only:
+        if not args.openprogram_version or args.tui is None:
+            parser.error("--probe-only requires --openprogram-version and --tui")
+        _probe_git(root)
+        _probe(root, product, args.openprogram_version, tui=args.tui.resolve())
+        print(f"verified base through this version's environment: {root}")
+        return 0
 
     manifest_path = root / "runtime-manifest.json"
     if args.write:
@@ -285,6 +379,11 @@ def main() -> int:
         _relative_file(root, args.python_relative, "managed Python")
         if args.allow_deferred_browser:
             parser.error("--allow-deferred-browser is only valid while checking an artifact")
+        # A release build always requires Git. An installed runtime refreshed in
+        # place predates it and keeps using the machine's Git until it is rebuilt.
+        bundled_git = args.require_git or (root / "git").is_dir()
+        if bundled_git:
+            _probe_git(root)
         capabilities = _probe(root, product, args.openprogram_version, browser=not args.defer_browser)
         node_relative = "bin/node.exe" if os.name == "nt" else "bin/node"
         tui_relative = "assets/tui/index.cjs"
@@ -313,6 +412,8 @@ def main() -> int:
                 "tui": tui_relative,
             },
         }
+        if bundled_git:
+            manifest["assets"]["git"] = "git"
         if (root / "assets" / "office").is_dir():
             manifest["assets"]["office"] = "assets/office"
         worker_relative = "OpenProgram.app/Contents/MacOS/OpenProgram"
@@ -347,6 +448,8 @@ def main() -> int:
         lock_digest = hashlib.sha256(lock_path.read_bytes()).hexdigest()
         if manifest.get("product_lock_sha256") != lock_digest:
             raise RuntimeError("product dependency lock hash mismatch")
+        if (manifest.get("assets") or {}).get("git"):
+            _probe_git(root)
         declared_office = (manifest.get("assets") or {}).get("office")
         if declared_office and not (root / declared_office).is_dir():
             raise RuntimeError("declared Office asset pack is missing")

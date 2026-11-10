@@ -12,8 +12,9 @@ Wire format::
 
 The store does the splice and keeps the journal
 (``session_store/node_deletion.py``); this layer only refuses while a
-turn runs, re-syncs the server's head/message cache, and tells every
-client to reload the session so transcript and graph both redraw.
+turn runs and re-syncs the server's head/message cache. The transcript
+publisher tells every open view its window went stale, so transcript and
+graph both redraw.
 """
 from __future__ import annotations
 
@@ -29,10 +30,6 @@ def _after_graph_change(session_id: str, head_after) -> None:
     # conv["messages"] (invalidating alone leaves the deleted rows in it).
     _s._set_active_head(session_id, head_after)
     _s.refresh_context_stats(session_id)
-    _s._broadcast(json.dumps({
-        "type": "session_reload",
-        "data": {"session_id": session_id, "reason": "delete_nodes"},
-    }, default=str))
 
 
 async def _run(ws, cmd: dict, reply_type: str, op) -> None:

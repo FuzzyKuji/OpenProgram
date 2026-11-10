@@ -34,6 +34,7 @@ _FUNCTION_BODY_CONTROL_KEYS = {
     "response_format",
     "window_id",
     "surface_ref",
+    "client_request_id",
 }
 
 
@@ -110,8 +111,15 @@ def register(app):
             return JSONResponse(
                 content={"error": "session_id required"}, status_code=400,
             )
+        was_archived = bool((default_db().get_session(session_id) or {}).get("archived"))
         if not default_db().set_archived(session_id, archived):
             return JSONResponse(content={"error": "unknown session"}, status_code=404)
+        if archived != was_archived:
+            from openprogram.runtime.conversation.always_on.runtime import archive_changed
+            await asyncio.to_thread(archive_changed, session_id, archived)
+        if archived:
+            from openprogram.programs.applications.browser.tabs import close_conversation_tabs_soon
+            close_conversation_tabs_soon(session_id)
         with _s._sessions_lock:
             conv = _s._sessions.get(session_id)
             if conv is not None:
@@ -262,6 +270,10 @@ def register(app):
             dispatch_options["origin_window_id"] = effective_window_id
         if surface_ref:
             dispatch_options["surface_ref"] = surface_ref
+        from openprogram.interfaces.server.ws_actions.chat.turn_request import client_request_id_of
+        request_id = client_request_id_of(body)
+        if request_id:
+            dispatch_options["client_request_id"] = request_id
         result = run_agent_method_call(
             name,
             kwargs,
@@ -284,6 +296,7 @@ def run_agent_method_call(
     origin_window_id: str | None = None,
     surface_ref: dict | None = None,
     retry_of: str | None = None,
+    client_request_id: str | None = None,
 ) -> dict:
     """Dispatch an Agent method via the forced tool-call path and
     return ``{"session_id", "msg_id"}`` (or ``{"error", "status_code",
@@ -553,6 +566,8 @@ def run_agent_method_call(
                     and isinstance(surface_ref.get("tab_id"), str)
                     else ""
                 )
+                if client_request_id:
+                    _node.metadata["client_request_id"] = client_request_id
                 if _origin_window:
                     _surface_origin = {
                         "version": 1,
@@ -655,7 +670,7 @@ def run_agent_method_call(
         try:
             _pending_node_writer.append(_pending_node)
         except BaseException as exc:
-            _adapter.fail_admission(_admission, reason_code="execution_record_failed")
+            _adapter.fail_admission(_admission, reason_code="execution_record_failed", failure_text=f"{type(exc).__name__}: {exc}")
             _terminalize_pending_node("execution_record_failed", str(exc))
             _s._release_run_reservation(session_id, msg_id)
             return {
@@ -735,7 +750,7 @@ def run_agent_method_call(
                 else:
                     out = {"ok": True, "result": out}
             except BaseException as e:  # noqa: BLE001
-                _adapter.fail_admission(_admission, reason_code="agent_runner_error")
+                _adapter.fail_admission(_admission, reason_code="agent_runner_error", failure_text=f"{type(e).__name__}: {e}")
                 _terminalize_pending_node("agent_runner_error", str(e))
                 _s._broadcast_chat_response(session_id, msg_id, {
                     "type": "error",
@@ -777,7 +792,7 @@ def run_agent_method_call(
         worker = threading.Thread(target=_run, daemon=True)
     except BaseException as exc:
         _adapter.fail_admission(
-            _admission, reason_code="agent_runner_error",
+            _admission, reason_code="agent_runner_error", failure_text=f"{type(exc).__name__}: {exc}",
         )
         _terminalize_pending_node("agent_runner_error", str(exc))
         _s._release_run_reservation(session_id, msg_id)
@@ -788,7 +803,7 @@ def run_agent_method_call(
         }
 
     if not _s._activate_run_reservation(session_id, msg_id, worker):
-        _adapter.fail_admission(_admission, reason_code="agent_runner_error")
+        _adapter.fail_admission(_admission, reason_code="agent_runner_error", failure_text="function reservation was lost")
         _terminalize_pending_node("agent_runner_error", "function reservation was lost")
         _s._release_run_reservation(session_id, msg_id)
         return {
@@ -799,7 +814,7 @@ def run_agent_method_call(
     try:
         _s._emit_running_task_event(session_id)
     except BaseException as exc:
-        _adapter.fail_admission(_admission, reason_code="function_handoff_failed")
+        _adapter.fail_admission(_admission, reason_code="function_handoff_failed", failure_text=f"{type(exc).__name__}: {exc}")
         _terminalize_pending_node("function_handoff_failed", str(exc))
         if _s._finish_owned_run(session_id, msg_id):
             _s._emit_running_task_event(
@@ -814,7 +829,7 @@ def run_agent_method_call(
         worker.start()
     except BaseException as exc:  # thread creation/start must roll back occupancy
         _adapter.fail_admission(
-            _admission, reason_code="agent_runner_error",
+            _admission, reason_code="agent_runner_error", failure_text=f"{type(exc).__name__}: {exc}",
         )
         _terminalize_pending_node("agent_runner_error", str(exc))
         if _s._finish_owned_run(session_id, msg_id):

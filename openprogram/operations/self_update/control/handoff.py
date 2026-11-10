@@ -19,14 +19,12 @@ def release_prepared_update(
     record = target.load_active()
     if record is None or record.state.phase is not UpdatePhase.PREPARING:
         return None
-    if (
-        record.request.session_id != session_id
-        or record.request.origin_assistant_id != assistant_id
-    ):
+    if record.request.origin_assistant_id != assistant_id:
         return None
     return target.transition(
         record.request.update_id,
-        UpdatePhase.STAGING,
+        # An undo to a retained version, or a prebuilt release, has nothing to build.
+        UpdatePhase.TRIAL if record.request.candidate_version else UpdatePhase.BUILDING,
         expected_phase=UpdatePhase.PREPARING,
         detail={
             "turn_released": True,

@@ -235,7 +235,7 @@ def _durable_approval_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="dispatcher-test", ttl_seconds=30,
+        owner_id="dispatcher-test",
     )
     attempt, execution = attempts.activate(
         leased.attempt_id, generation=leased.generation,
@@ -599,7 +599,8 @@ def test_approval_denied_aborts_tool_before_execution(
     finally:
         reset_preapproved_wait_id(token)
     assert result.is_error is True
-    assert "denied" in result.content[0].text
+    assert result.content[0].text.startswith("[blocked by mode]")
+    assert "you declined it" in result.content[0].text
     assert not fired.is_set()
 
 
@@ -840,7 +841,7 @@ def test_agent_spawn_bypass_hard_constraint_is_installed_in_dispatcher(
         if e["type"] == "chat_response"
         and e["data"].get("event", {}).get("type") == "tool_result"
     ]
-    assert any("hard constraint" in text and "denied" in text
+    assert any("[blocked by identity]" in text and "did not run" in text
                for text in tool_results)
 
 
@@ -1084,10 +1085,10 @@ def test_resumed_turn_releases_its_prepared_update(monkeypatch, turn_committed):
     released: list[tuple[str, str]] = []
     monkeypatch.setattr(T, "release_prepared_update",
                         lambda session_id, assistant_id: released.append((session_id, assistant_id)))
-    request = SimpleNamespace(session_id="c1", advance_head=True, source="web")
+    request = SimpleNamespace(session_id="c1", advance_head=True, source="web", last_round_text="")
     continuation = SimpleNamespace(
         request=request, assistant_message_id="a1",
-        state=SimpleNamespace(payload={"turn": {"user_message_id": "u1"}}),
+        user_message_id="u1",
     )
 
     T.execute_continuation.__wrapped__(continuation)

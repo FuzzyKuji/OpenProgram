@@ -7,6 +7,7 @@ import { describe, test } from "node:test";
 import {
   readContextBreakdownCache,
   refreshContextBreakdown,
+  warmContextBreakdown,
   writeContextBreakdownCache,
 } from "../../../lib/chat/context-breakdown-cache.ts";
 
@@ -91,4 +92,23 @@ describe("context breakdown cache", () => {
     assert.equal(await olderResult, null);
     assert.equal(readContextBreakdownCache("session-evicted-race", "head").total_used, 400);
   });
+});
+
+test("opening a conversation reads once, and a finished turn still reads again", async () => {
+  const original = globalThis.fetch;
+  let reads = 0;
+  globalThis.fetch = async () => { reads += 1; return response({ total_used: 1 }); };
+  const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
+  try {
+    warmContextBreakdown("focus-session", "h1", { focus: true });
+    await settle();
+    warmContextBreakdown("focus-session", "h1", { focus: true });
+    await settle();
+    assert.equal(reads, 1);
+    warmContextBreakdown("focus-session", "h1");
+    await settle();
+    assert.equal(reads, 2);
+  } finally {
+    globalThis.fetch = original;
+  }
 });

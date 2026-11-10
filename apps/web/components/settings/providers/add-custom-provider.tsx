@@ -1,5 +1,6 @@
 "use client";
 
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useState } from "react";
 import { Plus } from "lucide-react";
 
@@ -48,12 +49,10 @@ export function AddCustomProvider({ onCreated }: { onCreated: (id: string) => vo
     setError(null);
     setBusy(true);
     try {
-      const r = await fetch("/api/providers/custom", {
+      const d = await jsonFetch<{ ok?: boolean; error?: string; id?: string }>("/api/providers/custom", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ label: label.trim(), base_url: baseUrl.trim(), local }),
       });
-      const d = await r.json();
       if (!d.ok) {
         setError(d.error || text("Failed to create provider", "创建 Provider 失败"));
         return;

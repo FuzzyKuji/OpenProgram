@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useRef, useState } from "react";
 
-import styles from "../settings-page.module.css";
+import { SettingsPage } from "../settings-ui";
 import local from "./usage.module.css";
 import { cachedFetch } from "@/lib/prefs/settings-cache";
 import { useTranslation } from "@/lib/i18n";
@@ -359,6 +359,30 @@ function CategoryBars({
 
 // ── main component ───────────────────────────────────────────────────────────
 
+
+const USAGE_DAYS = 30;
+const DAY_SECONDS = 86_400;
+
+/** Everything on this page covers the same 30 days. The window starts on a
+ *  day boundary so the request stays cacheable, and matches the chart's. */
+function usageRequests() {
+  const today = Math.floor(Date.now() / 1000 / DAY_SECONDS);
+  const since = (today - USAGE_DAYS + 1) * DAY_SECONDS;
+  const trend = (group: string) =>
+    cachedFetch<GroupedTrendResp>(`/api/usage/trend?bucket=day&days=${USAGE_DAYS}&group=${group}`);
+  return Promise.all([
+    cachedFetch<Summary>(`/api/usage/summary?since=${since}`),
+    trend("call_kind"),
+    trend("model_id"),
+    trend("call_label"),
+  ]);
+}
+
+/** Start loading the page when Settings opens, so it appears already filled. */
+export function prefetchUsagePage(): void {
+  void usageRequests().catch(() => {});
+}
+
 export function TokenUsageSection() {
   const { t, text } = useTranslation();
   const [summary, setSummary] = useState<Summary | null>(null);
@@ -374,18 +398,7 @@ export function TokenUsageSection() {
     let alive = true;
     (async () => {
       try {
-        const [s, tKind, tModel, tLabel] = await Promise.all([
-          cachedFetch<Summary>("/api/usage/summary"),
-          cachedFetch<GroupedTrendResp>(
-            "/api/usage/trend?bucket=day&days=30&group=call_kind"
-          ),
-          cachedFetch<GroupedTrendResp>(
-            "/api/usage/trend?bucket=day&days=30&group=model_id"
-          ),
-          cachedFetch<GroupedTrendResp>(
-            "/api/usage/trend?bucket=day&days=30&group=call_label"
-          ),
-        ]);
+        const [s, tKind, tModel, tLabel] = await usageRequests();
         if (!alive) return;
         setSummary(s);
         setTrendData({
@@ -462,12 +475,7 @@ export function TokenUsageSection() {
   }, [summary, dim]);
 
   return (
-    <div className={`${styles.page} ${local.usagePage}`}>
-      <div className={styles.pageHeader}>
-        <h2 className={styles.pageTitle}>{t("settings.tab.usage")}</h2>
-        <p className={styles.pageMeta}>{t("usage.desc")}</p>
-      </div>
-      <div className={styles.pageBody}>
+    <SettingsPage title={t("settings.tab.usage")} description={t("usage.desc")} bodyClassName={local.usagePage}>
         {loading && <div className={local.muted}>{t("usage.loading")}</div>}
         {error && <div className={local.muted}>{t("usage.error")}</div>}
         {!loading && !error && totals && totals.events === 0 && (
@@ -481,6 +489,7 @@ export function TokenUsageSection() {
         {!loading && !error && totals && totals.events > 0 && (
           <>
             {/* stat cards */}
+            <h3 className={local.sectionTitle}>{text("Last 30 days", "最近 30 天")}</h3>
             <div className="grid grid-cols-[repeat(auto-fit,_minmax(120px,_1fr))] gap-[12px]">
               {cards.map((c) => (
                 <div key={c.label} className={local.card}>
@@ -507,7 +516,7 @@ export function TokenUsageSection() {
               role="tabpanel"
               aria-labelledby={`usage-breakdown-tab-${dim}`}
             >
-              <h3 className={local.sectionTitle}>{t("usage.trend")} · {text("Last 30 days", "最近 30 天")}</h3>
+              <h3 className={local.sectionTitle}>{t("usage.trend")}</h3>
               <StackedBarChart series={series} categories={categories} />
               <Legend categories={categories} />
             </div>
@@ -617,7 +626,6 @@ export function TokenUsageSection() {
             )}
           </>
         )}
-      </div>
-    </div>
+    </SettingsPage>
   );
 }

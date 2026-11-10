@@ -1,6 +1,6 @@
 'use client';
 import { useEffect, useLayoutEffect, useRef, type RefObject } from 'react';
-import { useSessionHistory } from '@/lib/chat/history/session-history';
+import { holdsHistoryWindow, useSessionHistory } from '@/lib/chat/history/session-history';
 import { startHistoryAutoload } from '@/lib/chat/history/history-autoload';
 import { captureHistoryAnchor, readHistoryAnchor, restoreHistoryAnchor, saveHistoryAnchor } from '@/lib/chat/history/history-viewport';
 import { loadSessionHistoryWindow, registerHistoryViewport } from '@/lib/runtime-bridge/session/session-history-loader';
@@ -39,7 +39,7 @@ export function useHistoryWindow(sessionId: string | null, enabled: boolean, are
     area.addEventListener('keydown',onInteract);
     void (async()=>{
       const page=useSessionHistory.getState().pages[sessionId];
-      if (saved && page?.snapshot) {
+      if (saved && holdsHistoryWindow(page)) {
         const found=useSessionStore.getState().messageOrder[sessionId]?.includes(saved.id);
         if (!found) await loadSessionHistoryWindow(sessionId,'around',saved.id,{isCurrent:()=>!stopped&&!interacted});
         if (!stopped && !interacted) restoreHistoryAnchor(area,saved);

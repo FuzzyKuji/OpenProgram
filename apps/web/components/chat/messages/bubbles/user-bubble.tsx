@@ -18,19 +18,21 @@ import { useUserProfile } from "@/lib/prefs/user-profile";
 import { MessageActions } from "./message-actions";
 import { AttachmentChips, parseAttachments } from "../attachments/user-attachments";
 import { MessageEditor } from "../editing/message-editor";
+import { RewindContextMenu } from "../../rewind/rewind-context-menu";
 import { RecordingCard } from "../../recording/recording-card";
 import { renderUserMarkdown } from "./markdown";
 import { collapsePastedSpans, pasteSentinel } from "@/lib/chat/send/paste-elements";
 import { collapseSecrets, maskSecrets, secretParts, secretSentinel } from "@/lib/chat/transcript/secret-mask";
 import { channelName, isChannelSource, speakerName, splitRoomEvent, splitRoomHistory, stripLegacySpeakerLabel } from "@/lib/chat/transcript/channel-speaker";
 import { buttonVariants } from "@/components/ui/button";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 /** Send a message that never reached the backend again, through the send
  *  queue (it goes as soon as the session is idle), in place of its row. */
 async function resend(sessionId: string, msg: ChatMsg): Promise<void> {
   const { requeueRejected, useSendQueue } = await import("@/lib/chat/send/send-queue");
   requeueRejected(sessionId, msg.content);
-  useSessionStore.getState().removeMessage(sessionId, msg.id);
+  useSessionStore.getState().applyLocalChange(sessionId, { kind: "local_remove", rowId: msg.id });
   useSendQueue.getState().drain(sessionId);
 }
 
@@ -41,7 +43,7 @@ function NotSent({ msg, sessionId, withFiles }: { msg: ChatMsg; sessionId?: stri
   return (
     <div className="user-not-sent" role="status">
       <CircleAlert size={14} aria-hidden="true" />
-      <span>{text("Not sent", "未发送")}</span>
+      <span>{text("Not sent", "未发送")}{msg.errorDetail ? `: ${msg.errorDetail}` : ""}</span>
       {sessionId && !withFiles ? (
         <button
           type="button"
@@ -101,8 +103,7 @@ function withSecrets(html: string, secrets: string[], revealed: ReadonlySet<numb
 }
 
 export function UserBubble({ msg, sessionIdOverride }: { msg: ChatMsg; sessionIdOverride?: string }) {
-  const focusedSessionId = useSessionStore(s => s.currentSessionId);
-  const sessionId = sessionIdOverride ?? focusedSessionId;
+  const sessionId = useRowSessionId(sessionIdOverride);
   const { text } = useTranslation();
   const [editing, setEditing] = useState(false);
   const profile = useUserProfile();
@@ -143,6 +144,7 @@ export function UserBubble({ msg, sessionIdOverride }: { msg: ChatMsg; sessionId
   const pending = msg.status === "pending";
   const notSent = msg.status === "error";
   return (
+    <RewindContextMenu msg={msg} sessionId={sessionId} enabled={!editing && !pending && !notSent}>
     <div
       className={"message user" + (editing ? " is-editing" : "") + (pending ? " is-pending" : "")}
       data-msg-id={msg.id}
@@ -234,5 +236,6 @@ export function UserBubble({ msg, sessionIdOverride }: { msg: ChatMsg; sessionId
         </div>
       ) : null}
     </div>
+    </RewindContextMenu>
   );
 }

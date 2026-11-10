@@ -27,6 +27,8 @@ class ActiveTurn:
     speaker_id: str
     #: 群里没点名机器人的消息 (ambient 模式): 最终回复不发到聊天里.
     ambient: bool = False
+    #: 这一轮所在的 thread (Slack 帖子 / Telegram 论坛话题), 没有就是空串.
+    thread_id: str = ""
 
 
 _lock = threading.Lock()
@@ -49,6 +51,16 @@ def end(session_key: str) -> None:
 def get(session_key: str) -> ActiveTurn | None:
     with _lock:
         return _turns.get(session_key)
+
+
+def sessions_for_peer(channel: str, account_id: str, peer_id: str) -> list[str]:
+    """Sessions running a turn that came from this chat."""
+    with _lock:
+        return [
+            session_key for session_key, turn in _turns.items()
+            if (turn.channel, turn.account_id, turn.peer_id)
+            == (channel, account_id, str(peer_id))
+        ]
 
 
 def take_send(session_key: str) -> bool:

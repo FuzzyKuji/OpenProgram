@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from typing import Any
 
-from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION, VALID_PERMISSION
+from openprogram.runtime.permissions.modes import VALID_PERMISSION, resolve_mode
 
 
 class PermissionUpdateError(ValueError):
@@ -27,8 +27,8 @@ def permission_state(session_id: str, *, db=None) -> dict[str, Any]:
             raise PermissionUpdateError("invalid_permission_state")
         return dict(state)
     from openprogram.runtime.permissions.session_facts import facts
-    mode = row.get("permission_mode") or facts().project_defaults(session_id).get("permission_mode") or DEFAULT_PERMISSION
-    return {"mode": mode if mode in VALID_PERMISSION else DEFAULT_PERMISSION, "version": 0}
+    return {"mode": resolve_mode(row.get("permission_mode"), facts().project_defaults(session_id).get("permission_mode")),
+            "version": 0}
 
 
 def update_permission(session_id: str, mode: str, expected_version: int, actor: dict, *, db=None) -> dict:
@@ -44,12 +44,22 @@ def update_permission(session_id: str, mode: str, expected_version: int, actor: 
     if db.get_session(session_id) is None:
         raise PermissionUpdateError("session_not_found")
 
+    # A conversation with no stored state is in its inherited mode.
+    inherited = permission_state(session_id, db=db)["mode"] if mode == "plan" else None
+
     def update(current):
         if current.get("principal_id", authority["principal_id"]) != authority["principal_id"]:
             raise PermissionUpdateError("permission_owner_mismatch")
         if current.get("version", 0) != expected_version:
             raise PermissionUpdateError("permission_version_conflict")
-        return {"mode": mode, "version": expected_version + 1, "principal_id": authority["principal_id"]}
+        updated = {"mode": mode, "version": expected_version + 1, "principal_id": authority["principal_id"]}
+        if mode == "plan":
+            # exit_plan_mode returns to this.
+            was = current.get("mode", inherited)
+            before = current.get("before_plan") if was == "plan" else was
+            if before in VALID_PERMISSION:
+                updated["before_plan"] = before
+        return updated
 
     result = db.update_session_dict(session_id, "permission_state", update)
     if result is None:

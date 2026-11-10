@@ -2,6 +2,8 @@
 from __future__ import annotations
 
 import asyncio
+import functools
+from contextlib import contextmanager
 
 
 
@@ -15,6 +17,7 @@ import time
 
 from typing import TYPE_CHECKING, Any, Callable, Optional
 
+from openprogram.models.providers.utils.stream_retry import retry_after_beyond_cap
 from openprogram.models.providers.structured_output import StructuredOutputError
 import logging
 
@@ -42,6 +45,36 @@ from .shared import (
     _is_permanent_error,
     _retry_sleep_seconds,
 )
+
+@contextmanager
+def _exec_usage_scope():
+    """Count a model call as Runtime work unless an outer scope already named it."""
+    from openprogram.models.usage import usage_scope
+    from openprogram.models.usage.context import current_usage_context
+    from openprogram.models.usage.event import CALL_KIND_EXEC
+
+    if current_usage_context().call_kind is not None:
+        yield
+        return
+    with usage_scope(call_kind=CALL_KIND_EXEC):
+        yield
+
+
+def _metered_exec(fn):
+    @functools.wraps(fn)
+    def wrapper(*args, **kwargs):
+        with _exec_usage_scope():
+            return fn(*args, **kwargs)
+    return wrapper
+
+
+def _metered_async_exec(fn):
+    @functools.wraps(fn)
+    async def wrapper(*args, **kwargs):
+        with _exec_usage_scope():
+            return await fn(*args, **kwargs)
+    return wrapper
+
 
 class ExecutionOperations:
     def _bind_exec_options(
@@ -115,6 +148,7 @@ class ExecutionOperations:
             if token is not None:
                 variable.reset(token)
 
+    @_metered_exec
     def exec(
         self,
         content: list[dict],
@@ -492,6 +526,7 @@ class ExecutionOperations:
                         or transport_done
                         or timed_out
                         or attempts_used >= self.max_retries
+                        or retry_after_beyond_cap(getattr(e, "retry_after_s", None))
                     ):
                         from openprogram.models.providers.utils.errors import (
                             ErrorReason as _ER,
@@ -636,6 +671,7 @@ class ExecutionOperations:
         )
 
 
+    @_metered_async_exec
     async def async_exec(
         self,
         content: list[dict],
@@ -902,6 +938,7 @@ class ExecutionOperations:
                         or transport_done
                         or timed_out
                         or attempts_used >= self.max_retries
+                        or retry_after_beyond_cap(getattr(e, "retry_after_s", None))
                     ):
                         from openprogram.models.providers.utils.errors import (
                             ErrorReason as _ER,

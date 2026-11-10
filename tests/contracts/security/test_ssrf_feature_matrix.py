@@ -26,7 +26,7 @@ def test_ssrf_matrix_evidence_matches_integrated_snapshot(matrix_path: Path) -> 
 
 
 def _replace_in_ssrf_row(text: str, old: str, new: str) -> str:
-    start = text.index("Private-network access and SSRF protection" if '<html lang="en"' in text else "私网访问与 SSRF 防护")
+    start = text.index("Private-network access and SSRF protection" if "<title>Feature matrix</title>" in text else "私网访问与 SSRF 防护")
     end = text.index("</tr>", start)
     return text[:start] + text[start:end].replace(old, new, 1) + text[end:]
 
@@ -35,7 +35,7 @@ def _replace_in_ssrf_row(text: str, old: str, new: str) -> str:
     ("old", "new", "message"),
     [
         ("be5eaa3c", "cafebabe", "SSRF snapshot"),
-        ('class="g2 us">◐', 'class="g1 us">●', "SSRF status"),
+        ("<td>◐</td>", "<td>●</td>", "SSRF status"),
     ],
 )
 def test_ssrf_matrix_checker_rejects_stale_evidence(

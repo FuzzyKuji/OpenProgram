@@ -14,11 +14,14 @@ SAFE_AUTO_ALLOWLIST = frozenset({
     "web_search", "web_fetch", "tool_search", "help",
     "todo_create", "todo_list", "todo_update", "open_work",
     "ask_user_question", "send_message", "chat_send",
-    "enter_plan_mode", "exit_plan_mode",
+    "exit_plan_mode",
     "memory_search", "memory_get", "memory_update",
     # Always-on check-ins run unattended with only these readers plus the
-    # report, which writes to the conversation and tells the user.
-    "get_goal", "read_conversation", "always_on_report",
+    # always-on tools, which write only the conversation's own report and
+    # next wake. A check-in must never need an approval for any of them.
+    "get_goal", "read_conversation", "list_agents", "always_on_report", "always_on_schedule",
+    # The owner's own turns only; a check-in is not given it.
+    "always_on_preference",
 })
 
 
@@ -28,7 +31,7 @@ def safe_call(name: str, args) -> bool:
         return True
     if name == "self_update":
         from openprogram.programs.tools.system.self_update import action_of
-        return action_of(args) == "status"
+        return action_of(args) in ("status", "versions")
     return False
 
 @dataclass(frozen=True)
@@ -69,6 +72,8 @@ async def auto_classify_tool(
     try:
         import time
         from openprogram.models.providers.streaming.stream import complete_simple
+        from openprogram.models.usage import usage_scope
+        from openprogram.models.usage.event import CALL_KIND_PERMISSION
         from openprogram.models.providers.types import (
             Context, UserMessage, SimpleStreamOptions,
         )
@@ -113,10 +118,11 @@ async def auto_classify_tool(
         last_error = ""
         for model in models:
             try:
-                result = await asyncio.wait_for(complete_simple(
-                    model, ctx,
-                    SimpleStreamOptions(temperature=0.0, max_tokens=120),
-                ), timeout=30.0)
+                with usage_scope(call_kind=CALL_KIND_PERMISSION):
+                    result = await asyncio.wait_for(complete_simple(
+                        model, ctx,
+                        SimpleStreamOptions(temperature=0.0, max_tokens=120),
+                    ), timeout=30.0)
                 text = "".join(
                     block.text for block in (result.content or [])
                     if getattr(block, "text", None)

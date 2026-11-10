@@ -7,7 +7,7 @@
  */
 import { useCallback, useEffect, useMemo, useState } from "react";
 
-import pageStyles from "../settings-page.module.css";
+import { SettingsPage } from "../settings-ui";
 import styles from "../providers/provider-pane.module.css";
 import { SearchInput } from "@/components/ui/search-input";
 import { jsonFetch } from "@/lib/net/fetch-client";
@@ -48,11 +48,11 @@ export function SearchProvidersSection() {
         return list[0]?.id ?? null;
       });
     } catch {
-      /* ignore */
+      setError(text("Could not load the search backends. Reopen this page to retry.", "无法加载搜索后端，请重新打开此页重试。"));
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [text]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -98,28 +98,22 @@ export function SearchProvidersSection() {
 
   if (loading) {
     return (
-      <div className={pageStyles.page}>
-        <div className={pageStyles.pageHeader}>
-          <h2 className={pageStyles.pageTitle}>{t("settings.tab.search")}</h2>
-        </div>
-        <div className={pageStyles.pageBody} style={{ opacity: 0.6 }}>{text("Loading...", "加载中...")}</div>
-      </div>
+      <SettingsPage title={t("settings.tab.search")}>
+        <div style={{ opacity: 0.6 }}>{text("Loading...", "加载中...")}</div>
+      </SettingsPage>
     );
   }
 
   return (
-    <div className={pageStyles.page}>
-      <div className={pageStyles.pageHeader}>
-        <h2 className={pageStyles.pageTitle}>{t("settings.tab.search")}</h2>
-        <p className={pageStyles.pageMeta}>
-          {text(
-            "Pick which backend handles web_search calls. Tavily / Exa / Brave / Perplexity need an API key; DuckDuckGo and SearXNG work zero-config as fallbacks.",
-            "选择由哪个后端处理 web_search 调用。Tavily / Exa / Brave / Perplexity 需要 API key；DuckDuckGo 和 SearXNG 可作为零配置 fallback。",
-          )}
-        </p>
-      </div>
+    <SettingsPage
+      title={t("settings.tab.search")}
+      description={text(
+        "Pick which backend handles web_search calls. Tavily / Exa / Brave / Perplexity need an API key; DuckDuckGo and SearXNG work zero-config as fallbacks.",
+        "选择由哪个后端处理 web_search 调用。Tavily / Exa / Brave / Perplexity 需要 API key；DuckDuckGo 和 SearXNG 可作为零配置 fallback。",
+      )}
+      bodyClassName="gap-0 overflow-hidden p-0"
+    >
       {error && <p role="alert">{error}</p>}
-      <div className={`${pageStyles.pageBody} ${styles.pageBodyTwoPane}`}>
         <div className={styles.providersLayout}>
           <div className={styles.providersSidebar}>
             <div className="p-[0_0_8px]">
@@ -181,7 +175,6 @@ export function SearchProvidersSection() {
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </SettingsPage>
   );
 }

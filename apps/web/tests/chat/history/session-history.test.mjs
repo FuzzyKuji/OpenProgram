@@ -10,16 +10,16 @@ const root = dirname(fileURLToPath(new URL('../../../package.json', import.meta.
 const dir = scratchDir(root, "history-test");
 await build({absWorkingDir:root,stdin:{contents:`
 export {loadOlderSessionHistory,loadSessionData} from './lib/runtime-bridge/session/conversations';
-export {seedHistoryWindow,loadSessionHistoryWindow,registerHistoryViewport,retrySessionHistory} from './lib/runtime-bridge/session/session-history-loader';
+export {seedTurnWindow,loadSessionHistoryWindow,registerHistoryViewport,retrySessionHistory} from './lib/runtime-bridge/session/session-history-loader';
 export {runtimeState,setSocket} from './lib/runtime-bridge/state';
-export {useSessionStore} from './lib/session-store';
+export {useSessionStore,selectRow} from './lib/session-store';
 export {createHistoryFragmentDecoder} from './lib/net/ws/history-fragments';
-export {registerSessionHistory,updateSessionHistory,useSessionHistory} from './lib/chat/history/session-history';
+export {holdsHistoryWindow,registerSessionHistory,updateSessionHistory,useSessionHistory} from './lib/chat/history/session-history';
 export {peekTakeLatest,lastSettledTakeLatest} from './lib/chat/history/chat-scroll';
 export {setFollowLock} from './lib/chat/history/history-viewport';
 `,resolveDir:root},bundle:true,format:'esm',platform:'node',packages:'external',tsconfig:join(root,'tsconfig.json'),outfile:join(dir,'test.mjs')});
 const fragment=(decoder,data)=>decoder.receive(JSON.stringify({type:'history_fragment',data}));
-const {peekTakeLatest,lastSettledTakeLatest,setFollowLock,registerHistoryViewport,retrySessionHistory,seedHistoryWindow,loadSessionHistoryWindow,loadOlderSessionHistory,loadSessionData,runtimeState,setSocket,useSessionStore,createHistoryFragmentDecoder,registerSessionHistory,updateSessionHistory,useSessionHistory}=await import(pathToFileURL(join(dir,'test.mjs')));
+const {seedTurnWindow,peekTakeLatest,lastSettledTakeLatest,setFollowLock,registerHistoryViewport,retrySessionHistory,loadSessionHistoryWindow,loadOlderSessionHistory,loadSessionData,runtimeState,setSocket,useSessionStore,selectRow,createHistoryFragmentDecoder,registerSessionHistory,updateSessionHistory,useSessionHistory,holdsHistoryWindow}=await import(pathToFileURL(join(dir,'test.mjs')));
 test('large Unicode response is dispatched only when all ordered fragments arrive',()=>{
  const decoder=createHistoryFragmentDecoder();
  const original=JSON.stringify({type:'session_loaded',data:{id:'s',messages:['中文😀'.repeat(500000)]}});
@@ -45,68 +45,51 @@ test('old history response cannot change a reloaded or different conversation',(
  assert.equal(useSessionHistory.getState().pages.b.before,'old-b');
 });
 
-test('public older-page load preserves live rows and rejects a page after reload',async()=>{
- class Socket extends EventTarget {
-  static OPEN=1;readyState=1;sent=[];
-  send(text){this.sent.push(JSON.parse(text));}
- }
- globalThis.WebSocket=Socket;
- globalThis.window ??= new EventTarget();
+function turnSocket(){
+ class Socket extends EventTarget { static OPEN=1;readyState=1;sent=[];send(text){const m=JSON.parse(text);if(m.action!=='close_view')this.sent.push(m);} }
+ globalThis.WebSocket=Socket;globalThis.window ??= new EventTarget();
  const ws=new Socket();setSocket(ws);
- runtimeState.currentSessionId='other';
- runtimeState.conversations.s={id:'s',messages:[{id:'live',role:'assistant',content:'old'}]};
- useSessionStore.getState().setMessages('s',[{id:'live',role:'assistant',content:'streamed newest',status:'running'}]);
- registerSessionHistory('s',{head_id:'head',before:'live'});
- const load=loadOlderSessionHistory('s');
- const request=ws.sent.at(-1);
- ws.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{
-  id:'s',action:'load_session',request_id:request.request_id,
-  messages:[{id:'old',role:'user',content:'earlier'}],history:{head_id:'head',before:null},
- }})}));
- await load;
- assert.deepEqual(useSessionStore.getState().messageOrder.s,['old','live']);
- assert.equal(useSessionStore.getState().messagesById.live.content,'streamed newest');
+ const reply=(data)=>ws.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{action:'load_session',request_id:ws.sent.at(-1).request_id,...data}})}));
+ return {ws,reply};
+}
+const turn=(id,fields={})=>({id,rows:[{id,role:'assistant',rowKind:'assistant',content:`${id} from the page`,status:'done',...fields}]});
+const turnWindow=(start,end,total,extra={})=>({head_id:'head',revision:4,start,end,total,before:start?`t${start}`:null,after:end<total?`t${end-1}`:null,...extra});
+function openTurns(id,turns,window,rows=turns.flatMap(t=>t.rows)){
+ runtimeState.currentSessionId='other';runtimeState.conversations[id]={id};
+ useSessionStore.getState().applyRead(id,rows);seedTurnWindow(id,turns,window);registerSessionHistory(id,window);
+}
+test('an older page lands before the held rows, and a page answering an earlier read is dropped',async()=>{
+ const {ws,reply}=turnSocket();const id='older-first';
+ openTurns(id,[turn('t10')],turnWindow(10,11,20,{before:'t10'}));
+ const load=loadOlderSessionHistory(id);
+ reply({id,turns:[turn('t9')],window:turnWindow(9,10,20)});
+ assert.equal(await load,undefined);
+ assert.deepEqual(useSessionStore.getState().messageOrder[id],['t9','t10']);
  assert.equal(runtimeState.currentSessionId,'other');
- registerSessionHistory('s',{head_id:'head',before:'old'});
- const stale=loadOlderSessionHistory('s');const staleRequest=ws.sent.at(-1);
- registerSessionHistory('s',{head_id:'different',before:'new-before'});
- ws.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{
-  id:'s',action:'load_session',request_id:staleRequest.request_id,
-  messages:[{id:'stale',role:'user',content:'wrong'}],history:{head_id:'head',before:null},
- }})}));
+ const stale=loadOlderSessionHistory(id);
+ registerSessionHistory(id,turnWindow(10,11,20,{before:'t10',revision:9}));
+ reply({id,turns:[turn('stale')],window:turnWindow(8,9,20)});
  await stale;
- assert.equal(useSessionStore.getState().messagesById.stale,undefined);
- assert.equal(useSessionHistory.getState().pages.s.before,'new-before');
+ assert.equal(selectRow(id,'stale')(useSessionStore.getState()),undefined);
+ assert.equal(useSessionHistory.getState().pages[id].revision,9);
  setSocket(null);
 });
 
-test('historical compaction loads full content without graph placeholders',async()=>{
- class Socket extends EventTarget {static OPEN=1;readyState=1;sent=[];send(t){this.sent.push(JSON.parse(t));}}
- globalThis.WebSocket=Socket; const ws=new Socket();setSocket(ws);
- runtimeState.currentSessionId='other';
- loadSessionData({id:'compacted',messages:[{id:'new',role:'user',content:'latest'}],history:{head_id:'new',before:'new'},graph:[{id:'sum',covers_ids:['old'],preview:'short preview',summarised_count:1}]});
- const pending=loadOlderSessionHistory('compacted');const request=ws.sent.at(-1);
- ws.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:'compacted',action:'load_session',request_id:request.request_id,messages:[{id:'sum_card',role:'system',kind:'compaction',slot:'card',content:'FULL SUMMARY CONTENT',covers_ids:['old']}],history:{head_id:'new',before:null}}})}));
- await pending;
- assert.equal(runtimeState.conversations.compacted.messages.find(m=>m.id==='sum_card').content,'FULL SUMMARY CONTENT');
- setSocket(null);
-});
-
-test('snapshot completes before interleaved terminal updates are applied',()=>{
+test('a first read completes before interleaved terminal updates are applied',()=>{
  runtimeState.currentSessionId='other';
  const id='fragment-live';
- loadSessionData({id,messages:[{id:'running-row',role:'assistant',content:'initial',status:'running'}]});
+ loadSessionData({id,turns:[turn('running-row',{content:'initial',status:'running'})],window:turnWindow(0,1,1)});
  const decoder=createHistoryFragmentDecoder();
- const snapshot=JSON.stringify({type:'session_loaded',data:{id,messages:[{id:'running-row',role:'assistant',content:'snapshot-old',status:'running'}],history:{head_id:'running-row',before:null}}});
- const cut=Math.floor(snapshot.length/2);
- assert.deepEqual(fragment(decoder,{id:'snapshot',index:0,text:snapshot.slice(0,cut),final:false}),[]);
+ const read=JSON.stringify({type:'session_loaded',data:{id,turns:[turn('running-row',{content:'read-old',status:'running'})],window:turnWindow(0,1,1)}});
+ const cut=Math.floor(read.length/2);
+ assert.deepEqual(fragment(decoder,{id:'read',index:0,text:read.slice(0,cut),final:false}),[]);
  assert.deepEqual(decoder.receive(JSON.stringify({type:'terminal',data:'terminal-result'})),[]);
- for(const wire of fragment(decoder,{id:'snapshot',index:1,text:snapshot.slice(cut),final:true})) {
+ for(const wire of fragment(decoder,{id:'read',index:1,text:read.slice(cut),final:true})) {
   const message=JSON.parse(wire);
   if(message.type==='session_loaded')loadSessionData(message.data);
-  else useSessionStore.getState().setMessages(id,[{id:'running-row',role:'assistant',content:message.data,status:'completed'}]);
+  else useSessionStore.getState().applyRead(id,[{id:'running-row',role:'assistant',rowKind:'assistant',content:message.data,status:'done'}]);
  }
- assert.equal(useSessionStore.getState().messagesById['running-row'].content,'terminal-result');
+ assert.equal(selectRow(id,'running-row')(useSessionStore.getState()).content,'terminal-result');
 });
 test('interleaved snapshots retain first-fragment order and clear deferred notifications on disconnect',()=>{
  const decoder=createHistoryFragmentDecoder();
@@ -118,127 +101,40 @@ test('interleaved snapshots retain first-fragment order and clear deferred notif
  assert.deepEqual(decoder.receive('"fresh"'),['"fresh"']);
 });
 
-
-test('visiting many sessions evicts inactive raw pages and store rows; deletion releases history state',t=>{
+test('visiting many chats keeps at most four windows; removing a chat releases its window',t=>{
  const storageDescriptor=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
  Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:()=>null,setItem:()=>{},removeItem:()=>{}}});
  t.after(()=>storageDescriptor?Object.defineProperty(globalThis,'localStorage',storageDescriptor):delete globalThis.localStorage);
- runtimeState.currentSessionId='other';
- for(let i=0;i<10;i++){
-  const id=`cache-${i}`, messages=[{id:`row-${i}`,role:'user',content:'content'}];
-  runtimeState.conversations[id]={id,messages};
-  useSessionStore.getState().setMessages(id,messages);
-  const history={snapshot:id,head_id:`row-${i}`,start:0,end:1,total:1,before:null,after:null};
-  registerSessionHistory(id,history);seedHistoryWindow(id,messages,history);
- }
- assert.ok(Object.values(runtimeState.conversations).filter(c=>c.id?.startsWith('cache-')&&c.messages?.length).length<=4);
+ for(let i=0;i<10;i++)openTurns(`cache-${i}`,[turn(`row-${i}`)],turnWindow(0,1,1));
  assert.ok(Object.entries(useSessionStore.getState().messageOrder).filter(([id,ids])=>id.startsWith('cache-')&&ids.length).length<=4);
  useSessionStore.getState().removeConversation('cache-9');
  assert.equal(useSessionHistory.getState().pages['cache-9'],undefined);
 });
 
 test('latest waits for a pending page instead of dropping the navigation intent',async()=>{
- class Socket extends EventTarget {static OPEN=1;readyState=1;sent=[];send(t){this.sent.push(JSON.parse(t));}}
- globalThis.WebSocket=Socket; const ws=new Socket();setSocket(ws);
- runtimeState.currentSessionId='other';
- runtimeState.conversations.queued={id:'queued',messages:[{id:'m50',role:'user',content:'middle'}]};
- useSessionStore.getState().setMessages('queued',[{id:'m50',role:'user',content:'middle'}]);
- const history={snapshot:'queue',head_id:'head',before:'m50',after:'m99',start:50,end:100,total:1000};
- seedHistoryWindow('queued',runtimeState.conversations.queued.messages,history);registerSessionHistory('queued',history);
- const older=loadOlderSessionHistory('queued');const latest=loadSessionHistoryWindow('queued','latest');
+ const {ws,reply}=turnSocket();const id='queued';
+ openTurns(id,[turn('t50')],turnWindow(50,51,1000,{before:'t50',after:'t50'}));
+ const older=loadOlderSessionHistory(id);const latest=loadSessionHistoryWindow(id,'latest');
  assert.equal(ws.sent.length,1);
- function reply(messages,history){const req=ws.sent.at(-1);ws.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:'queued',action:'load_session',request_id:req.request_id,messages,history}})}));}
- reply([{id:'m0',role:'user',content:'old'}],{...history,start:0,end:50,before:null,after:'m49'});
+ reply({id,turns:[turn('t49')],window:turnWindow(49,50,1000)});
  await older;await new Promise(resolve=>setImmediate(resolve));
  assert.equal(ws.sent.length,2);assert.equal(ws.sent[1].history_latest,true);
- reply([{id:'newest',role:'user',content:'latest'}],{...history,start:950,end:1000,before:'m950',after:null});
- await latest;assert.deepEqual(useSessionStore.getState().messageOrder.queued,['newest']);setSocket(null);
-});
-
-const rows=(from,to)=>Array.from({length:to-from},(_,i)=>({id:`m${from+i}`,role:'user',content:`row ${from+i}`}));
-function pageSocket(){
- class Socket extends EventTarget {static OPEN=1;readyState=1;sent=[];send(t){this.sent.push(JSON.parse(t));}}
- globalThis.WebSocket=Socket;const ws=new Socket();setSocket(ws);
- const send=(type,data)=>ws.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type,data:{action:'load_session',request_id:ws.sent.at(-1).request_id,...data}})}));
- return {ws,send,settle:()=>new Promise(resolve=>setImmediate(resolve))};
-}
-function readingArea(id){
- const row={dataset:{msgId:id},getBoundingClientRect:()=>({top:10,bottom:50,height:40})};
- return {scrollTop:2000,scrollHeight:5000,isConnected:true,dispatchEvent(){},
-  getBoundingClientRect:()=>({top:0}),querySelectorAll:()=>[row]};
-}
-
-test('an older page from a rebuilt snapshot at the same head renews around the reading anchor',async t=>{
- const {ws,send,settle}=pageSocket();t.after(()=>setSocket(null));
- runtimeState.currentSessionId='other';
- const id='rebuilt', shown=rows(50,100);
- runtimeState.conversations[id]={id,messages:shown};useSessionStore.getState().setMessages(id,shown);
- const history={snapshot:'old',head_id:'m999',before:'m50',after:'m99',start:50,end:100,total:1000};
- seedHistoryWindow(id,shown,history);registerSessionHistory(id,history);
- const release=registerHistoryViewport(id,readingArea('m70'),id);t.after(release);
- const older=loadOlderSessionHistory(id);
- assert.equal(ws.sent[0].history_snapshot,'old');assert.equal(ws.sent[0].history_before,'m50');
- // The server evicted 'old' and answered from a new snapshot of the same head.
- send('session_history_page',{id,messages:rows(0,50),history:{...history,snapshot:'new',start:0,end:50,before:null,after:'m49'}});
- await settle();
- assert.equal(ws.sent.length,2);
- assert.equal(ws.sent[1].history_around,'m70');assert.equal(ws.sent[1].history_snapshot,'new');
- send('session_history_page',{id,messages:rows(45,95),history:{...history,snapshot:'new',start:45,end:95,before:'m45',after:'m94'}});
- await older;
- const order=useSessionStore.getState().messageOrder[id];
- assert.ok(order.includes('m70'),'the row being read stays in the window');
- assert.equal(order[0],'m45');
- const state=useSessionHistory.getState().pages[id];
- assert.equal(state.snapshot,'new');assert.equal(state.before,'m45');
- assert.equal(state.error,false);assert.ok(!state.renewalRequired);
-});
-
-test('an expired cursor with no reading anchor renews at the newest page and keeps retrying',async t=>{
- const {ws,send,settle}=pageSocket();t.after(()=>setSocket(null));
- runtimeState.currentSessionId='other';
- const id='unanchored', shown=rows(50,100);
- runtimeState.conversations[id]={id,messages:shown};useSessionStore.getState().setMessages(id,shown);
- const history={snapshot:'gone',head_id:'m999',before:'m50',after:'m99',start:50,end:100,total:1000};
- seedHistoryWindow(id,shown,history);registerSessionHistory(id,history);
- let older=loadOlderSessionHistory(id);
- send('operation_error',{code:'invalid_request',scope:'session'});
- await settle();
- assert.equal(ws.sent.length,2,'no anchor must not stop the renewal');
- assert.equal(ws.sent[1].history_latest,true);assert.equal(ws.sent[1].history_snapshot,undefined);
- send('operation_error',{code:'invalid_request',scope:'session'});
- await older;
- let state=useSessionHistory.getState().pages[id];
- assert.equal(state.error,true);assert.equal(state.renewalRequired,true);assert.equal(state.loading,false);
- // The next older request (autoload backoff) renews instead of being refused.
- older=loadOlderSessionHistory(id);
- assert.equal(ws.sent.length,3);assert.equal(ws.sent[2].history_latest,true);
- send('session_history_page',{id,messages:rows(950,1000),history:{...history,snapshot:'fresh',start:950,end:1000,before:'m950',after:null}});
- await older;
- state=useSessionHistory.getState().pages[id];
- assert.equal(state.error,false);assert.ok(!state.renewalRequired);
- assert.equal(state.snapshot,'fresh');assert.equal(state.before,'m950');
- // The manual retry works without an anchor too.
- const retry=retrySessionHistory(id);
- assert.equal(ws.sent.at(-1).history_latest,true);
- send('session_history_page',{id,messages:rows(950,1000),history:{...history,snapshot:'fresh',start:950,end:1000,before:'m950',after:null}});
- assert.equal(await retry,true);
+ reply({id,turns:[turn('t999')],window:turnWindow(999,1000,1000)});
+ await latest;assert.deepEqual(useSessionStore.getState().messageOrder[id],['t999']);setSocket(null);
 });
 
 test('a newest page nobody asked for hands its placement to the stick hook as a take-latest note',async t=>{
- const {ws,send,settle}=pageSocket();t.after(()=>setSocket(null));
- runtimeState.currentSessionId='other';
- const id='renewed-latest', shown=rows(50,100);
- runtimeState.conversations[id]={id,messages:shown};useSessionStore.getState().setMessages(id,shown);
- const history={snapshot:'fresh',head_id:'m999',before:'m50',after:'m99',start:50,end:100,total:1000};
- seedHistoryWindow(id,shown,history);registerSessionHistory(id,history);
+ const {ws,reply}=turnSocket();t.after(()=>setSocket(null));
+ const id='renewed-latest';
+ openTurns(id,[turn('t50')],turnWindow(50,51,1000,{before:'t50',after:'t50'}));
  // A viewport with no readable row: the retry has no anchor and asks for the newest page.
  const area={scrollTop:2000,scrollHeight:5000,isConnected:true,dispatchEvent(){},getBoundingClientRect:()=>({top:0}),querySelectorAll:()=>[]};
  const release=registerHistoryViewport(id,area,id);t.after(release);
  const before=peekTakeLatest(id,id)?.generation ?? 0;
  let retry=retrySessionHistory(id);
  assert.equal(ws.sent.at(-1).history_latest,true);
- send('session_history_page',{id,messages:rows(950,1000),history:{...history,start:950,end:1000,before:'m950',after:null}});
- assert.equal(await retry,true);await settle();
+ reply({id,turns:[turn('t999')],window:turnWindow(999,1000,1000)});
+ assert.equal(await retry,true);await new Promise(resolve=>setImmediate(resolve));
  const note=peekTakeLatest(id,id);
  assert.ok(note && note.generation>before,'the hook is told to take the latest');
  assert.ok(note.generation>lastSettledTakeLatest(id,id),'the note is still waiting to be applied');
@@ -246,7 +142,86 @@ test('a newest page nobody asked for hands its placement to the stick hook as a 
  // A Jump or a send holds the follow lock and places the view itself: no second note.
  setFollowLock(id,true);t.after(()=>setFollowLock(id,false));
  retry=retrySessionHistory(id);
- send('session_history_page',{id,messages:rows(950,1000),history:{...history,start:950,end:1000,before:'m950',after:null}});
- assert.equal(await retry,true);await settle();
+ reply({id,turns:[turn('t999')],window:turnWindow(999,1000,1000)});
+ assert.equal(await retry,true);await new Promise(resolve=>setImmediate(resolve));
  assert.equal(peekTakeLatest(id,id).generation,note.generation);
+});
+
+test('a protocol 3 page reply takes the page\'s rows, keeps rows outside the page and adds no row at the tail',async()=>{
+ const {ws,reply}=turnSocket();const id='v3-page';
+ openTurns(id,[turn('t10')],turnWindow(10,11,20,{before:'t10',after:'t10'}));
+ const load=loadSessionHistoryWindow(id,'older');
+ assert.equal(ws.sent.at(-1).history_before,'t10');assert.equal(ws.sent.at(-1).history_snapshot,undefined);assert.equal(ws.sent.at(-1).history_head,undefined);
+ // Something appended and streaming after the request, neither in the page.
+ const held=selectRow(id,'t10')(useSessionStore.getState());
+ useSessionStore.getState().applyRead(id,[held,{id:'open',role:'assistant',content:'streaming',status:'streaming'}]);
+ reply({id,turns:[turn('t8'),turn('open',{content:'stream',status:'running'}),turn('t9')],window:turnWindow(7,10,20)});
+ assert.equal(await load,true);
+ const state=useSessionStore.getState();
+ assert.deepEqual(state.messageOrder[id],['t8','open','t9','t10']);
+ // The server holds the session's updates while it sends the page, so the page's row is current.
+ assert.equal(selectRow(id,'open')(state).content,'stream');
+ assert.equal(selectRow(id,'t10')(state).content,held.content,'a held row outside the page is untouched');
+ assert.equal(useSessionHistory.getState().pages[id].revision,4);
+ setSocket(null);
+});
+test('a protocol 3 page replaces a row that did not change during the read',async()=>{
+ const {reply}=turnSocket();const id='v3-fresh';
+ openTurns(id,[turn('t10'),turn('t11',{content:'old',status:'running'})],turnWindow(10,12,20));
+ const load=loadSessionHistoryWindow(id,'around','t11');
+ reply({id,turns:[turn('t10'),turn('t11',{content:'new',status:'done'})],window:turnWindow(10,12,20)});
+ assert.equal(await load,true);
+ assert.equal(selectRow(id,'t11')(useSessionStore.getState()).content,'new');
+ setSocket(null);
+});
+test('a page that touches nothing held is dropped and the window stays',async()=>{
+ const {reply}=turnSocket();const id='v3-gap';
+ openTurns(id,[turn('t10')],turnWindow(10,11,20,{before:'t10'}));
+ const load=loadSessionHistoryWindow(id,'older');
+ reply({id,turns:[turn('t2')],window:turnWindow(2,3,20)});
+ assert.equal(await load,false);
+ assert.deepEqual(useSessionStore.getState().messageOrder[id],['t10']);
+ assert.equal(useSessionHistory.getState().pages[id].loading,false);
+ setSocket(null);
+});
+test('an unknown cursor does one first read instead of retrying the same cursor',async()=>{
+ const {ws,reply}=turnSocket();const id='v3-cursor';
+ openTurns(id,[turn('t10')],turnWindow(10,11,20,{before:'t10'}));
+ const load=loadSessionHistoryWindow(id,'around','gone');
+ const before=ws.sent.length;
+ reply({id,error_code:'cursor_not_on_branch'});
+ assert.equal(await load,false);
+ assert.equal(ws.sent.length,before+1);
+ assert.equal(ws.sent.at(-1).action,'load_session');assert.equal(ws.sent.at(-1).history_around,undefined);
+ setSocket(null);
+});
+test('a first read answered in turns seeds the window and holds no raw rows',()=>{
+ const {ws}=turnSocket();const id='v3-open';runtimeState.currentSessionId='other';
+ loadSessionData({id,turns:[turn('t1')],window:turnWindow(1,2,2),graph:[],head_id:'t1'});
+ assert.deepEqual(useSessionStore.getState().messageOrder[id],['t1']);
+ assert.equal(runtimeState.conversations[id].messages,undefined);assert.equal(runtimeState.conversations[id].turns,undefined);
+ assert.equal(holdsHistoryWindow(useSessionHistory.getState().pages[id]),true);
+ assert.equal(holdsHistoryWindow(undefined),false);
+ assert.equal(ws.sent.length,0);
+ setSocket(null);
+});
+test('a chat trimmed from the client closes its view on the server',t=>{
+ const storageDescriptor=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
+ Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:()=>null,setItem:()=>{},removeItem:()=>{}}});
+ t.after(()=>storageDescriptor?Object.defineProperty(globalThis,'localStorage',storageDescriptor):delete globalThis.localStorage);
+ const closed=[];
+ class Socket extends EventTarget {static OPEN=1;readyState=1;send(text){const m=JSON.parse(text);if(m.action==='close_view')closed.push(m.view);}}
+ globalThis.WebSocket=Socket;setSocket(new Socket());t.after(()=>setSocket(null));runtimeState.currentSessionId='other';
+ for(let i=0;i<10;i++)loadSessionData({id:`v3-close-${i}`,turns:[turn(`close-${i}`)],window:turnWindow(0,1,1),graph:[],head_id:`close-${i}`});
+ assert.ok(closed.includes('v3-close-0'));
+});
+test('leftover rows are no window, and trimming a chat forgets its window',t=>{
+ const storageDescriptor=Object.getOwnPropertyDescriptor(globalThis,'localStorage');
+ Object.defineProperty(globalThis,'localStorage',{configurable:true,value:{getItem:()=>null,setItem:()=>{},removeItem:()=>{}}});
+ t.after(()=>storageDescriptor?Object.defineProperty(globalThis,'localStorage',storageDescriptor):delete globalThis.localStorage);
+ useSessionStore.getState().applyRead('v3-leftover',[{id:'x',role:'assistant',content:'tail',status:'running'}]);
+ assert.equal(holdsHistoryWindow(useSessionHistory.getState().pages['v3-leftover']),false);
+ for(let i=0;i<10;i++)openTurns(`v3-trim-${i}`,[turn(`row-${i}`)],turnWindow(0,1,1));
+ const left=Object.keys(useSessionHistory.getState().pages).filter(id=>id.startsWith('v3-trim-'));
+ assert.ok(left.length<=4,'a trimmed chat reads again on its next open');
 });

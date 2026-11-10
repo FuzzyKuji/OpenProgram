@@ -609,6 +609,9 @@ def test_surface_context_capture_carries_binding_epoch(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr(webtab, "request_on_ws", request_on_ws)
+    # An earlier connection came and went, so a writer still holding its
+    # revision (1 in a fresh process) is older than this connection.
+    next(webtab._next_revision)
     owner = object()
     context = surface_context.capture({
         "version": 1,
@@ -621,7 +624,7 @@ def test_surface_context_capture_carries_binding_epoch(tmp_path, monkeypatch):
     page_key = surface["page_key"]
     binding_id = surface["binding_id"]
     generation = _binding_generation(binding_id)
-    assert generation > 0
+    assert generation > 1
     store = BrowserResourceStore()
     row = store.get_resource(page_key)
     assert row["title"] == "Current"

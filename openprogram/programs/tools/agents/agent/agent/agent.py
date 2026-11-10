@@ -4,13 +4,13 @@ Same-session multi-agent model: a turn is just
 ``(predecessor, prompt, agent_id)``. The new turn lands as a branch
 in the parent session's DAG. Three start points:
 
-  * ``start_from="clean"`` (default) — the spawned agent starts at a new
-    root (``caller=null``), inside the same session repo. It sees
-    only the prompt; the result becomes a peer DAG tree alongside
-    the original conversation.
-  * ``start_from="inherit"`` — the spawned agent forks off the caller's
-    turn, inheriting the conversation that led up to it. Same DAG
-    semantics as a "fork from here" click.
+  * ``start_from="inherit"`` (default) — the spawned agent forks off the
+    caller's turn, inheriting the conversation that led up to it. Same
+    DAG semantics as a "fork from here" click.
+  * ``start_from="clean"`` — the spawned agent starts at a new root
+    (``caller=null``), inside the same session repo. It sees only the
+    prompt; the result becomes a peer DAG tree alongside the original
+    conversation.
   * ``start_from="SID:MSG_ID"`` — the spawned agent forks off that exact
     node (any session), inheriting the chain up to it. This is how a
     new branch is forked from an arbitrary point in the DAG.
@@ -40,6 +40,7 @@ import threading
 from collections import OrderedDict
 
 from openprogram.programs._host.runtime import ToolReturn, function
+from openprogram.runtime.permissions import refusal
 from openprogram.programs.tools.agents.send_message.send_message.depth import (
     delegation_budget_left as _delegation_budget_left,
 )
@@ -51,13 +52,12 @@ _log = logging.getLogger(__name__)
 
 
 # Spawn budget: how many generations of NEW agents a chain may create.
-# ONE level by default — the main agent spawns workers; a worker does
-# the work itself. Even a single "coordinator" hop turned out to be an
-# agent avoiding its job in practice (observed live: a weather query
-# bounced through a whole delegation chain, every hop re-wording the
-# same prompt). Deliberately tighter than the message budget
-# (MAX_MESSAGES=8), which pays for multi-round conversation, not for
-# creating agents. Module-level fallback for ``agent.max_spawn_depth``.
+# Off by default (0): the job pool bounds concurrency and the owner
+# decides how deep work goes. The cost of leaving it off is on record: a
+# weather query once bounced through a whole delegation chain, every hop
+# re-wording the same prompt. ``agent.max_spawn_depth=1`` gives the
+# one-level shape: the main agent spawns workers, a worker does the work
+# itself. Module-level fallback for ``agent.max_spawn_depth``.
 #
 # Calibrated against the eight reference implementations (see
 # docs/reference/design/runtime/collaboration/agent-collab-comparison.html §05). Five
@@ -65,19 +65,9 @@ _log = logging.getLogger(__name__)
 # opencode (by injecting a deny rule instead of counting) and us.
 # Claude Code's 3 is the outlier and it does not transfer:
 #
-#   * its leaked source tree has no depth counter at all. `Agent` is
-#     removed from every subagent's tool pool unless USER_TYPE=ant
-#     (src/constants/tools.ts:36-46), so an external user's effective
-#     depth there is 1. The depth-3 constant in the 2.1.226 binary
-#     replaces that env gate; it loosens a hard 1, it does not extend
-#     an already-working 3.
-#   * background subagents are capped at 1 regardless of the counter:
-#     the async tool allowlist (tools.ts:55-71) omits `Agent`, so an
-#     agent spawned to run unattended can never spawn again. Depth 3
-#     only ever applies to synchronous nesting, where the parent's tool
-#     call blocks for the whole child run and a human is watching.
-#     Our unattended path is `run_in_background=True`, so 1 is the
-#     value Claude Code enforces on the path that matches ours.
+#   * depth 3 suits synchronous nesting, where the parent's tool call
+#     blocks for the whole child run and a human is watching. Our
+#     unattended path is `run_in_background=True`, so it stays at 1.
 #   * their per-level tool pool is rebuilt and `Agent` disappears at the
 #     last level, which they pay for in prompt-cache misses. Ours is
 #     deliberately binary (depth.delegation_budget_left), so a raised
@@ -85,11 +75,9 @@ _log = logging.getLogger(__name__)
 #     generation would cost a refused call instead of a smaller tool
 #     list.
 #
-# Raise it when a spawned worker genuinely needs its own workers — a
-# decomposition whose sub-parts are themselves multi-agent. 2 is the
-# next sensible value; the refusal text tells the worker to do the work
+# When a limit is set, the refusal text tells the worker to do the work
 # itself, so a chain that hits the limit still finishes.
-MAX_SPAWN_DEPTH = 1
+MAX_SPAWN_DEPTH = 0
 
 
 def max_spawn_depth() -> int:
@@ -136,10 +124,9 @@ def max_spawn_depth() -> int:
 # which is the right side to err on: this guard exists to stop a
 # runaway, not to shape normal parallelism.
 #
-# Raise it for genuinely wide parallel work (one agent per file over a
-# large set) and raise OPENPROGRAM_JOB_WORKERS with it, or the extra
-# children only queue longer. 0 removes the limit.
-MAX_SPAWN_FANOUT = 8
+# Off by default (0); the job pool bounds how many run at once, and
+# OPENPROGRAM_JOB_WORKERS raises that.
+MAX_SPAWN_FANOUT = 0
 
 # Children already created by each parent turn, keyed (session, turn).
 # Module state rather than a ContextVar because every tool body runs in
@@ -279,7 +266,7 @@ def _dispatch_to_existing(
     """
     # to= dispatches onto an existing branch, which keeps its own
     # history — a start_from/fork-point choice contradicts that.
-    if (start_from or "").strip().lower() not in ("", "clean"):
+    if (start_from or "").strip().lower() not in ("", "inherit"):
         return (
             "[agent error] to= and start_from are mutually exclusive — "
             "to= dispatches the task onto an EXISTING branch, which "
@@ -315,11 +302,8 @@ def _dispatch_to_existing(
     generations = current_chain_generations()
     limit = max_messages()
     if limit and messages >= limit:
-        return (
-            f"[agent refused] this chain has passed {messages} messages, "
-            f"the maximum ({limit}). Finish the work here instead of "
-            "dispatching further."
-        )
+        raise refusal.agent_budget("agent", "messages", limit,
+                                   "finish the work here instead of dispatching further")
 
     # Addressing is send_message's, verbatim: SID:HEAD snaps to the
     # branch's current tip; a name resolves exact-first then unique
@@ -384,6 +368,7 @@ def _dispatch_to_existing(
             creates_agent=False,
             relation="linked",
             origin_turn_id=aid,
+            message_origin="agent_delivery",
             chain_messages=messages + 1,
             chain_generations=generations,
             caller_chain_generations=generations,
@@ -492,6 +477,7 @@ def _dispatch_to_existing(
             caller_chain_generations=generations,
             authority=caller_authority,
             creates_agent=False,
+            message_origin="agent_delivery",
         )
     except Exception as e:  # noqa: BLE001
         return f"[agent error] {type(e).__name__}: {e}"
@@ -509,7 +495,7 @@ def _agent_impl(
     prompt: str,
     description: str = "",
     agent_id: str = "",
-    start_from: str = "clean",
+    start_from: str = "inherit",
     run_in_background: bool = False,
     to: str = "",
     archive_when_done: bool = False,
@@ -561,11 +547,7 @@ def _agent_impl(
     # Generation guard — counts agents CREATED by this chain, and only
     # that: reading a worker's result travels on the message counter, so
     # an agent that collects a batch of replies can create the next
-    # batch. The cap is much tighter than the message budget on purpose:
-    # only the main agent may spawn; a spawned agent works with its own
-    # tools, it never re-delegates (observed live: a 5-generation
-    # weather-query delegation chain, every hop just re-wording the same
-    # prompt).
+    # batch.
     from openprogram.programs.tools.agents.send_message.send_message.depth import (
         current_chain_generations,
         current_chain_messages,
@@ -577,23 +559,16 @@ def _agent_impl(
     messages = current_chain_messages()
     spawn_limit = max_spawn_depth()
     if spawn_limit and generations >= spawn_limit:
-        return (
-            f"[agent refused] this chain has already created "
-            f"{generations} generations of agents, the maximum "
-            f"({spawn_limit}). Do the work yourself with your own tools "
-            "instead of delegating again."
-        )
+        raise refusal.agent_budget("agent", "generations", spawn_limit,
+                                   "do the work yourself with your own tools instead of delegating again")
 
     # A spawn also hands the child a message, so it spends the message
     # budget too — otherwise spawning would be a way around the cap that
     # send_message and agent(to=…) both respect.
     message_limit = max_messages()
     if message_limit and messages >= message_limit:
-        return (
-            f"[agent refused] this chain has passed {messages} messages, "
-            f"the maximum ({message_limit}). Finish the work here "
-            "instead of spawning another agent."
-        )
+        raise refusal.agent_budget("agent", "messages", message_limit,
+                                   "finish the work here instead of spawning another agent")
 
     # Fan-out guard — the counters above bound the chain downward and
     # along, this bounds siblings within one turn (see
@@ -601,17 +576,14 @@ def _agent_impl(
     # spawn never spends a slot.
     used = claim_fanout_slot(sid, aid)
     if used is not None:
-        return (
-            f"[agent refused] this turn has already created {used} "
-            f"agents, the maximum ({max_spawn_fanout()}). Give the rest "
-            "of the work to one of them with agent(to=…) (see "
-            "list_agents), or do it here."
-        )
+        raise refusal.agent_budget("agent", "agents", max_spawn_fanout(),
+                                   "give the rest of the work to one of them with agent(to=…) "
+                                   "(see list_agents), or do it here")
 
     # Resolve the start point. Besides the two named modes, a node
     # address "SID:MSG_ID" forks the new branch off that exact node —
     # the spawned agent inherits the chain up to it.
-    mode = (start_from or "").strip() or "clean"
+    mode = (start_from or "").strip() or "inherit"
     run_session = sid
     branch_from: str | None = None
     if mode.lower() in ("inherit", "clean"):
@@ -647,9 +619,9 @@ def _agent_impl(
     else:
         release_fanout_slot(sid, aid)
         return (
-            f"[agent error] unknown start_from {start_from!r} — use 'clean' "
-            "(default, new root, no parent history), 'inherit' (fork off "
-            "this turn, full chain visible), or 'SID:MSG_ID' (fork off "
+            f"[agent error] unknown start_from {start_from!r} — use 'inherit' "
+            "(default, fork off this turn, full chain visible), 'clean' "
+            "(new root, no parent history), or 'SID:MSG_ID' (fork off "
             "that exact node)."
         )
 
@@ -658,7 +630,6 @@ def _agent_impl(
         # responsible for state transitions and attach card updates.
         try:
             from openprogram.runtime.conversation.sub_agent_run import (
-                emit_spawn_event,
                 run_agent_turn_async,
                 write_attach_placeholder_for_spawn,
             )
@@ -671,8 +642,8 @@ def _agent_impl(
             tool_call_id = current_tool_call_id()
 
             # Admission owns the first external side effect. Persist the
-            # placeholder, including its durable job id, and publish the live
-            # running card before the runner is allowed to dispatch the job.
+            # placeholder, including its durable job id, before the runner is
+            # allowed to dispatch the job; the transcript publishes the card.
             def _on_accepted(job) -> None:
                 written_id = write_attach_placeholder_for_spawn(
                     session_id=sid,
@@ -683,24 +654,10 @@ def _agent_impl(
                     node_id=attach_id,
                     job_id=job.id,
                     target_session_id=run_session,
+                    tool_call_id=tool_call_id,
                 )
                 if written_id != attach_id:
                     raise RuntimeError("failed to persist agent attach placeholder")
-                try:
-                    emit_spawn_event(
-                        session_id=sid,
-                        status="running",
-                        label=label or None,
-                        prompt=prompt,
-                        chosen_agent=chosen_agent,
-                        card_id=attach_id,
-                        target_session_id=run_session,
-                        tool_call_id=tool_call_id,
-                        job_id=job.id,
-                    )
-                except Exception:
-                    # The card is display; the spawned job runs regardless.
-                    _log.warning("spawn card running event not emitted session=%s", sid, exc_info=True)
 
             job_id = run_agent_turn_async(
                 session_id=run_session,
@@ -743,31 +700,39 @@ def _agent_impl(
             f"{job_id!r}."
         )
 
-    # Announce the spawn BEFORE running it: a synchronous spawn blocks
-    # this tool call for as long as the sub-agent runs, so without a
-    # "running" event the caller's turn shows nothing until it finishes.
-    # The id is minted here and reused for the attach node below, so the
-    # live card and the reloaded row are one and the same.
+    # Write the running card BEFORE the run: a synchronous spawn blocks
+    # this tool call for as long as the sub-agent runs, so without the
+    # placeholder the caller's turn shows nothing until it finishes. The
+    # id is minted here and reused for the end write, so the card is
+    # updated in place.
     import uuid as _uuid
     from openprogram.programs._host.runtime import current_tool_call_id
     _card_id = _uuid.uuid4().hex[:12]
     _tool_call_id = current_tool_call_id()
     try:
         from openprogram.runtime.conversation.sub_agent_run import (
-            emit_spawn_event,
+            AgentTurnResult,
             run_agent_turn,
+            write_attach_placeholder_for_spawn,
             write_attach_pointer_for_spawn,
         )
-        emit_spawn_event(
-            session_id=sid,
-            status="running",
-            label=label or None,
-            prompt=prompt,
-            chosen_agent=chosen_agent,
-            card_id=_card_id,
-            target_session_id=run_session,
-            tool_call_id=_tool_call_id,
-        )
+
+        def _on_accepted(job) -> None:
+            # The running card carries its job from its first write. If the
+            # write fails the spawn still runs and the end write adds the row.
+            write_attach_placeholder_for_spawn(
+                session_id=sid,
+                caller_msg_id=aid,
+                label=label or None,
+                prompt=prompt,
+                chosen_agent=chosen_agent,
+                node_id=_card_id,
+                job_id=job.id,
+                target_session_id=run_session,
+                tool_call_id=_tool_call_id,
+                delivery="tool_result",
+            )
+
         # Bind both counts + 1 for the child turn (same-context
         # synchronous run), mirroring what the async runner does from
         # the Task's chain_messages / chain_generations.
@@ -794,6 +759,8 @@ def _agent_impl(
                 caller_session_id=sid if run_session != sid else None,
                 advance_head=False,  # same-session spawn never steals head
                 authority=caller_authority,
+                on_accepted=_on_accepted,
+                attach_pointer_id=_card_id,
             )
         finally:
             for _token in _chain_tokens:
@@ -801,17 +768,17 @@ def _agent_impl(
     except Exception as e:  # noqa: BLE001
         # The card is already on screen in "running" — close it out, or
         # it spins forever.
-        try:
-            emit_spawn_event(
-                session_id=sid, status="errored", label=label or None,
-                prompt=prompt, chosen_agent=chosen_agent, card_id=_card_id,
-                target_session_id=run_session,
-                tool_call_id=_tool_call_id,
-                content=f"{type(e).__name__}: {e}",
-            )
-        except Exception:
-            # The spawn failure itself is handled below; only the card stays stale.
-            _log.warning("spawn card errored event not emitted session=%s", sid, exc_info=True)
+        write_attach_pointer_for_spawn(
+            session_id=sid,
+            caller_msg_id=aid,
+            result=AgentTurnResult(failed=True, error=f"{type(e).__name__}: {e}"),
+            label=label or None,
+            prompt=prompt,
+            chosen_agent=chosen_agent,
+            node_id=_card_id,
+            target_session_id=run_session,
+            tool_call_id=_tool_call_id,
+        )
         _release_after_spawn_failure(sid, aid, e)
         return f"[agent error] {type(e).__name__}: {e}"
 
@@ -830,27 +797,12 @@ def _agent_impl(
             chosen_agent=chosen_agent,
             node_id=_card_id,
             target_session_id=run_session,
+            tool_call_id=_tool_call_id,
         )
     except Exception:
         # The result is returned regardless; only the attach pointer is missing.
         _log.warning("spawn attach pointer not written session=%s", sid, exc_info=True)
 
-    try:
-        emit_spawn_event(
-            session_id=sid,
-            status="errored" if (result.failed or result.error) else "completed",
-            label=label or None,
-            prompt=prompt,
-            chosen_agent=chosen_agent,
-            card_id=_card_id,
-            target_session_id=run_session,
-            tool_call_id=_tool_call_id,
-            head_id=result.head_id,
-            content=(result.final_text or result.error or "").strip(),
-        )
-    except Exception:
-        # The result is returned regardless; only the card stays stale.
-        _log.warning("spawn card final event not emitted session=%s", sid, exc_info=True)
 
     # Spawn-branch meta, after the result is in hand: archive on
     # request. Best-effort — the result below flows back regardless.
@@ -894,7 +846,7 @@ def agent(
     prompt: str,
     description: str = "",
     agent_id: str = "",
-    start_from: str = "clean",
+    start_from: str = "inherit",
     run_in_background: bool = False,
     to: str = "",
     archive_when_done: bool = False,
@@ -912,14 +864,14 @@ def agent(
     is ignored); the result comes back automatically.
 
     Args:
-        prompt: full instruction. In ``start_from="clean"`` this is ALL
-            the spawned agent sees, so include any context it needs.
+        prompt: the task. In ``start_from="clean"`` this is ALL the
+            spawned agent sees, so include any context it needs.
         description: short label (1-3 words) used as the branch name.
         agent_id: agent profile to run under. Defaults to this
             session's agent.
-        start_from: ``"clean"`` (default) ⇒ the spawned agent starts at
-            a new root with only the prompt visible. ``"inherit"`` ⇒
-            forks off this turn and sees the full chain that led here.
+        start_from: ``"inherit"`` (default) ⇒ the spawned agent forks off
+            this turn and sees the full chain that led here. ``"clean"``
+            ⇒ starts at a new root with only the prompt visible.
             ``"SID:MSG_ID"`` ⇒ forks off that exact node. Mutually
             exclusive with ``to``.
         run_in_background: False (default) blocks for the final

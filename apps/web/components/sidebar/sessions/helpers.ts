@@ -1,7 +1,7 @@
 "use client";
 
 // Pure helpers and types for the sessions list: title/label formatting,
-// channel brand, placeholder detection, the LegacyConv shape, wsSend.
+// placeholder detection, the LegacyConv shape, wsSend.
 
 import { parseAttachments } from "@/components/chat/messages/attachments/user-attachments";
 import { sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
@@ -113,18 +113,6 @@ export function activityTs(c: { updated_at?: number; created_at?: number }): num
   return c.updated_at || c.created_at || 0;
 }
 
-const CHANNEL_BRAND: Record<string, string> = {
-  wechat: "WeChat",
-  discord: "Discord",
-  telegram: "Telegram",
-  slack: "Slack",
-};
-
-export function channelBrand(ch?: string | null): string {
-  if (!ch) return "";
-  return CHANNEL_BRAND[String(ch).toLowerCase()] || ch;
-}
-
 function isPlaceholderTitle(t: string): boolean {
   if (!t) return true;
   if (t === "New conversation" || t === "Untitled") return true;
@@ -134,7 +122,7 @@ function isPlaceholderTitle(t: string): boolean {
 /** The only fields displayTitle / labelFor actually read. Kept narrower
  *  than LegacyConv so the store's ConvSummary (whose `status` is a plain
  *  string) can be labelled too — both the sidebar and /chats call these. */
-export type LabelableConv = Pick<LegacyConv, "title" | "preview" | "channel">;
+export type LabelableConv = Pick<LegacyConv, "title" | "preview">;
 
 export function displayTitle(c: LabelableConv): string {
   const raw = (c.title || "").trim();
@@ -151,11 +139,9 @@ export function displayTitle(c: LabelableConv): string {
 }
 
 export function labelFor(c: LabelableConv, untitled: string): string {
-  // Channel conversations get a bracketed brand prefix (no account, no
-  // colon): "[WeChat] <title>". The title itself is the LLM-generated
-  // real title (same two-phase naming as normal sessions); only the
-  // display-layer brand tag is channel-specific.
-  const brand = c.channel ? channelBrand(c.channel) : "";
+  // Plain text: a channel conversation's brand is drawn as its logo
+  // beside the title (ConvItem, the /chats row), never as a "[WeChat]"
+  // text prefix, so tab titles and sorting read the title alone.
   let real = displayTitle(c);
   if (!real && c.preview) {
     // Strip "[attached: …]" / inlined <file> markers the composer baked
@@ -167,8 +153,6 @@ export function labelFor(c: LabelableConv, untitled: string): string {
     pv = pv || String(c.preview).trim();
     real = pv.length > 120 ? pv.slice(0, 120) : pv;
   }
-  if (brand && real) return `[${brand}] ${real}`;
-  if (brand) return `[${brand}]`;
   if (real) return real;
   return c.title || untitled;
 }

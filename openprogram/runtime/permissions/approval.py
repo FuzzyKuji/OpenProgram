@@ -16,10 +16,9 @@ TurnRequest = Any
 
 from openprogram.runtime.permissions.file_state import capture as capture_file_state
 
-from openprogram.runtime.permissions.policy import (
-    _RISKY_TOOLS,
-    _hard_constraint_violation, one_shot_approval, page_script, permission_decision,
-)
+from openprogram.runtime.permissions import refusal
+from openprogram.runtime.permissions.identity import RISKY_TOOLS, page_script
+from openprogram.runtime.permissions.policy import can_approve, one_shot_approval, permission_decision
 
 EventCallback = Callable[[dict], None]
 
@@ -27,7 +26,7 @@ EventCallback = Callable[[dict], None]
 def _persist_always_allow_rule(session_id: str, tool_name: str, args: dict) -> bool:
     """把 "总是允许" 写成一条精确操作规则，落到**项目**层
     （<project>/.openprogram/settings.json 的 permission_rules.allow）。
-    规则跟项目走——切会话仍生效、长期记住。见 permission-model.md §2.3。"""
+    规则跟项目走——切会话仍生效、长期记住。见 docs/reference/design/runtime/security/permission-decision.html。"""
     if not session_id:
         return False
     try:
@@ -137,6 +136,7 @@ def wrap_with_approval(
     on_event: EventCallback,
     *,
     _live: bool = True,
+    _access_found: set[str] | None = None,
 ):
     """Return a copy of ``agent_tool`` whose ``execute`` first checks
     approval, awaiting (not blocking) the user's response. Falls back
@@ -160,29 +160,37 @@ def wrap_with_approval(
     orig_execute = agent_tool.execute
     name = agent_tool.name
     prepared = None
-    approved_recovery = None
 
     async def _permission_preflight(call_id, args, *, operation_id=None):
         nonlocal prepared
+        from openprogram.programs._authoring.prechecks import call_problem
+        if call_problem(name, args):
+            prepared = None
+            return
         from openprogram.runtime.permissions.auto_review import prepare_review
         prepared = await prepare_review(agent_tool, req, call_id, args, operation_id=operation_id)
 
     def _fallback(call_id, args):
         return bool(prepared is not None and prepared.matches(call_id, args)
                     and prepared.verdict.code == "AUTO_CLASSIFIER_DENY"
-                    and prepared.record and prepared.record["fallback"] and _approval_authorized())
+                    and prepared.record and prepared.record["fallback"] and can_approve(req))
 
     def _interaction_manifest(call_id: str, args: dict) -> dict | None:
         """Describe an approval before the Agent loop dispatches its effect."""
-        decision, reason, _, _ = permission_decision(agent_tool, req, args)
+        from openprogram.programs._authoring.prechecks import call_problem
+        if call_problem(name, args):
+            return None
+        verdict = permission_decision(agent_tool, req, args)
+        decision, reason = verdict.outcome, verdict.code
         if (decision != "deny" and req.permission_mode != "bypass"
                 and _escalation_needed(name, args)
                 and not _escalation_granted(req.session_id, args)
-                and _approval_authorized()):
+                and can_approve(req)):
             return _escalation_manifest(call_id, args)
-        if decision != "deny" and reason != "RECOVERY_EFFECT_UNCERTAIN":
+        if decision != "deny" and can_approve(req):
+            # Without someone to grant it, execution says what is missing instead of waiting.
             from openprogram.host.system_access import access_manifest_for_tool
-            access = access_manifest_for_tool(name, args)
+            access = access_manifest_for_tool(name, args, _access_found)
             if access is not None:
                 return access
         if decision == "allow" and name == "ask_user_question":
@@ -196,20 +204,12 @@ def wrap_with_approval(
         import os
         from openprogram.runtime.permissions.rule import exact_rule_for_call
         scopes = ["once"]
-        if reason not in {"AUTO_REFUSAL_FALLBACK", "RECOVERY_EFFECT_UNCERTAIN"} and not one_shot_approval(name, args) and exact_rule_for_call(name, args) is not None:
+        if reason != "AUTO_REFUSAL_FALLBACK" and not one_shot_approval(name, args) and exact_rule_for_call(name, args) is not None:
             if name in _SESSION_SCOPE_TOOLS:
                 scopes.append("session")
-            if not page_script(name, args):
-                scopes.append("always")
-        from openprogram.runtime.permissions.recovery import approval_context
-        recovery = approval_context(agent_tool, req)
+            scopes.append("always")
         shown = _shown_args(name, args, req)
         detail = _approval_detail(name, shown)
-        if recovery:
-            detail = ("Previous operations have unknown outcomes. This approval authorizes only "
-                      "the new operation below; it does not confirm or resolve prior operations.\n"
-                      + "\n".join(f"{item['tool']}: {item['effect_id']}" for item in recovery)
-                      + "\n\n" + detail)
         return {
             "kind": "approval",
             "prompt": f"允许执行 {name}？",
@@ -222,7 +222,6 @@ def wrap_with_approval(
                 "risk_level": _risk_level(name, args),
                 "approval_reason": reason,
                 "allowed_scopes": scopes,
-                "recovery_effects": recovery,
                 "permission_version": getattr(req, "_permission_version", 0),
                 "file_preconditions": capture_file_state(name, args),
                 "accept_edits_safe": bool(getattr(agent_tool, "_accept_edits_safe", False)),
@@ -257,7 +256,6 @@ def wrap_with_approval(
                 "risk_level": "high",
                 "approval_reason": "SANDBOX_ESCALATION",
                 "allowed_scopes": scopes,
-                "recovery_effects": [],
                 "permission_version": getattr(req, "_permission_version", 0),
                 "file_preconditions": {},
                 "accept_edits_safe": False,
@@ -271,44 +269,18 @@ def wrap_with_approval(
             "timeout": None,
         }
 
-    def _denied(
-        text: str,
-        reason_code: str,
-        authority_decision=None,
-        *, execution_started=False,
-    ) -> "AgentToolResult":
+    def _denied(item, *, rule=None, authority=None) -> "AgentToolResult":
+        """The denied result of a refusal; every denied tool result comes from here."""
         from openprogram.runtime.permissions.execution import mark_refused
-        mark_refused(reason_code)
-        details = {
-            "denied": True,
-            "reason_code": reason_code,
-            "outcome": "failed" if execution_started else "not_started",
-            "execution_started": execution_started,
-        }
-        if authority_decision is not None:
-            details["authority_decision"] = authority_decision.to_dict()
+        mark_refused(item.code)
+        return refusal.tool_result(item, rule=rule, mode=req.permission_mode, authority=authority)
+
+    def _malformed(problem) -> "AgentToolResult":
+        """A call that cannot run as written goes back to the model; it was not refused."""
         return AgentToolResult(
-            content=[TextContent(text=text)],
-            details=details,
+            content=[TextContent(text=problem.text)],
+            details={"reason_code": problem.code, "outcome": "not_started", "execution_started": False},
             is_error=True,
-        )
-
-    def _approval_authorized() -> bool:
-        from openprogram.state.authority import has_capability, normalize_authority
-        from openprogram.runtime.permissions.authority import owner_principal_id
-
-        authority = normalize_authority(req)
-        try:
-            is_owner = authority.get("principal_id") == owner_principal_id()
-        except Exception:
-            is_owner = False
-        return bool(
-            authority
-            and is_owner
-            and authority.get("authority_tier") == "owner"
-            and authority.get("speaker_kind") == "owner"
-            and authority.get("interaction") == "interactive"
-            and has_capability(authority, "approval.request")
         )
 
     def _sandbox_metadata(result) -> dict | None:
@@ -323,13 +295,6 @@ def wrap_with_approval(
         return value if isinstance(value, dict) else None
 
     async def _run_original(call_id, args, cancel, on_update):
-        from openprogram.runtime.permissions.recovery import approval_context
-        try:
-            recovery = approval_context(agent_tool, req)
-        except Exception:
-            return _denied("[denied] cannot verify unresolved prior operations", "RECOVERY_STATE_UNAVAILABLE")
-        if (recovery or approved_recovery) and recovery != approved_recovery:
-            return _denied("[denied] prior operations changed; request a new one-shot approval", "RECOVERY_APPROVAL_STALE")
         try:
             from openprogram.runtime.permissions.file_state import check_current, current_files
             check_current()
@@ -338,12 +303,16 @@ def wrap_with_approval(
             for path in current_files():
                 mark_seen(path)
         except (OSError, ValueError) as exc:
-            return _denied(str(exc), "APPROVAL_FILE_CHANGED")
+            return _denied(refusal.stale("APPROVAL_FILE_CHANGED", str(exc)))
         from openprogram.runtime.permissions.file_state import file_scope
         from openprogram.runtime.permissions.execution import mark_started
         await mark_started()
+        from openprogram.runtime.permissions.recovery import uncertain_notice
+        notice = uncertain_notice(req, agent_tool)
         with file_scope():
             result = await orig_execute(call_id, args, cancel, on_update)
+        if notice and isinstance(result, AgentToolResult):
+            result.content = [TextContent(text=notice), *result.content]
         sandbox = _sandbox_metadata(result)
         if not sandbox or sandbox.get("kind") != "denied":
             return result
@@ -371,118 +340,107 @@ def wrap_with_approval(
 
     async def _escalate_then_run(call_id, args, cancel, on_update):
         """Run one command outside the sandbox the model asked to leave."""
-        if req.permission_mode == "bypass":
-            return _denied(
-                "[denied] Bypass mode keeps the configured sandbox and asks no "
-                "questions, so this command cannot leave it. Tell the user it "
-                "needs network or writes outside the workspace; they can turn "
-                "on sandbox.network or switch permission mode.",
-                "SANDBOX_ESCALATION_BYPASS",
-            )
-        if not _approval_authorized():
-            return _denied(
-                "[denied] sandbox escalation requires an interactive local owner",
-                "SANDBOX_ESCALATION_OWNER_REQUIRED",
-            )
-        hard_violation = _hard_constraint_violation(name, args, req)
-        if hard_violation:
-            return _denied(f"[denied] hard constraint: {hard_violation}", "HARD_CONSTRAINT_DENIED")
-        if not _escalation_granted(req.session_id, args):
-            approved, reason, scope = await await_user_approval(
-                req=req, tool_name=f"{name}:{ESCALATION_SUFFIX}",
-                args=_escalation_args(args), on_event=on_event, tool_call_id=str(call_id),
-            )
-            if not approved:
-                said = (f" The user said: {reason.strip()}"
-                        if isinstance(reason, UserDeclineReason) else "")
-                return _denied(
-                    f"[denied] The user did not let this command leave the sandbox, "
-                    f"so it did not run.{said} Do not retry it unchanged.",
-                    "SANDBOX_ESCALATION_NOT_APPROVED",
+        if req.permission_mode != "bypass":
+            if not can_approve(req):
+                return _denied(refusal.no_one_to_approve(
+                    name, args, source=req.source, mode=req.permission_mode,
+                    wanted="SANDBOX_ESCALATION", layer="sandbox"))
+            if not _escalation_granted(req.session_id, args):
+                approved, reason, scope = await await_user_approval(
+                    req=req, tool_name=f"{name}:{ESCALATION_SUFFIX}",
+                    args=_escalation_args(args), on_event=on_event, tool_call_id=str(call_id),
                 )
-            if scope == "session":
-                _grant_escalation(req.session_id, args)
+                if not approved:
+                    note = reason.strip() if isinstance(reason, UserDeclineReason) else None
+                    return _denied(refusal.escalation_declined(name, args, note))
+                if scope == "session":
+                    _grant_escalation(req.session_id, args)
         from openprogram.host.sandbox import escalated_policy
         with escalated_policy():
             return await _run_original(call_id, args, cancel, on_update)
 
-    async def _approve_then_run(call_id, args, cancel, on_update):
-        nonlocal approved_recovery
-        if not _approval_authorized():
-            return _denied(
-                "[denied] approval requires an interactive local owner",
-                "APPROVAL_LOCAL_OWNER_REQUIRED",
-            )
+    async def _approve_then_run(call_id, args, cancel, on_update, *, layer="mode"):
+        if not can_approve(req):
+            return _denied(refusal.local_owner_required(name, args))
         approval_args = args
         if _self_update_retry(name, args):
             from openprogram.operations.self_update.repair.next_candidate import approval_preview
             try:
                 preview = approval_preview(args.get("update_id"), args.get("candidate_sha"), req)
             except Exception as exc:
-                return _denied(f"[denied] {exc}", "SELF_UPDATE_RETRY_INVALID")
+                return _denied(refusal.stale("SELF_UPDATE_RETRY_INVALID", str(exc)))
             approval_args = {**args, "candidate": preview}
-        from openprogram.runtime.permissions.recovery import approval_context
-        recovery = approval_context(agent_tool, req)
         approved, reason, scope = await await_user_approval(
             req=req, tool_name=name, args=approval_args, on_event=on_event,
-            tool_call_id=str(call_id), **({"recovery_effects": recovery} if recovery else {}))
+            tool_call_id=str(call_id))
         if not approved:
-            if isinstance(reason, UserDeclineReason):
-                msg = (f"[denied] The user declined this {name} call, so it did not run. "
-                       f"The user said: {reason.strip()}\n"
-                       "Follow the user's instruction instead of retrying this call.")
-            elif isinstance(reason, str) and reason.strip():
-                msg = f"[denied] {reason.strip()}"
-            else:
-                msg = (f"[denied] The user declined this {name} call, so it did not run. "
-                       "Do not retry it or work around it; stop and ask the user how to proceed.")
-            return _denied(msg, "APPROVAL_DENIED")
-        if recovery and scope != "once":
-            return _denied("[denied] uncertain operations require one-shot approval", "RECOVERY_APPROVAL_SCOPE")
-        approved_recovery = recovery
-        if scope == "always" and not recovery and page_script(name, args):
-            return _denied("[denied] page scripts are allowed once or for this conversation, never project-wide", "APPROVAL_SCOPE_INVALID")
-        if scope == "always" and not recovery and not one_shot_approval(name, args):
+            if isinstance(reason, str) and reason.strip() and not isinstance(reason, UserDeclineReason):
+                return _denied(refusal.stale("APPROVAL_DENIED", reason.strip()))
+            note = reason.strip() if isinstance(reason, UserDeclineReason) else None
+            return _denied(refusal.declined(name, args, layer=layer, note=note))
+        if scope == "always" and not one_shot_approval(name, args):
             if not _persist_always_allow_rule(req.session_id, name, args):
-                return _denied("[denied] could not save the project approval rule; operation was not executed", "APPROVAL_RULE_SAVE_FAILED")
-        if scope == "session" and not recovery and name in _SESSION_SCOPE_TOOLS:
+                return _denied(refusal.stale("APPROVAL_RULE_SAVE_FAILED",
+                                             "Could not save the project approval rule, so the operation was not executed. Ask again."))
+        if scope == "session" and name in _SESSION_SCOPE_TOOLS:
             if not _persist_session_allow_rule(req.session_id, name, args):
-                return _denied("[denied] could not save the conversation approval rule; operation was not executed", "APPROVAL_RULE_SAVE_FAILED")
+                return _denied(refusal.stale("APPROVAL_RULE_SAVE_FAILED",
+                                             "Could not save the conversation approval rule, so the operation was not executed. Ask again."))
         if _fallback(call_id, args) and prepared.history is not None:
             prepared.history.record(blocked=False, reason="owner approved operation",
                                code="AUTO_OWNER_APPROVED", approved=True)
         return await _run_original(call_id, args, cancel, on_update)
 
-    async def _gated_execute(call_id, args, cancel, on_update):
-        decision, code, message, authority = permission_decision(agent_tool, req, args)
-        if decision == "deny":
-            return _denied(f"[denied] {message}", code, authority)
+    async def _decide_then_run(call_id, args, cancel, on_update):
+        verdict = permission_decision(agent_tool, req, args)
+        if verdict.outcome == "deny":
+            return _denied(verdict.refusal, rule=verdict.rule, authority=verdict.authority)
+        if not can_approve(req):
+            from openprogram.host.system_access import missing_access_error
+            from openprogram.programs._authoring.prechecks import CallProblem
+            missing = missing_access_error(name, args, _access_found)
+            if missing:
+                # Waiting would park this run forever: the wait has no timeout.
+                return _malformed(CallProblem("SYSTEM_ACCESS_MISSING", missing))
         if _escalation_needed(name, args):
             # The escalation card is the one approval: it also covers what
             # an ordinary "ask" would have asked.
             return await _escalate_then_run(call_id, args, cancel, on_update)
-        if decision == "ask":
-            return await _approve_then_run(call_id, args, cancel, on_update)
-        if decision == "auto":
+        if verdict.outcome == "ask":
+            return await _approve_then_run(call_id, args, cancel, on_update, layer=verdict.layer)
+        if verdict.outcome == "auto":
             if prepared is None or not prepared.matches(call_id, args):
                 await _permission_preflight(call_id, args)
             if not prepared.matches(call_id, args):
-                return _denied("[denied] operation changed during review", "PERMISSION_REVIEW_STALE")
+                return _denied(refusal.stale("PERMISSION_REVIEW_STALE", "The operation changed during review; submit it again."))
             from openprogram.runtime.permissions.file_state import validate
             import os
             from openprogram.state.worktree.context import current_worktree_path
             if prepared.working_dir != (current_worktree_path() or os.getcwd()):
-                return _denied("[denied] working directory changed during review", "PERMISSION_REVIEW_STALE")
+                return _denied(refusal.stale("PERMISSION_REVIEW_STALE", "The working directory changed during review; submit the operation again."))
             try:
                 validate(prepared.files)
             except (OSError, ValueError) as exc:
-                return _denied(str(exc), "PERMISSION_REVIEW_STALE")
+                return _denied(refusal.stale("PERMISSION_REVIEW_STALE", str(exc)))
             if _fallback(call_id, args):
                 return await _approve_then_run(call_id, args, cancel, on_update)
             blocked, reason = prepared.verdict
             if blocked:
-                return _denied(f"[denied] auto classifier: {reason}", prepared.verdict.code)
+                code = prepared.verdict.code
+                return _denied(refusal.stale(code, f"{reason}; submit the operation again.")
+                               if code == "PERMISSION_REVIEW_STALE"
+                               else refusal.auto(name, args, code, reason))
         return await _run_original(call_id, args, cancel, on_update)
+
+    async def _gated_execute(call_id, args, cancel, on_update):
+        from openprogram.programs._authoring.prechecks import call_problem
+        problem = call_problem(name, args)
+        if problem:
+            return _malformed(problem)
+        try:
+            return await _decide_then_run(call_id, args, cancel, on_update)
+        except refusal.Refused as refused:
+            return _denied(refused.refusal)
 
     wrapped = AgentTool(
         name=agent_tool.name,
@@ -509,7 +467,7 @@ def _risk_level(tool_name: str, args: dict) -> str:
     """审批卡片的危险分级 "low"|"medium"|"high"，驱动前端高亮。
     完整规则集见 file_safety.py（S13）；这里是基础判定。"""
     name = tool_name.lower()
-    if name in _RISKY_TOOLS:
+    if name in RISKY_TOOLS:
         cmd = str((args or {}).get("command", "")).lower()
         if any(p in cmd for p in ("rm -rf", "sudo", "mkfs", ":(){", "| sh", "| bash", "curl", "wget")):
             return "high"
@@ -543,13 +501,14 @@ def _json_form(value):
 
 def _approval_detail(tool_name: str, args: dict) -> str:
     """批准卡片的危险摘要：工具名 + 参数全文（超长截断，首尾保留）。
-    第一版不做危险 token 高亮（docs/reference/design/ui/composer/composer-interaction-modes.md 决策）。"""
+    第一版不做危险 token 高亮（docs/reference/design/ui/composer/composer-interaction-modes.html 决策）。"""
     try:
         import json
         body = json.dumps(args, ensure_ascii=False, indent=2) if args else ""
     except Exception:
         body = str(args)
-    if len(body) > 2000 and not one_shot_approval(tool_name, args) and not page_script(tool_name, args):
+    if (len(body) > 2000 and tool_name != "self_update"
+            and not one_shot_approval(tool_name, args) and not page_script(tool_name, args)):
         body = body[:1200] + "\n…（已截断）…\n" + body[-600:]
     return f"{tool_name}\n{body}".rstrip()
 
@@ -566,7 +525,6 @@ async def await_user_approval(
     on_event: EventCallback,
     timeout: float = 300.0,
     tool_call_id: str | None = None,
-    recovery_effects: list[dict[str, str]] | None = None,
 ) -> tuple[bool, "str | None", str]:
     """Consume the resolved approval wait selected by the Agent safe point.
     返回 (approved, reason, scope)：approved=是否放行；reason=拒绝理由（可为 None）；
@@ -600,14 +558,6 @@ async def await_user_approval(
             if (wait.request.get("permission_version", 0) != getattr(req, "_permission_version", 0)
                     or wait.request.get("working_dir") != (current_worktree_path() or os.getcwd())):
                 return False, "permission or working directory changed after this approval", "once"
-        if recovery_effects or wait.request.get("recovery_effects"):
-            import os
-            from openprogram.state.worktree.context import current_worktree_path
-            if (wait.request.get("approval_reason") != "RECOVERY_EFFECT_UNCERTAIN"
-                    or wait.request.get("recovery_effects") != recovery_effects
-                    or wait.request.get("permission_version", 0) != getattr(req, "_permission_version", 0)
-                    or wait.request.get("working_dir") != (current_worktree_path() or os.getcwd())):
-                return False, "recovery context changed; request a new one-shot approval", "once"
         if wait.status is WaitStatus.RESOLVED:
             from openprogram.runtime.permissions.file_state import validate
             if tool_name in {"edit", "write", "apply_patch"} and "file_preconditions" not in wait.request:

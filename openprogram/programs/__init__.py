@@ -35,6 +35,7 @@ from ._host.runtime import (
     tool_search,
     Tier,
     as_resident,
+    current_tool as _current_tool,
 )
 from ._host.lower_layers import register as _register_lower_layer_ports
 
@@ -83,7 +84,7 @@ DEFAULT_TOOLS: list[str] = [
     "agent",
     # Branch-to-branch communication — an agent can see other agents
     # (sessions/branches) and message them
-    # (docs/reference/design/runtime/collaboration/agent-collaboration.md).
+    # (docs/reference/design/runtime/collaboration/agent-collaboration.html).
     "send_message",
     "list_agents",
     # Outbound attachments — the agent hands a real file back to the
@@ -112,13 +113,8 @@ DEFAULT_TOOLS: list[str] = [
     # Pages, a VM. Resident: its description is a short catalogue of
     # targets, and each target's guide arrives with the first call to it.
     "computer_use_agent",
-    # Plan-mode gate — the LLM is allowed to enter plan mode on its
-    # own when it judges the task warrants it (mirrors claude-code's
-    # EnterPlanMode tool). The "plan" pseudo-channel filter in
-    # ``apply_tool_policy`` hides the write tools while in plan mode,
-    # but enter/exit themselves are never on any unsafe_in list — they
-    # stay visible across modes.
-    "enter_plan_mode",
+    # Offered only in a turn whose selector says Plan (see ``loop_runner``).
+    # Plan comes from the selector alone, so no enter tool is offered.
     "exit_plan_mode",
     # MCP meta — read resources / render prompts on any configured
     # MCP server. Lightweight (one read per call), and the LLM needs
@@ -136,6 +132,9 @@ DEFAULT_TOOLS: list[str] = [
     # the model must see it without searching. The full scheduler stays
     # deferred for listing and cancelling.
     "remind",
+    # "Do this every Monday": turns the work just done into a Skill and,
+    # optionally, a waking reminder. Deferred below; asked for rarely.
+    "save_routine",
 ]
 
 
@@ -148,11 +147,6 @@ DEFAULT_TOOLS: list[str] = [
 DEFERRED_DEFAULT_TOOLS: set = {
     *MEMORY_TOOL_NAMES,
     "scheduler",
-    # 1052 tok。进 plan mode 有两条路：用户在 web chip / TUI 选 "Plan mode"
-    # 档位（agent/plan_mode.py sync_tier，不经此工具），或模型自己判断要规划。
-    # 后者罕见，且一旦 plan mode 激活，plan_mode 系统提示块会明确点名
-    # exit_plan_mode，模型据此 tool_search 加载即可。UI 入口不依赖它常驻。
-    "enter_plan_mode",
     # 644 tok。只在 plan mode 内有意义；plan 提示块已指名要调它。
     "exit_plan_mode",
     # 378 tok。跨 session/branch 通信，多分支协作场景才用得上。
@@ -160,6 +154,8 @@ DEFERRED_DEFAULT_TOOLS: set = {
     # 技能加载动词。<available_skills> 每轮已经列了名字和描述，模型要用
     # 才需要这个 schema；不用的会话不该为它付费。catalog 一行即可。
     "skill",
+    # Saving a routine is rare; its catalog line says when to load it.
+    "save_routine",
 }
 
 # 常驻工具：schema 一直带在请求里（不 defer）。= DEFAULT_TOOLS 减去上面的冷门大块，
@@ -437,7 +433,8 @@ def agent_tools(
             _log.debug("tools.disabled unreadable; no tool hidden", exc_info=True)
     if only_available:
         picked = [t for t in picked if _is_available_agent_tool(t)]
-    return picked
+    # Each tool as it describes itself now (the ``describe`` hook).
+    return [_current_tool(t) for t in picked]
 
 
 def apply_tool_policy(
@@ -492,7 +489,7 @@ def apply_tool_policy(
         out = [t for t in out if t.name in allowset]
     if only_available:
         out = [t for t in out if _is_available_agent_tool(t)]
-    return out
+    return [_current_tool(t) for t in out]
 
 
 def _unsafe_in_for(tool_name: str) -> set[str]:

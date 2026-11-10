@@ -1,10 +1,32 @@
 const fs = require("fs");
 const path = require("path");
 
+// The worker and everything it starts run the runtime's Git, whatever else is
+// installed. On a clean Mac that keeps them away from the /usr/bin/git shim and
+// its Command Line Tools dialog.
+function bundledGitEnvironment(git, platform, environment) {
+  const windows = platform === "win32";
+  const pathKey =
+    (windows &&
+      Object.keys(environment).find((key) => key.toUpperCase() === "PATH")) ||
+    "PATH";
+  const commands = path.join(git, windows ? "cmd" : "bin");
+  const existing = environment[pathKey];
+  const launch = {
+    [pathKey]: existing ? `${commands}${windows ? ";" : ":"}${existing}` : commands,
+  };
+  if (!windows) {
+    launch.GIT_EXEC_PATH = path.join(git, "libexec", "git-core");
+    launch.GIT_TEMPLATE_DIR = path.join(git, "share", "git-core", "templates");
+  }
+  return launch;
+}
+
 function resolvePackagedWorker(
   resourcesPath,
   expectedVersion,
   platform = process.platform,
+  environment = process.env,
 ) {
   const runtimeRoot = path.resolve(resourcesPath, "runtime");
   const manifestPath = path.join(runtimeRoot, "runtime-manifest.json");
@@ -78,6 +100,10 @@ function resolvePackagedWorker(
     args: ["-I", "-B", "-m", "openprogram", "worker", "start"],
     env: {
       PLAYWRIGHT_BROWSERS_PATH: resolveAsset("playwright"),
+      // A runtime refreshed in place on an older install declares no Git.
+      ...(manifest.assets?.git
+        ? bundledGitEnvironment(resolveAsset("git"), platform, environment)
+        : {}),
     },
   };
 }

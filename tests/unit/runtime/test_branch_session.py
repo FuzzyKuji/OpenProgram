@@ -308,7 +308,7 @@ def test_ws_action_result_frame(store, broadcasts):
 
 
 def test_rest_route(store, broadcasts):
-    from openprogram.interfaces.server.context_git_routes import post_chat_branch_session
+    from openprogram.interfaces.server.routes.chat_branches import post_chat_branch_session
 
     _seed(store)
     ok = asyncio.run(post_chat_branch_session({"session_id": "src", "msg_id": "u1_reply"}))
@@ -327,7 +327,7 @@ def test_rest_route(store, broadcasts):
 def test_rest_route_without_a_message_copies_up_to_head(store, broadcasts):
     """"Copy conversation": no msg_id. The fixture reports a running turn,
     so the copy stops before the turn in flight."""
-    from openprogram.interfaces.server.context_git_routes import post_chat_branch_session
+    from openprogram.interfaces.server.routes.chat_branches import post_chat_branch_session
 
     _seed(store)
     _running_turn(store)

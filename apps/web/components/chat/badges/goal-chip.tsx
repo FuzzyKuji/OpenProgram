@@ -1,11 +1,13 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Pause, Play, Square, Target } from "lucide-react";
+import { Check, Pause, Play, Square } from "lucide-react";
 import { CheckIcon, HistoryIcon } from "@/components/animated-icons";
 import { useActionIconAnimation } from "../messages/bubbles/use-action-icon-animation";
 
 import { Button } from "@/components/ui/button";
+import { FillIcon } from "@/components/ui/fill-icon";
+import { SolarIcon } from "@/components/solar-icons";
 import { HoverTip, TipBody } from "@/components/ui/tooltip";
 import {
   Dialog,
@@ -91,6 +93,8 @@ function stopReason(goal: GoalState, zh: boolean): string {
   if (goal.status === "active") return raw;
   switch (goal.pause_reason) {
     case "user": return t("Paused by you.", "你暂停了此 Goal。");
+    case "conversation_archived": return t("The conversation was archived. Unarchiving it continues the Goal.", "对话已归档。取消归档后 Goal 会继续。");
+    case "always_on_off": return t("Always-on was turned off. Turning it on again continues the Goal.", "常驻已关闭。重新开启后 Goal 会继续。");
     case "edited": return t("The Goal was edited. Resume to work on the new revision.", "目标已修改，继续后按新版本执行。");
     case "idle": {
       const turns = Number.parseInt(raw, 10) || 2;
@@ -343,7 +347,7 @@ export function GoalDetails({ sessionId, goal, historical = false }: { sessionId
         onClick={() => setOpen(true)}
         aria-label={text("Open Goal details", "打开 Goal 详情")}
       >
-        <Target size={14} strokeWidth={2} className="workdir-icon" />
+        <SolarIcon name="target" size={16} fit="fill" className="workdir-icon" />
         <span className="badge-short">Goal · {stopPending ? text("Stop not confirmed", "停止未确认") : statusLabel(goal.status, zh, goal.phase)}{progress ? ` · ${progress}` : null}</span>
       </button></HoverTip> : null}
       <Dialog open={open} onOpenChange={(value) => { setOpen(value); if (!value) setConfirmCancel(false); }}>
@@ -436,12 +440,12 @@ export function GoalDetails({ sessionId, goal, historical = false }: { sessionId
               <Button variant="destructive" disabled={busy} onClick={() => void mutate("cancel")}>{text("Confirm end", "确认终止")}</Button>
             </DialogFooter>
           </section> : <DialogFooter className={styles.actions}>
-            {!terminal ? <Button ref={endButton} variant="destructive" disabled={busy || (execution.fresh && controls?.can_end === false)} onClick={() => setConfirmCancel(true)}><Square size={14} />{text("End", "终止")}</Button> : null}
-            {controls?.can_pause ? <Button variant="elevated" disabled={busy || !execution.fresh} onClick={() => void mutate("pause")}><Pause size={14} />{text("Pause", "暂停")}</Button> : null}
+            {!terminal ? <Button ref={endButton} variant="destructive" disabled={busy || (execution.fresh && controls?.can_end === false)} onClick={() => setConfirmCancel(true)}><FillIcon><Square /></FillIcon>{text("End", "终止")}</Button> : null}
+            {controls?.can_pause ? <Button variant="elevated" disabled={busy || !execution.fresh} onClick={() => void mutate("pause")}><FillIcon><Pause /></FillIcon>{text("Pause", "暂停")}</Button> : null}
             <Button variant="elevated" disabled={busy || !draft.dirty || draft.conflict || !draft.value.trim()} onClick={() => void mutate("edit", { prompt: draft.value.trim() })}>{text("Save edit", "保存修改")}</Button>
             {!terminal ? <>
-              <Button disabled={busy || unsaved || !canResume} onClick={() => void mutate("resume")}><Play size={14} />{text("Resume", "继续")}</Button>
-              <Button disabled={busy || unsaved || !execution.fresh || !controls?.can_verify} onClick={() => void mutate("verify")}><Check size={14} />{text("Verify", "验收")}</Button>
+              <Button disabled={busy || unsaved || !canResume} onClick={() => void mutate("resume")}><FillIcon><Play /></FillIcon>{text("Resume", "继续")}</Button>
+              <Button disabled={busy || unsaved || !execution.fresh || !controls?.can_verify} onClick={() => void mutate("verify")}><FillIcon><Check /></FillIcon>{text("Verify", "验收")}</Button>
             </> : null}
           </DialogFooter>}
           {unsaved ? <p className={styles.draftNotice} role="status">{text("Save or discard unsaved changes before resuming.", "继续前请保存或放弃未保存的修改。")}

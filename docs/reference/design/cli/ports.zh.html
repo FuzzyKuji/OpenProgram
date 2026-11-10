@@ -1,0 +1,72 @@
+<title>Web UI 端口</title>
+<meta name="description" content="OpenProgram 如何选择、配置和守住 Web UI 运行的唯一端口。">
+<h1>Web UI 端口</h1>
+
+<dl class="pairs">
+<dt>默认</dt><dd><code translate="no">18100</code></dd>
+<dt>提供</dt><dd>FastAPI <code translate="no">/api/*</code>、<code translate="no">/ws</code>、<code translate="no">/healthz</code> 和静态 Web UI 导出，浏览器、TUI、CLI 都连它。<a href="single-port.zh.html">单端口架构</a></dd>
+</dl>
+
+<h2 id="configuration-surface">设置</h2>
+<p>优先级从高到低：</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">来源</th><th scope="col">范围</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram web --web-port &lt;p&gt;</code></th><td>本次运行，不持久化；仅 <code translate="no">openprogram web</code></td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_WEB_PORT</code></th><td>本进程，不持久化</td></tr>
+<tr><th scope="row"><code translate="no">~/.openprogram/config.json</code> 的 <code translate="no">ui.web_port</code></th><td>持久化，下次 <code translate="no">openprogram web</code> 或 <code translate="no">openprogram worker</code> 启动时读取。运行中的不会重新绑定</td></tr>
+<tr><th scope="row">内置</th><td><code translate="no">18100</code></td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">命令</th><th scope="col">效果</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram ports</code></th><td>显示当前端口</td></tr>
+<tr><th scope="row"><code translate="no">openprogram ports --port 9100</code></th><td>设置并持久化</td></tr>
+<tr><th scope="row"><code translate="no">openprogram setup ui</code></th><td>向导：端口（<code translate="no">1–65535</code>）和自动打开浏览器</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">operations/worker/lifecycle.py</code> 的 <code translate="no">resolve_worker_port()</code> 是唯一解析路径；<code translate="no">state/preferences.py</code> 的 <code translate="no">read_ui_prefs()</code>、<code translate="no">set_ui_ports()</code> 是唯一读写路径。</p>
+
+<h2 id="conflict-handling">端口被占用时</h2>
+<table class="stack">
+<thead><tr><th scope="col">端口状态</th><th scope="col"><code translate="no">openprogram web</code></th><th scope="col"><code translate="no">openprogram worker</code></th></tr></thead>
+<tbody>
+<tr><th scope="row">空闲</th><td>绑定并启动</td><td>绑定并启动</td></tr>
+<tr><th scope="row">被自己的实例占用</th><td>复用，把浏览器指向 UI</td><td>worker 锁已阻止第二个 worker</td></tr>
+<tr><th scope="row">被外部程序占用</th><td>拒绝。打印占用者（PID、命令行）和如何释放或改端口。不打开浏览器。</td><td>说出占用者，回退到空闲端口并报告，UI 地址跟随。它还承载 channel，必须起来。</td></tr>
+<tr><th scope="row">刚退出（TIME_WAIT）</th><td>uvicorn 的 <code translate="no">SO_REUSEADDR</code> 重新绑定</td><td><code translate="no">_port_available</code> 用 <code translate="no">SO_REUSEADDR</code>，快速重启不漂移</td></tr>
+</tbody>
+</table>
+<p class="note">绝不杀占用者。</p>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">operations/worker/ports.py 的检查</th><th scope="col">方式</th></tr></thead>
+<tbody>
+<tr><th scope="row">存活：<code translate="no">port_in_use(port)</code></th><td>裸 TCP 连接</td></tr>
+<tr><th scope="row">身份：<code translate="no">backend_is_ours(port)</code></th><td>检查受管 worker 的 PID、端口文件和 profile 下仅属主可读的 <code translate="no">web/access.json</code>，向 <code translate="no">/api/auth/challenge</code> 发随机 nonce，本地验证 token-HMAC 证明。绝不发送属主 token 或 Bearer 头，外部监听者拿不到凭据。可选的 <code translate="no">expected_revision</code> 把证明绑定到升级目标的版本。</td></tr>
+<tr><th scope="row">归属：<code translate="no">describe_port_owner(port)</code>、<code translate="no">port_owner_hint(port)</code></th><td><code translate="no">lsof</code> 或 <code translate="no">netstat</code> + <code translate="no">/proc</code>、<code translate="no">ps</code>、Windows CIM：PID 和命令行，自己的还是外部的</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>为什么是 18100</summary>
+<ul>
+<li>低于 49152，不在系统分配给出站 socket 的临时端口范围。</li>
+<li><code translate="no">18xxx</code> 段少有开发工具使用，不像 3000、5173、8000、8080。</li>
+<li>固定：地址可收藏，浏览器状态（localStorage、service worker 作用域）跨重启保留。</li>
+</ul>
+</details>
+
+<details>
+<summary>与 OpenClaw 对比</summary>
+<p>OpenClaw 把网关固定在 <code translate="no">18789</code>。</p>
+<table class="stack">
+<thead><tr><th scope="col">OpenClaw 层</th><th scope="col">源码</th><th scope="col">OpenProgram</th></tr></thead>
+<tbody>
+<tr><th scope="row">单实例锁（pid、启动时间、argv）</th><td><code translate="no">src/infra/gateway-lock.ts</code></td><td><code translate="no">worker.lock</code>（fcntl）、带启动时间的 <code translate="no">worker.pid</code>、<code translate="no">_process_alive</code></td></tr>
+<tr><th scope="row">为 TIME_WAIT 做 EADDRINUSE 重试</th><td><code translate="no">src/gateway/server/http-listen.ts</code></td><td><code translate="no">SO_REUSEADDR</code>，无需重试循环</td></tr>
+<tr><th scope="row">用 <code translate="no">lsof</code> 说出占用者</th><td><code translate="no">src/infra/ports.ts</code>，仅 SSH 隧道路径</td><td><code translate="no">describe_port_owner</code>、<code translate="no">port_owner_hint</code>，启动路径上每条“端口被占用”消息都有</td></tr>
+</tbody>
+</table>
+</details>

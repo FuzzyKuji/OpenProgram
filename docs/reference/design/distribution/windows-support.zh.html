@@ -1,0 +1,141 @@
+<title>Windows 支持</title>
+<meta name="description" content="Windows 支持等级、各自的承诺和实现位置。">
+<h1>Windows 支持</h1>
+<table class="stack" id="levels">
+<caption>各等级可独立使用</caption>
+<thead><tr><th scope="col">等级</th><th scope="col">承诺</th></tr></thead>
+<tbody>
+<tr><th scope="row">W0</th><td>接受社区修复，记录已知缺口，不支持的入口报错退出。不做承诺</td></tr>
+<tr><th scope="row">W1</th><td>原生 CLI 和服务器、Ink 和浏览器 UI、MCP token、Windows CI 契约。没有原始输入时回退到 Rich。沙箱执行和 Desktop 不在 W1 内</td></tr>
+<tr><th scope="row">W2</th><td>发布归档、PowerShell 和命令提示符安装器、Windows <code translate="no">doctor</code> 检查。不依赖证书，也是智能应用控制拒绝 App 安装包时的路径</td></tr>
+<tr><th scope="row">W3</th><td>带更新的 Electron Desktop。有证书时签名。否则发布 <code translate="no">-unsigned.exe</code> 安装包，并事先告诉用户它的限制：SmartScreen 需要<strong>更多信息 → 仍要运行</strong>，智能应用控制没有单个应用的例外</td></tr>
+<tr><th scope="row">W4</th><td>可选的 WSL2 和 bubblewrap 隔离。原生 CLI 从不依赖 WSL</td></tr>
+<tr><th scope="row">薄壳</th><td>外壳、seed、<code translate="no">openprogram-launcher.exe</code>、Shift 检查、<code translate="no">install-release.ps1</code> 的 seed 分支</td></tr>
+<tr><th scope="row">本地刷新</th><td>带补偿回滚的原生发布</td></tr>
+</tbody>
+</table>
+
+<h2>工程规则</h2>
+<ul>
+<li>平台行为放在 <code translate="no">openprogram/host/_platform/</code>（文件系统、锁、进程、进程归属、终端、环境）或它选择的适配器里。</li>
+<li>优先能力检测。不支持的功能在入口失败，不在后期抛 <code translate="no">NotImplementedError</code>。</li>
+<li>对 POSIX 安全属性的弱化替代必须是明确记录的决定。</li>
+<li>Windows CI 契约覆盖之前，修复不算完成。</li>
+<li>POSIX <code translate="no">0600</code>、<code translate="no">0700</code> 不是 Windows 要求：保留配置文件继承的 ACL，任何步骤都不移除继承或改写条目。原子替换和跨进程锁仍然必需。</li>
+</ul>
+
+<h2 id="w1">W1：原生 CLI 和服务端</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">领域</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">源码安装器</th><td>检出内 <code translate="no">.venv</code>、npm 锁文件、Web 和 Ink 构建、所选 extras、用户 PATH 上的 <code translate="no">openprogram.cmd</code>。<code translate="no">-Minimal</code>：只装 Python CLI 和服务端</td></tr>
+<tr><th scope="row">启动器</th><td>只有一个 <code translate="no">openprogram.cmd</code>：PowerShell 优先选同名 <code translate="no">.ps1</code>，而默认的 Restricted 策略会拒绝它，所以安装器会删除旧文件。PowerShell 脚本：带 BOM 的 UTF-8。批处理：不带 BOM 的 UTF-8，带 ASCII 代码页前导，关闭延迟展开，转义百分号，恢复调用方代码页，保留退出状态。安装器只对自身进程使用 <code translate="no">powershell.exe -ExecutionPolicy Bypass -File</code>；不改机器的执行策略或区域设置</td></tr>
+<tr><th scope="row">Ink</th><td>各系统都按能力判断。Windows Terminal 和 ConPTY 全屏运行；MinTTY 等恢复 stdio 后回退 Rich。分词器把控制字节和可打印片段分开；括号粘贴保持一个事件</td></tr>
+<tr><th scope="row">MCP 令牌</th><td>唯一临时文件加原子硬链接。读取时重新校验文件和祖先目录</td></tr>
+<tr><th scope="row">进程</th><td>PowerShell CIM，不用 WMIC。存活和创建时间来自只读原生查询；绝不用信号 0。常驻 worker：最小权限的按用户计划任务</td></tr>
+<tr><th scope="row">文件日志</th><td>共用跨进程锁。应用和回滚用不同的 guard 文件</td></tr>
+<tr><th scope="row">检查点、备份、恢复</th><td>没有基于描述符的操作时走路径回退：拒绝符号链接和联接点，重新校验父目录，二进制原子写</td></tr>
+<tr><th scope="row">工作区审查</th><td>分批读取 Git 元数据和对象；Git 调用次数不随变更文件增长</td></tr>
+<tr><th scope="row">Shell 工具</th><td>装了 Git Bash 就用它，否则用 Windows PowerShell；绝不用 <code translate="no">cmd.exe</code>。无窗口进程。Git Bash 的源码经临时环境变量传递；PowerShell 接收 UTF-16 源码并输出 UTF-8；Python 子进程默认 UTF-8</td></tr>
+<tr><th scope="row">Program 发现</th><td>直接查元数据，不为每次连接重建完整的导入到发行包映射</td></tr>
+<tr><th scope="row">会话存储关闭</th><td>取消定时器，在锁外等待进行中的写入，刷出最新快照。失败的写入保持脏状态。没有线程时同步保存</td></tr>
+<tr><th scope="row">LF 编辑</th><td>可匹配 CRLF 文件并保留行尾；重复匹配拒绝；混合行尾需要精确文本</td></tr>
+</tbody>
+</table>
+<details>
+<summary>自更新和 CI</summary>
+<p>日志读取可移植，但对话内控制器只有 macOS 版。对话的 prepare 和 retry 在创建状态前检查 <code translate="no">host/_platform/environment.py</code> 里的能力，并指向 CLI 和 Desktop 更新器。status 和 cancel 不受限。原生候选测试和激活尚未实现。</p>
+<p>push 和 PR 检查会取代同分支的旧运行。安装验收和定时冒烟使用唯一分组。每个矩阵都包含两种架构。core 任务覆盖兼容层、检查点、备份、升级、安装器契约和计划任务；smoke 任务完成 PowerShell 完整安装，启动 worker，运行 <code translate="no">doctor</code> 后停止。</p>
+</details>
+
+<h2 id="w2">W2：发布安装器</h2>
+<p>原生 runner 构建 <code translate="no">OpenProgram-&lt;version&gt;-runtime-windows-x86_64.zip</code> 及其 SHA-256 文件；<code translate="no">OPENPROGRAM_RELEASE_WINDOWS_ARM64</code> 打开时构建 arm64。只有一个 <code translate="no">runtime/</code> 根目录。Ink 启动探测成功后才记录 <code translate="no">tui.ink</code>。</p>
+<ol>
+<li><code translate="no">install.ps1</code>（或取用它的 <code translate="no">install.cmd</code>）解析稳定版本，release manifest 没有本平台安装包时停止并说明，然后交给该不可变 tag 上的安装器。</li>
+<li>检查磁盘空间，支持续传下载，校验 checksum 和每个 ZIP 条目；拒绝链接和重解析点。</li>
+<li>在每运行时一把的排他锁下，校验能力，并在隔离暂存状态下冷启动 worker。</li>
+<li>把通过校验的候选移入版本目录。</li>
+<li>原子替换 <code translate="no">.cmd</code> 启动器，保留 <code translate="no">openprogram.previous.cmd</code>。</li>
+</ol>
+<p>托管升级通过兼容层选择 Windows ZIP 和 tag 上的 PowerShell 安装器。经 <code translate="no">iex</code> 管道运行时失败只设置退出码并抛错，窗口不会关闭。</p>
+<details>
+<summary>激活和解压细节</summary>
+<ul>
+<li>各版本留在各自目录，保留上一份启动器。缓存的版本会重新校验。</li>
+<li>启动器先准备并做快照。替换失败时恢复；恢复也失败时，把原文件保留在报告的路径。</li>
+<li>写入前校验 ZIP 名称；文件经扩展长度路径流式写入，检查展开字节数和长度。检查和清理用同样的 API。不改长路径注册表值。</li>
+<li>.NET 替换时传 <code translate="no">NullString</code>，否则 PowerShell 5 把 <code translate="no">$null</code> 绑定成无效的空路径。</li>
+<li>构建辅助脚本恢复工作区、工具链、下载和浏览器缓存环境，失败时也恢复。</li>
+<li><code translate="no">doctor</code> 以只读建议报告长路径和 Defender 状态。</li>
+</ul>
+</details>
+
+<h2 id="w3">W3：Desktop</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">领域</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">构建</th><td>x64 按用户、assisted 的 NSIS，由薄壳和解包进 App 的 seed 组成（arm64 跟随 W2 的开关）。Release 任务要求 seed 在 App 内</td></tr>
+<tr><th scope="row">签名</th><td>有 <code translate="no">WINDOWS_CSC_LINK</code> 和 <code translate="no">WINDOWS_CSC_KEY_PASSWORD</code> 时：<code translate="no">OpenProgram.exe</code> 和安装包 Authenticode 为 Valid，否则任务失败。没有时：两者都必须是 NotSigned，安装包改名为 <code translate="no">-unsigned.exe</code></td></tr>
+<tr><th scope="row">运行</th><td>封存版本位于 <code translate="no">%USERPROFILE%\.openprogram\runtime</code>，首次启动时在进度页后从 seed 解包。终端：Windows PowerShell，否则 <code translate="no">COMSPEC</code>，经 <code translate="no">node-pty</code> ConPTY。从常规路径导入浏览器</td></tr>
+<tr><th scope="row">更新器</th><td>通过 <code translate="no">openprogram upgrade --json</code> 接收封存版本。只有发行版需要更新的外壳时，才提供文件 <code translate="no">OpenProgram-&lt;version&gt;-win-&lt;arch&gt;.exe</code> 或 <code translate="no">-unsigned.exe</code>。运行中 App 自身的签名决定更新线：只有未签名构建的 App 才接受 NotSigned，并且要先通过大小和 SHA-256；已签名的 App 要求 Valid 且发布者相同。失败时删除候选。可见的用户交接：<a href="automatic-updates.zh.html">自动更新</a></td></tr>
+<tr><th scope="row">CI</th><td>x64 和 arm64 安装依赖和原生 PTY，运行 Desktop 契约和 Web 测试</td></tr>
+</tbody>
+</table>
+<details>
+<summary>运行时准备和版本预检</summary>
+<p>本地用完整运行时打包 <code translate="no">dist:win</code>：</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">部分</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">构建</th><td>独占锁下的唯一暂存目录</td></tr>
+<tr><th scope="row">旧 payload</th><td>保留到替换品就绪且与 Desktop 版本一致</td></tr>
+<tr><th scope="row">失败时</th><td>恢复旧 payload，或把备份留在报告的路径</td></tr>
+<tr><th scope="row">深层或只读文件</th><td>走扩展路径</td></tr>
+<tr><th scope="row">目录链接</th><td>不跟随直接删除</td></tr>
+<tr><th scope="row">已安装的 App</th><td>不替换</td></tr>
+</tbody>
+</table>
+<p><code translate="no">verify-release-version.py --installed-app</code> 接受安装目录或 EXE，不启动就读取 PE 版本元数据，要求与运行时清单和内嵌 Python 包元数据一致。第四段为零时规范化；非零不丢弃。</p>
+</details>
+
+<h2 id="local-refresh">本地刷新发布</h2>
+<p><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/windows-refresh-transaction.ps1"><code translate="no">windows-refresh-transaction.ps1</code></a> 按顺序发布已校验的同级源和目标对，覆盖 App、CLI 运行时和启动器。加载脚本没有副作用。</p>
+<details>
+<summary>事务契约</summary>
+<ul>
+<li>路径不得重叠；拒绝驱动器相对路径和被重定向的祖先。使用扩展路径，不改 ACL 或机器设置。</li>
+<li>第一个目标的父目录里一把排他 OS 锁。载荷检查在锁内进行。</li>
+<li>四个回调：静默旧安装、校验已发布、静默失败的替换、恢复旧服务。每个都必须恰好返回布尔 true。</li>
+<li>刷盘的 JSON 日志记录每个源、目标和备份。按序发布，反序补偿。</li>
+<li>成功保留原件和回执，不删除运行时目录。关闭或回滚失败时保留日志并拒绝后续尝试。</li>
+<li>这是补偿式发布，不是崩溃原子的：恢复必须检查记录的路径，不能相信最后的标志。</li>
+<li>仍需构建：冻结检出、App 和 CLI 共用一个 wheel、停 worker 前校验、在默认 profile 和端口验证、与 CLI 和 Desktop 安装锁协调。</li>
+</ul>
+</details>
+
+<h2 id="w4">W4：命令沙箱</h2>
+<p>兼容层找到真实的 WSL2 发行版，校验 Bash 和 bubblewrap，探测命名空间，用 <code translate="no">wslpath</code> 转换路径。bubblewrap 提供与 Linux 相同的边界：只读根、可写工作区根、拒绝路径、PID/IPC/UTS 命名空间、私有临时目录，除非策略允许否则加网络命名空间。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"><code translate="no">sandbox.mode</code></th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">off</code>（默认）</th><td>只在打开沙箱开关的对话中启用</td></tr>
+<tr><th scope="row"><code translate="no">auto</code></th><td>探测成功后所有对话都启用；否则原生、无沙箱</td></tr>
+<tr><th scope="row"><code translate="no">workspace-write</code></th><td>失败即关闭：在入口报告缺少 WSL2 或 bubblewrap</td></tr>
+</tbody>
+</table>
+<p class="note">探测不改 ACL、所有权、权限、Defender 或 WSL 设置。AppContainer 需要按应用做能力和 ACL 工作。Job Object 能限 CPU 和进程，但没有文件系统和网络边界。</p>
+
+<h2 id="implementation-status">实现状态</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">等级</th><th scope="col">状态</th></tr></thead>
+<tbody>
+<tr><th scope="row">W1</th><td>已有；Windows 任务是合并门禁</td></tr>
+<tr><th scope="row">W2</th><td>已实现。安装器在 PowerShell 7 下解析通过，用替身工具跑通；真实 Windows 安装和 Release 任务都没有运行过。v1.0.0 没有发布 Windows 文件</td></tr>
+<tr><th scope="row">W3</th><td>已实现，v1.1.0 首次发布。目前只在 macOS 上用占位 seed 构建过 NSIS；App 从未在 Windows 上启动。门禁是一次 Release 运行和一次真实 Windows 验证</td></tr>
+<tr><th scope="row">W4</th><td>已实现；原生 AppContainer 和配额是未来工作</td></tr>
+<tr><th scope="row">薄壳</th><td>已实现，未在 Windows 上运行过</td></tr>
+<tr><th scope="row">本地刷新</th><td>只有底层能力：编排、崩溃恢复、已安装 App 验收待完成</td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="installation-packaging.zh.html">安装与打包</a></p>

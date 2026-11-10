@@ -161,7 +161,7 @@ def test_existing_usage_database_is_migrated_and_reopens(tmp_path):
         )
     }
     assert {"job_id", "budget_scope_id", "reservation_id"} <= columns
-    assert {"job_admissions", "budget_scopes", "usage_reservations"} <= tables
+    assert not {"job_admissions", "budget_scopes", "usage_reservations"} & tables
     assert reopened.connection().execute("PRAGMA journal_mode").fetchone()[0] == "wal"
 
 
@@ -240,9 +240,8 @@ def test_legacy_task_usage_schema_is_renamed_to_jobs(tmp_path):
     assert migrated.execute(
         "SELECT job_id FROM usage_events WHERE event_id = 'event'"
     ).fetchone()[0] == "t_1"
-    assert tuple(migrated.execute(
-        "SELECT scope_kind, job_id FROM budget_scopes WHERE budget_scope_id = 'scope'"
-    ).fetchone()) == ("job", "t_1")
+    scope = ledger.stored_run_table_rows()["budget_scopes"][0]
+    assert (scope["scope_kind"], scope["job_id"]) == ("job", "t_1")
     indexes = {
         row[0] for row in migrated.execute(
             "SELECT name FROM sqlite_master WHERE type = 'index'"
@@ -277,12 +276,12 @@ def test_usage_aggregation_tracks_unknown_cost_events(ledger):
 # contextvar scope
 
 def test_usage_scope_sets_and_resets():
-    assert current_usage_context().call_kind == "unknown"
+    assert current_usage_context().call_kind is None
     with usage_scope(call_kind="chat", agent_id="ag1"):
         c = current_usage_context()
         assert c.call_kind == "chat"
         assert c.agent_id == "ag1"
-    assert current_usage_context().call_kind == "unknown"
+    assert current_usage_context().call_kind is None
 
 
 def test_usage_scope_nesting_inherits():

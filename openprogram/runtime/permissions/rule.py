@@ -316,14 +316,11 @@ def parse_command(tool_name: str, args: dict) -> Optional[str]:
             return f"vm:{vm.url()}" if vm.url() else None
         nested = args.get("args") if isinstance(args.get("args"), dict) else args
         if target == "browser":
-            # The user's own Chrome or Edge is one grant; built-in Pages have no rule.
+            # The user's own Chrome or Edge is one grant for everything done
+            # in it, page scripts included; built-in Pages have no rule.
             from openprogram.programs._host import services as _services
             browser = _services.lookup("browser")
             chosen = browser.browser_of(nested) if browser is not None else ""
-            # Page scripts are allowed apart from the grant to operate a browser.
-            from openprogram.programs.tools.computer_use.computer_use_agent import evaluates
-            if evaluates(args):
-                return f"browser:{chosen}:evaluate" if chosen else "browser:evaluate"
             return f"browser:{chosen}" if chosen else None
         if target != "app":
             return None
@@ -350,13 +347,13 @@ def exact_rule_for_call(tool_name: str, args: dict) -> PermissionRuleValue | Non
 
 def load_merged_rules(session_id: str):
     """合并各来源的权限规则，返回 PermissionRules（低→高：global < session）。
-    见 docs/design/runtime/permission-model.md §2.3。
+    见 docs/reference/design/runtime/security/permission-decision.html。
 
     落地三层真实载体——全局配置 < 项目（主要载体）< 会话（临时覆盖）。
     权限规则跟着**项目**走（<project>/.openprogram/settings.json），所以切会话
     规则还在、"总是允许"能长期记住。会话层保留作最高优先的一次性覆盖。
-    合并只是拼接三 list：deny/ask/allow 的总序由 _match_rule 保证（命中即返回），
-    来源顺序只影响同一 behavior 内的先后。见 permission-model.md §2.3。"""
+    合并只是拼接三 list：deny/ask/allow 的总序由 match_rule 保证（命中即返回），
+    来源顺序只影响同一 behavior 内的先后。见 docs/reference/design/runtime/security/permission-decision.html。"""
     from openprogram.runtime.permissions.modes import PermissionRules
     from openprogram.runtime.permissions.session_facts import facts
 
@@ -431,6 +428,27 @@ def load_merged_rules(session_id: str):
                 raise
 
     return merged
+
+
+def rule_origin(session_id: str, raw: str | None, behavior: str) -> str:
+    """Which layer holds ``raw`` as a ``behavior`` rule, in the words the settings use.
+
+    The same text can be an allow rule in one layer and an ask rule in another,
+    and the refusal must send the owner to the one that decided.
+    """
+    from openprogram.runtime.permissions.session_facts import facts
+    try:
+        session = facts().session_rules(session_id)
+        if session is not None and raw in getattr(session, behavior):
+            return "this conversation"
+        from openprogram.state.store.project import project_store as projects
+        project = projects.project_for_session(session_id)
+        rules = (projects.load_project_settings(project.id).get("permission_rules") or {}) if project else {}
+        if raw in (rules.get(behavior) or ()):
+            return "this project"
+    except Exception as exc:  # noqa: BLE001 - only the wording of a refusal depends on this
+        _log.debug("permission rule origin unavailable: %s", exc)
+    return "global settings"
 
 
 def _match_one(pattern: str, value: str, *, allow: bool) -> bool:

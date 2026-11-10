@@ -68,8 +68,8 @@ def run() -> int:
         # Start the worker?
         running = _worker.current_worker_pid() is not None
         if running:
-            print("\n[setup] channels worker is already running — "
-                  "no need to restart.")
+            print("\n[setup] the background service is running — "
+                  "it starts this account within a few seconds.")
         else:
             if _confirm("Start the channels worker now?", default=True):
                 pid = _worker.spawn_detached()

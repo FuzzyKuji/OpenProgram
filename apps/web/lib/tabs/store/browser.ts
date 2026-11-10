@@ -18,7 +18,7 @@ export function browserActions(set: StoreApi<CenterTabsState>["setState"]): Pick
           }));
       }),
 
-    openPopupWebTab: (url, openerTabId, nativeId) => {
+    openPopupWebTab: (url, openerTabId, nativeId, behind) => {
       const id = nativeId || nextPopupWebTabId(url);
       set((s) => {
         const opener = s.tabs.find((tab) => tab.id === openerTabId);
@@ -30,7 +30,7 @@ export function browserActions(set: StoreApi<CenterTabsState>["setState"]): Pick
             agentBranchId: opener?.agentBranchId,
             agentExecutionId: opener?.agentExecutionId,
           }),
-          activeId: opener?.agentOpened ? s.activeId : id,
+          activeId: opener?.agentOpened || behind ? s.activeId : id,
         });
       });
       return id;

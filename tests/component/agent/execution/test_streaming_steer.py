@@ -109,8 +109,8 @@ def test_stop_with_pending_steer_keeps_reply_in_cold_history(real_agent_chat):
         h.server._append_msg(conv, {"id": "next-user", "role": "user", "content": "continue"})
         branch = SessionStore(h.sessions.root_path).get_branch(h.session_id)
         assert [m["id"] for m in branch][-2:] == [source.assistant_message_id, "next-user"]
-        from openprogram.runtime.execution.projections import ExecutionProjectionReadModel
-        ExecutionProjectionReadModel(h.store).project_cancelled_assistant(
+        from openprogram.runtime.execution.event_effects import ExecutionEventEffects
+        ExecutionEventEffects(h.store).project_cancelled_assistant(
             h.store.get_execution(execution.execution_id),
         )
         assert SessionStore(h.sessions.root_path).get_session(h.session_id)["head_id"] == "next-user"

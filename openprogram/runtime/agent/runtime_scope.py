@@ -128,8 +128,9 @@ def execution_scope(runtime=None):
             token = _store.set(writer)
             stack.callback(_store.reset, token)
         if current_turn_request.get() is None:
+            from openprogram.runtime.permissions.authority import local_owner_authority
             request = TurnRequest(session_id=getattr(writer, "session_id", "standalone"), user_text='',
-                                  agent_id='standalone', source='python', permission_mode='ask')
+                                  agent_id='standalone', source='python', **local_owner_authority())
             token = current_turn_request.set(request)
             stack.callback(current_turn_request.reset, token)
         yield current

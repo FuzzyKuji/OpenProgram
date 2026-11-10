@@ -5,8 +5,9 @@ Each action below is written action(arguments). Send one as computer_use_agent(t
 Workflow
 1. get_app_state(app) first (list_apps shows installed and running apps; a closed app is launched in the background). It returns a screenshot and the window's Accessibility tree, one element per line with an index. When an app exposes little to Accessibility (games, canvases, remote desktops), the state also lists the text read off the screenshot by OCR, each line with the pixel x,y of its centre.
 2. Act by element_index whenever the tree has the element; element actions reach covered, hidden and minimized windows. Use x,y (pixels of the app's last screenshot) only for what the tree lacks: canvases, custom controls.
-3. Every action returns its result and the tree lines that changed (indices you already have stay valid; new elements get new indices). Do not call get_app_state again just to check; call it when an index is reported stale, or with full=true for the whole tree.
+3. Every action returns its result and the tree lines that changed (indices you already have stay valid, also when the app redraws its window; new elements get new indices). Do not call get_app_state again just to check; call it when a step says an element no longer exists, or with full=true for the whole tree.
 4. Put several deterministic steps (fill a form, type then press Return) in one actions list.
+5. Other agents may operate the same app. A call (one action, a list, a read) keeps the app to itself until it returns, so another agent's call waits for it; when another agent acted on the app since you last looked, the result says so and the changes it lists include theirs.
 
 Actions
 - list_apps; list_windows(app): window ids, titles, minimized / hidden / other-Space state.
@@ -32,4 +33,4 @@ Actions
 - open_file(app, path): open a document (absolute path) in that app the way Open With does, without raising it; the next state is of its window. Use it instead of File > Open or cmd+O: the system Open and Save dialogs take clicks and set_value but not keys. When a state says a file dialog is open, call open_file: it cancels the dialog first.
 - start_audio_recording(app, max_duration=60): record the sound that app plays (only that app; the user still hears it), up to 300 seconds; act meanwhile. stop_audio_recording(app, transcribe=true) stops, saves a WAV and returns its path and, when a speech engine is set up in Settings > Voice, a transcript; a model that accepts audio input also receives the recording itself.
 
-Refused: password fields, the Keychain and Passwords apps, system login prompts, and OpenProgram itself.
+OpenProgram's own windows are refused outside Bypass permissions mode. The owner can refuse more applications (`computer_use.refused_apps`) and typing into password fields (`computer_use.refuse_password_fields`).

@@ -17,7 +17,7 @@ Everything event-related lives here:
 * ``event_log.py``   — per-session events.jsonl with 5 MB rotation.
 * ``bridges.py``     — type-B subsystem bridges (auth → bus).
 
-Design doc: docs/reference/design/proactive/event-layer.md. Dependency
+Design doc: docs/reference/design/proactive/event-layer.html. Dependency
 rule: this package never imports webui — webui subscribes to the bus, the
 bus does not know webui.
 

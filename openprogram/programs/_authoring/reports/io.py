@@ -88,7 +88,8 @@ def preflight(output_dir: str) -> str:
     target = str(Path(resolved).absolute())
     violation = validate_write_path(str(Path(target) / "checkpoint.json"))
     if violation:
-        raise OSError("sandbox policy: " + violation)
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("report checkpoint", violation)
     return target
 
 
@@ -114,14 +115,15 @@ def load_checkpoint(path: str) -> dict:
 
     resolved, _ = resolve_path(path)
     path = str(Path(resolved).absolute())
+    from openprogram.runtime.permissions import refusal
     violation = validate_read_path(path)
     if violation:
-        raise OSError("sandbox policy: " + violation)
+        raise refusal.sandbox("report checkpoint", violation)
     invalidation = str(path) + ".invalidated.json"
     if Path(invalidation).exists():
         violation = validate_read_path(invalidation)
         if violation:
-            raise OSError("sandbox policy: " + violation)
+            raise refusal.sandbox("report checkpoint", violation)
         with open(invalidation, "rb") as stream:
             notice = decode_object(stream.read(4097).decode("utf-8"), max_bytes=4096)
         raise ValueError("Checkpoint invalidated; start a fresh report: " + str(notice.get("reason", "Source correction"))[:500])

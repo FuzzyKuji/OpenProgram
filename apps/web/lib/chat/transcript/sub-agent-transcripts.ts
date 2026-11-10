@@ -3,33 +3,67 @@
  *
  * A sub-agent (an `agent` spawn, or a later `send_message` to it) runs as a
  * Job whose turns are a branch of the SAME session, so its live frames carry
- * the conversation's session id. The server stamps each of them with
- * `job_id`; they are kept here, under a chat key of their own, and shown by
- * the agent's step row when it opens. The conversation's transcript never sees them.
+ * the conversation's session id. The agent's step row opens them as a view of
+ * its own, under a chat key of its own, and numbered updates keep that view live.
  *
- * Job turns use the admission ids `<job_id>_user` / `<job_id>_user_reply`
- * (openprogram/runtime/jobs/runner/admission.py), so a follow-up Job names the
- * agent it continues through its `parent_msg_id`.
+ * A follow-up Job's status names the Job its agent continues
+ * (`continues_job_id`, openprogram/runtime/jobs/runner/shared.py).
  */
-import { convToChatMsgs } from "@/lib/chat/transcript/conv-mapper";
+import type { TurnWindow, WireTurn } from "@/lib/chat/history/history-window";
 import type { JobStatusDetail } from "@/lib/net/ws/ws-events";
 import { wsRequest } from "@/lib/net/ws/ws-request";
-import { useSessionStore } from "@/lib/session-store";
-import { chatKeySession, ownsSubAgentChatKey, subAgentChatKey } from "./sub-agent-keys.ts";
+import { getSocket } from "@/lib/runtime-bridge/state";
+import { selectViewRows, useSessionStore } from "@/lib/session-store";
+import { ownsSubAgentChatKey, subAgentChatKey } from "./sub-agent-keys.ts";
+import { rowsOfTurns } from "./turn-rows.ts";
+import { applyReadToView } from "./apply-read.ts";
 
 export { ownsSubAgentChatKey, subAgentChatKey };
 
-const JOB_REPLY_SUFFIX = "_user_reply";
 
 /** Job → the Job whose branch it continues (a follow-up message). */
 const continues = new Map<string, string>();
-/** Job → the prompt shown above its first reply until the transcript loads. */
-const prompts = new Map<string, string>();
 /** Job → the session it runs in, so a removed session releases its Jobs. */
 const jobSessions = new Map<string, string>();
 
 function noteJobSession(jobId: string, sessionId: string | undefined): void {
   if (sessionId) jobSessions.set(jobId, sessionId);
+}
+
+/** The views this client holds a cursor on, by key; how to read one again. */
+const cursors = new Map<string, number>();
+const viewSources = new Map<string, { sessionId: string; agentKey: string; source: { jobId?: string; headId?: string } }>();
+
+export function subAgentCursor(view: string): number | undefined {
+  return cursors.get(view);
+}
+
+export function advanceSubAgentCursor(view: string, revision: number): void {
+  cursors.set(view, revision);
+}
+
+export function forgetSubAgentCursor(view: string): void {
+  cursors.delete(view);
+  viewSources.delete(view);
+}
+
+export function subAgentViews(sessionId: string): string[] {
+  return [...viewSources].flatMap(([view, read]) => (read.sessionId === sessionId ? [view] : []));
+}
+
+/** The expanded view closed: the server stops keeping it for this socket. */
+export function closeSubAgentView(sessionId: string, agentKey: string): void {
+  const view = subAgentChatKey(sessionId, agentKey);
+  forgetSubAgentCursor(view);
+  const socket = getSocket();
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ action: "close_view", session_id: sessionId, view }));
+  }
+}
+
+export async function reloadSubAgentTranscript(view: string): Promise<void> {
+  const read = viewSources.get(view);
+  if (read) await loadSubAgentTranscript(read.sessionId, read.agentKey, read.source);
 }
 
 /** Forget what this module holds for a removed session's Jobs. The store
@@ -39,8 +73,8 @@ export function releaseSubAgentTranscripts(sessionId: string): void {
     if (owner !== sessionId) continue;
     jobSessions.delete(jobId);
     continues.delete(jobId);
-    prompts.delete(jobId);
   }
+  for (const view of subAgentViews(sessionId)) forgetSubAgentCursor(view);
 }
 
 /** The first Job of the agent this Job belongs to. */
@@ -54,43 +88,21 @@ export function agentJobFor(jobId: string): string {
   return current;
 }
 
-export function rememberJobPrompt(jobId: string | undefined, prompt: string | undefined, sessionId?: string): void {
-  if (!jobId) return;
-  noteJobSession(jobId, sessionId && chatKeySession(sessionId));
-  if (prompt && !prompts.has(jobId)) prompts.set(jobId, prompt);
-}
-
 /** Record which agent a Job continues, before its first frame arrives. */
 export function noteJobStatus(detail: JobStatusDetail): void {
   const jobId = detail.job_id;
   if (!jobId) return;
   noteJobSession(jobId, detail.session_id);
-  const parent = detail.parent_msg_id || "";
-  if (parent.endsWith(JOB_REPLY_SUFFIX)) {
-    const parentJob = parent.slice(0, -JOB_REPLY_SUFFIX.length);
-    if (parentJob && parentJob !== jobId) continues.set(jobId, parentJob);
-  }
-  rememberJobPrompt(jobId, detail.resource?.prompt_summary ?? undefined);
-}
-
-/** Put the Job's prompt row in place before its reply starts streaming. */
-export function ensureSubAgentPrompt(key: string, jobId: string, userMsgId: string): void {
-  noteJobSession(jobId, chatKeySession(key));
-  const store = useSessionStore.getState();
-  if (store.messagesById[userMsgId]) return;
-  store.appendMessage(key, {
-    id: userMsgId,
-    role: "user",
-    content: prompts.get(jobId) ?? "",
-    status: "done",
-  });
+  const parentJob = detail.continues_job_id;
+  if (parentJob && parentJob !== jobId) continues.set(jobId, parentJob);
 }
 
 interface TranscriptReply {
   session_id?: string;
   job_id?: string;
-  head_id?: string;
-  messages?: unknown[];
+  view?: string;
+  turns?: WireTurn[];
+  window?: TurnWindow | null;
   error?: string;
 }
 
@@ -111,19 +123,23 @@ export async function loadSubAgentTranscript(
     { requestId: true },
     8000,
   );
-  if (!data || data.error || !Array.isArray(data.messages)) return null;
-  const messages = convToChatMsgs(data.messages as Parameters<typeof convToChatMsgs>[0]);
+  if (!data || data.error || !Array.isArray(data.turns)) return null;
+  const messages = rowsOfTurns(data.turns);
   if (!messages.length) return null;
-  const tip = data.head_id || null;
+  const tip = data.window?.head_id || null;
+  const view = data.view ?? subAgentChatKey(sessionId, agentKey);
+  viewSources.set(view, { sessionId, agentKey, source });
+  if (data.window) cursors.set(view, data.window.revision);
   // A turn that started after the server read the branch stays at the end.
   const key = subAgentChatKey(sessionId, agentKey);
   const store = useSessionStore.getState();
   const loaded = new Set(messages.map((message) => message.id));
+  const held = selectViewRows(key)(store);
   const newer = (store.messageOrder[key] ?? [])
     .filter((id) => !loaded.has(id))
-    .map((id) => store.messagesById[id])
+    .map((id) => held[id])
     .filter((message) => message !== undefined);
-  store.setMessages(key, [...messages, ...newer]);
+  applyReadToView(key, [...messages, ...newer]);
   return tip;
 }
 

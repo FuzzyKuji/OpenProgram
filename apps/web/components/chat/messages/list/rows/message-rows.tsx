@@ -2,94 +2,122 @@
 
 /** One transcript row: picks the bubble, card or event a message renders
  *  as, with the recyclable wrapper the virtualized list mounts. */
-import { TranscriptSessionContext } from "../transcript-view-scope";
-import { memo, useLayoutEffect, useRef, useState } from "react";
-import { useMessageById, useSessionStore, type ChatMsg } from "@/lib/session-store";
+import { BotViewContext, TranscriptScopeContext, type TranscriptScope } from "../transcript-view-scope";
+import { memo, useContext, useLayoutEffect, useRef, useState, type ReactNode } from "react";
+import { BotMessage } from "../../bubbles/bot-message";
+import { selectRow, useSessionStore, type ChatMsg } from "@/lib/session-store";
 import { messageArrivedWithin } from "@/lib/session-store/messages/message-arrivals";
 import { getRowHeight, setRowHeight } from "@/lib/chat/history/message-window";
 import { AgentNoticeRows, ReceivedMessageRow } from "../../cards/agent-event-row";
 import { AssistantBubble } from "../../bubbles/assistant-bubble";
 import { AttachCard } from "../../cards/attach-card";
+import { PromptTurn } from "../../cards/sub-agent-prompt";
+import { TodoPlans } from "../../cards/todo-plan-card";
+import { SubAgentStrip } from "../../execution/execution-strip";
+import { StepExpansionScope } from "../../execution/step-expansion";
+import { isAgentLive } from "@/lib/chat/transcript/row-status";
 import { RuntimeBlock } from "../../runtime/runtime-block";
 import { SpawnedFromCard } from "../../cards/spawned-from-card";
 import { UserBubble } from "../../bubbles/user-bubble";
 import { MessageTimestamp } from "../../bubbles/message-actions";
-import { readReceipt } from "@/lib/chat/transcript/agent-notices";
-import { SYSTEM_EVENT_KINDS, SystemEventRow, CompactionCard } from "./system-event-rows";
+import { readReceipt, type Receipt } from "@/lib/chat/transcript/agent-notices";
+import type { RowKind } from "@/lib/chat/transcript/wire-types.generated";
+import { SystemEventRow, CompactionCard } from "./system-event-rows";
 
 /** A row mounted this soon after its message arrived still plays msgAppear. */
 const APPEAR_WINDOW_MS = 1000;
 
-/** goal 循环的内部 spawn 轮 label（openprogram/programs/workflow/goal/
- *  __init__.py 的 run_agent_turn(label=...)，经 spawnedFrom.label 到达）。
- *  只有这些轮才做 JSON 尾巴折叠——绝不按"内容长得像 JSON"匹配普通消息。 */
-const GOAL_SPAWN_LABELS = new Set(["goal 判定", "goal 完善"]);
-
-/** Internal verifier output stays in durable execution history, not chat. */
-export function AssistantMessage({ msg, sessionIdOverride }: {
-  msg: ChatMsg; sessionIdOverride?: string;
-}) {
-  const spawnLabel = useSessionStore((s) =>
-    msg.calledBy ? s.messagesById[msg.calledBy]?.spawnedFrom?.label : undefined);
-  if (msg.goalVerification || (spawnLabel && GOAL_SPAWN_LABELS.has(spawnLabel))) return null;
-  return <AssistantBubble msg={msg} sessionIdOverride={sessionIdOverride} />;
+/** The receipt a delivered message shows. The server decided the row is
+ *  one; a delivery written without its receipt line shows just the body. */
+function receiptOf(msg: ChatMsg): Receipt {
+  const content = msg.content || "";
+  return readReceipt(content) ?? { kind: "message", from: "", address: "", body: content };
 }
 
-function dispatch(msg: ChatMsg, sessionIdOverride?: string) {
-  if (msg.role === "system") {
-    if (msg.kind === "compaction" && msg.slot === "card") {
-      return <CompactionCard msg={msg} />;
-    }
-    if (msg.kind && SYSTEM_EVENT_KINDS.has(msg.kind)) {
-      return <SystemEventRow msg={msg} />;
-    }
-    return (
-      <div className="message system" data-msg-id={msg.id}>
-        {msg.content}
-        <div className="message-actions-footer">
-          <div className="message-actions">
-            <MessageTimestamp timestamp={msg.timestamp} />
+/** One branch per row kind the server sends, and per local row kind. */
+function dispatch(kind: RowKind, msg: ChatMsg, scope: TranscriptScope): ReactNode {
+  const sessionId = scope.sessionId ?? undefined;
+  const viewKey = scope.viewKey ?? undefined;
+  switch (kind) {
+    case "silent":
+      return null;
+    case "user":
+      return scope.embedded ? <PromptTurn msg={msg} /> : <UserBubble msg={msg} sessionIdOverride={sessionId} />;
+    case "received_message":
+      return scope.embedded ? <PromptTurn msg={msg} /> : <ReceivedMessageRow msg={msg} receipt={receiptOf(msg)} />;
+    case "spawned_root":
+      return scope.embedded ? <PromptTurn msg={msg} /> : (
+        <>
+          <SpawnedFromCard msg={msg} />
+          <UserBubble msg={msg} sessionIdOverride={sessionId} />
+        </>
+      );
+    case "agent_notice":
+      return scope.embedded ? <PromptTurn msg={msg} /> : <AgentNoticeRows msg={msg} items={msg.notice ?? []} />;
+    case "assistant":
+      // A goal check whose verdict landed before the server's row did stays hidden too.
+      if (msg.goalVerification) return null;
+      return scope.embedded ? (
+        <>
+          <AssistantBubble msg={msg} sessionIdOverride={sessionId} viewKey={viewKey} embedded />
+          {/* The sub-agent's own plan sits under its own reply. */}
+          <TodoPlans sessionId={scope.sessionId} viewKey={viewKey} rowId={msg.id} />
+        </>
+      ) : <AssistantBubble msg={msg} sessionIdOverride={sessionId} viewKey={viewKey} />;
+    case "function_run":
+      // 手动函数运行（fn-form / /run）：RuntimeBlock 内部已统一为
+      // 时间线组件（根行 + 递归子树，子节点逐层展开）。
+      return (
+        <div className="runtime-card-host">
+          <RuntimeBlock msg={msg} sessionIdOverride={sessionId} />
+        </div>
+      );
+    case "sub_agent_step":
+      // A sub-agent of this conversation draws as a step wherever it was
+      // started from; only a reference to something else keeps the card.
+      return (
+        <div className="message assistant" data-msg-id={msg.id}>
+          <div className="chat-stream-body">
+            <StepExpansionScope view={viewKey} row={msg.id}>
+              <SubAgentStrip cards={[msg]} streaming={isAgentLive(msg.attach?.status)} expansionId="subagents" />
+            </StepExpansionScope>
           </div>
         </div>
-      </div>
-    );
+      );
+    case "external_reference":
+      return (
+        <div className="attach-row" data-msg-id={msg.id}>
+          <AttachCard msg={msg} />
+        </div>
+      );
+    case "compaction_card":
+      return <CompactionCard msg={msg} />;
+    case "system_event":
+      return <SystemEventRow msg={msg} />;
+    case "system_text":
+      return (
+        <div className="message system" data-msg-id={msg.id}>
+          {msg.content}
+          <div className="message-actions-footer">
+            <div className="message-actions">
+              <MessageTimestamp timestamp={msg.timestamp} />
+            </div>
+          </div>
+        </div>
+      );
   }
-  if (msg.role === "assistant" && msg.function === "attach") {
-    return (
-      <div className="attach-row" data-msg-id={msg.id}>
-        <AttachCard msg={msg} />
-      </div>
-    );
-  }
-  if (msg.role === "user" && msg.source === "job_followup" && msg.notice) {
-    return <AgentNoticeRows msg={msg} items={msg.notice} />;
-  }
-  const receipt = msg.role === "user" && msg.display !== "runtime" && !msg.spawnedFrom
-    ? readReceipt(msg.content || "")
-    : null;
-  if (receipt) return <ReceivedMessageRow msg={msg} receipt={receipt} />;
-  if (msg.role === "user" && msg.spawnedFrom) {
-    return (
-      <>
-        <SpawnedFromCard msg={msg} />
-        <UserBubble msg={msg} sessionIdOverride={sessionIdOverride} />
-      </>
-    );
-  }
-  if (msg.display === "runtime") {
-    if (msg.role === "user") return null;
-    // 手动函数运行（fn-form / /run）：RuntimeBlock 内部已统一为
-    // 时间线组件（根行 + 递归子树，子节点逐层展开）。
-    return (
-      <div className="runtime-card-host">
-        <RuntimeBlock msg={msg} sessionIdOverride={sessionIdOverride} />
-      </div>
-    );
-  }
-  if (msg.role === "user") {
-    return <UserBubble msg={msg} sessionIdOverride={sessionIdOverride} />;
-  }
-  return <AssistantMessage msg={msg} sessionIdOverride={sessionIdOverride} />;
+  const unknown: never = kind;
+  return unknown;
+}
+
+/** The scope a row is drawn in: its row list's, or for a row drawn on its
+ *  own, the conversation it was given. */
+function useScope(sessionIdOverride?: string): TranscriptScope {
+  const listed = useContext(TranscriptScopeContext);
+  const focused = useSessionStore((s) => s.currentSessionId);
+  if (listed) return listed;
+  const sessionId = sessionIdOverride ?? focused;
+  return { sessionId, viewKey: sessionId, embedded: false };
 }
 
 export const MessageRow = memo(function MessageRow({
@@ -99,14 +127,16 @@ export const MessageRow = memo(function MessageRow({
   id: string;
   sessionIdOverride?: string;
 }) {
-  const msg = useMessageById(id);
+  const scope = useScope(sessionIdOverride);
+  const msg = useSessionStore(selectRow(scope.viewKey, id));
   // A reply a restart cut off is drawn by the reply that continues it.
-  const continued = useSessionStore((s) => !!msg?.continuedBy && !!s.messagesById[msg.continuedBy]);
-  if (!msg || msg.steeringReplyId || continued) return null;
+  const continued = useSessionStore((s) => !!selectRow(scope.viewKey, msg?.continuedBy)(s));
+  const bot = useContext(BotViewContext) !== null;
+  if (!msg || continued || (!bot && msg.steeringReplyId)) return null;
   return (
-    <TranscriptSessionContext.Provider value={sessionIdOverride}>
-      {dispatch(msg, sessionIdOverride)}
-    </TranscriptSessionContext.Provider>
+    <TranscriptScopeContext.Provider value={scope}>
+      {bot ? <BotMessage msg={msg} sessionIdOverride={scope.sessionId ?? undefined} /> : dispatch(msg.rowKind, msg, scope)}
+    </TranscriptScopeContext.Provider>
   );
 });
 

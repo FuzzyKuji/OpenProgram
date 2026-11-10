@@ -114,16 +114,14 @@ def test_owner_can_record_a_dev_symlink(tmp_path, monkeypatch):
     assert program_sources.is_owner_controlled_program_path(target)
 
 
-def test_model_file_policy_protects_source_registry(tmp_path, monkeypatch):
+def test_model_file_policy_leaves_the_source_registry_writable(tmp_path, monkeypatch):
     from openprogram.host import sandbox
     import openprogram.state.paths as paths
 
     state = tmp_path / "state"
     monkeypatch.setattr(paths, "get_state_dir", lambda: state)
 
-    violation = sandbox.validate_write_path(state / "Program-Sources.JSON")
-
-    assert violation and "source registry" in violation
+    assert sandbox.validate_write_path(state / "Program-Sources.JSON") is None
 
 
 def test_recorded_program_outside_the_programs_directory_stays_available(

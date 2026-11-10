@@ -469,7 +469,7 @@ def test_trigger_compaction_inserts_summary_and_moves_head(
     async def _fake_gen(*args, **kwargs):
         return "compressed summary of earlier discussion"
     monkeypatch.setattr(
-        "openprogram.runtime.context.summarize.Summarizer._llm_summary",
+        "openprogram.runtime.context.compaction.summarize.Summarizer._llm_summary",
         _fake_gen,
     )
 

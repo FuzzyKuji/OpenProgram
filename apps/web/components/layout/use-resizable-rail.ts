@@ -1,10 +1,10 @@
 "use client";
 
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
-import type { CSSProperties, PointerEvent as ReactPointerEvent } from "react";
+import type { CSSProperties, KeyboardEvent as ReactKeyboardEvent, PointerEvent as ReactPointerEvent } from "react";
 
 // Keep in sync with --rail-collapsed-w in app/styles/design/layout.css.
-const COLLAPSED_RAIL_WIDTH = 63;
+const COLLAPSED_RAIL_WIDTH = 62;
 // The rail moves the whole centre column, so the curve starts from rest:
 // one that front-loads the travel puts a third of it into the first frame.
 export const RAIL_MOVE_MS = 200;
@@ -12,6 +12,17 @@ export const RAIL_EASING = "cubic-bezier(0.4, 0, 0.2, 1)";
 const RAIL_TRANSITION = `width ${RAIL_MOVE_MS}ms ${RAIL_EASING}, min-width ${RAIL_MOVE_MS}ms ${RAIL_EASING}`;
 // A move whose width does not report its end settles after this.
 const SETTLE_FALLBACK_MS = RAIL_MOVE_MS + 120;
+const KEYBOARD_STEP = 24;
+// A drag that ends this close to the default width lands on it.
+const DEFAULT_SNAP = 8;
+// The way back to the default width. It is walked a frame at a time like a
+// drag: a transition would move the rail's edge alone, while everything
+// inside, laid out at --rail-open-w, jumped to the new width at once.
+const RESET_MS = 280;
+const easeOut = (t: number) => 1 - Math.pow(1 - t, 3);
+// At or below this the rail floats over the page (styles/base/layout.css),
+// so its width takes nothing from the centre column.
+const FLOATING_WINDOW_WIDTH = 900;
 
 /** Makes the rail's open-only parts (`.rail-open-only`, outermost ones)
  *  inert or not, on the elements themselves. */
@@ -32,6 +43,33 @@ interface ResizableRailOptions {
   maxWidth: number;
   defaultWidth: number;
   direction: 1 | -1;
+  /** Keeps the width in this browser, lets the arrow keys resize the handle,
+   *  and gives the handle its way back to the default: a double-click or
+   *  Enter, and a drag snapping to it. */
+  storageKey?: string;
+  /** The most of the window the rail may show. It limits what is drawn, not
+   *  what is stored, so widening the window brings a stored width back. */
+  maxWindowShare?: number;
+}
+
+function readStoredWidth(storageKey: string): number | null {
+  try {
+    const stored = Number(window.localStorage.getItem(storageKey));
+    return Number.isFinite(stored) && stored > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+/** A rail at its default width stores nothing, so it follows the default if
+ *  that ever changes. */
+function storeWidth(storageKey: string, width: number, defaultWidth: number) {
+  try {
+    if (width === defaultWidth) window.localStorage.removeItem(storageKey);
+    else window.localStorage.setItem(storageKey, String(width));
+  } catch {
+    // The width still holds for this page.
+  }
 }
 
 /** The rail's width, its resize handle, and when a close has settled.
@@ -50,8 +88,31 @@ export function useResizableRail({
   maxWidth,
   defaultWidth,
   direction,
+  storageKey,
+  maxWindowShare,
 }: ResizableRailOptions) {
   const [width, setWidth] = useState(defaultWidth);
+  const widthRef = useRef(width);
+  widthRef.current = width;
+  const [windowWidth, setWindowWidth] = useState<number | null>(null);
+  useLayoutEffect(() => {
+    if (!maxWindowShare) return;
+    const read = () => setWindowWidth(window.innerWidth);
+    read();
+    window.addEventListener("resize", read);
+    return () => window.removeEventListener("resize", read);
+  }, [maxWindowShare]);
+  const limit = maxWindowShare && windowWidth !== null && windowWidth > FLOATING_WINDOW_WIDTH
+    ? Math.max(minWidth, Math.min(maxWidth, Math.round(windowWidth * maxWindowShare)))
+    : maxWidth;
+  const shownWidth = Math.min(width, limit);
+  const limitRef = useRef(limit);
+  limitRef.current = limit;
+  useLayoutEffect(() => {
+    if (!storageKey) return;
+    const stored = readStoredWidth(storageKey);
+    if (stored !== null) setWidth(Math.max(minWidth, Math.min(maxWidth, stored)));
+  }, [storageKey, minWidth, maxWidth]);
   const [resizing, setResizing] = useState(false);
   // Closed, and the close has arrived: false from the render that opens,
   // true once a close's width has settled (its transitionend, or the timer
@@ -108,6 +169,16 @@ export function useResizableRail({
     else if (inert.current) setOpenOnlyInert(shellRef.current, true);
   });
   const dragRef = useRef<{ startX: number; startWidth: number } | null>(null);
+  const [gliding, setGliding] = useState(false);
+  const glide = useRef(0);
+  const stopGlide = useCallback(() => {
+    if (!glide.current) return;
+    window.cancelAnimationFrame(glide.current);
+    glide.current = 0;
+    setGliding(false);
+  }, []);
+  useEffect(() => stopGlide, [stopGlide]);
+
 
   const onPointerDown = useCallback(
     (event: ReactPointerEvent<HTMLDivElement>) => {
@@ -115,16 +186,55 @@ export function useResizableRail({
       if (event.button !== 0 || !open) return;
       event.preventDefault();
       event.currentTarget.setPointerCapture(event.pointerId);
-      dragRef.current = { startX: event.clientX, startWidth: width };
+      stopGlide();
+      dragRef.current = { startX: event.clientX, startWidth: shownWidth };
       setResizing(true);
     },
-    [width, open],
+    [shownWidth, open, stopGlide],
   );
 
   const finishResize = useCallback(() => {
+    if (dragRef.current && storageKey) storeWidth(storageKey, widthRef.current, defaultWidth);
     dragRef.current = null;
     setResizing(false);
-  }, []);
+  }, [storageKey, defaultWidth]);
+
+  const resetWidth = useCallback(() => {
+    if (!storageKey || !open) return;
+    storeWidth(storageKey, defaultWidth, defaultWidth);
+    stopGlide();
+    const from = Math.min(widthRef.current, limitRef.current);
+    const still = typeof window.matchMedia === "function" && window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    if (still || Math.abs(from - defaultWidth) < 2) { setWidth(defaultWidth); return; }
+    const started = performance.now();
+    setGliding(true);
+    const step = () => {
+      const progress = Math.min(1, (performance.now() - started) / RESET_MS);
+      setWidth(Math.round(from + (defaultWidth - from) * easeOut(progress)));
+      if (progress < 1) { glide.current = window.requestAnimationFrame(step); return; }
+      glide.current = 0;
+      setGliding(false);
+    };
+    glide.current = window.requestAnimationFrame(step);
+  }, [defaultWidth, open, stopGlide, storageKey]);
+
+  const onKeyDown = useCallback(
+    (event: ReactKeyboardEvent<HTMLDivElement>) => {
+      if (event.key === "Enter") {
+        event.preventDefault();
+        resetWidth();
+        return;
+      }
+      if (!storageKey || !open || (event.key !== "ArrowLeft" && event.key !== "ArrowRight")) return;
+      event.preventDefault();
+      stopGlide();
+      const moved = (event.key === "ArrowRight" ? KEYBOARD_STEP : -KEYBOARD_STEP) * direction;
+      const next = Math.max(minWidth, Math.min(limitRef.current, Math.min(widthRef.current, limitRef.current) + moved));
+      setWidth(next);
+      storeWidth(storageKey, next, defaultWidth);
+    },
+    [defaultWidth, direction, minWidth, open, resetWidth, stopGlide, storageKey],
+  );
 
   // A close ends a drag: the width is no longer the handle's.
   useEffect(() => {
@@ -151,20 +261,21 @@ export function useResizableRail({
         finishResize();
         return;
       }
-      const next = drag.startWidth + (event.clientX - drag.startX) * direction;
-      setWidth(Math.max(minWidth, Math.min(maxWidth, next)));
+      const moved = drag.startWidth + (event.clientX - drag.startX) * direction;
+      const next = storageKey && Math.abs(moved - defaultWidth) <= DEFAULT_SNAP ? defaultWidth : moved;
+      setWidth(Math.max(minWidth, Math.min(limitRef.current, next)));
     },
-    [direction, maxWidth, minWidth, finishResize],
+    [defaultWidth, direction, minWidth, finishResize, storageKey],
   );
 
   const style = {
-    width: `${open ? width : COLLAPSED_RAIL_WIDTH}px`,
+    width: `${open ? shownWidth : COLLAPSED_RAIL_WIDTH}px`,
     minWidth: `${open ? minWidth : COLLAPSED_RAIL_WIDTH}px`,
-    transition: resizing ? "none" : RAIL_TRANSITION,
+    transition: resizing || gliding ? "none" : RAIL_TRANSITION,
     // The open width: what only the open rail shows is laid out at it in
     // both states (styles/base/layout.css). It changes only while the
     // handle is dragged, never on opening or closing.
-    "--rail-open-w": `${width}px`,
+    "--rail-open-w": `${shownWidth}px`,
     // The rail's move as a duration and a curve, for what moves or fades
     // with the width inside it.
     "--rail-move-duration": `${RAIL_MOVE_MS}ms`,
@@ -199,11 +310,23 @@ export function useResizableRail({
       "data-off": open ? undefined : "",
       "aria-hidden": open ? undefined : true,
       "data-resizing": resizing,
+      "data-snapped": resizing && storageKey && shownWidth === defaultWidth ? "" : undefined,
       onPointerDown,
       onPointerMove,
       onPointerUp: finishResize,
       onPointerCancel: finishResize,
       onLostPointerCapture: finishResize,
+      ...(storageKey && open ? {
+        role: "separator",
+        "aria-orientation": "vertical" as const,
+        "aria-label": "Resize panel",
+        "aria-valuemin": minWidth,
+        "aria-valuemax": limit,
+        "aria-valuenow": shownWidth,
+        tabIndex: 0,
+        onKeyDown,
+        onDoubleClick: resetWidth,
+      } : {}),
     },
   };
 }

@@ -98,10 +98,11 @@ def _execute_result(
         return ToolReturn(text="Error: at least one of `image_paths` / `image_urls` must be provided.", is_error=True)
 
     from openprogram.host.sandbox import validate_read_path
+    from openprogram.runtime.permissions import refusal
     for p in paths:
         violation = validate_read_path(p)
         if violation:
-            return ToolReturn(text=f"Error: sandbox policy: {violation}", is_error=True)
+            raise refusal.sandbox("image_analyze", violation)
 
     images: list[ImageInput] = [ImageInput(path=p) for p in paths] + [ImageInput(url=u) for u in urls]
 
@@ -112,6 +113,8 @@ def _execute_result(
 
     try:
         answer = backend.analyze(images, prompt, model=model)
+    except refusal.Refused:
+        raise
     except Exception as e:
         return ToolReturn(text=f"Error: {backend.name} vision failed: {type(e).__name__}: {e}", is_error=True)
 

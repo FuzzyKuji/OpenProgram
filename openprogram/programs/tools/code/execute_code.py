@@ -226,7 +226,7 @@ function(
     description=DESCRIPTION,
     parameters=SPEC["parameters"],
     toolset=['core'],
-    unsafe_in=['wechat', 'telegram', 'plan'],
+    unsafe_in=["plan"],
 )(execute)
 
 __all__ = ["NAME", "SPEC", "execute", "DESCRIPTION"]

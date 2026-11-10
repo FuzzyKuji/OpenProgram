@@ -688,6 +688,7 @@ function controlledRecord(id, currentUrl = "", loading = false) {
       closeCalls += 1;
       if (closeFailure) throw new Error("injected close failure");
     },
+    setBackgroundThrottling() {},
     setWindowOpenHandler(handler) {
       windowOpenHandler = handler;
       this.windowOpen = handler;

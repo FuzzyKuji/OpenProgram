@@ -59,7 +59,7 @@ def test_authenticated_diagnostics_identify_pid_and_owner(monkeypatch):
     misc.register(app)
     with TestClient(OwnerAuthMiddleware(app, auth_state=state), base_url="http://127.0.0.1:18100") as client:
         assert client.get("/api/diagnostics").status_code == 401
-        assert client.get("/healthz").json() == {"status": "ok"}
+        assert client.get("/healthz").json()["status"] == "ok"
         data = client.get("/api/diagnostics", headers={"Authorization": f"Bearer {state.token}"}).json()
         assert data["worker_pid"] == os.getpid()
         assert data["principal_id"] == owner

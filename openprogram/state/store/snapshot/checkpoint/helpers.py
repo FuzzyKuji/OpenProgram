@@ -1,12 +1,16 @@
 """Turn-context helpers used by trusted file-mutating tools."""
 from __future__ import annotations
 
+import logging
 import os
 from contextlib import contextmanager
 from contextvars import ContextVar
 from pathlib import Path
 
+from .prompt_checkpoints import PromptCheckpoints
 from .store import CheckpointStore
+
+_log = logging.getLogger(__name__)
 
 
 # Graph isolation does not transfer ownership of the user turn's file edits.
@@ -75,6 +79,23 @@ def _register(shim, turn_id: str, *, propagate: bool) -> None:
             raise
 
 
+def _track_for_prompt(store: CheckpointStore, abs_path: str, content_src: str | None) -> None:
+    try:
+        PromptCheckpoints(store.session_dir).track(abs_path, content_src)
+    except Exception:
+        _log.warning("prompt checkpoint did not track %s", abs_path, exc_info=True)
+
+
+def capture_prompt_checkpoint(store, session_id: str, user_msg_id: str) -> bool:
+    """Record a prompt's recovery point. Failure never reaches the turn."""
+    try:
+        PromptCheckpoints(store._session_dir(session_id)).capture(user_msg_id)
+        return True
+    except Exception:
+        _log.warning("prompt checkpoint failed for %s", session_id, exc_info=True)
+        return False
+
+
 def checkpoint_before_edit(abs_path: str, content_src: str | None = None) -> bool:
     """Persist a prepared receipt before a trusted mutator writes."""
     if not abs_path or not os.path.isabs(abs_path):
@@ -83,6 +104,7 @@ def checkpoint_before_edit(abs_path: str, content_src: str | None = None) -> boo
         if active is None:
             return False
         store, turn_id, shim = active
+        _track_for_prompt(store, abs_path, content_src)
         store.backup_before_edit(
             turn_id, abs_path, content_src=content_src,
             project_locator=_project_locator(shim, abs_path),

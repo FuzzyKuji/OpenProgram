@@ -31,6 +31,7 @@ from typing import Any
 # Generic OpenAI-compatible /v1/models fetcher — the fallback for every
 # provider that DOESN'T ship its own list_models.py. It belongs to no single
 # provider, so it stays here rather than in a provider directory.
+from ..probe_log import KIND_MODEL_LIST, probe
 from .openai_compat import _fetch_openai_compat
 import logging
 
@@ -75,6 +76,7 @@ def _load_probe(provider_id: str) -> Any:
         return None
 
 
+@probe(KIND_MODEL_LIST)
 def fetch_and_normalize(provider_id: str, timeout: float = 15.0) -> dict[str, Any]:
     """Dispatch to a provider-specific fetcher and normalise the result
     into the catalog row shape — WITHOUT any persistence.

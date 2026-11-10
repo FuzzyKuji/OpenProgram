@@ -47,7 +47,7 @@ export function enqueueDecision(
 
 /** The WS reply for an answered question. For approvals, scope='always'
  *  also persists a project-level allow rule for the tool server-side
- *  (mirrors the web's 总是允许; permission-model.md §6.3). */
+ *  (mirrors the web's 总是允许; docs/reference/design/runtime/security/permission-decision.html). */
 export function replyAction(
   decision: PendingDecision, answer: unknown,
 ): WsRequest {

@@ -55,7 +55,7 @@ role="code"   ─ 一次函数调用    input  = arguments dict
 ```
 
 **DAG 上的"边"有三套**（权威定义见
-[`docs/reference/design/runtime/dag/overview.md`](https://github.com/FuzzyKuji/OpenProgram/blob/main/docs/reference/design/runtime/dag/overview.md)
+[`docs/reference/design/runtime/dag/overview.html`](https://github.com/FuzzyKuji/OpenProgram/blob/main/docs/reference/design/runtime/dag/overview.html)
 §3，本文其余段落里出现的旧名 `called_by` 一律读作 `caller`）：
 
 ```
@@ -214,7 +214,7 @@ render_range['subcalls']        in-frame 节点最多保留多少（默认 -1 �
 
 ## 1. 系统提示装配
 
-文件：`system_prompt.py::build_system_prompt(agent)`
+文件：`components.py::build_system_prompt(agent)`
 
 把 5 类信息按固定顺序拼成一段，包在 `── Agent prompt ──` 和 `── End of agent prompt ──` 之间，模型一眼能看到边界。
 
@@ -309,48 +309,28 @@ CJK-aware 字符估算      有            无            无         无
 
 ## 3. 历史瘦身（aging，不调 LLM）
 
-文件：`aging.py::TurnAger` + `references.py::ReferenceTracker`
+文件：`aging.py`、`tool_aging/`
 
 每个 turn 都跑一次，把旧的、大的、没人再用的 tool_result 块替换成占位符，省 token。**不调 LLM、不动消息结构、不动 SessionDB**——只在 prepare 的内存副本里替换 extra.blocks 里的 content 字段。
 
-### 3.1 三闸门
+### 3.1 两个闸门
 
-一条 tool_result 块要被 redact，必须**同时**通过三个闸门：
+一条 tool_result 块要被 redact，必须**同时**通过两个闸门：
 
 ```
 turn 距离闸门       消息所在 turn 离当前 ≥ keep_recent_turns（默认 4 个 assistant turn）
 wall-clock 闸门     消息 timestamp 离现在 ≥ keep_recent_seconds（默认 60 秒）
-引用闸门             ReferenceTracker 没有把这条消息标记为 cited
 ```
 
-每条单独失败都不动。turn 距离闸门防止 agent 还在用刚抓的数据；wall-clock 闸门防止 agent 在 10 秒内连发 8 个 tool_call 时把刚来的输出也 redact 掉；引用闸门保护 agent 还在分析的旧输出。
+每条单独失败都不动。turn 距离闸门防止 agent 还在用刚抓的数据；wall-clock 闸门防止 agent 在 10 秒内连发 8 个 tool_call 时把刚来的输出也 redact 掉。
 
-通过三闸门后，再看 tool_result 的 content token 数 ≥ 800 才动手——更小的 redact 收益太低（占位符本身也占字数）。
+通过两个闸门后，再看 tool_result 的 content token 数 ≥ 800 才动手——更小的 redact 收益太低（占位符本身也占字数）。
 
 替换后的内容：`[Old tool result content cleared (was N tokens)]`，并在 block 上加 `_redacted: true` 标记，下次 prepare 时遇到这个标记就跳过（避免反复处理）。
 
 ### 3.2 保护前 N
 
 `protect_first_n` 默认 2。前 2 条消息（通常是用户的初始任务描述）永远不被 aging 触碰，即使过了几小时也保留原文。否则在长会话里 LLM 会忘了一开始要干嘛。
-
-### 3.3 ReferenceTracker
-
-判断"旧消息是不是还在被后续消息引用"。算法不追求精确，只要 catch 90% 的真实引用：
-
-**Distinctive 子串提取**（regex）：
-
-```
-路径          [A-Za-z0-9_./-]+/[A-Za-z0-9_./-]+         长度 ≥ 8
-hex/数字 id    [a-f0-9]{6,} | [0-9]{6,}
-反引号片段     `(.{3,40})`
-CamelCase     [A-Z][A-Za-z0-9]{3,}                     长度 ≥ 4
-```
-
-去停用词（the / and / True / False / TextContent / AssistantMessage / ...），每条消息最多保留 32 个 distinctive 子串。
-
-**引用判定**：扫历史一遍，对每对 (i, j) i<j，检查消息 i 的 distinctive 子串是否出现在消息 j 的 text 里。命中一次就把 i 标为 cited，标完就跳过后续检查。O(messages²) 但每条只比 32 个短串、有 early-exit，几百条消息毫秒级。
-
-ReferenceMap 在 prepare 开头构建一次，aging 和 summarisation 都共享。
 
 **对比**
 
@@ -475,7 +455,7 @@ compact 完成后    把新 summary 写回 session.extra_meta._last_summary_text
 
 **UPDATE_PROMPT** 包一个 `<previous-summary>` 标签把上一版扔给 LLM，让它"合并新消息、删过期细节、刷进度"，同样输出 5 段结构。冲突时新消息为准。
 
-**SYSTEM_PROMPT** 框定 summariser 的工作风格：要具体（路径、id、命令名、错误信息），不要 hedging、不要前言"Here is a summary..."、不要 moralising。
+**SYSTEM_PROMPT** 框定 summariser 的工作风格：要具体（路径、id、命令名、错误信息），不要 hedging、不要前言"Here is a summary..."、不要 moralising。它带上 **SUMMARY_RULES**（请求期压缩也用）：用户取消或替换的请求要标明，不算待办；助手和工具说的话要注明出处，不写成事实。
 
 ### 4.5 LLM 失败兜底
 
@@ -648,16 +628,14 @@ chat.py            chat_turn：LLM↔tool 循环 + parse_tool_call
 
 ─── 上下文编排 ─────────────────────────────────────────────
 __init__.py        公开 API：default_engine / resolve_engine_for / TurnPrep / CompactResult / ...
-types.py           编排 dataclass：UsageState / BudgetAllocation / TurnPrep / CompactResult / ReferenceMap
+types.py           编排 dataclass：UsageState / BudgetAllocation / TurnPrep / CompactResult
 tokens.py          token 估算 + real_context_window + CJK 比例
 usage.py           UsageTracker：provider usage 缓存 + hybrid 估算
 budget.py          BudgetAllocator：context_window → 四段切分
-references.py      ReferenceTracker：distinctive substring 引用图
 aging.py           TurnAger：三闸门 + 保护前 N 的 tool_result redact
 prompts.py         SYSTEM / FRESH / UPDATE 三个 summariser 提示
 summarize.py       Summarizer：找切点 + LLM 调用 + structural 兜底
 persistence.py     Persister：写 compactionSummary 节点 + re-parent kept tail
-system_prompt.py   build_system_prompt：5 段分层装配
 engine.py          ContextEngine ABC + DefaultContextEngine + 注册表
 components.py      系统提示段落注册表与装配（其他包可注册段落）
 scope.py           调用核心写、Context 读的任务局部状态（_call_id、workflow 调用点）
@@ -681,7 +659,6 @@ TurnPrep               system_prompt: str
                        usage: UsageState
                        tool_results_redacted: int
                        tokens_freed_by_aging: int
-                       references_protected: int
                        summary_id: str | None             当前活动 summary id
                        decision_path: list[str]           遥测：这一轮做了哪些动作
                        budget_pct: float                  budget.input_used_pct
@@ -697,9 +674,6 @@ CompactResult          ok: bool
                        error: str | None
                        fell_back_to_structural: bool
 
-ReferenceMap           cited_tool_use_ids: set[str]
-                       quoted_snippets_by_msg: dict[str, set[str]]
-                       last_built_at: float
 ```
 
 **DAG 节点类型**（底座，`openprogram/state/store/session/nodes.py`）：

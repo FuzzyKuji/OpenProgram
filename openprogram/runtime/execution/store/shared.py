@@ -1,4 +1,4 @@
-"""SQLite authority for canonical execution and control-command records."""
+"""Shared helpers of the canonical execution and control-command records."""
 
 from __future__ import annotations
 
@@ -41,15 +41,9 @@ class CommandConflict(ExecutionStoreError):
     pass
 
 
-class ProjectionConflict(ExecutionStoreError):
-    pass
-
-
 _AGENT_TURN_INPUT_VERSION = 1
 _AGENT_TURN_INPUT_MAX_BYTES = AGENT_TURN_INPUT_MAX_BYTES
 _AGENT_TURN_INPUT_KINDS = frozenset({"chat", "forced_tool"})
-_FINISH_REPAIR_HIGH_WATERMARK = 4096
-_FINISH_REPAIR_PAGE_LIMIT = 4096
 _AGENT_TURN_INPUT_KEYS = frozenset({
     "version", "kind", "request", "tool_name", "tool_input",
     "anchor_msg_id", "work_dir", "agent_id", "source", "provider", "model",
@@ -120,8 +114,8 @@ def _fingerprint(value: Mapping[str, Any]) -> str:
     return hashlib.sha256(_json(value).encode("utf-8")).hexdigest()
 
 
-_projection_event_written: ContextVar[bool] = ContextVar(
-    "execution_projection_event_written", default=False
+_event_written: ContextVar[bool] = ContextVar(
+    "execution_event_written", default=False
 )
 
 
@@ -137,11 +131,6 @@ def _construct_store(path: Path) -> ExecutionStore:
 
 
 def _store_for_path(path: Path) -> ExecutionStore:
-    # ``lru_cache`` does not serialize misses: two threads asking for a store
-    # that is not cached yet would both construct one, and two concurrent
-    # schema initializations of a fresh file collide on SQLite's lock
-    # ("database is locked" while switching to WAL). One store per path is
-    # built under this lock; later calls are plain cache hits.
     with _store_construction_lock:
         return _construct_store(path)
 
@@ -151,6 +140,6 @@ _store_for_path.cache_clear = _construct_store.cache_clear  # type: ignore[attr-
 
 def default_store() -> ExecutionStore:
     """Return the store for the currently active profile."""
-    from openprogram.state.paths import get_execution_db_path
+    from openprogram.state.paths import get_run_state_path
 
-    return _store_for_path(get_execution_db_path())
+    return _store_for_path(get_run_state_path())

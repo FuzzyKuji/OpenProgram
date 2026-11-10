@@ -1,11 +1,11 @@
 /** Labels, tones and times the Running panel shows for executions,
- *  programs, spawned agents and routines. Pure functions of the item. */
-import { processIsActive, type ActiveToolCall, type AgentCall, type ManagedProcess } from "@/lib/net/execution/process-client";
+ *  programs and routines. Pure functions of the item. */
+import { processIsActive, type ActiveToolCall, type ManagedProcess } from "@/lib/net/execution/process-client";
 import { type ExecutionSnapshot } from "@/lib/execution/execution-debugger";
 import { executionPending } from "@/lib/execution/activity-model";
 import { presentTool } from "@/components/chat/messages/execution/tool-presentation";
 import { shortTime } from "../debugger/debugger-presentation";
-import { type Routine } from "@/lib/chat/conversation-work";
+import { type Routine, type RoutineRun } from "@/lib/chat/conversation-work";
 import { seconds, type ProgressLook } from "./program-progress";
 import type { Text, Tone } from "./running-rows";
 
@@ -119,12 +119,16 @@ export function programBarTone(item: ManagedProcess, look: ProgressLook | null):
   return ["completed", "exited"].includes(item.status) ? "ok" : "muted";
 }
 
-/** A call that started no sub-agent: why, in the reader's words. */
-export function spawnState(item: AgentCall, text: Text): string {
-  return item.failed ? text("Failed to start", "没有启动成功") : text("Not started", "没有启动");
+/** A routine's kind and when it runs, as the Scheduler page names them. */
+export function routineRunLabel(run: RoutineRun, text: Text): string {
+  const at = new Date(run.at * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  return `${at} ${text(...({
+    quiet: ["Nothing new", "无新内容"], result: ["Sent you a message", "已发消息"], failed: ["Check failed", "检查失败"],
+    skipped: ["Skipped: the previous run was still going", "已跳过：上一次运行还没结束"],
+    missed: ["Missed: OpenProgram was not running", "错过：当时 OpenProgram 没有运行"],
+  }[run.status] as [string, string]))}`;
 }
 
-/** A routine's kind and when it runs, as the Scheduler page names them. */
 export function routineSchedule(task: Routine, text: Text): string {
   const kind = task.reminder ? text("Reminder", "提醒") : text(...({
     once: ["One-time", "一次性"], recurring: ["Recurring", "周期"], monitor: ["Monitor", "监控"], webhook: ["Webhook", "Webhook"],

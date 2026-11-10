@@ -62,7 +62,11 @@ export function subscribeWebTabPopups(
       return;
     }
     const opener = state.tabs.find((tab) => tab.id === popup.openerId);
-    const id = state.openPopupWebTab(popup.url, popup.openerId, nativeId);
+    // A popup from the user's own page that an Agent is operating came from
+    // the Agent's step: it opens beside the page and the user stays where they are.
+    const held = !opener?.agentOpened && agentHoldsTab(bridge, popup.openerId);
+    const id = state.openPopupWebTab(popup.url, popup.openerId, nativeId, held);
+    if (held) return;
     if (!opener?.agentOpened) {
       showCenterSurface();
       return;
@@ -101,6 +105,21 @@ function adoptAgentPopup(
     .catch(() => {});
 }
 
+/** The pages of this window an Agent holds now. */
+function agentHeldTabs(bridge: Pick<DesktopBridge, "windowId">): Set<string> {
+  const held = new Set<string>();
+  for (const row of listedBrowserResources()) {
+    if (!row.tabId || (row.windowId && row.windowId !== bridge.windowId)) continue;
+    const control = controlResourceFromSession(row);
+    if (control && agentHoldsPage(presentedControlState(control))) held.add(row.tabId);
+  }
+  return held;
+}
+
+function agentHoldsTab(bridge: Pick<DesktopBridge, "windowId">, tabId: string): boolean {
+  return agentHeldTabs(bridge).has(tabId);
+}
+
 /** Tell the shell which of this window's pages the Agent holds, so their
  *  edge glows like a desktop window the Agent operates. */
 export function subscribeAgentPageGlow(bridge: DesktopBridge): () => void {
@@ -108,12 +127,7 @@ export function subscribeAgentPageGlow(bridge: DesktopBridge): () => void {
   if (!setGlow) return () => {};
   const held = new Set<string>();
   const sync = () => {
-    const next = new Set<string>();
-    for (const row of listedBrowserResources()) {
-      if (!row.tabId || (row.windowId && row.windowId !== bridge.windowId)) continue;
-      const control = controlResourceFromSession(row);
-      if (control && agentHoldsPage(presentedControlState(control))) next.add(row.tabId);
-    }
+    const next = agentHeldTabs(bridge);
     for (const id of held) if (!next.has(id)) setGlow(id, false);
     for (const id of next) if (!held.has(id)) setGlow(id, true);
     held.clear();

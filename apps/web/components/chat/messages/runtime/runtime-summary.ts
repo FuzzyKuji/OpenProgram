@@ -1,3 +1,4 @@
+import { isLive } from "../../../../lib/chat/transcript/row-status.ts";
 type RuntimeTreeSummary = {
   status?: string;
   output?: unknown;
@@ -17,7 +18,6 @@ type RuntimeSummaryInput = {
   text?: (en: string, zh: string) => string;
 };
 
-const RUNNING = new Set(["pending", "running", "streaming", "cancelling"]);
 const GUI_OUTCOMES = new Set(["succeeded", "failed", "infeasible", "cancelled"]);
 
 function epochMs(value: number): number {
@@ -30,7 +30,7 @@ function durationMs(input: RuntimeSummaryInput): number | null {
   if (tree?.start_time && tree.end_time) {
     return Math.max(0, epochMs(tree.end_time) - epochMs(tree.start_time));
   }
-  if (timestamp && RUNNING.has(resolvedStatus(input))) {
+  if (timestamp && isLive(resolvedStatus(input))) {
     return Math.max(0, now - epochMs(timestamp));
   }
   return null;
@@ -81,7 +81,7 @@ function workflowPayload(output: unknown): Record<string, unknown> | null {
 function resolvedStatus(input: RuntimeSummaryInput): string {
   const payload = workflowPayload(input.tree?.output);
   const outer = (input.status || input.tree?.status || "").toLowerCase();
-  if (RUNNING.has(outer)) return outer;
+  if (isLive(outer)) return outer;
 
   const inner = String(payload?.status || "").toLowerCase();
   const outerIsGeneric = ["", "completed", "done", "success"].includes(outer);
@@ -93,7 +93,7 @@ function resolvedStatus(input: RuntimeSummaryInput): string {
 
 /** Render the persisted backend handoff; this layer never starts a model call. */
 export function runtimeAnswer(input: RuntimeSummaryInput): string | null {
-  if (RUNNING.has(resolvedStatus(input))
+  if (isLive(resolvedStatus(input))
     || resolvedStatus(input) === "paused") return null;
   const output = input.tree?.output;
   if (input.fnName === "gui_agent" && resolvedStatus(input) === "cancelled"
@@ -112,7 +112,7 @@ export function runtimeAnswer(input: RuntimeSummaryInput): string | null {
 export function runtimeSummaryLabel(input: RuntimeSummaryInput): string {
   const text = input.text ?? ((en: string) => en);
   const rawStatus = resolvedStatus(input);
-  const running = RUNNING.has(rawStatus);
+  const running = isLive(rawStatus);
   const cancelled = rawStatus === "cancelled" || rawStatus === "canceled";
   const interrupted = rawStatus === "interrupted";
   const paused = rawStatus === "paused";

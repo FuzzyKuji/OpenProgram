@@ -33,7 +33,7 @@ export {
   type BotShape,
 } from "./bot/catalog";
 export { botLookFor, type BotLook } from "./bot/identity";
-export type { BotMood } from "./bot/bot-avatar";
+export type { BotFitRule, BotMood } from "./bot/bot-avatar";
 export { STYLES } from "./styles";
 export { UPLOAD_ACCEPT, UPLOAD_MAX_BYTES, fileToDataUrl } from "./upload";
 export type {

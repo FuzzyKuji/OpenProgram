@@ -5,6 +5,7 @@ owner-only permissions, directory handles), ``locking`` (``flock``),
 ``processes`` (liveness, kill trees, port owners), ``process_ownership``
 (process groups and Windows jobs), ``terminal`` (shells, PTYs, bundled
 tools), ``environment`` (browser, WSL, release and service backends),
-``screen_capture_audio`` (audio-only ScreenCaptureKit streams on macOS) and
+``screen_capture_audio`` (audio-only ScreenCaptureKit streams on macOS),
+``front`` (giving the front back to the application the user is in) and
 ``asyncio``.
 """

@@ -25,17 +25,19 @@ import asyncio
 import logging
 import threading
 import time
-from typing import Optional
+import uuid
+from typing import Callable, Optional, Sequence
 
 from openprogram.runtime.events import emit_ws_frame as _emit_ws_frame
 from openprogram.runtime.agent_registry import manager as _agents
-from openprogram.interfaces.channels import bindings as _bindings
+from openprogram.interfaces.channels import _format, bindings as _bindings
 from openprogram.interfaces.channels._broadcast import (
     broadcast_channel_turn as _broadcast_channel_turn,
     poke_live_webui as _poke_live_webui,
 )
 from openprogram.interfaces.channels._session_routing import (
     apply_reset_policy as _apply_reset_policy,
+    current_session_key as _current_session_key,
     session_key_for_agent as _session_key_for_agent,
     start_new_generation,
 )
@@ -55,6 +57,9 @@ from openprogram.interfaces.channels._session_store import (
 # 问题再换带回收的表.
 _log = logging.getLogger(__name__)
 
+#: 一轮被 ``/stop`` 停下, 又没有可发的文本时, 占位变成这句.
+STOPPED_REPLY = "已停止。"
+
 _SESSION_LOCKS: dict[str, threading.Lock] = {}
 _SESSION_LOCKS_GUARD = threading.Lock()
 
@@ -65,6 +70,28 @@ def _session_lock_for(session_key: str) -> threading.Lock:
         if lock is None:
             lock = _SESSION_LOCKS[session_key] = threading.Lock()
         return lock
+
+
+# ---------------------------------------------------------------------------
+# 会话 run slot
+# ---------------------------------------------------------------------------
+
+# 一个会话同一时间只跑一轮. 上面的锁只管 channel 之间, App 里打字发起的轮次
+# 走 run slot, 所以 channel 轮次也要占同一个 slot. 等太久就回一句 "忙",
+# 而不是让发消息的人一直等到另一轮结束.
+RUN_SLOT_WAIT_SECONDS = 30.0
+RUN_SLOT_POLL_SECONDS = 0.5
+BUSY_REPLY = "这个对话正在处理别的消息，这条没有发给它。请等它结束后再发一次。"
+
+
+def _reserve_run_slot(session_key: str, owner: str, *, wait_seconds: float) -> bool:
+    from openprogram.runtime.conversation.run_control import run_slot
+    deadline = time.monotonic() + wait_seconds
+    while not run_slot.reserve(session_key, owner):
+        if time.monotonic() >= deadline:
+            return False
+        time.sleep(RUN_SLOT_POLL_SECONDS)
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -87,6 +114,9 @@ def dispatch_inbound(
     ambient: bool = False,
     memory_mode: str = "on",
     thread_id: Optional[str] = None,
+    room_full_access: bool = False,
+    on_busy: Optional[Callable[[], None]] = None,
+    on_session_locked: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """End-to-end inbound handling.
 
@@ -120,6 +150,14 @@ def dispatch_inbound(
     Telegram 论坛话题). 占位、回复、文件都发回这个 thread; 不参与
     session 路由.
 
+    ``room_full_access`` — 群聊发信人在 :mod:`._access` 里的结果是
+    ``full``. 只对群聊有意义; 不传就按只能聊天算.
+
+    ``on_busy`` — 会话忙、这条消息没开启一轮时调用一次.
+
+    ``on_session_locked`` — 拿到 session 锁、轮次即将开始时调用一次,
+    同一 peer 的下一条消息从这时起才能往下走.
+
     Never raises into the channel's poll loop — any failure (no
     provider configured, runtime crash, etc.) is flattened into an
     error-shaped reply string that the bot can surface to the user
@@ -144,7 +182,8 @@ def dispatch_inbound(
     # 命中且该 qid 属于本 session 才 resolve 并回执，不走 agent dispatch；
     # 否则（不是命令 / qid 不属于本 session）返回 None，照常进 agent。
     _question_actor = _channel_authority(
-        channel, account_id, speaker_id or "", speaker_display or user_display,
+        channel, account_id, speaker_id or "", speaker_display or user_display, peer,
+        room_full_access,
     )
     _question_actor.update({
         "project_ids": ["default"],
@@ -169,6 +208,8 @@ def dispatch_inbound(
     # /answer·/decline 必须在锁外处理 (上面已 return): turn 停在
     # runtime.ask 时持锁等待, /answer 若也抢锁就自死锁.
     with _session_lock_for(session_key):
+        if on_session_locked is not None:
+            on_session_locked()
         return _run_session_turn(
             channel=channel, account_id=account_id, peer=peer,
             peer_id=peer_id, user_text=user_text,
@@ -177,50 +218,30 @@ def dispatch_inbound(
             agent_id=agent_id, session_key=session_key,
             attachments=attachments, block_stream=block_stream,
             ambient=ambient, memory_mode=memory_mode, thread_id=thread_id,
+            room_full_access=room_full_access, on_busy=on_busy,
         )
 
 
 def _channel_authority(
-    channel: str, account_id: str, speaker_id: str, display: str,
+    channel: str, account_id: str, speaker_id: str, display: str, peer: dict,
+    room_full_access: bool,
 ) -> dict:
-    """账号的 ``sender_access``: ``owner`` (默认) 让通过准入的发信人和本机
-    主人同权 — 工具、批准照常; ``paired`` 只能回复和用记忆."""
+    """账号的 ``sender_access`` (默认 ``owner``) 是上限, ``paired`` 把私聊和
+    群聊都收窄成只能回复和用记忆. 群里还要发信人在 full 名单上才和主人同权."""
     from openprogram.runtime.permissions.authority import (
         channel_owner_authority, paired_channel_authority,
     )
     from openprogram.interfaces.channels.accounts import sender_access
-    if sender_access(channel, account_id) == "owner":
+    room = (peer.get("kind") or "direct") != "direct"
+    if sender_access(channel, account_id) == "owner" and (room_full_access or not room):
         return channel_owner_authority(channel, account_id, speaker_id, display)
     return paired_channel_authority(channel, account_id, speaker_id, display)
 
 
-def _sandbox_room_session(
-    channel: str, account_id: str, peer: dict, agent_id: str, session_key: str,
-) -> None:
-    """群聊里谁都能说话, 主人权限的群会话默认开沙盒 (命令只能写工作区).
-    只在会话还没设过沙盒开关时写入, 用户在网页里关掉后不再改回."""
-    if (peer.get("kind") or "direct") == "direct":
-        return
-    from openprogram.interfaces.channels.accounts import sender_access
-    if sender_access(channel, account_id) != "owner":
-        return
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config, save_session_run_config,
-    )
-    try:
-        if load_session_run_config(session_key).sandbox_enabled is None:
-            save_session_run_config(
-                session_key, agent_id=agent_id, sandbox_enabled=True,
-            )
-    except Exception:
-        _log.warning("could not enable the sandbox for %s", session_key,
-                     exc_info=True)
-
-
-def _route(channel: str, account_id: str, peer: dict):
+def _route(channel: str, account_id: str, peer: dict, *, rotate: bool = True):
     """路由: alias > binding. 返回 ``(agent_id, session_key, base_key)``;
     base_key 是重置前的 key (alias 会话固定, 为 None). 出错时返回一条
-    给用户看的错误文本."""
+    给用户看的错误文本. ``rotate=False`` 只看当前 key, 不触发 idle 重置."""
     from openprogram.runtime.agent_registry import session_aliases as _aliases
     alias = _aliases.lookup(channel, account_id, peer)
     if alias is not None:
@@ -241,7 +262,8 @@ def _route(channel: str, account_id: str, peer: dict):
         return (f"[unknown agent {agent_id!r}] — binding points at a "
                 f"deleted agent.")
     base_key = _session_key_for_agent(agent, channel, account_id, peer)
-    return agent_id, _apply_reset_policy(agent, base_key), base_key
+    resolve_key = _apply_reset_policy if rotate else _current_session_key
+    return agent_id, resolve_key(agent, base_key), base_key
 
 
 def start_new_conversation(
@@ -256,9 +278,50 @@ def start_new_conversation(
     agent_id, _session_key, base_key = route
     if base_key is None:
         return "这个对话固定绑定在一个会话上，不能重开。"
-    with _session_lock_for(_session_key):
+    # 这个锁在一轮期间一直被持有, 不限时等就等于等这一轮跑完.
+    lock = _session_lock_for(_session_key)
+    if not lock.acquire(timeout=RUN_SLOT_WAIT_SECONDS):
+        return BUSY_REPLY
+    try:
         start_new_generation(_agents.get(agent_id), base_key)
+    finally:
+        lock.release()
     return "✓ 已开始新对话，之前的内容不会带进来。"
+
+
+def stop_current_work(
+    *, channel: str, account_id: str, peer_kind: str, peer_id: str,
+) -> str:
+    """``/stop``: 取消这个聊天当前的工作. 不拿会话锁 — 正在跑的轮次全程
+    持有它. 只读路由: 一条 /stop 不能让 idle 重置开出新会话, 否则正在跑的
+    轮次反而找不到了; 跑到一半跨过 daily 重置的轮次靠 active_turns 找到."""
+    peer = {"kind": peer_kind or "direct", "id": str(peer_id)}
+    route = _route(channel, account_id, peer, rotate=False)
+    if isinstance(route, str):
+        return route
+    from openprogram.interfaces.channels import _active_turns
+    from openprogram.runtime.execution.run_control import cancel_session_executions
+    session_keys = {route[1], *_active_turns.sessions_for_peer(channel, account_id, peer_id)}
+    try:
+        stopped = [item for key in session_keys for item in cancel_session_executions(key)]
+    except Exception as e:  # noqa: BLE001
+        # 这条命令在 handle_inbound 的线程里跑, 抛出去用户什么也收不到.
+        _log.exception("[%s:%s] /stop failed", channel, account_id)
+        return f"[error] {type(e).__name__}: {e}"
+    return "✓ 已停止正在进行的任务。" if stopped else "现在没有正在进行的任务。"
+
+
+def _stopped_on_request(store, execution_id: str) -> bool:
+    from openprogram.runtime.execution.model import ExecutionStatus
+    execution = store.get_execution(execution_id)
+    return execution is not None and execution.status in (
+        ExecutionStatus.CANCELLING, ExecutionStatus.CANCELLED,
+    )
+
+
+def _empty_reply_text(store, execution_id: str) -> str:
+    """A turn with no text: stopped on request, or the model said nothing."""
+    return STOPPED_REPLY if _stopped_on_request(store, execution_id) else "(empty reply)"
 
 
 def _run_session_turn(
@@ -279,14 +342,32 @@ def _run_session_turn(
     ambient: bool = False,
     memory_mode: str = "on",
     thread_id: Optional[str] = None,
+    room_full_access: bool = False,
+    on_busy: Optional[Callable[[], None]] = None,
 ) -> Optional[str]:
     """路由已完成、session 锁已持有 — 跑一个完整 turn: load session →
-    agent turn → 持久化 → broadcast. 返回值语义同 dispatch_inbound."""
+    agent turn → 持久化 → broadcast. 返回值语义同 dispatch_inbound.
+
+    先占会话的 run slot: 占不到时这条消息不开启一轮. 房间事件没人在等
+    回复, 不等也不回话."""
     from openprogram.interfaces.channels import _active_turns
+    from openprogram.runtime.conversation.run_control import run_slot
+    slot = {"owner": uuid.uuid4().hex[:12], "execution_id": None,
+            "on_busy": on_busy or (lambda: None)}
+    if not _reserve_run_slot(
+        session_key, slot["owner"],
+        wait_seconds=0.0 if ambient else RUN_SLOT_WAIT_SECONDS,
+    ):
+        slot["on_busy"]()
+        if ambient:
+            _log.info("[%s:%s] room event skipped: conversation busy",
+                      channel, account_id)
+            return None
+        return BUSY_REPLY
     _active_turns.begin(session_key, _active_turns.ActiveTurn(
         channel=channel, account_id=account_id, peer_id=str(peer_id),
         peer_kind=peer.get("kind") or "direct",
-        speaker_id=speaker_id or "", ambient=ambient,
+        speaker_id=speaker_id or "", ambient=ambient, thread_id=thread_id or "",
     ))
     try:
         return _run_turn_body(
@@ -299,9 +380,15 @@ def _run_session_turn(
             attachments=attachments,
             block_stream=block_stream and not ambient,
             ambient=ambient, memory_mode=memory_mode, thread_id=thread_id,
+            room_full_access=room_full_access, slot=slot,
         )
     finally:
         _active_turns.end(session_key)
+        if slot["execution_id"]:
+            run_slot.finish(session_key, slot["owner"],
+                            execution_id=slot["execution_id"])
+        else:
+            run_slot.release(session_key, slot["owner"])
 
 
 def _run_turn_body(*, channel: str, account_id: str, ambient: bool,
@@ -398,7 +485,9 @@ def _run_turn_core(
     ambient: bool,
     memory_mode: str,
     thread_id: Optional[str],
+    room_full_access: bool,
     turn: dict,
+    slot: dict,
 ) -> Optional[str]:
     # ---- session 创建 / 加载 -------------------------------------------
     meta, _ = _load_or_init_session(
@@ -409,7 +498,6 @@ def _run_turn_core(
         peer=peer,
         user_display=user_display or str(peer_id),
     )
-    _sandbox_room_session(channel, account_id, peer, agent_id, session_key)
 
     # ---- run config 加载 (permission/tools/effort) ---------------------
     from openprogram.runtime.conversation.session_config import (
@@ -467,8 +555,10 @@ def _run_turn_core(
             return _transport.SendResult.fail(
                 "unknown", f"{type(e).__name__}: {e}")
 
+    from openprogram.runtime.conversation.bound_reply import flattens_tables
+    flatten = flattens_tables(session_key)
     streamer = (
-        _BlockStreamer(channel, account_id, str(peer_id), thread_id=thread_id)
+        _BlockStreamer(channel, account_id, str(peer_id), thread_id=thread_id, flatten=flatten)
         if block_stream and progress_handle is None else None
     )
     turn["streamer"] = streamer
@@ -528,7 +618,7 @@ def _run_turn_core(
 
     _authority = _channel_authority(
         channel, account_id, speaker_id or "",
-        speaker_display or user_display,
+        speaker_display or user_display, peer, room_full_access,
     )
     req = TurnRequest(
         session_id=session_key,
@@ -537,6 +627,8 @@ def _run_turn_core(
         source=channel,
         peer_display=user_display or str(peer_id),
         peer_id=str(peer_id),
+        peer_kind=peer.get("kind") or "direct",
+        user_msg_id=slot["owner"],
         permission_mode=permission_from_config(
             run_cfg, default=_pdef.get("permission_mode")),
         permission_rules=_load_merged_rules(session_key),
@@ -549,6 +641,7 @@ def _run_turn_core(
     from openprogram.interfaces.channels._room import memory_override
     req.memory_policy_override = memory_override(memory_mode)
     adapter = CanonicalAgentAdapter(event_sink=_on_event)
+    admission = None
     try:
         admission = adapter.admit(
             req,
@@ -556,9 +649,45 @@ def _run_turn_core(
             user_message_id=req.user_msg_id,
             config_snapshot_ref=f"channel:{channel}",
         )
+        from openprogram.runtime.conversation.run_control import run_slot
+        if not run_slot.activate(
+            session_key, slot["owner"], execution_id=admission.execution_id,
+            status_version=getattr(admission, "status_version", 0),
+            runner=threading.current_thread(),
+        ):
+            adapter.fail_admission(
+                admission, reason_code="channel_turn_activation_failed",
+            )
+            slot["on_busy"]()
+            if streamer is not None:
+                streamer.close()
+            if ambient:
+                return None
+            if progress_handle is not None:
+                _finish_placeholder(progress_handle, BUSY_REPLY,
+                                    thread_id=thread_id)
+                return None
+            return BUSY_REPLY
+        slot["execution_id"] = admission.execution_id
         _active, result = asyncio.run(adapter.activate(admission))
     except Exception as e:  # noqa: BLE001
-        err_text = f"[error] {type(e).__name__}: {e}"
+        # /stop 落在准入和启动之间时, 启动会因版本冲突失败 — 那不是错误.
+        err_text = (
+            STOPPED_REPLY
+            if admission is not None
+            and _stopped_on_request(adapter.store, admission.execution_id)
+            else f"[error] {type(e).__name__}: {e}"
+        )
+        if slot["execution_id"]:
+            # 没能开始的轮次要收尾, 否则它的记录一直占着这个会话. 已经开始
+            # 过的轮次由 driver 收尾, 这里的版本号对不上, 什么也不改.
+            try:
+                adapter.fail_admission(
+                    admission, reason_code="channel_turn_activation_failed",
+                )
+            except Exception:  # noqa: BLE001
+                _log.debug("[%s:%s] admission already settled", channel,
+                           account_id, exc_info=True)
         if streamer is not None:
             streamer.close()
         if ambient:
@@ -577,14 +706,26 @@ def _run_turn_core(
             streamer.close()
         if ambient:
             return None
-        return "[error] canonical Agent activation produced no result"
-    reply_text = (result.final_text or "").strip() or "(empty reply)"
+        # 轮次在取消后抛异常时没有结果; 占位不能留在 "⏳".
+        err_text = (
+            STOPPED_REPLY
+            if _stopped_on_request(adapter.store, admission.execution_id)
+            else "[error] canonical Agent activation produced no result"
+        )
+        if progress_handle is not None:
+            _finish_placeholder(progress_handle, err_text, thread_id=thread_id)
+            return None
+        return err_text
+    reply_text = (result.final_text or "").strip() or _empty_reply_text(
+        adapter.store, admission.execution_id,
+    )
     user_msg_id = result.user_msg_id
     assistant_msg_id = result.assistant_msg_id
 
     # ---- agent 交出来的文件 → 平台原生附件 -------------------------------
     # ambient 房间事件的回复不进群 (agent 用 chat_send 开口), 附件也不发.
-    # reply_text 里的 [attachment: ... @ 路径] 是 send_file 工具登记的.
+    # 只有 result.attached_files 里的文件才上传; reply_text 里的标记是文本,
+    # 模型自己也能写.
     # 先把文件真的传上去, 再把标记从"发给平台的那份文本"里拿掉 —— 存进
     # 会话 / 广播给网页的那份 (reply_text) 保留标记, 网页据此画 chip.
     if ambient:
@@ -594,12 +735,14 @@ def _run_turn_core(
         unsent = streamer.unsent_part(reply_text)
         channel_text = (
             _deliver_outbound_files(channel, account_id, str(peer_id), unsent,
+                                    attached_files=result.attached_files,
                                     thread_id=thread_id)
             if unsent.strip() else ""
         )
     else:
         channel_text = _deliver_outbound_files(
-            channel, account_id, str(peer_id), reply_text, thread_id=thread_id,
+            channel, account_id, str(peer_id), reply_text,
+            attached_files=result.attached_files, thread_id=thread_id,
         )
 
     # ---- 持久化 + webui WS push ----------------------------------------
@@ -609,6 +752,7 @@ def _run_turn_core(
         "content": user_text,
         "timestamp": time.time(),
         "source": channel,
+        "origin": "person",
         "peer_display": user_display or str(peer_id),
         "peer_id": str(peer_id),
     }
@@ -633,6 +777,10 @@ def _run_turn_core(
                              default_db().get_messages(session_key))
     except Exception:  # noqa: BLE001
         _log.exception("live webui poke failed for %s", session_key)
+
+    # 常驻 Agent 的表格到不了聊天应用: 下面三个出口 (占位, 分段, 交回 adapter) 共用这一次.
+    if flatten:
+        channel_text = _format.flatten_tables(channel_text)
 
     # ---- Progress streaming: 把占位 edit 成完整 reply, 返回 None -------
     # 按渲染后长度判断; 放不下时占位放第一段, 余下用新消息追加.
@@ -660,20 +808,31 @@ class _BlockStreamer:
 
     发出去的始终是流文本的一个前缀; 结束时 :meth:`unsent_part` 用它从
     最终回复 (流文本 + send_file 附件标记) 里算出还没发的部分.
+
+    附件标记绝不当文字发出去: 流到它时还不知道本轮登记了哪些文件, 所以
+    先扣下, 结束时由 :func:`_deliver_outbound_files` 统一上传或改写成说明.
+
+    ``flatten`` (常驻 Agent): 表格写完才发, 发的时候逐行铺平; 表格和代码块
+    都不从中间切, 否则下一段认不出代码块, 里面的表格会被铺平. 工具调用时的
+    :meth:`flush` 照常全发: 文字块到此结束, 表格也就写完了. ``sent_upto``
+    始终按原始文本算.
     """
 
     MIN_CHARS = 200
 
     def __init__(self, channel: str, account_id: str, target: str,
-                 thread_id: Optional[str] = None) -> None:
+                 thread_id: Optional[str] = None, flatten: bool = False) -> None:
         import queue
         self.channel = channel
         self.account_id = account_id
         self.target = target
         self.thread_id = thread_id
+        self.flatten = flatten
         self.streamed = ""
         self.sent_upto = 0
         self.sent_any = False
+        # 发失败的 SendResult, 按发生顺序; 绑定会话的回复投递据此告诉网页.
+        self.failures: list = []
         self._closed = False
         self._queue: "queue.Queue[Optional[str]]" = queue.Queue()
         self._thread = threading.Thread(target=self._drain, daemon=True)
@@ -709,15 +868,40 @@ class _BlockStreamer:
         if not cut and len(pending) > limit and pending.count("```") % 2 == 0:
             newline = pending.rfind("\n", 0, limit)
             cut = newline + 1 if newline > 0 else limit
+        return self._outside_blocks(pending, cut) if self.flatten and cut else cut
+
+    @staticmethod
+    def _outside_blocks(pending: str, cut: int) -> int:
+        """``cut`` moved so no table or code block is split. Trailing lines
+        with a pipe may still be a table being written, and a block reaching
+        the end may still be open, so they wait for what comes next."""
+        lines = pending.splitlines(keepends=True)
+        trailing_start = len(pending)
+        has_pipe = False
+        for position, line in reversed(list(enumerate(lines))):
+            still_being_written = position == len(lines) - 1 and not line.endswith("\n")
+            if "|" not in line and not still_being_written:
+                break
+            has_pipe = has_pipe or "|" in line
+            trailing_start -= len(line)
+        if has_pipe:
+            cut = min(cut, trailing_start)
+        for start, end in _format.block_spans(pending):
+            if start < cut < end:
+                return start or (end if end < len(pending) else 0)
         return cut
 
     def _emit(self, length: int) -> None:
         chunk = self.streamed[self.sent_upto:self.sent_upto + length]
         self.sent_upto += length
-        if chunk.strip():
-            self.send(chunk.strip())
+        from openprogram.state.attachments import strip_markers
+        text = strip_markers(chunk).strip()
+        if text:
+            self.send(text)
 
     def send(self, text: str) -> None:
+        if self.flatten:
+            text = _format.flatten_tables(text)
         self.sent_any = True
         if self._closed:
             self._post(text)
@@ -731,9 +915,13 @@ class _BlockStreamer:
                 self.thread_id,
             )
             if not result.ok:
+                self.failures.append(result)
                 _log.warning("[%s:%s] send failed: %s",
                              self.channel, self.account_id, result.error_kind)
         except Exception as e:  # noqa: BLE001
+            from openprogram.interfaces.channels import _transport
+            self.failures.append(_transport.SendResult.fail(
+                "unknown", f"{type(e).__name__}: {e}"))
             _log.warning("[%s:%s] send failed: %s",
                          self.channel, self.account_id, type(e).__name__)
 
@@ -753,25 +941,33 @@ class _BlockStreamer:
         self._closed = True
 
     def unsent_part(self, reply_text: str) -> str:
-        """最终回复里还没发出去的部分."""
+        """最终回复里还没发出去的部分, 含发送时扣下的附件标记."""
         if not self.sent_any:
             return reply_text
+        from openprogram.state.attachments import find_markers
         sent = self.streamed[:self.sent_upto].strip()
+        held = [marker for marker, _name, _path in find_markers(sent)]
         body = reply_text
         if sent and body.startswith(sent):
-            return body[len(sent):].strip()
-        # 流文本和最终文本对不上 (不该发生): 只补流里没发的那段 +
-        # 最终文本里流之外的尾巴 (附件标记).
-        tail = body[len(self.streamed.strip()):] if body.startswith(
-            self.streamed.strip()) else ""
-        return (self.streamed[self.sent_upto:].strip() + tail).strip()
+            rest = body[len(sent):].strip()
+        else:
+            # 流文本和最终文本对不上 (不该发生): 只补流里没发的那段 +
+            # 最终文本里流之外的尾巴 (附件标记).
+            tail = body[len(self.streamed.strip()):] if body.startswith(
+                self.streamed.strip()) else ""
+            rest = (self.streamed[self.sent_upto:].strip() + tail).strip()
+        return "\n\n".join(part for part in [*held, rest] if part)
 
 
 def _deliver_outbound_files(
     channel: str, account_id: str, peer_id: str, reply_text: str,
-    *, thread_id: Optional[str] = None,
+    *, attached_files: Sequence[str], thread_id: Optional[str] = None,
 ) -> str:
     """把 reply_text 里的附件标记逐个上传, 返回去掉标记后的平台文本.
+
+    标记只是文本, 模型自己也能写, 所以只上传 ``attached_files`` 里的文件
+    (本轮 ``send_file`` 调用登记过的路径). 其他标记什么都不传, 改写成一句
+    不带路径的说明.
 
     传输层四个平台早就写好了 (``_transport.post_file``), 缺的只是这一步.
     三种结局都不静默:
@@ -788,7 +984,14 @@ def _deliver_outbound_files(
         return reply_text
     from openprogram.interfaces.channels import _transport
     out = reply_text
-    for marker, name, path in markers:
+    recorded = set(attached_files)
+    # 同一个标记写了两遍也只传一次: 下面的 replace 会把两处一起换掉.
+    for marker, name, path in dict.fromkeys(markers):
+        if path not in recorded:
+            _log.warning("[%s:%s] attachment marker %r refused: no send_file call recorded it",
+                         channel, account_id, name)
+            out = out.replace(marker, f"(附件 {name} 没有发送：这个文件不是用 send_file 交出的)")
+            continue
         try:
             result = (
                 _transport.post_file(channel, account_id, peer_id, path,

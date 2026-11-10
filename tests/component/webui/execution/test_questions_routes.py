@@ -28,7 +28,7 @@ def client(monkeypatch, tmp_path, request):
         revision_id=revision.revision_id, capabilities=CapabilitySet(pause=True),
     )
     attempts = AttemptStore(store)
-    leased, reserved = attempts.lease(execution.execution_id, expected_version=execution.status_version, owner_id="test", ttl_seconds=30)
+    leased, reserved = attempts.lease(execution.execution_id, expected_version=execution.status_version, owner_id="test")
     attempts.activate(leased.attempt_id, generation=leased.generation, expected_execution_version=reserved.status_version)
     monkeypatch.setattr(execution_module, "default_store", lambda: store)
     monkeypatch.setattr("openprogram.runtime.agent.questions._registry", QuestionRegistry())

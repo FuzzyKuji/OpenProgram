@@ -1,7 +1,7 @@
 """Default chat-runtime workdir resolution.
 
 Single seam between the session store (which owns ``workdir/`` inside
-each session's git repo) and the runtime (which forwards a working
+each session's directory) and the runtime (which forwards a working
 directory to subprocess-spawning providers via ``--cd`` and similar).
 
 Why a tiny helper and not inline in the turn runtime
@@ -18,7 +18,7 @@ from typing import Optional
 
 def session_workdir_for(session_id: str) -> Optional[Path]:
     """Resolve the session's ``workdir/`` directory; ``None`` when the
-    session has no git repo yet (first-turn race) or the store is
+    session has no directory yet (first-turn race) or the store is
     misconfigured. Callers should treat ``None`` as "leave runtime cwd
     untouched"."""
     if not session_id:

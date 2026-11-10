@@ -1,0 +1,127 @@
+"""Rewind to here: the button's two server steps.
+
+/api/chat/rewind_plan names the files the replies after a user message
+changed and whether they can be put back; /api/chat/rewind applies exactly
+the plan the user confirmed. Edit never touches files.
+"""
+import asyncio
+import json
+
+from openprogram.interfaces.server.routes import chat_branches as routes
+
+
+def _body(response):
+    return json.loads(response.body)
+
+
+def test_rewind_plan_reports_rows_and_skips_recovery_during_a_run(monkeypatch):
+    from openprogram.interfaces.server import server
+    from openprogram.runtime.conversation import rewind
+    seen = {}
+    monkeypatch.setattr(server, "_is_run_active", lambda sid: True)
+
+    def plan(sid, msg, **kw):
+        seen.update(kw)
+        return {
+            "status": "ready", "mode": kw["mode"],
+            "files": [{"path": "/w/a.py", "action": "restore", "additions": 1, "deletions": 2}],
+            "plan_hash": "sha256:p", "idempotency_key": "k",
+        }
+    monkeypatch.setattr(rewind, "plan_rewind", plan)
+    response = asyncio.run(routes.post_chat_rewind_plan({"session_id": "s", "msg_id": "u", "mode": "code"}))
+    assert seen == {"mode": "code", "recover": False}
+    body = _body(response)
+    assert body["files"][0]["action"] == "restore"
+    assert body["plan_hash"] == "sha256:p"
+
+
+def test_rewind_plan_rejects_an_unknown_mode():
+    response = asyncio.run(routes.post_chat_rewind_plan({"session_id": "s", "msg_id": "u", "mode": "x"}))
+    assert response.status_code == 400
+
+
+def _reserve(monkeypatch, order, allowed=True):
+    from openprogram.interfaces.server import server
+    monkeypatch.setattr(server, "_try_reserve_run", lambda sid, r: order.append("reserve") or allowed)
+    monkeypatch.setattr(server, "_release_run_reservation", lambda sid, r: order.append("release"))
+
+
+def test_rewind_applies_the_confirmed_plan_and_moves_head(monkeypatch):
+    from openprogram.interfaces.server import server
+    from openprogram.runtime.conversation import rewind, rewind_marks as marks
+    order = []
+    _reserve(monkeypatch, order)
+    monkeypatch.setattr(marks, "list_rewind_marks", lambda sid: [])
+    monkeypatch.setattr(server, "_set_active_head", lambda sid, head: order.append(("head", head)))
+    monkeypatch.setattr(server, "refresh_context_stats", lambda sid: None)
+    monkeypatch.setattr(rewind, "rewind_to", lambda sid, msg, **kw: order.append(("rewind", msg, kw)) or {
+        "status": "committed", "head_changed": True, "new_head_id": "before-u",
+        "turns_reverted": 1, "user_text": "make notes",
+    })
+    response = asyncio.run(routes.post_chat_rewind({
+        "session_id": "s", "msg_id": "u", "plan_hash": "sha256:p", "idempotency_key": "k",
+    }))
+    assert response.status_code == 200
+    body = _body(response)
+    assert body["status"] == "committed" and body["new_head_id"] == "before-u"
+    assert body["user_text"] == "make notes" and body["mode"] == "code_and_conversation"
+    assert order == [
+        "reserve",
+        ("rewind", "u", {"idempotency_key": "k", "expected_plan_hash": "sha256:p", "mode": "code_and_conversation"}),
+        ("head", "before-u"),
+        "release",
+    ]
+
+
+def test_a_stale_plan_rewinds_nothing(monkeypatch):
+    from openprogram.interfaces.server import server
+    from openprogram.runtime.conversation import rewind
+    _reserve(monkeypatch, [])
+    monkeypatch.setattr(server, "_set_active_head", lambda *a: (_ for _ in ()).throw(AssertionError("no head move")))
+    monkeypatch.setattr(rewind, "rewind_to", lambda *a, **kw: {"status": "aborted", "error": "stale_plan"})
+    response = asyncio.run(routes.post_chat_rewind({
+        "session_id": "s", "msg_id": "u", "plan_hash": "sha256:old", "idempotency_key": "k",
+    }))
+    assert response.status_code == 409
+    assert "Rewind again" in _body(response)["error"]
+
+
+def test_rewind_waits_for_a_running_turn(monkeypatch):
+    order = []
+    _reserve(monkeypatch, order, allowed=False)
+    response = asyncio.run(routes.post_chat_rewind({
+        "session_id": "s", "msg_id": "u", "plan_hash": "sha256:p", "idempotency_key": "k",
+    }))
+    assert response.status_code == 409
+    assert order == ["reserve"]
+
+
+def test_undo_reserves_the_run_and_moves_head(monkeypatch):
+    from openprogram.interfaces.server import server
+    from openprogram.runtime.conversation import rewind_marks as marks
+    order = []
+    _reserve(monkeypatch, order)
+    monkeypatch.setattr(server, "_set_active_head", lambda sid, head: order.append(head))
+    monkeypatch.setattr(server, "refresh_context_stats", lambda sid: None)
+    monkeypatch.setattr(marks, "undo_rewind", lambda sid, **kw: {
+        "status": "committed", "head_changed": True, "new_head_id": "tail",
+    })
+    response = asyncio.run(routes.post_chat_rewind_undo({"session_id": "s"}))
+    assert response.status_code == 200
+    assert order == ["reserve", "tail", "release"]
+
+
+def test_rewind_needs_the_plan_it_was_shown():
+    response = asyncio.run(routes.post_chat_rewind({"session_id": "s", "msg_id": "u", "plan_hash": "x"}))
+    assert response.status_code == 400
+
+
+def test_edit_leaves_files_alone(monkeypatch):
+    from openprogram.runtime.conversation import rewind
+    monkeypatch.setattr(rewind, "rewind_to", lambda *a, **kw: (_ for _ in ()).throw(AssertionError("no rewind")))
+    monkeypatch.setattr(routes, "_fork_user_turn_and_run", lambda *a, **kw: {"msg_id": "new"})
+    response = asyncio.run(routes.post_chat_edit({
+        "session_id": "s", "msg_id": "u", "content": "edited",
+        "restore_files": {"plan_hash": "sha256:p", "idempotency_key": "k"},
+    }))
+    assert response.status_code == 200

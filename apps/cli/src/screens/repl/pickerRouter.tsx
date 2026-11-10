@@ -52,7 +52,6 @@ import type {
   ThinkingEffort,
 } from './types.js';
 import { PERMISSION_MODES, PERMISSION_LABELS } from './types.js';
-import { Confirm } from '../../ui/Confirm.js';
 
 const THINKING_EFFORTS: ThinkingEffort[] = ['off', 'minimal', 'low', 'medium', 'high', 'xhigh'];
 
@@ -285,7 +284,7 @@ export function buildPickerNode(ctx: PickerCtx): React.ReactElement | null {
         actions={[
           { label: 'Model', command: '/model', hint: 'switch model' },
           { label: 'Thinking effort', command: '/effort', hint: 'off … xhigh' },
-          { label: 'Permission mode', command: '/permissions', hint: 'ask … bypass' },
+          { label: 'Permission mode', command: '/permissions', hint: 'bypass … plan' },
           { label: 'Theme', command: '/theme', hint: 'live preview' },
           { label: 'Claude accounts', command: '/login', hint: 'add · switch · rename · remove' },
         ]}
@@ -429,10 +428,10 @@ export function buildPickerNode(ctx: PickerCtx): React.ReactElement | null {
   }
 
   if (pickerKind === 'permission') {
-    // The five permission tiers, numbered like the web Mode menu (1-5).
-    // Picking bypass detours through the explicit confirm below — same
-    // as the web's Enable-Bypass dialog — unless it's already active.
-    const items: PickerItem<PermissionMode>[] = PERMISSION_MODES.map((m, i) => ({
+    // The permission tiers, numbered like the web Mode menu.
+    const shown: PermissionMode[] = permissionMode === 'acceptEdits'
+      ? [...PERMISSION_MODES, 'acceptEdits'] : PERMISSION_MODES;
+    const items: PickerItem<PermissionMode>[] = shown.map((m, i) => ({
       label: `${i + 1}. ${PERMISSION_LABELS[m]}`,
       description: m === permissionMode ? 'current' : undefined,
       value: m,
@@ -442,40 +441,11 @@ export function buildPickerNode(ctx: PickerCtx): React.ReactElement | null {
         title="Set permission mode"
         items={items}
         onSelect={(it) => {
-          if (it.value === 'bypass' && permissionMode !== 'bypass') {
-            // The Confirm title is one terminal row — push the full
-            // warning (same copy as the web dialog) to the transcript
-            // where it wraps, so it's readable at any width.
-            pushSystem('Bypass permissions: every tool runs without asking — '
-              + 'including commands that can change or delete files. Sandbox '
-              + 'restrictions still apply.');
-            setPickerKind('permission_bypass_confirm');
-            return;
-          }
           setPermissionMode(it.value);
           pushSystem(`Permission mode change requested: ${it.value}.`);
           setPickerKind(null);
         }}
         onCancel={() => setPickerKind(null)}
-      />
-    );
-  }
-
-  if (pickerKind === 'permission_bypass_confirm') {
-    // defaultYes false so a stray Enter cancels instead of enabling;
-    // cancel returns to the tier list rather than closing outright.
-    return (
-      <Confirm
-        title="Enable bypass permissions?"
-        defaultYes={false}
-        yesLabel="Enable"
-        noLabel="Cancel"
-        onConfirm={() => {
-          setPermissionMode('bypass');
-          pushSystem('Permission mode change requested: bypass.');
-          setPickerKind(null);
-        }}
-        onCancel={() => setPickerKind('permission')}
       />
     );
   }

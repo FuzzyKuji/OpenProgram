@@ -14,8 +14,12 @@
  * while-running mode shows a forward arrow for Steer and a queue list
  * for Queue.
  *
- * Send is the Solar paper plane, flying up-right on hover; Stop stays a local
+ * Send is the Solar paper plane; Stop stays a local
  * filled square (the send button's stop glyph, not an icon).
+ *
+ * Every glyph here fills its 16 px box (SolarIcon fit="fill") and grows to
+ * exactly 18 px on hover, the paper plane like the rest. The stop
+ * square keeps its 8 px square in the 16 px box.
  */
 "use client";
 
@@ -30,31 +34,31 @@ type IconProps = { size?: number };
 // tuning-sliders ("adjust options") glyph rather than a plus.
 export const OptionsIcon = forwardRef<AnimatedNavIconHandle, IconProps>(
   function OptionsIcon({ size = 16 }, ref) {
-    return <SolarIcon ref={ref} name="tuning-2" size={size} />;
+    return <SolarIcon ref={ref} fit="fill" name="tuning-2" size={size} />;
   },
 );
 
 export const AttachIcon = forwardRef<AnimatedNavIconHandle, IconProps>(
   function AttachIcon({ size = 16 }, ref) {
-    return <SolarIcon ref={ref} name="paperclip" size={size} />;
+    return <SolarIcon ref={ref} fit="fill" name="paperclip" size={size} />;
   },
 );
 
 export const RecordIcon = forwardRef<AnimatedNavIconHandle, IconProps>(
   function RecordIcon({ size = 16 }, ref) {
-    return <SolarIcon ref={ref} name="record" size={size} />;
+    return <SolarIcon ref={ref} fit="fill" name="record" size={size} />;
   },
 );
 
 export const WebSearchIcon = forwardRef<AnimatedNavIconHandle, IconProps>(
   function WebSearchIcon({ size = 16 }, ref) {
-    return <SolarIcon ref={ref} name="global" size={size} />;
+    return <SolarIcon ref={ref} fit="fill" name="global" size={size} />;
   },
 );
 
 export const SandboxIcon = forwardRef<AnimatedNavIconHandle, IconProps>(
   function SandboxIcon({ size = 16 }, ref) {
-    return <SolarIcon ref={ref} name="box-minimalistic" size={size} />;
+    return <SolarIcon ref={ref} fit="fill" name="box-minimalistic" size={size} />;
   },
 );
 
@@ -62,14 +66,14 @@ export const SandboxIcon = forwardRef<AnimatedNavIconHandle, IconProps>(
 // while someone is attending, closed eye once the mode is on.
 export const UnattendedIcon = forwardRef<AnimatedNavIconHandle, IconProps & { on?: boolean }>(
   function UnattendedIcon({ size = 16, on = false }, ref) {
-    return <SolarIcon ref={ref} name={on ? "eye-closed" : "eye"} size={size} />;
+    return <SolarIcon ref={ref} fit="fill" name={on ? "eye-closed" : "eye"} size={size} />;
   },
 );
 
-// Send glyph — paper plane, flown up-right on the send button's hover via ref
-// (controlled). `.actionBtn svg` keeps it filled with currentColor.
+// Send glyph — paper plane, grown on the send button's hover via ref like the
+// row's other glyphs (controlled): it does not glide. `.actionBtn svg` keeps it filled with currentColor.
 export const SendIcon = forwardRef<AnimatedNavIconHandle>(function SendIcon(_props, ref) {
-  return <SolarIcon ref={ref} name="plain-2" size={16} motionPreset="fly" />;
+  return <SolarIcon ref={ref} fit="fill" name="plain-2" size={16} />;
 });
 
 export function StopIcon() {

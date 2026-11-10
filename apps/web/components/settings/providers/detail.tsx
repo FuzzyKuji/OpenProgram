@@ -18,6 +18,8 @@ import styles from "./provider-pane.module.css";
 import type { Model, Provider } from "./types";
 import { useTranslation } from "@/lib/i18n";
 import { confirmAction } from "@/components/ui/confirm-dialog";
+import { HoverTip } from "@/components/ui/tooltip";
+import { settingsSend } from "@/lib/settings/settings-request";
 
 /** Right-pane detail view for one selected provider. Header + enable
  *  toggle, then a stack of sections: setup hint (optional), API key
@@ -43,9 +45,11 @@ export function Detail({
       confirmLabel: text("Delete", "删除"),
       destructive: true,
     }))) return;
-    try {
-      await fetch(`/api/providers/custom/${encodeURIComponent(provider.id)}`, { method: "DELETE" });
-    } catch { /* ignore */ }
+    const deleted = await settingsSend(`/api/providers/custom/${encodeURIComponent(provider.id)}`, {
+      method: "DELETE",
+      failure: text("Could not delete this provider.", "无法删除这个 Provider。"),
+    });
+    if (deleted === null) return;
     onDeleted?.();
   }
   const subtitle =
@@ -60,32 +64,38 @@ export function Detail({
           : text("Subscription required", "需要订阅");
 
   const [models, setModels] = useState<Model[]>([]);
+  const [modelsState, setModelsState] = useState<"loading" | "ready" | "failed">("loading");
   const [modelSearch, setModelSearch] = useState("");
   const [fetchStatus, setFetchStatus] = useState<string | null>(null);
   const [manualId, setManualId] = useState("");
   const [manualBusy, setManualBusy] = useState(false);
-  const [contextWindow, setContextWindow] = useState("4096");
-  const [maxTokens, setMaxTokens] = useState("1024");
+  const [contextWindow, setContextWindow] = useState("128000");
+  const [maxTokens, setMaxTokens] = useState("8192");
   const [manualError, setManualError] = useState<string | null>(null);
   const connectivityRef = useRef<ConnectivityHandle>(null);
 
   const reloadModels = useCallback(async () => {
     if (provider.kind === "cli") {
       setModels([]);
+      setModelsState("ready");
       return;
     }
     try {
       const r = await fetch(
         `/api/providers/${encodeURIComponent(provider.id)}/models`,
       );
+      if (!r.ok) throw new Error(String(r.status));
       const d = await r.json();
       setModels(d.models || []);
+      setModelsState("ready");
     } catch {
-      setModels([]);
+      setModelsState("failed");
     }
   }, [provider.id, provider.kind]);
 
   useEffect(() => {
+    setModels([]);
+    setModelsState("loading");
     reloadModels();
   }, [reloadModels]);
 
@@ -158,12 +168,14 @@ export function Detail({
         body: JSON.stringify({ id: mid, ...(provider.local ? { context_window: Number(contextWindow), max_tokens: Number(maxTokens) } : {}) }),
       });
       const result = await response.json();
-      if (!response.ok || result.error) { setManualError(result.error || "Failed to save model"); return; }
+      if (!response.ok || result.error) { setManualError(result.error || text("Could not save the model.", "无法保存模型。")); return; }
       setManualError(null);
       setManualId("");
       await reloadModels();
       onChanged();
-    } catch { /* ignore */ } finally {
+    } catch {
+      setManualError(text("Could not save the model. Check the connection and try again.", "无法保存模型，请检查连接后重试。"));
+    } finally {
       setManualBusy(false);
     }
   }, [manualId, provider.id, provider.local, contextWindow, maxTokens, reloadModels, onChanged]);
@@ -187,18 +199,19 @@ export function Detail({
               checked={provider.enabled}
               onCheckedChange={onToggle}
               aria-label={text("Enable this provider", "启用这个 Provider")}
-              title={text("Enable this provider", "启用这个 Provider")}
             />
           </label>
           {provider.custom && (
-            <Button
-              variant="destructive"
-              size="icon"
-              onClick={deleteProvider}
-              title={text("Delete custom provider", "删除自定义 Provider")}
-            >
-              <Trash2 />
-            </Button>
+            <HoverTip label={text("Delete custom provider", "删除自定义 Provider")}>
+              <Button
+                variant="destructive"
+                size="icon"
+                aria-label={text("Delete custom provider", "删除自定义 Provider")}
+                onClick={deleteProvider}
+              >
+                <Trash2 />
+              </Button>
+            </HoverTip>
           )}
         </div>
       </div>
@@ -261,6 +274,11 @@ export function Detail({
 
       {provider.kind === "cli" ? (
         <CliInfo provider={provider} />
+      ) : modelsState === "loading" ? null : modelsState === "failed" ? (
+        <div className="flex items-center justify-between gap-[10px]">
+          <span className={styles.modelCountSummary}>{text("Could not load the model list.", "无法加载模型列表。")}</span>
+          <Button variant="elevated" onClick={reloadModels}>{text("Retry", "重试")}</Button>
+        </div>
       ) : models.length > 0 ? (
         <ModelList provider={provider} models={models} search={modelSearch} onSearch={setModelSearch} onReload={reloadModels} />
       ) : (

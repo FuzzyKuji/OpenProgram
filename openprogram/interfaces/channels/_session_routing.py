@@ -60,6 +60,11 @@ def session_key_for_agent(
     return safe or "unknown"
 
 
+def current_session_key(agent, base_key: str) -> str:
+    """The key this peer is on right now, starting no new generation."""
+    return _with_daily(agent, _with_generation(agent, base_key))
+
+
 def apply_reset_policy(agent, base_key: str) -> str:
     """应用 ``/new`` 代数和 agent 的 daily / idle 重置策略, 返回最终
     session_key.
@@ -85,6 +90,14 @@ def apply_reset_policy(agent, base_key: str) -> str:
         if last and (time.time() - last) > idle_min * 60:
             start_new_generation(agent, base_key)
             key = _with_daily(agent, _with_generation(agent, base_key))
+    # A deleted conversation never comes back: its id keeps a delete
+    # mark, and a turn routed to it has no session to write to. The
+    # peer's next message starts a new one, as after ``/new``.
+    for _ in range(100):
+        if not _session_deleted(key):
+            break
+        start_new_generation(agent, base_key)
+        key = _with_daily(agent, _with_generation(agent, base_key))
     return key
 
 
@@ -142,6 +155,15 @@ def _with_daily(agent, key: str) -> str:
         return f"{key}_{window_start.strftime('%Y%m%d')}"
     except (ValueError, AttributeError):
         return key
+
+
+def _session_deleted(session_key: str) -> bool:
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        from openprogram.state.store.session.placement import is_deleted
+        return is_deleted(default_db().root_path, session_key)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 def _last_activity(session_key: str) -> float:

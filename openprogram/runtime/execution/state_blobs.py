@@ -1,6 +1,7 @@
 """Execution-owned content-addressed state blobs for Agent checkpoints."""
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass
 
 from .store import ExecutionConflict, ExecutionStore
@@ -49,17 +50,12 @@ class ExecutionStateBlobStore:
 
     def list(self, execution_id: str) -> list[StateBlobRecord]:
         with self.executions._connect() as connection:
-            rows = connection.execute(
-                "SELECT ref, sha256, byte_length, media_type, schema_version "
-                "FROM execution_state_blobs WHERE execution_id = ? ORDER BY ref", (execution_id,)
-            ).fetchall()
-        return [StateBlobRecord(**dict(row)) for row in rows]
+            rows = connection.rows("execution_state_blobs", order="ref", execution_id=execution_id)
+        return [StateBlobRecord(**{key: row[key] for key in StateBlobRecord.__dataclass_fields__}) for row in rows]
 
     def owners(self, ref: str) -> set[str]:
         with self.executions._connect() as connection:
-            rows = connection.execute(
-                "SELECT execution_id FROM execution_state_blobs WHERE ref = ?", (ref,)
-            ).fetchall()
+            rows = connection.rows("execution_state_blobs", ref=ref)
         return {str(row["execution_id"]) for row in rows}
 
     def attach_ref(self, *, execution_id: str, ref: str, name: str, reference_kind: str = "checkpoint", reference_id: str = "") -> None:
@@ -67,21 +63,31 @@ class ExecutionStateBlobStore:
             self.executions._validate_state_ref(ref)
             with self.executions._transaction() as connection:
                 self.executions._require_execution(connection, execution_id)
-                if connection.execute("SELECT 1 FROM execution_state_blobs WHERE execution_id = ? AND ref = ?", (execution_id, ref)).fetchone() is None:
+                if connection.get("execution_state_blobs", execution_id, ref) is None:
                     raise StateBlobConflict("state_ref_invalid", "state ref is not owned by execution")
-                connection.execute(
-                    "INSERT OR IGNORE INTO execution_state_blob_refs "
-                    "(execution_id, ref, name, reference_kind, reference_id, created_at) VALUES (?, ?, ?, ?, ?, strftime('%s','now'))",
-                    (execution_id, ref, name, reference_kind, reference_id),
+                connection.insert(
+                    "execution_state_blob_refs",
+                    {
+                        "execution_id": execution_id,
+                        "ref": ref,
+                        "name": name,
+                        "reference_kind": reference_kind,
+                        "reference_id": reference_id,
+                        "created_at": float(int(time.time())),
+                    },
+                    on_conflict="ignore",
                 )
         except ExecutionConflict as exc:
             raise StateBlobConflict(exc.code, str(exc)) from exc
 
     def detach_ref(self, *, execution_id: str, ref: str, reference_kind: str, reference_id: str) -> None:
         with self.executions._transaction() as connection:
-            connection.execute(
-                "DELETE FROM execution_state_blob_refs WHERE execution_id = ? AND ref = ? AND reference_kind = ? AND reference_id = ?",
-                (execution_id, ref, reference_kind, reference_id),
+            connection.delete(
+                "execution_state_blob_refs",
+                execution_id=execution_id,
+                ref=ref,
+                reference_kind=reference_kind,
+                reference_id=reference_id,
             )
 
     def gc(self, *, execution_id: str) -> int:
@@ -89,9 +95,9 @@ class ExecutionStateBlobStore:
             execution = self.executions._require_execution(connection, execution_id)
             if execution.status not in TERMINAL_EXECUTION_STATUSES:
                 return 0
-            result = connection.execute(
-                "DELETE FROM execution_state_blobs WHERE execution_id = ? AND ref NOT IN "
-                "(SELECT ref FROM execution_state_blob_refs WHERE execution_id = ?)",
-                (execution_id, execution_id),
+            referenced = {row["ref"] for row in connection.rows("execution_state_blob_refs", execution_id=execution_id)}
+            return connection.delete(
+                "execution_state_blobs",
+                where=lambda blob: blob["ref"] not in referenced,
+                execution_id=execution_id,
             )
-            return int(result.rowcount)

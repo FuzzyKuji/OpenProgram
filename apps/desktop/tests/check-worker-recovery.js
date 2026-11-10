@@ -7,6 +7,7 @@ const {
   startRecoveryCycle,
   beginRecoveryProbe,
   finishRecoveryProbe,
+  workerVersionAction,
 } = require("../main/worker/worker-recovery-state");
 
 const state = createRecoveryState();
@@ -164,5 +165,30 @@ assert.equal(
   "load",
   "a reachable worker loads even while the lock is still held",
 );
+
+// An App update leaves the old background worker running. The App replaces it
+// once, when it can tell the worker is from another version.
+{
+  const coordinator = createRecoveryCoordinator();
+  assert.equal(workerVersionAction(coordinator, null, "1.0.1"), null, "an unknown version proves nothing");
+  assert.equal(workerVersionAction(coordinator, "unknown", "1.0.1"), null);
+  assert.equal(coordinator.workerVersionChecked, false, "an unknown answer may be asked again");
+  assert.equal(workerVersionAction(coordinator, "1.0.0", null), null, "a development App keeps any worker");
+  assert.equal(workerVersionAction(coordinator, "1.0.0", "1.0.1"), "restart");
+  assert.equal(workerVersionAction(coordinator, "1.0.0", "1.0.1"), null, "one restart per launch, never a loop");
+
+  const matching = createRecoveryCoordinator();
+  assert.equal(workerVersionAction(matching, "1.0.1", "1.0.1"), null);
+  assert.equal(matching.workerVersionChecked, true);
+
+  const source = require("node:fs").readFileSync(require.resolve("../main.js"), "utf8");
+  assert.match(source, /if \(await restartWorkerFromOtherVersion\(authenticated\)\) return errorPageUrl\(\);/,
+    "the first window waits while the other version's worker is replaced");
+  assert.match(source, /spawnWorker\("restart"\);\n  return true;/);
+  assert.match(source, /await probe\(HEALTH_URL, 1000\) && await workerVersionSettled\(\)/,
+    "the old worker's health answer does not count while it is being replaced");
+  assert.match(source, /INSTANCE\.development \|\| !app\.isPackaged \|\| process\.env\.OPENPROGRAM_DESKTOP_URL/,
+    "development instances and a pointed-at server are left alone");
+}
 
 console.log("worker recovery checks passed");

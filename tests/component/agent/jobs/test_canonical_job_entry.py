@@ -9,6 +9,12 @@ from tests.component.agent import async_job_support as _async_job_support
 fake_worker = _async_job_support.fake_worker
 store_fixture = _async_job_support.store_fixture
 
+
+def _admission_columns(ledger, job_id, *columns):
+    row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+    return tuple(row[column] for column in columns)
+
+
 def test_public_spawn_creates_job_id_bound_canonical_execution(
     tmp_path, store_fixture, fake_worker, monkeypatch,
 ):
@@ -19,7 +25,7 @@ def test_public_spawn_creates_job_id_bound_canonical_execution(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(
@@ -62,7 +68,7 @@ def test_driver_starts_after_running_projection_and_preserves_early_cancel(
     from openprogram.models.usage.ledger import UsageLedger
 
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "execution.sqlite3",
     )
     projection_entered = threading.Event()
@@ -129,7 +135,7 @@ def test_public_cancel_persists_canonical_execution_command(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
@@ -166,7 +172,7 @@ def test_public_cross_process_cancel_is_consumed_by_owner_worker(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     import openprogram.runtime.execution.control as control_module
     control_module._default_control_services.clear()
@@ -196,10 +202,7 @@ def test_public_cross_process_cancel_is_consumed_by_owner_worker(
         assert command is not None
         assert command.status is CommandStatus.APPLIED
         assert wait_until(
-            lambda: tuple(ledger.connection().execute(
-                "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-                ).fetchone())[0] == "released",
+            lambda: ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released",
             timeout=30,
         )
     finally:
@@ -221,7 +224,7 @@ def test_public_job_reconciler_recovers_cancel_command_after_apply_failure(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     import openprogram.runtime.execution.control as control_module
     control_module._default_control_services.clear()
@@ -234,9 +237,7 @@ def test_public_job_reconciler_recovers_cancel_command_after_apply_failure(
     def fail_first_terminal_cancel_apply(connection, command_id, **kwargs):
         nonlocal fail_apply
         terminal = (
-            connection.execute(
-                "SELECT status FROM executions WHERE execution_id = ?", (job_id,),
-            ).fetchone()
+            connection.get("executions", job_id)
             if job_id is not None else None
         )
         if (
@@ -244,7 +245,7 @@ def test_public_job_reconciler_recovers_cancel_command_after_apply_failure(
             and command_id == f"execution-cancel:{job_id}"
             and kwargs.get("target") is CommandStatus.APPLIED
             and terminal is not None
-            and terminal[0] == "cancelled"
+            and terminal["status"] == "cancelled"
         ):
             fail_apply = False
             raise RuntimeError("injected cancel apply failure")
@@ -280,11 +281,8 @@ def test_public_job_reconciler_recovers_cancel_command_after_apply_failure(
         assert runner._execution_control._delivered_cancel_commands == set()
         assert runner._execution_control._cancel_delivery_by_execution == {}
         def released_admission():
-            row = ledger.connection().execute(
-                "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-            return row is not None and tuple(row) == ("released", "cancel.user")
+            row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+            return row is not None and (row["state"], row["reason_code"]) == ("released", "cancel.user")
 
         assert wait_until(released_admission, timeout=10.0)
     finally:
@@ -323,7 +321,7 @@ def test_cross_process_cancel_wins_natural_completion_race(
     )
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     import openprogram.runtime.execution.control as control_module
     control_module._default_control_services.clear()
@@ -370,16 +368,10 @@ def test_cross_process_cancel_wins_natural_completion_race(
         assert execution.reason_code == "cancel.user"
         assert runner.get_job(job_id).reason_code == "cancel.user"
         released = wait_until(
-            lambda: tuple(ledger.connection().execute(
-                "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()) == ("released", "cancel.user"),
+            lambda: _admission_columns(ledger, job_id, "state", "reason_code") == ("released", "cancel.user"),
             timeout=30,
         )
-        assert released, tuple(ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone())
+        assert released, _admission_columns(ledger, job_id, "state", "reason_code")
     finally:
         allow_finish.set()
         runner.shutdown()
@@ -422,7 +414,7 @@ def test_cross_process_cancel_escalates_to_exact_owner_termination(
     )
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(
@@ -449,16 +441,10 @@ def test_cross_process_cancel_escalates_to_exact_owner_termination(
         assert execution is not None and execution.status.value == "cancelled"
         assert execution.reason_code == "cancel.user"
         released = wait_until(
-            lambda: tuple(ledger.connection().execute(
-                "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()) == ("released", "cancel.user"),
+            lambda: _admission_columns(ledger, job_id, "state", "reason_code") == ("released", "cancel.user"),
             timeout=30,
         )
-        assert released, tuple(ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone())
+        assert released, _admission_columns(ledger, job_id, "state", "reason_code")
     finally:
         release_worker.set()
         runner.shutdown()
@@ -476,7 +462,7 @@ def test_transport_neutral_cancel_projects_and_releases_queued_job(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
@@ -489,9 +475,7 @@ def test_transport_neutral_cancel_projects_and_releases_queued_job(
         result = execution_run_control.cancel_execution(job_id)
         assert result["status"] == "cancelled"
         assert runner.get_job(job_id).status.value == "cancelled"
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released"
         assert [item.kind.value for item in
                 default_execution_store().list_commands(job_id)] == [
                     "execution.cancel",
@@ -514,7 +498,7 @@ def test_terminal_projection_retry_releases_after_store_failure(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
@@ -539,12 +523,8 @@ def test_terminal_projection_retry_releases_after_store_failure(
         result = execution_run_control.cancel_execution(job_id)
         assert result["status"] == "cancelled"
         assert runner.get_job(job_id).status == JobStatus.QUEUED
-        assert tuple(ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()) == ("queued",)
-        assert ledger.connection().execute(
-            "SELECT state FROM job_finalizations WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "pending"
+        assert _admission_columns(ledger, job_id, "state") == ("queued",)
+        assert ledger.run_tables().handle.first("job_finalizations", job_id=job_id)["state"] == "pending"
         assert [item.kind.value for item in
                 default_execution_store().list_commands(job_id)] == [
                     "execution.cancel",
@@ -557,10 +537,7 @@ def test_terminal_projection_retry_releases_after_store_failure(
             governor=ResourceGovernor(ledger),
         )
         assert runner2.get_job(job_id).status == JobStatus.CANCELLED
-        assert tuple(ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()) == ("released", "cancel.user")
+        assert _admission_columns(ledger, job_id, "state", "reason_code") == ("released", "cancel.user")
     finally:
         fake_worker[1].set()
         if runner2 is not None:
@@ -621,11 +598,9 @@ def test_failed_termination_keeps_live_owner_until_exact_recovery(
             timeout=30,
         )
         assert terminate_called.wait(30)
-        admission = ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()
+        admission = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
         assert runner._execution_store.get_execution(job_id).status.value == "cancelling"
-        assert admission[0] == "stopping"
+        assert admission["state"] == "stopping"
 
         execution = runner._execution_store.get_execution(job_id)
         recovery = runner._execution_control.recover_owner_loss(
@@ -639,9 +614,7 @@ def test_failed_termination_keeps_live_owner_until_exact_recovery(
             admission_lease_generation=runner._governor.admission_fence(job_id)[1],
         )
         assert runner.get_job(job_id).status.value in {"cancelled", "errored"}
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released"
     finally:
         release_worker.set()
         runner.shutdown()
@@ -660,7 +633,7 @@ def test_cancel_projection_failure_returns_recovery_required_and_blocks_dispatch
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     monkeypatch.setattr(runner_module.shared, "_broadcast", lambda *a, **k: None)
     original_update = runner_module.shared._store_update_status
@@ -714,11 +687,8 @@ def test_cancel_projection_failure_returns_recovery_required_and_blocks_dispatch
         assert command is not None
         assert command.status is CommandStatus.REJECTED
         assert command.rejection_code == "projection_recovery_required"
-        admission = ledger.connection().execute(
-            "SELECT state, dispatch_ready FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
-        assert tuple(admission) == ("queued", 0)
+        admission = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert (admission["state"], admission["dispatch_ready"]) == ("queued", 0)
         assert claim_result == [None]
         assert runner._governor.claim_next(owner_instance_id=runner._instance_id) is None
     finally:
@@ -738,7 +708,7 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.db")
     runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
@@ -752,12 +722,11 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
         )
 
         def conflict(**_kwargs):
-            row = ledger.connection().execute(
-                "SELECT state, dispatch_ready, terminal_blocked, "
-                "terminal_block_command_id, terminal_block_phase "
-                "FROM job_admissions WHERE job_id = ?", (job_id,),
-            ).fetchone()
-            assert tuple(row) == (
+            row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+            assert _admission_columns(
+                ledger, job_id, "state", "dispatch_ready", "terminal_blocked",
+                "terminal_block_command_id", "terminal_block_phase",
+            ) == (
                 "queued", 0, 1, f"execution-cancel:{job_id}", "prepared",
             )
             raise ExecutionConflict("stale_version", "canonical changed")
@@ -768,12 +737,11 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
         )
         result = execution_run_control.cancel_execution(job_id)
         assert result["recovery_required"] is True
-        barrier = ledger.connection().execute(
-            "SELECT dispatch_ready, terminal_blocked, terminal_block_command_id, "
-            "terminal_block_phase, terminal_block_prior_dispatch_ready "
-            "FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()
-        assert tuple(barrier) == (
+        barrier = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert _admission_columns(
+            ledger, job_id, "dispatch_ready", "terminal_blocked", "terminal_block_command_id",
+            "terminal_block_phase", "terminal_block_prior_dispatch_ready",
+        ) == (
             0, 1, f"execution-cancel:{job_id}", "recovery", 0,
         )
 
@@ -782,10 +750,7 @@ def test_cancel_conflict_records_exact_barrier_and_recovers_deferred_dispatch(
             "accept_command_with_transition", original_accept,
         )
         runner._reconcile_terminal_dispatch_barriers()
-        assert tuple(ledger.connection().execute(
-            "SELECT dispatch_ready, terminal_blocked FROM job_admissions "
-            "WHERE job_id = ?", (job_id,),
-        ).fetchone()) == (0, 0)
+        assert _admission_columns(ledger, job_id, "dispatch_ready", "terminal_blocked") == (0, 0)
         assert runner._governor.claim_next(
             owner_instance_id=runner._instance_id,
         ) is None
@@ -840,18 +805,13 @@ def test_force_termination_releases_exact_owner_after_background_escalation(
         runner.cancel_execution(job_id)
         assert terminate_called.wait(30)
         assert wait_until(
-            lambda: ledger.connection().execute(
-                "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-            ).fetchone()[0] == "released",
+            lambda: ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released",
             timeout=30,
         )
         assert runner.get_job(job_id).status in {
             JobStatus.CANCELLED, JobStatus.ERRORED,
         }
-        assert ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()[1] in {"cancel.user", "owner_lost"}
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["reason_code"] in {"cancel.user", "owner_lost"}
     finally:
         release_worker.set()
         runner.shutdown()
@@ -867,7 +827,7 @@ def _hold_owner_after_canonical_complete(tmp_path, monkeypatch):
     from tests.support.waiting import wait_until
 
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "execution.sqlite3",
     )
     monkeypatch.setattr(runner_module.shared, "_broadcast", lambda *a, **k: None)
@@ -928,28 +888,22 @@ def test_reconciler_does_not_absorb_empty_completed_while_local_owner_will_proje
         before = runner.get_job(job_id)
         assert before is not None and not is_terminal(before.status)
         assert before.result_text is None
-        admission = ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()
-        assert admission is not None and admission[0] != "released"
+        admission = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert admission is not None and admission["state"] != "released"
 
         runner._project_existing_canonical_terminals()
 
         held = runner.get_job(job_id)
         assert held is not None and not is_terminal(held.status)
         assert held.result_text is None
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] != "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] != "released"
 
         allow.set()
         final = runner.await_job(job_id, timeout=5)
         assert final is not None
         assert final.status is JobStatus.COMPLETED
         assert final.result_text == "hello"
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released"
 
 
 def test_reconciler_reconstructs_completed_when_local_owner_is_gone(
@@ -970,6 +924,4 @@ def test_reconciler_reconstructs_completed_when_local_owner_is_gone(
         assert recovered is not None
         assert recovered.status is JobStatus.COMPLETED
         assert recovered.result_text is None
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released"

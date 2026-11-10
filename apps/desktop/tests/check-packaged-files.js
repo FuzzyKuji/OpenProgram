@@ -7,7 +7,7 @@ const path = require("node:path");
 
 const root = path.resolve(__dirname, "..");
 const packaged = require("./packaged-files").packagedFiles();
-const entries = ["main.js", "main/preload.js"];
+const entries = ["shell/loader.js", "main.js", "main/preload.js"];
 
 function localRequires(file) {
   const source = fs.readFileSync(path.join(root, file), "utf8");

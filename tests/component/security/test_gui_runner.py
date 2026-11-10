@@ -45,8 +45,7 @@ def test_cancellation_closes_running_child():
 @pytest.mark.parametrize("code, message", [
     ("import os; os.write(1, b'xxxx')", "frame"),
     ("import os; os.write(1, b'\\x00\\x00\\x00\\x01!')", "protocol"),
-    ("import os; os.write(2, b'x' * 400000)", "output"),
-    ("print('x' * 400000)", "output"),
+    ("print('x' * 5_000_000)", "transport"),
     ("import os; os._exit(0)", "exited"),
 ])
 def test_untrusted_output_fails_closed(code, message):
@@ -55,6 +54,20 @@ def test_untrusted_output_fails_closed(code, message):
             runner.execute(code, timeout=3)
         with pytest.raises(GuiRunnerError, match="closed"):
             runner.execute("pass")
+
+
+@pytest.mark.parametrize("code, stream", [
+    ("import os; os.write(2, b'x' * 400000)", "stderr"),
+    ("print('x' * 400000)", "stdout"),
+])
+def test_output_past_the_limit_is_dropped_and_the_interpreter_goes_on(code, stream):
+    """What reaches the host stays bounded; the code is not killed for printing."""
+    with GuiPythonRunner() as runner:
+        result = runner.execute(code + "\nkept = 1", timeout=3)
+        assert result.truncated and result.error is None
+        assert len(getattr(result, stream).encode()) == 256 * 1024
+        again = runner.execute("print(kept)")
+        assert again.stdout == "1\n" and not again.truncated
 
 
 def test_raw_stderr_before_completion_is_not_lost():

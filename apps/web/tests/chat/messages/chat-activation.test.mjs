@@ -53,6 +53,16 @@ test('older-window activation requests latest and ignores outgoing completion',a
  await act(async()=>root.unmount());
 });
 
+test('a window read on protocol 3 activates at latest the same way',async()=>{
+ const root=createRoot(document.querySelector('#root'));let complete;
+ globalThis.historyState={pages:{oldv3:{after:'cursor',revision:1,loading:false}}};
+ globalThis.loadLatest=async(sid,direction,_anchor,{isCurrent})=>{assert.equal(sid,'oldv3');assert.equal(direction,'latest');return new Promise(resolve=>{complete=()=>{if(isCurrent())globalThis.historyState.pages.oldv3={revision:2};resolve(true);};});};
+ await act(async()=>root.render(createElement(View,{id:'oldv3'})));assert.ok(complete,'activation requests latest');
+ await act(async()=>root.render(createElement(View,{id:'other'})));const incoming=top;
+ await act(async()=>complete());assert.equal(top,incoming,'stale completion cannot move incoming view');
+ await act(async()=>root.unmount());
+});
+
 test('saved latest intent survives remount and a temporarily shorter transcript',async()=>{
  saved.set('chatScrollByKey',JSON.stringify({persisted:{top:3000,atBottom:true},legacy:240}));
  height=800;top=0;globalThis.historyState={pages:{}};

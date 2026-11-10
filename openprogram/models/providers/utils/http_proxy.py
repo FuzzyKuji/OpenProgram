@@ -80,3 +80,28 @@ def get_proxy_mounts() -> dict[str, str | None] | None:
     if not env_map:
         return None
     return {**_LOOPBACK_BYPASS, **env_map}
+
+
+def proxy_for_url(url: str) -> str | None:
+    """The proxy :func:`get_proxy_mounts` routes ``url`` through, or ``None``.
+
+    For a transport that is not an httpx client (the Codex WebSocket), so it
+    goes the way an httpx request to the same URL would: the most specific
+    matching pattern wins, as httpx orders its mounts. A ``ws(s)://`` URL is
+    matched as the ``http(s)://`` URL of its handshake.
+    """
+    from httpx import URL
+    from httpx._utils import URLPattern
+
+    mounts = get_proxy_mounts()
+    if not mounts:
+        return None
+    if url.startswith("wss://"):
+        url = "https://" + url[len("wss://"):]
+    elif url.startswith("ws://"):
+        url = "http://" + url[len("ws://"):]
+    target = URL(url)
+    for pattern in sorted(URLPattern(key) for key in mounts):
+        if pattern.matches(target):
+            return mounts[pattern.pattern]
+    return None

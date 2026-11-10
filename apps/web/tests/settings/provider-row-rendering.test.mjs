@@ -108,7 +108,7 @@ describe("provider list", () => {
     globalThis.providerList = PROVIDERS;
     globalThis.providerPaths = [];
     const posts = [];
-    globalThis.fetch = async (url, init) => { posts.push([url, JSON.parse(init.body)]); return { json: async () => ({ ok: true, id: "frontier" }) }; };
+    globalThis.fetch = async (url, init) => { posts.push([url, JSON.parse(init.body)]); return { ok: true, status: 200, text: async () => JSON.stringify({ ok: true, id: "frontier" }), json: async () => ({ ok: true, id: "frontier" }) }; };
     const view = await render(h(ProvidersSection));
     await view.act(settle);
     const byText = (text) => [...view.container.querySelectorAll("button")].find((b) => b.textContent.trim() === text);

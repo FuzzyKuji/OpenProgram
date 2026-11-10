@@ -1,14 +1,11 @@
 """Public writing and maintenance operations."""
 
-import hashlib
-import json
 from pathlib import Path
 from typing import Any
 
 from .config import MemoryConfig, load_memory_config
 from .agent import _run_agent, render_conversation
-from ..prompts import ORGANIZE_MEMORY, SYSTEM_PROMPT, WRITE_MEMORY
-from .tools import TOOLS
+from ..prompts import ORGANIZE_MEMORY, WRITE_MEMORY
 
 
 def render_writer_task(
@@ -29,27 +26,6 @@ def render_writer_task(
             f"{render_conversation(session['turns'], session['refs'])}"
         )
     return WRITE_MEMORY.format(sessions="\n\n".join(rendered))
-
-
-def render_writer_input(sessions: list[dict[str, Any]]) -> str:
-    """Render all fixed and session-specific text sent to the Writer."""
-    return f"{SYSTEM_PROMPT}\n\n{render_writer_task(sessions)}"
-
-
-def writer_protocol_sha256() -> str:
-    payload = json.dumps(
-        {
-            "system": SYSTEM_PROMPT,
-            "write_memory": WRITE_MEMORY,
-            "tools": TOOLS[:1],
-            "runtime": "openprogram-agent-session",
-            "contract": "topic-core-v4-jsonl-runtime-ids",
-        },
-        ensure_ascii=False,
-        sort_keys=True,
-        separators=(",", ":"),
-    )
-    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
 def organize_topics(

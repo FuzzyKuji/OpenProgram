@@ -4,7 +4,7 @@ import { useEffect, useState } from "react";
 import { useTranslation } from "@/lib/i18n";
 import { Switch } from "@/components/ui/switch";
 import { SimpleSelect } from "@/components/ui/select";
-import { desktopBridge } from "@/lib/desktop/desktop-bridge";
+import { useDesktopBridge } from "@/lib/desktop/use-desktop-bridge";
 import type { DesktopAttentionApi, DesktopAttentionPrefs } from "@/lib/desktop/desktop-bridge-types";
 import { FieldError } from "@/components/ui/field";
 import { SettingsRow, SettingsSection } from "../settings-ui";
@@ -12,14 +12,13 @@ import { SettingsRow, SettingsSection } from "../settings-ui";
 /** Desktop notifications and keep-awake. Rendered only inside the desktop shell. */
 export function DesktopAttentionSection() {
   const { text } = useTranslation();
-  const [attention, setAttention] = useState<DesktopAttentionApi | null>(null);
+  const attention = useDesktopBridge()?.attention ?? null;
   const [prefs, setPrefs] = useState<DesktopAttentionPrefs | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [sounds, setSounds] = useState<string[]>([]);
 
   useEffect(() => {
-    const api = desktopBridge()?.attention ?? null;
-    setAttention(api);
+    const api = attention;
     if (!api) return;
     let active = true;
     void api.getPrefs().then((next) => { if (active) setPrefs(next); })
@@ -27,7 +26,7 @@ export function DesktopAttentionSection() {
     void api.sounds?.().then((names) => { if (active) setSounds(names); }).catch(() => {});
     const unsubscribe = api.onPrefs((next) => { if (active) setPrefs(next); });
     return () => { active = false; unsubscribe(); };
-  }, []);
+  }, [attention]);
 
   if (!attention) return null;
 

@@ -1,52 +1,132 @@
-<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram Programs target code structure</title>
-<style>
-:root{color-scheme:dark;--bg:#111317;--p:#191c22;--p2:#22262e;--line:#353b46;--text:#eef0f4;--muted:#a8aeb9;--cyan:#62d2df;--blue:#75aaff;--green:#72d3a2;--red:#ef827b;--mono:ui-monospace,"SFMono-Regular",Menlo,monospace;--sans:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}*{box-sizing:border-box}html{scroll-behavior:smooth}body{margin:0;background:var(--bg);color:var(--text);font:15px/1.65 var(--sans)}a{color:#91bdff}code,pre{font-family:var(--mono)}code{padding:1px 5px;border-radius:4px;background:#292e37;font-size:.9em}.page{width:min(1160px,calc(100% - 32px));margin:auto;padding:28px 0 72px}.nav{display:flex;flex-wrap:wrap;gap:7px;margin-bottom:20px}.nav a{padding:5px 9px;border:1px solid var(--line);border-radius:7px;color:#bbc0ca;text-decoration:none;font-size:12px}.nav a[aria-current=page]{border-color:#447b84;background:#16262a;color:#8de4ed}header{padding-bottom:25px;border-bottom:1px solid var(--line)}.eyebrow{color:var(--cyan);font:11px var(--mono);letter-spacing:.09em;text-transform:uppercase}h1{margin:7px 0 10px;font-size:clamp(28px,4vw,43px);line-height:1.14}h2{margin:0 0 14px;font-size:23px}h3{margin:0 0 7px;font-size:16px}.lead{max-width:920px;margin:0;color:#cbd0d8;font-size:16px}.meta{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}.tag{padding:4px 8px;border:1px solid var(--line);border-radius:999px;color:var(--muted);font:11px var(--mono)}section{padding:30px 0;border-bottom:1px solid var(--line)}.tree{overflow:auto;margin:0;padding:20px 22px;border:1px solid var(--line);border-radius:11px;background:#0d0f12;color:#dfe3ea;font-size:13px;line-height:1.68}.callout{margin-top:14px;padding:12px 14px;border-left:3px solid var(--cyan);background:#162429;color:#cedde0}.grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:13px}.card{padding:16px;border:1px solid var(--line);border-radius:10px;background:var(--p)}.card p{margin:5px 0 0;color:var(--muted)}.path{display:block;margin-bottom:9px;color:var(--cyan);font:12px var(--mono)}.flow{display:grid;grid-template-columns:1fr 44px 1fr 44px 1fr;align-items:center;margin:17px 0}.node{min-height:104px;padding:15px;border:1px solid #41678d;border-radius:10px;background:var(--p);text-align:center}.node:first-child{border-color:#397983;background:#152429}.node strong,.node span{display:block}.node span{margin-top:5px;color:var(--muted);font-size:12px}.arrow{text-align:center;color:#7d8591;font-size:20px}table{width:100%;margin:14px 0;border-collapse:collapse;font-size:13px}th,td{padding:10px 11px;border:1px solid var(--line);text-align:left;vertical-align:top}th{background:var(--p2)}td{color:#c8ccd4}.rules{display:grid;gap:9px}.rule{display:grid;grid-template-columns:170px 1fr;border:1px solid var(--line);border-radius:9px;overflow:hidden}.rule strong,.rule div{padding:10px 12px}.rule strong{background:var(--p2)}.rule div{color:#c9cdd5}.good{color:var(--green)}.bad{color:var(--red)}.note{color:var(--muted);font-size:13px}@media(max-width:820px){.grid,.flow{grid-template-columns:1fr}.flow{gap:8px}.arrow{transform:rotate(90deg)}.rule{grid-template-columns:1fr}.rule strong{border-bottom:1px solid var(--line)}}@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
-</style></head><body><main class="page">
-<nav class="nav" aria-label="Workflow documentation"><a href="../workflows/workflow.md">Workflows</a><a href="programs-architecture.html" aria-current="page">Programs code structure</a><a href="../workflows/self-programming-workflow-ui.html">DAG and Programs</a></nav>
-<header><div class="eyebrow">Current architecture contract</div><h1>Programs code structure</h1><p class="lead">Everything the agent can call is a Program. Built-in tools live in <code>programs/tools/</code> and are always available; built-in applications live in <code>programs/applications/</code> and can be switched on and off; the user's own Programs live in <code>~/.openprogram/programs/</code>. Each loaded package registers through its own <code>ProgramContext</code>, so unloading it removes everything it added. Model calls go through two primitives, <code>llm()</code> and <code>agent()</code>, plus the <code>Agent</code> class for named roles.</p><div class="meta"><span class="tag">Status: current design</span><span class="tag">Scope: source, registration, Programs UI, packaging</span></div></header>
+<title>Programs code structure</title>
+<meta name="description" content="Where Programs live in the source tree, how they register, what they may depend on, and how tool argument mappings are validated.">
+<span id="portable-workflow-integration"></span>
+<h1>Programs code structure</h1>
+<p>Everything the Agent can call is a Program.</p>
 
-<section><h2>1. Directory layout</h2><pre class="tree">openprogram/
+<h2 id="directory-layout">Directory layout</h2>
+<pre translate="no" tabindex="0">openprogram/
 ├── runtime/agent/
 │   ├── llm.py                  # llm(): one model call
 │   ├── agent_function.py       # agent(): model tool-call loop
 │   └── agent_class.py          # Agent: named roles with methods
 └── programs/
-    ├── __init__.py             # resolution API: TOOLSETS, DEFAULT_TOOLS, agent_tools, apply_tool_policy
-    ├── tools/                  # built-in tools, always given to the Agent
+    ├── __init__.py             # TOOLSETS, DEFAULT_TOOLS, agent_tools, apply_tool_policy
+    ├── tools/                  # always given to the Agent
     │   ├── files/  code/  web/  interaction/  knowledge/  jobs/
     │   ├── agents/  computer_use/  runtime/  system/
     │   └── planning/           # todo/  plan_mode/  open_work/  goal/
-    ├── applications/           # built-in applications, each enabled or disabled as a unit
+    ├── applications/           # each enabled or disabled as a unit
     │   ├── browser/            # tabs, Pages and web_use
+    │   ├── meeting/            # records, transcribes and summarizes calls
     │   ├── workflow_recording/ # the demonstration recorder
     │   └── office_editor/      # the ONLYOFFICE document editor
-    ├── _authoring/             # what Program code imports: errors, json_parsing, reports/, helpers ...
-    └── _host/                  # how the host loads and runs Programs; Program code never imports it
+    ├── _authoring/             # imported by Program code: application_client,
+    │                           # json_parsing, reports/, helpers ...
+    └── _host/                  # loads and runs Programs; Program code never imports it
         ├── runtime.py          # @function and the shared tool registry
         ├── context.py          # ProgramContext, one per owner
         ├── registry.py         # loader for built-in, user and harness Programs
         └── packages.py  sources.py  execution.py  services.py  ui/ ...
 
-~/.openprogram/programs/<name>/   # the user's Programs: Python packages, applications, harness clones</pre><div class="callout">Each capability has one authoritative implementation and one public import path. There are no <code>functions/</code>, <code>workflows/</code> or <code>packages/</code> directories under <code>programs/</code>, and no compatibility aliases for old paths.</div></section>
+~/.openprogram/programs/&lt;name&gt;/   # Python packages, applications, harness clones</pre>
+<p class="note">Each capability has one implementation and one public import path. No <code translate="no">functions/</code>, <code translate="no">workflows/</code> or <code translate="no">packages/</code> under <code translate="no">programs/</code>, and no aliases for old paths.</p>
 
-<section><h2>2. Three places a Program comes from</h2><div class="grid"><article class="card"><span class="path">programs/tools/</span><h3>Built-in tools</h3><p>What the agent cannot work without: files, shell, search, planning, asking the user, memory, jobs, web and computer use. They ship with the core, are always given to the agent and cannot be disabled one by one. Most register with <code>@function</code> on import; a tool package with <code>PROGRAM_ENTRIES</code> registers through its own <code>ProgramContext</code> (owner <code>tool:&lt;name&gt;</code>).</p></article><article class="card"><span class="path">programs/applications/</span><h3>Built-in applications</h3><p><code>browser</code>, <code>workflow_recording</code> and <code>office_editor</code>. Each loads through a <code>ProgramContext</code> owned by <code>application:&lt;name&gt;</code>, provides the named service the core reaches it through, and loads only while enabled (<code>openprogram programs enable|disable &lt;name&gt;</code> or the Applications page).</p></article><article class="card"><span class="path">~/.openprogram/programs/</span><h3>User Programs</h3><p>Python packages that list <code>PROGRAM_ENTRIES</code> (Workflows such as a weekly report or a research loop), application directories with <code>application.json</code>, and harness clones recorded by <code>openprogram programs install</code>. They load through the same contexts as built-ins; see <a href="../workflows/workflow.md">Workflows</a> for the package contract.</p></article></div>
-<div id="portable-workflow-integration"></div><div id="portable-workflow-sources"></div><div id="portable-application-sources"></div><h3>Portable package sources</h3><p>Project-local Programs record locations as relative paths scoped by <code>programs</code>. An external installation binding connects the installed runtime to the source checkout. Relative paths do not use the chat working directory. Only exact authorized package names participate in Python resolution; the entire external directory is not added to import scope. Rejection conditions and publishing rules follow the <a href="../workflows/workflow.md">Workflow package contract</a>.</p></section>
+<h2 id="program-sources">Where a Program comes from</h2>
+<table class="stack">
+<thead><tr><th scope="col">Source</th><th scope="col">Holds</th><th scope="col">Loads</th></tr></thead>
+<tbody>
+<tr><th scope="row">Built-in tools<span class="arg"><code translate="no">programs/tools/</code></span></th><td>Files, shell, search, planning, asking the user, memory, jobs, web, computer use</td><td>Always, and cannot be disabled one by one. Most through <code translate="no">@function</code> on import; a package with <code translate="no">PROGRAM_ENTRIES</code> through a <code translate="no">ProgramContext</code> owned by <code translate="no">tool:&lt;name&gt;</code></td></tr>
+<tr><th scope="row">Built-in applications<span class="arg"><code translate="no">programs/applications/</code></span></th><td><code translate="no">browser</code>, <code translate="no">meeting</code>, <code translate="no">workflow_recording</code>, <code translate="no">office_editor</code>, each providing the named service the core reaches it through</td><td>Only while enabled (<code translate="no">openprogram programs enable|disable &lt;name&gt;</code> or the Applications page). Context owner <code translate="no">application:&lt;name&gt;</code></td></tr>
+<tr><th scope="row">User Programs<span class="arg"><code translate="no">~/.openprogram/programs/</code></span></th><td>Packages listing <code translate="no">PROGRAM_ENTRIES</code>, directories with <code translate="no">application.json</code>, harness clones recorded by <code translate="no">openprogram programs install</code></td><td>Through the same contexts. Package contract: <a href="../workflows/workflow.html">Workflows</a></td></tr>
+</tbody>
+</table>
+<details id="portable-workflow-sources">
+<summary id="portable-application-sources">Portable package sources</summary>
+<p>Project-local Programs record locations as relative paths scoped by <code translate="no">programs</code>, never relative to the chat working directory. An external installation binding connects the installed runtime to the source checkout. Only exact authorized package names join Python resolution, not the whole external directory. Rejection and publishing rules: <a href="../workflows/workflow.html">Workflow package contract</a>.</p>
+</details>
 
-<section><h2>3. Basic primitives and Workflows</h2><div class="flow"><div class="node"><strong>Workflow</strong><span>Defines flow, state, and acceptance</span></div><div class="arrow">→</div><div class="node"><strong>agent()</strong><span>Multi-round model reasoning with Tools</span></div><div class="arrow">→</div><div class="node"><strong>llm()</strong><span>Single model request and structured output</span></div></div><table><thead><tr><th>Entry</th><th>Meaning</th><th>Location</th></tr></thead><tbody><tr><td><code>llm()</code></td><td>One model call without a tool loop.</td><td><code>runtime/agent/llm.py</code></td></tr><tr><td><code>agent()</code></td><td>Model tool-call loop.</td><td><code>runtime/agent/agent_function.py</code></td></tr><tr><td><code>Agent</code></td><td>A named role whose methods run model calls; methods can be offered as tools.</td><td><code>runtime/agent/agent_class.py</code></td></tr><tr><td><code>goal()</code></td><td>Starts a chat Goal that keeps an objective across ordinary chat turns; session state, not a primitive.</td><td><code>programs/tools/planning/goal/</code></td></tr></tbody></table><p>A Workflow is ordinary Python that calls these primitives and other Programs. Any capability that makes model calls, calls other Workflows, or keeps multi-stage state and completion checks is a Workflow; a single model call wrapped in a role is one too.</p></section>
+<h2 id="primitives">Primitives and Workflows</h2>
+<table class="stack">
+<thead><tr><th scope="col">Entry</th><th scope="col">Meaning</th><th scope="col">Location</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">llm()</code></th><td>One model call, structured output, no tool loop</td><td><code translate="no">runtime/agent/llm.py</code></td></tr>
+<tr><th scope="row"><code translate="no">agent()</code></th><td>Multi-round model tool-call loop</td><td><code translate="no">runtime/agent/agent_function.py</code></td></tr>
+<tr><th scope="row"><code translate="no">Agent</code></th><td>Named role whose methods run model calls and can be offered as tools</td><td><code translate="no">runtime/agent/agent_class.py</code></td></tr>
+<tr><th scope="row"><code translate="no">goal()</code></th><td>Starts a chat Goal. Session state, not a primitive</td><td><code translate="no">programs/tools/planning/goal/</code></td></tr>
+</tbody>
+</table>
+<p>A Workflow is ordinary Python that defines flow, state and acceptance by calling these and other Programs. Anything that makes model calls, calls other Workflows, or keeps multi-stage state and completion checks is a Workflow, including a single model call wrapped in a role.</p>
 
-<section><h2>4. Goal runs as ordinary chat turns</h2><div class="rules"><div class="rule"><strong>One mechanism</strong><div>A Goal is session state in <code>programs/tools/planning/goal/</code>. After each successful chat turn, <code>chat.py</code> decides whether to start another ordinary chat turn for the active Goal. There is no separate Goal loop, judge Workflow or nested working agent.</div></div><div class="rule"><strong>Programs form</strong><div><code>goal(prompt)</code> takes only the objective. It saves a chat Goal in the current conversation and the route starts the first turn through the same controls as <code>/goal</code>.</div></div><div class="rule"><strong>Chat command and agent tools</strong><div><code>/goal &lt;objective&gt;</code> and the agent's <code>create_goal</code> tool create the same chat Goal. The <code>goal</code> Program is never offered to agents as a tool.</div></div><div class="rule"><strong>Completion</strong><div><code>update_goal(status="complete")</code> or a finished todo plan only submits a candidate. <code>verification.py</code> runs one independent read-only verification turn before the Goal becomes achieved.</div></div><div class="rule"><strong>Limits and restarts</strong><div>Goals have no round limit. Two automatic turns in a row without a tool call stop the Goal as stalled. Optional token, active-time and cost limits are the only budgets. A Goal whose lease belonged to a previous worker comes back paused with a resume action (<code>restart.py</code>).</div></div></div></section>
+<h2 id="goal">Goal runs as ordinary chat turns</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">One mechanism</th><td>Session state in <code translate="no">planning/goal/</code>. After each successful chat turn, <code translate="no">chat.py</code> decides whether to start another for the active Goal. No separate Goal loop, judge Workflow or nested working agent.</td></tr>
+<tr><th scope="row">Programs form</th><td><code translate="no">goal(prompt)</code> takes only the objective, saves a chat Goal in the current conversation; the route starts the first turn through the same controls as <code translate="no">/goal</code>.</td></tr>
+<tr><th scope="row">Chat and Agent</th><td><code translate="no">/goal &lt;objective&gt;</code> and the <code translate="no">create_goal</code> tool create the same Goal. The <code translate="no">goal</code> Program is never offered to agents as a tool.</td></tr>
+<tr><th scope="row">Completion</th><td><code translate="no">update_goal(status="complete")</code> or a finished todo plan only submits a candidate. <code translate="no">verification.py</code> runs one independent read-only verification turn before the Goal is achieved.</td></tr>
+<tr><th scope="row">Limits</th><td>No round limit. Two automatic turns in a row without a tool call stop it as stalled. Optional token, active-time and cost limits are the only budgets.</td></tr>
+<tr><th scope="row">Restart</th><td>A Goal whose lease belonged to a previous worker comes back paused with a resume action (<code translate="no">restart.py</code>).</td></tr>
+</tbody>
+</table>
 
-<section><h2>5. Choosing files and directories</h2><table><thead><tr><th>Form</th><th>When to use</th><th>Example</th></tr></thead><tbody><tr><td>Single <code>.py</code></td><td>One public entry and a few local helpers; the file can be read on its own.</td><td><code>tools/files/edit.py</code></td></tr><tr><td>Same-name package</td><td>Several modules with distinct responsibilities, resource files, or session adapters.</td><td><code>tools/planning/goal/</code>, <code>applications/browser/</code></td></tr><tr><td>Internal directory</td><td>Shared implementation serving only its neighbours; its name begins with <code>_</code> and it never becomes a Programs UI node.</td><td><code>programs/_authoring/</code>, <code>programs/_host/</code></td></tr></tbody></table><p>File count and responsibility boundaries decide when to split a package, not uniformity.</p></section>
+<h2 id="files-and-directories">File or directory</h2>
+<table class="stack">
+<thead><tr><th scope="col">Form</th><th scope="col">When</th><th scope="col">Example</th></tr></thead>
+<tbody>
+<tr><th scope="row">Single <code translate="no">.py</code></th><td>One public entry and a few local helpers; readable on its own</td><td><code translate="no">tools/files/edit.py</code></td></tr>
+<tr><th scope="row">Same-name package</th><td>Several modules with distinct responsibilities, resource files or session adapters</td><td><code translate="no">tools/planning/goal/</code>, <code translate="no">applications/browser/</code></td></tr>
+<tr><th scope="row">Internal directory, <code translate="no">_</code> prefix</th><td>Shared implementation serving only its neighbours; never a Programs UI node</td><td><code translate="no">programs/_authoring/</code>, <code translate="no">programs/_host/</code></td></tr>
+</tbody>
+</table>
+<p class="note">File count and responsibility boundaries decide a split, not uniformity.</p>
 
-<section><h2>6. Permitted dependency directions</h2><table><thead><tr><th>Caller</th><th>Allowed</th><th>Forbidden</th></tr></thead><tbody><tr><td>Tool</td><td>Standard library, approved dependencies, and deterministic helpers.</td><td><code>llm()</code>, <code>agent()</code>, Workflows, Applications.</td></tr><tr><td>Workflow</td><td>Tools, its own roles, other Workflows without dependency cycles.</td><td>Depending on Applications, copying other Workflows, or dispatch by string name.</td></tr><tr><td>Application</td><td>Public Tools, public Workflows, and the application's own UI and services.</td><td>Modifying the called Program or keeping a second implementation.</td></tr><tr><td>Program code</td><td><code>programs/_authoring/</code> and the public runtime API.</td><td><code>programs/_host/</code>.</td></tr></tbody></table></section>
+<h2 id="dependency-directions">Permitted dependencies</h2>
+<table class="stack">
+<thead><tr><th scope="col">Caller</th><th scope="col">Allowed</th><th scope="col">Forbidden</th></tr></thead>
+<tbody>
+<tr><th scope="row">Tool</th><td>Standard library, approved dependencies, deterministic helpers</td><td><code translate="no">llm()</code>, <code translate="no">agent()</code>, Workflows, Applications</td></tr>
+<tr><th scope="row">Workflow</th><td>Tools, its own roles, other Workflows without cycles</td><td>Depending on Applications, copying other Workflows, dispatch by string name</td></tr>
+<tr><th scope="row">Application</th><td>Public Tools and Workflows, its own UI and services</td><td>Modifying the called Program or keeping a second implementation</td></tr>
+<tr><th scope="row">Program code</th><td><code translate="no">programs/_authoring/</code> and the public runtime API</td><td><code translate="no">programs/_host/</code></td></tr>
+</tbody>
+</table>
 
-<section><h2>7. Registration and Programs UI</h2><div class="rules"><div class="rule"><strong>Shared registration</strong><div><code>_host/registry.py</code> loads built-in tools, enabled built-in applications, the user's Programs and recorded harnesses. Every package registers through its own <code>ProgramContext</code>, kept by owner (<code>tool:&lt;name&gt;</code>, <code>application:&lt;name&gt;</code>, the user package's name, <code>external:&lt;package&gt;</code>); unloading or reloading disposes it.</div></div><div class="rule"><strong>Programs tree</strong><div>The tree mirrors source directories only. A registered entry is runnable and shows Use. Expanding a same-name package lists its modules from the actual directory (such as <code>goal/command.py</code>); these can be opened to read but are not registered as extra Programs. <code>__init__.py</code> and <code>_</code> directories never become nodes.</div></div><div class="rule"><strong>Stable contract</strong><div>Moving source does not change public names, parameter schemas, permissions, DAG semantics or session state formats. Old paths fail directly; there are no aliases or dual scanning.</div></div></div></section>
+<h2 id="registration">Registration and Programs UI</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Registration</th><td><code translate="no">_host/registry.py</code> loads built-in tools, enabled built-in applications, the user's Programs and recorded harnesses. Each package registers through its own <code translate="no">ProgramContext</code>, kept by owner (<code translate="no">tool:&lt;name&gt;</code>, <code translate="no">application:&lt;name&gt;</code>, the package's name, <code translate="no">external:&lt;package&gt;</code>). Unloading or reloading disposes it and everything it added.</td></tr>
+<tr><th scope="row">Programs tree</th><td>Mirrors source directories only. A registered entry is runnable and shows Use. Expanding a same-name package lists its modules from the actual directory (<code translate="no">goal/command.py</code>), readable but not extra Programs. <code translate="no">__init__.py</code> and <code translate="no">_</code> directories never become nodes.</td></tr>
+<tr><th scope="row">Stable contract</th><td>Moving source does not change public names, parameter schemas, permissions, DAG semantics or session state formats. Old paths fail directly: no aliases, no dual scanning.</td></tr>
+</tbody>
+</table>
 
-<section><h2>8. Excluded designs</h2><div class="grid"><article class="card"><div id="portable-no-new-decorator"></div><h3>No workflow decorator</h3><p>There is no <code>@workflow</code>; directories and metadata express classification.</p></article><article class="card"><div id="portable-no-string-dispatch"></div><h3>No string-based dispatch</h3><p>Workflows use ordinary Python imports and calls; there is no <code>call_workflow(name)</code>.</p></article><article class="card"><div id="portable-single-structure"></div><h3>No parallel structures</h3><p>No versioned old/new directories and no runtime choice between them.</p></article></div></section>
+<h2 id="excluded-designs">Excluded</h2>
+<ul>
+<li id="portable-no-new-decorator">No <code translate="no">@workflow</code> decorator; directories and metadata express classification.</li>
+<li id="portable-no-string-dispatch">No <code translate="no">call_workflow(name)</code>; Workflows use ordinary Python imports and calls.</li>
+<li id="portable-single-structure">No versioned old and new directories, and no runtime choice between them.</li>
+</ul>
 
-<section id="dynamic-tool-mappings"><h2>9. Dynamic tool argument mappings</h2><p>Canonical tool schemas distinguish mappings whose keys are provided at invocation time from objects with declared fields. The public <code>program.args</code> mapping accepts a registered program's legal keyword arguments, including <code>task</code>. Anonymous object mappings and Python <code>dict</code>/<code>Mapping</code> annotations keep open keys and any declared value schema. Objects with properties, including an empty declared property set, keep fixed-field closure. Explicit <code>additionalProperties: false</code> is never opened; nullable mappings keep their null behavior.</p><table><thead><tr><th>Canonical object</th><th>Local validation</th><th>Provider tool mode</th></tr></thead><tbody><tr><td>Anonymous or typed mapping</td><td>Accept legal dynamic keys; enforce object and declared value types</td><td>Keep the mapping schema with non-strict tool mode</td></tr><tr><td>Declared fixed fields or explicit closed object</td><td>Keep required fields, types and closed-field rejection</td><td>Strict mode where supported</td></tr><tr><td>Mixed request containing both tool kinds</td><td>Validate each call against its canonical schema</td><td>Select mode per tool; strict validation is never disabled request-wide</td></tr></tbody></table><p>The shared provider schema adapter never turns an open mapping into an empty closed object: <code>models/providers/schema/strict.py</code> refuses to make a schema with dynamic keys strict. OpenAI function calling requires closed objects for strict mode, so dynamic-mapping tools send an explicit <code>strict: false</code> on Responses, Codex and Chat Completions while compatible fixed-field tools stay strict. Anthropic applies strict validation per tool as well; mapping tools keep the ordinary input schema without the strict flag. The fixed <code>execute_code</code> schema stays strict.</p></section>
+<h2 id="dynamic-tool-mappings">Dynamic tool argument mappings</h2>
+<p>Canonical schemas distinguish mappings whose keys arrive at invocation time from objects with declared fields.</p>
+<table class="stack">
+<thead><tr><th scope="col">Canonical object</th><th scope="col">Local validation</th><th scope="col">Provider tool mode</th></tr></thead>
+<tbody>
+<tr><th scope="row">Anonymous mapping, Python <code translate="no">dict</code> or <code translate="no">Mapping</code></th><td>Accepts dynamic keys; enforces object and declared value types</td><td>Mapping schema, non-strict</td></tr>
+<tr><th scope="row">Declared fields, even an empty set, or explicit <code translate="no">additionalProperties: false</code></th><td>Required fields, types, closed-field rejection. Never opened.</td><td>Strict where supported</td></tr>
+<tr><th scope="row">Request with both kinds</th><td>Each call against its own schema</td><td>Mode per tool; strict is never disabled request-wide</td></tr>
+</tbody>
+</table>
+<ul>
+<li><code translate="no">program.args</code> accepts a registered program's legal keyword arguments, including <code translate="no">task</code>. Nullable mappings keep their null behavior.</li>
+<li><code translate="no">models/providers/schema/strict.py</code> refuses to make a schema with dynamic keys strict, so an open mapping never becomes an empty closed object.</li>
+<li>OpenAI strict mode needs closed objects: dynamic-mapping tools send <code translate="no">strict: false</code> on Responses, Codex and Chat Completions; fixed-field tools stay strict.</li>
+<li>Anthropic is per tool too: mapping tools keep the ordinary input schema without the strict flag.</li>
+<li>The fixed <code translate="no">execute_code</code> schema stays strict.</li>
+</ul>
 
-<section id="implementation-status"><h2>Implementation status</h2><table><thead><tr><th>Area</th><th>State</th></tr></thead><tbody><tr><td>Directory layout, registration through <code>ProgramContext</code>, built-in application enable/disable</td><td>Implemented</td></tr><tr><td>Chat Goal (<code>planning/goal/</code>) with verification turn and restart recovery</td><td>Implemented</td></tr><tr><td>Programs tree mirroring directories</td><td>Implemented</td></tr><tr><td>Dynamic tool argument mappings and per-tool strict mode</td><td>Implemented</td></tr></tbody></table></section>
-</main></body></html>
+<p class="note" id="implementation-status">Implementation status: everything on this page is implemented.</p>
+<p class="next"><a href="application-runtime.html">Application runtime</a></p>

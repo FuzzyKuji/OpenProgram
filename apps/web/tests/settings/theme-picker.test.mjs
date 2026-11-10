@@ -1,4 +1,4 @@
-// General settings' theme picker: the Mode tiles preview the chosen colour
+// Appearance settings' theme picker: the Mode tiles preview the chosen colour
 // style and the Style tiles preview the chosen mode, choosing one applies the
 // theme, the accent row offers presets, a custom colour well and Follow theme
 // back to the style's own accent, and Custom CSS can be switched on, seeded from the
@@ -30,7 +30,7 @@ installDom();
 document.cookie = ""; // font-pref reads document.cookie, which linkedom leaves undefined.
 
 const { createElement: h } = await import("react");
-const { GeneralSection } = await import("../../components/settings/sections/general-section.tsx");
+const { AppearanceSection } = await import("../../components/settings/sections/appearance-section.tsx");
 const { CUSTOM_CSS_TEMPLATE } = await import("../../lib/prefs/appearance/theme-config.ts");
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -47,7 +47,7 @@ const buttonNamed = (container, text) => [...container.querySelectorAll("button"
 test("the theme picker previews, applies and resets the appearance", async () => {
   localStorage.setItem("agentic_theme_style", "beige");
   localStorage.setItem("agentic_theme_mode", "dark");
-  const view = await render(h(GeneralSection));
+  const view = await render(h(AppearanceSection));
   await view.act(settle);
   const { container } = view;
 

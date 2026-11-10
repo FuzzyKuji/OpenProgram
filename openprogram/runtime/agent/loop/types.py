@@ -108,6 +108,9 @@ class AgentContext(BaseModel):
     # itself for entry points that don't.
     _request_compactor: Any = PrivateAttr(default=None)
     memory_prefetch: str | None = None
+    # Told to the model beside this turn's message: a scheduled run's last
+    # result and how to answer. Not memory, so memory settings do not touch it.
+    run_note: str | None = None
     # Resolved immutable runtime contract used by durable safe points.  This
     # is metadata only; executable tool callbacks never enter the context.
     runtime_contract: dict[str, Any] | None = None

@@ -12,7 +12,7 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None:
             return []
-        _git, idx = pair
+        _session_log, idx = pair
         head = head_msg_id or idx.head_id
         if not head or head not in idx.nodes_by_id:
             return []
@@ -108,7 +108,7 @@ class BranchesOperations:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return
-        git, idx = pair
+        session_log, idx = pair
         # A summary node is a stand-in, never a conversational tip: a
         # head on it makes the active branch [summary] alone and hides
         # the whole session (context/compaction.md §5). No caller has a
@@ -120,7 +120,7 @@ class BranchesOperations:
                 "a stand-in cannot be the active branch tip"
             )
         idx.set_head(head_id)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
 
 
     def compare_and_set_head(
@@ -137,15 +137,15 @@ class BranchesOperations:
             pair = self._open(session_id)
             if pair is None:
                 return False
-            git, idx = pair
+            session_log, idx = pair
             node = idx.nodes_by_id.get(new_head_id) if new_head_id else None
             if node is not None and (node.metadata or {}).get("covers_ids"):
                 raise ValueError(
                     f"compare_and_set_head: {new_head_id!r} is a compaction summary"
                 )
-            with self._head_file_lock(git):
+            with self._head_file_lock(session_log):
                 try:
-                    durable = git.read_meta()
+                    durable = session_log.read_meta()
                     if durable.get("head_id") != expected_head_id:
                         return False
                     updated = dict(durable)
@@ -195,7 +195,7 @@ class BranchesOperations:
                         ) + 1
                     if meta_update:
                         updated.update(meta_update)
-                    git.write_meta(updated)
+                    session_log.write_meta(updated)
                     with idx._persist_lock:
                         with idx._lock:
                             idx.head_id = new_head_id
@@ -209,7 +209,7 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None:
             return False
-        _git, idx = pair
+        _session_log, idx = pair
         return msg_id in idx.nodes_by_id
 
 
@@ -220,27 +220,14 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None or not ancestor_id or not descendant_id:
             return False
-        git, _idx = pair
-        paths = {}
-        for path in git.list_history():
-            parts = path.stem.split("-", 2)
-            if len(parts) == 3:
-                node_id = parts[2]
-                if node_id in paths:
-                    return False
-                paths[node_id] = path
+        session_log, _idx = pair
+        nodes = {payload.get("id"): payload for payload in session_log.list_history()}
         visited = set()
         current = descendant_id
         while current and current not in visited:
             visited.add(current)
-            path = paths.get(current)
-            if path is None:
-                return False
-            try:
-                node = shared.json.loads(shared.read_text_with_retry(path))
-            except (OSError, shared.json.JSONDecodeError):
-                return False
-            if not isinstance(node, dict) or node.get("id") != current:
+            node = nodes.get(current)
+            if node is None:
                 return False
             if current == ancestor_id:
                 return True
@@ -254,7 +241,7 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None:
             return []
-        _git, idx = pair
+        _session_log, idx = pair
         # A branch tip is a conv node (no caller) with no conv-child.
         tips: list[dict[str, shared.Any]] = []
         named = (idx.meta.get("branches") or {})
@@ -303,12 +290,23 @@ class BranchesOperations:
             return child is not None and _conversation_node(child)
 
         merged = self.merged_heads(session_id)
+        # The conversation's head is a branch end even while a background
+        # branch (a scheduled task's) leaves from it.
+        head = idx.head_id
 
         for node in idx.all_nodes():
             if not _conversation_node(node):
                 continue
             kids = idx.children_by_predecessor.get(node.id, [])
-            if any(_conv_child(k) for k in kids):
+            def _opens_task_branch(kid_id: str) -> bool:
+                """A scheduled task's first message leaves this line without ending it."""
+                kid_md = idx.nodes_by_id[kid_id].metadata or {}
+                return kid_md.get("source") == "scheduler" and (node.metadata or {}).get("source") != "scheduler"
+
+            continued = [k for k in kids if _conv_child(k) and not _opens_task_branch(k)]
+            side_only = node.id == head and all(
+                idx.nodes_by_id[k].role == shared.ROLE_USER for k in continued)
+            if continued and not side_only:
                 continue
             # Heads that a merge consumed don't surface as standalone
             # branches anymore — their content lives on the merge tip.
@@ -354,7 +352,7 @@ class BranchesOperations:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return
-        git, idx = pair
+        session_log, idx = pair
 
         def _mutate(entry: dict) -> None:
             now = shared.time.time()
@@ -364,7 +362,17 @@ class BranchesOperations:
             entry.update(fields)
 
         idx.update_branch_entry(head_msg_id, _mutate)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
+
+
+    def branch_entries(self, session_id: str) -> dict[str, dict[str, shared.Any]]:
+        """Every branch meta entry of the session, keyed by tip."""
+        pair = self._open(session_id)
+        if pair is None:
+            return {}
+        _session_log, idx = pair
+        return {head: dict(entry) for head, entry in (idx.meta.get("branches") or {}).items()
+                if isinstance(entry, dict)}
 
 
     def get_branch_meta(self, session_id: str, head_msg_id: str) -> dict[str, shared.Any]:
@@ -375,7 +383,7 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None:
             return {}
-        _git, idx = pair
+        _session_log, idx = pair
         return dict((idx.meta.get("branches") or {}).get(head_msg_id) or {})
 
 
@@ -389,7 +397,7 @@ class BranchesOperations:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return
-        git, idx = pair
+        session_log, idx = pair
 
         def _mutate(entry: dict) -> None:
             now = shared.time.time()
@@ -398,7 +406,7 @@ class BranchesOperations:
             entry["updated_at"] = now
 
         idx.update_branch_entry(head_msg_id, _mutate)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
 
 
     def bump_branch_turns(self, session_id: str, head_msg_id: str) -> int:
@@ -409,13 +417,13 @@ class BranchesOperations:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return 0
-        git, idx = pair
+        session_log, idx = pair
 
         def _mutate(entry: dict) -> None:
             entry["turns"] = int(entry.get("turns", 0)) + 1
 
         merged = idx.update_branch_entry(head_msg_id, _mutate)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
         return int(merged.get("turns", 0))
 
 
@@ -439,7 +447,7 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None:
             return False
-        git, idx = pair
+        session_log, idx = pair
         named = idx.meta.get("branches") or {}
         node = idx.nodes_by_id.get(head_msg_id)
         if node is None or head_msg_id in named:
@@ -475,7 +483,7 @@ class BranchesOperations:
                 return False
             branches[head_msg_id] = branches.pop(source)
             idx.meta["branches"] = branches
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
         return True
 
 
@@ -483,19 +491,19 @@ class BranchesOperations:
         pair = self._open(session_id)
         if pair is None:
             return
-        git, idx = pair
+        session_log, idx = pair
         branches = dict(idx.meta.get("branches") or {})
         if branches.pop(head_msg_id, None) is None:
             return
         idx.set_meta(branches=branches)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
 
 
     def delete_branch_tail(self, session_id: str, head_msg_id: str) -> int:
         pair = self._open(session_id)
         if pair is None:
             return 0
-        git, idx = pair
+        session_log, idx = pair
         if head_msg_id not in idx.nodes_by_id:
             return 0
         # Fork point the doomed subtree hangs off — the head fallback
@@ -518,7 +526,8 @@ class BranchesOperations:
                     to_delete.append(cid)
                     stack.append(cid)
 
-        # Drop from index + remove history files. ID set kept so the
+        session_log.delete_nodes(to_delete)
+        # Drop from index. ID set kept so the
         # rest of the index stays consistent.
         with idx._lock:
             for nid in to_delete:
@@ -541,12 +550,6 @@ class BranchesOperations:
                         kids.remove(nid)
                         if not kids:
                             del idx.children_by_caller[parent]
-                # File removal
-                for fpath in (git.path / "history").glob(f"*-{nid}.json"):
-                    try:
-                        fpath.unlink()
-                    except OSError:
-                        pass
         # Drop named branches for the deleted heads
         branches = dict(idx.meta.get("branches") or {})
         for nid in to_delete:
@@ -559,5 +562,5 @@ class BranchesOperations:
         # (the ws handler moves to another named leaf) overwrite this.
         if idx.head_id in seen:
             idx.set_head(root_pred)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
         return len(to_delete)

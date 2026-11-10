@@ -17,3 +17,12 @@ test('synchronous reads only expose successful fresh responses and respect inval
   assert.equal(readCachedSettings('/cache-test'),undefined);
  }finally{globalThis.fetch=originalFetch;Date.now=originalNow;invalidate('/cache-test');}
 });
+test('a failed read carries what the server said went wrong',async()=>{
+ const originalFetch=globalThis.fetch;
+ globalThis.fetch=async()=>({ok:false,status:500,json:async()=>({error:'OSError: catalogue unreadable'})});
+ try {
+  await assert.rejects(cachedFetch('/cache-error'),/OSError: catalogue unreadable/);
+  globalThis.fetch=async()=>({ok:false,status:401,json:async()=>{throw new SyntaxError('not json');}});
+  await assert.rejects(cachedFetch('/cache-error'),/\/cache-error → 401/);
+ }finally{globalThis.fetch=originalFetch;invalidate('/cache-error');}
+});

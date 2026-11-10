@@ -6,6 +6,8 @@
     "check": "node scripts/testing/run-checks.mjs",
     "test": "npm run test:unit",
     "test:unit": "node scripts/testing/run-tests.mjs",
+    "generate:brand-ink-bounds": "node scripts/icons/generate-brand-ink-bounds.mjs",
+    "generate:solar-ink-bounds": "node scripts/icons/generate-solar-ink-bounds.mjs",
     "check:static-resource-budget": "node --no-warnings scripts/runtime/check-static-resource-budget.mjs",
     "dev": "next dev --turbo",
     "build": "next build --webpack",

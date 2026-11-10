@@ -163,6 +163,7 @@ export const SecondaryRail = forwardRef<HTMLElement, {
   className?: string;
   children: ReactNode;
   "data-testid"?: string;
+  [data: `data-${string}`]: string | undefined;
 }>(function SecondaryRail({ railKey, label, id, as = "nav", className, children, ...rest }, ref) {
   const [open] = useRailOpen(railKey);
   const Tag = as;
@@ -174,6 +175,7 @@ export const SecondaryRail = forwardRef<HTMLElement, {
         aria-label={label}
         className={cn(styles.rail, className)}
         data-collapsed={open ? undefined : ""}
+        data-collapsible={railKey ? "" : undefined}
         {...rest}
       >
         {children}

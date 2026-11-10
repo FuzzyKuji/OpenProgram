@@ -29,7 +29,6 @@ import json
 import threading
 import time
 import uuid
-from pathlib import Path
 from typing import Any, Optional
 
 _log = logging.getLogger(__name__)
@@ -75,17 +74,17 @@ def _session_lock(session_id: str) -> threading.Lock:
         return lk
 
 
-def _inbox_path(session_id: str) -> Optional[Path]:
+def _inbox_path(session_id: str):
     """Path to the session's inbox.json, or None when the session repo
     doesn't exist."""
     from openprogram.runtime.context.session_db import default_db
-    sdir = default_db()._session_dir(session_id)  # noqa: SLF001 — same as job store
-    if not sdir.exists():
+    sessions = default_db()
+    if not sessions._session_dir(session_id).exists():  # noqa: SLF001 — same as job store
         return None
-    return sdir / "inbox.json"
+    return sessions.state_file(session_id, "inbox.json")
 
 
-def _load(path: Path) -> list[dict[str, Any]]:
+def _load(path) -> list[dict[str, Any]]:
     if not path.exists():
         return []
     try:
@@ -96,14 +95,9 @@ def _load(path: Path) -> list[dict[str, Any]]:
     return entries if isinstance(entries, list) else []
 
 
-def _write(path: Path, entries: list[dict[str, Any]]) -> None:
+def _write(path, entries: list[dict[str, Any]]) -> None:
     payload = {"version": 1, "entries": entries}
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(payload, ensure_ascii=False, default=str, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
 
 
 def pending_count(session_id: str) -> int:
@@ -225,12 +219,7 @@ def _notify_sender(entry: dict[str, Any], content: str) -> None:
             "content": content,
             "predecessor": head_before,
             "timestamp": time.time(),
-        })
-        if head_before:
-            try:
-                store.set_head(sender, head_before)
-            except Exception:
-                _log.warning("inbox notice moved head of sender session %s; restore failed", sender, exc_info=True)
+        }, advance_head=False)
         store.commit_turn(sender, "send_message: inbox notice")
     except Exception:
         # Best-effort notice: the inbox operation itself already succeeded.
@@ -266,7 +255,7 @@ def discard_tracked_job(job_id: str) -> bool:
         return False
     from openprogram.state.store.session.placement import iter_session_dirs
     for sid, sdir in iter_session_dirs(store.root_path):
-        if (sdir / "inbox.json").exists():
+        if store.state_file_at(sdir, "inbox.json").exists():
             if discard_job(sid, job_id):
                 removed = True
     return removed
@@ -405,9 +394,10 @@ def sweep() -> None:
     if not _seeded:
         from openprogram.state.store import default_store
         from openprogram.state.store.session.placement import iter_session_dirs
-        root = default_store().root_path
+        sessions = default_store()
+        root = sessions.root_path
         found = {sid for sid, sdir in iter_session_dirs(root)
-                 if (sdir / "inbox.json").exists()} if root.exists() else set()
+                 if sessions.state_file_at(sdir, "inbox.json").exists()} if root.exists() else set()
         with _locks_master:
             _due.update(found)
         _seeded = True
@@ -498,6 +488,7 @@ def _deliver(session_id: str, entry: dict[str, Any]) -> None:
         authority=entry,
         creates_agent=False,
         resume_deferred=bool(tid),
+        message_origin="agent_delivery",
     )
 
 

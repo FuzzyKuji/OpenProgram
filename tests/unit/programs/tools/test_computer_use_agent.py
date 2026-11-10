@@ -3,9 +3,7 @@ import json
 
 import pytest
 
-from openprogram.programs.tools.computer_use.computer_use_agent.desktop import backends
 from openprogram.programs._host.execution import ToolReturn
-from openprogram.programs.tools.computer_use.computer_use_agent import fresh
 from openprogram.programs.tools.computer_use.computer_use_agent import tool as entry
 from openprogram.programs.tools.computer_use.computer_use_agent.targets import browser, vm
 
@@ -40,43 +38,12 @@ def test_json_results_keep_their_data(monkeypatch):
     assert result.json_data == {"pages": []}
 
 
-def test_a_spawned_agent_holds_the_marked_guides_in_its_brief(monkeypatch):
-    from openprogram.programs._authoring import guides
-    seen = {}
-
-    def spawn(target, args, brief, guide, session, **kwargs):
-        seen.update(target=target, guide=guide, kwargs=kwargs)
-        return ToolReturn(text="done")
-    monkeypatch.setattr(fresh, "run", spawn)
-    # The app target is available whatever the host is.
-    monkeypatch.setattr(backends, "support", lambda: {"available": True})
-    assert entry.computer_use_agent(target="app", context="fresh", brief="b", args={"app": "Notes"}).text == "done"
-    assert seen["kwargs"]["needs_grant"] is True
-    # The spawned agent's first call finds every guide in its request already.
-    for name in ("computer_use_agent.app", "computer_use_agent.code"):
-        assert guides.marker(name) in seen["guide"]
-    token = guides.begin_loop()
-    try:
-        guides.observe_request([{"content": seen["guide"]}])
-        assert guides.due("computer_use_agent", {"target": "app", "code": "pass"}, failed=False) == []
-        assert guides.missing_required("computer_use_agent", {"target": "app", "code": "pass"}) == []
-    finally:
-        guides.end_loop(token)
-
-
-def test_fresh_needs_a_brief_and_cannot_nest(monkeypatch):
-    monkeypatch.setattr(fresh, "nested", lambda: False)
-    result = fresh.run("app", {"app": "Notes"}, "  ", "guide", "s", needs_grant=True)
-    assert result.is_error and "needs brief" in result.text
-    monkeypatch.setattr(fresh, "nested", lambda: True)
-    result = fresh.run("app", {"app": "Notes"}, "do it", "guide", "s", needs_grant=True)
-    assert result.is_error and "inherit" in result.text
-
-
-def test_fresh_prompt_names_the_target_and_carries_the_guide():
-    text = fresh.prompt("app", {"app": "Numbers"}, "Sum column B.", "GUIDE")
-    assert text.startswith("Sum column B.") and 'target="app", args={"app": "Numbers"}' in text
-    assert "GUIDE" in text
+def test_the_caller_operates_the_screen_itself():
+    """The tool has no way to pass the task to another agent: whoever calls it carries it through."""
+    assert not {"context", "brief"} & set(entry._PARAMETERS["properties"])
+    assert "new agent" not in entry.DESCRIPTION
+    with pytest.raises(TypeError):
+        entry.computer_use_agent(target="app", context="fresh", brief="b", args={"app": "Notes"})
 
 
 # ----------------------------------------------------------------- browser
@@ -109,10 +76,11 @@ def test_browser_steps_stop_at_the_first_failure(monkeypatch):
     assert result.text.endswith("step 2 failed; the steps after it did not run")
 
 
-def test_browser_approval_asks_for_uploads_and_external_origins_only():
+def test_the_built_in_browser_asks_for_uploads_only():
     assert browser.approval([("click", {"ref": "e1"})], {}) is False
     assert browser.approval([("navigate", {"url": "http://localhost:3000/"})], {}) is False
-    assert "https://example.com" in browser.approval([("navigate", {"url": "https://example.com/a"})], {})
+    # Opening a site is what a browser is for; web_fetch reaches the same address unasked.
+    assert browser.approval([("navigate", {"url": "https://example.com/a"})], {}) is False
     assert "Upload" in browser.approval([("upload", {"path": "/tmp/x"})], {})
 
 
@@ -175,7 +143,6 @@ def test_opening_the_app_target_without_an_app_only_lists_apps():
     assert entry.requires_approval(target="app", args={"app": "Notes"})
     assert _desktop_operation("computer_use_agent", {"target": "app"}) is None
     assert _desktop_operation("computer_use_agent", {"target": "app", "args": {"app": "Notes"}})
-    assert _desktop_operation("computer_use_agent", {"target": "app", "context": "fresh", "brief": "b"})
 
 
 def test_a_click_that_opened_a_file_chooser_tells_the_model_how_to_answer_it():

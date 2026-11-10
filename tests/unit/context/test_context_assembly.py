@@ -336,6 +336,30 @@ def test_prefetch_renders_in_the_user_message_not_the_system_prompt(
     assert text.index("<memory-context>") < text.index("what did we decide")
 
 
+@pytest.mark.parametrize("query, recalled", [("the standing goal", "recalled for: the standing goal"), ("", None)])
+def test_a_turn_with_its_own_recall_query_recalls_by_it(
+    tmp_db: SessionDB, monkeypatch: pytest.MonkeyPatch, fake_prefetch, query, recalled,
+):
+    """A check-in's prompt is fixed instructions: recall follows ``recall_query``."""
+    monkeypatch.setattr(D, "_load_agent_profile",
+                        lambda agent_id: {"id": agent_id, "system_prompt": "", "tools": []})
+    orig = D._run_loop_blocking
+    stream = _capturing_stream([])
+
+    def _wrapped(*, req, history, on_event, cancel_event, stream_fn=None, **_extra):
+        return orig(req=req, history=history, on_event=on_event,
+                    cancel_event=cancel_event, stream_fn=stream)
+
+    with patch.object(D, "_run_loop_blocking", _wrapped):
+        D.process_user_turn(agent_turn_request.TurnRequest(
+            session_id="recall1", user_text="fixed instructions", agent_id="main",
+            source="tui", recall_query=query,
+        ))
+    written = next(row for row in tmp_db.get_messages("recall1") if row.get("role") == "user")
+    assert "fixed instructions" not in str(written.get("memory_prefetch"))
+    assert (recalled in written["memory_prefetch"]) if recalled else "memory_prefetch" not in written
+
+
 def test_system_prompt_is_byte_identical_across_turns(
     tmp_db: SessionDB, monkeypatch: pytest.MonkeyPatch, fake_prefetch,
 ):

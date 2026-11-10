@@ -170,7 +170,16 @@ def register(app):
     @app.get("/api/providers/list")
     def api_providers_list():
         from openprogram.models import listing as _mc
-        return JSONResponse(content={"providers": _mc.list_providers()})
+        try:
+            providers = _mc.list_providers()
+        except Exception as exc:
+            # The settings page shows this line instead of an empty list.
+            _log.exception("provider list failed")
+            return JSONResponse(
+                status_code=500,
+                content={"error": f"{type(exc).__name__}: {exc}"[:500]},
+            )
+        return JSONResponse(content={"providers": providers})
 
     @app.post("/api/providers/custom")
     async def api_create_custom_provider(body: Any = Body(default=None)):
@@ -399,6 +408,20 @@ def register(app):
             )
         from openprogram.models import listing as _mc
         return JSONResponse(content=_mc.test_provider(name, model=model))
+
+    @app.get("/api/providers/{name}/probes")
+    def api_provider_probes(name: str, days: float = 7.0):
+        """The requests OpenProgram sent this provider on its own behalf
+        (tests, credential checks, failed model lists), newest first. They
+        are never usage; see models/listing/probe_log.py."""
+        import time
+        from openprogram.models.usage.ledger import default_ledger
+        if not 0 < days <= 30:
+            return JSONResponse(content={"error": "days must be in (0, 30]"}, status_code=400)
+        since = time.time() - days * 86400
+        return JSONResponse(content={
+            "probes": default_ledger.probe_events(since=since, provider=name, limit=100),
+        })
 
     @app.post("/api/providers/{name}/validate")
     def api_validate_provider(name: str, body: Any = Body(default=None)):

@@ -1,0 +1,155 @@
+<title>Background Job lifecycle</title>
+<meta name="description" content="How a sub-agent call becomes a durable Job: states, worker pool, cancellation and how the result returns.">
+<h1>Background Job lifecycle</h1>
+
+<p>Every spawned sub-agent is a Job in <code translate="no">openprogram/runtime/jobs/</code>, with <code translate="no">job_id</code> equal to its <code translate="no">execution_id</code>. Control goes through <a href="control.html">the execution control plane</a>; a Job adds admission, a worker pool and result delivery.</p>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 190" role="img" aria-label="A Job moves from pending to queued to running, and ends completed, cancelled or errored. Pending and queued can also end cancelled or errored without running.">
+  <defs><marker id="jb-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" translate="no" x="0" y="80">pending</text>
+  <text class="t-soft" x="0" y="104">record saved</text>
+  <line class="ln" x1="84" y1="73" x2="146" y2="73" marker-end="url(#jb-a)"/>
+  <text class="t-big" translate="no" x="158" y="80">queued</text>
+  <text class="t-soft" x="158" y="104">waits for a worker</text>
+  <line class="ln" x1="236" y1="73" x2="298" y2="73" marker-end="url(#jb-a)"/>
+  <text class="t-big" translate="no" x="310" y="80">running</text>
+  <text class="t-soft" x="310" y="104">turn in progress</text>
+  <line class="ln" x1="392" y1="66" x2="510" y2="32" marker-end="url(#jb-a)"/>
+  <line class="ln" x1="392" y1="73" x2="510" y2="73" marker-end="url(#jb-a)"/>
+  <line class="ln" x1="392" y1="80" x2="510" y2="114" marker-end="url(#jb-a)"/>
+  <rect class="tile" x="520" y="8" width="160" height="128" rx="8"/>
+  <text class="t-big" translate="no" x="536" y="38">completed</text>
+  <text class="t-big" translate="no" x="536" y="80">cancelled</text>
+  <text class="t-big" translate="no" x="536" y="122">errored</text>
+  <text class="t-soft" x="0" y="172">pending and queued can also end cancelled or errored without running</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong><code translate="no">pending</code></strong><small>record saved</small></li>
+  <li><strong><code translate="no">queued</code></strong><small>waits for a worker</small></li>
+  <li><strong><code translate="no">running</code></strong><small>turn in progress</small></li>
+  <li class="flow-end"><strong><code translate="no">completed</code> · <code translate="no">cancelled</code> · <code translate="no">errored</code></strong><small>terminal; pending and queued can also end cancelled or errored</small></li>
+</ol>
+</figure>
+
+<p class="note">Terminal states absorb; illegal moves raise <code translate="no">ValueError</code>. Since canonical executions do not mirror their running transition, the projection may also go <code translate="no">pending → running</code> and <code translate="no">queued → completed</code>.</p>
+
+<h2 id="entry-points">Entry points</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent(prompt, description, agent_id?, context?, run_in_background=False, to?)</code></th><td>Model tool. Foreground returns the reply; background returns the execution id; <code translate="no">to</code> delivers to an existing agent.</td></tr>
+<tr><th scope="row"><code translate="no">job_output(job_id, block=True, timeout=30000)</code></th><td>Waits up to 600000 ms and returns the reply and terminal status. <code translate="no">block=false</code> peeks. Also reads a <code translate="no">send_message</code> delivery.</td></tr>
+<tr><th scope="row"><code translate="no">list_jobs()</code></th><td>This session's background tasks, newest first, at most 50 rows</td></tr>
+<tr><th scope="row"><code translate="no">/task</code>, <code translate="no">/task --async</code>, <code translate="no">/spawn</code></th><td>Typed in chat. Blocks, or writes a running placeholder and returns.</td></tr>
+<tr><th scope="row"><code translate="no">spawn_job</code>, <code translate="no">list_jobs</code>, <code translate="no">get_job</code> (WS)</th><td>Create and read. Replies: <code translate="no">spawn_job_result</code>, <code translate="no">jobs_list</code>, <code translate="no">job</code>. No <code translate="no">session_id</code> on <code translate="no">list_jobs</code> means all sessions.</td></tr>
+<tr><th scope="row"><code translate="no">execution.cancel</code> (WS)</th><td>Cancels; Job actions do not include a separate cancel</td></tr>
+</tbody>
+</table>
+
+<p class="note">Clients follow the <code translate="no">job_status</code> broadcast. The branch view shows Job status; there is no separate Tasks panel.</p>
+
+<h2 id="scenarios">Scenarios</h2>
+
+<table class="stack">
+<thead><tr><th scope="col">Case</th><th scope="col">While running</th><th scope="col">Result reaches caller</th><th scope="col">Stop and failure</th></tr></thead>
+<tbody>
+<tr><th scope="row">One foreground call</th><td>Caller blocks; the attach card goes straight to its final state</td><td>Reply as the tool result</td><td>Stopping the session cancels the child and the parent turn; partial output returns</td></tr>
+<tr><th scope="row">One background call</th><td>Caller continues; a running card shows</td><td><code translate="no">job_output</code>, or a notice turn when the caller has not read it</td><td>Cancel from the UI; <code translate="no">job_output</code> then returns the cancelled state</td></tr>
+<tr><th scope="row">Several background calls</th><td>Pool runs up to its width; the rest stay <code translate="no">queued</code>, first in first out</td><td>Each returns separately; finishing together during a turn produces one notice</td><td>Each has its own status and error; the parent decides on partial results</td></tr>
+<tr><th scope="row">Long job, cancelled</th><td>Slot held until the worker exits</td><td>Partial output</td><td>Escalates after 30 seconds</td></tr>
+</tbody>
+</table>
+
+<h2 id="pool">Worker pool</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Pool</th><td><code translate="no">ThreadPoolExecutor</code>, same thread model as a chat run. <code translate="no">process_user_turn</code> opens its own event loop, so there is no nested-loop conflict.</td></tr>
+<tr><th scope="row">Width</th><td><code translate="no">OPENPROGRAM_JOB_WORKERS</code>, default 4</td></tr>
+<tr><th scope="row">Admission</th><td>Resource governance admits and limits a Job; see <a href="../reliability/agent-resource-governance.html">Resource allocation</a></td></tr>
+<tr><th scope="row">Per-session limit</th><td>None</td></tr>
+</tbody>
+</table>
+
+<h2 id="persistence">Persistence and recovery</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Store</th><td>One <code translate="no">jobs.json</code> document per session, <code translate="no">{"jobs": {id: Job}, "version": 1}</code>; each write is one line of the session log</td></tr>
+<tr><th scope="row">Locking</th><td>One lock per session: read, mutate, write</td></tr>
+<tr><th scope="row">Worker lost</th><td>A non-terminal Job with no current attempt or accepted command becomes <code translate="no">errored</code>, <code translate="no">worker died before completion</code>. One with a canonical attempt follows <a href="control.html#restart-window">restart recovery</a>.</td></tr>
+<tr><th scope="row">Notices</th><td>Pending in <code translate="no">&lt;caller-session-dir&gt;/notices.json</code>, so a restart keeps them</td></tr>
+</tbody>
+</table>
+
+<h2 id="cancel">Cancellation</h2>
+
+<ol>
+<li><code translate="no">JobRunner.cancel_execution</code> persists one <code translate="no">execution.cancel</code> command, and cascades to child Jobs.</li>
+<li>The owning worker consumes it and sets <code translate="no">cancel_event</code>, which <code translate="no">process_user_turn</code> bridges into the agent loop; the provider stream stops at its next chunk.</li>
+<li>Live subprocesses and exec runtimes are signalled by exact execution id. Agent methods check at their pre-invocation hook.</li>
+<li>After <code translate="no">_CANCEL_ESCALATION_SECS</code> (30 s) the owner's grace ends.</li>
+</ol>
+
+<p class="note">A tool's own atomic operation finishes first. A cancelled or errored Job cannot be resumed as the same work; retry is a new spawn.</p>
+
+<h2 id="attach">Session and attach card</h2>
+
+<ul>
+<li>A Job runs in exactly one session, <code translate="no">parent_session_id</code>, and that never changes. A caller in another session is <code translate="no">caller_session_id</code>, with a linked mirror for visibility and ownership checks.</li>
+<li>Output lands as a branch of that session, or a new root with <code translate="no">context="clean"</code>.</li>
+<li>An attach node (<code translate="no">function="attach"</code>) is written after admission with status <code translate="no">running</code> and the <code translate="no">job_id</code>. The runner updates that same node at each terminal state. A cross-session card lives in the source session and names the target.</li>
+<li>Context rendering skips a running card. A finished one becomes one sub-agent report with its task, final reply and transcript address.</li>
+</ul>
+
+<details>
+<summary>Job fields</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Identity</th><td><code translate="no">id</code>, <code translate="no">parent_session_id</code>, <code translate="no">caller_session_id</code>, <code translate="no">parent_job_id</code>, <code translate="no">parent_msg_id</code>, <code translate="no">caller_msg_id</code>, <code translate="no">agent_id</code></td></tr>
+<tr><th scope="row">Work</th><td><code translate="no">prompt</code>, <code translate="no">subject</code>, <code translate="no">description</code>, <code translate="no">label</code>, <code translate="no">context_mode</code> (<code translate="no">inherit</code>, <code translate="no">clean</code>), <code translate="no">wait</code>, <code translate="no">source</code>, <code translate="no">model_override</code>, <code translate="no">tools_override</code>, <code translate="no">thinking_effort</code></td></tr>
+<tr><th scope="row">Timing</th><td><code translate="no">status</code>, <code translate="no">created_at</code>, <code translate="no">queued_at</code>, <code translate="no">started_at</code>, <code translate="no">completed_at</code>, <code translate="no">cancel_requested_at</code></td></tr>
+<tr><th scope="row">Outcome</th><td><code translate="no">head_id</code>, <code translate="no">result_text</code>, <code translate="no">error</code>, <code translate="no">reason_code</code>, <code translate="no">attempt</code>, <code translate="no">attach_pointer_id</code>, <code translate="no">target_branch_head_id</code></td></tr>
+<tr><th scope="row">Collaboration</th><td><code translate="no">chain_messages</code>, <code translate="no">chain_generations</code>, <code translate="no">caller_chain_generations</code>, <code translate="no">archive_when_done</code>, <code translate="no">deferred_inbox</code>, <code translate="no">relation</code>, <code translate="no">worktree_id</code></td></tr>
+<tr><th scope="row">Authority and budget</th><td><code translate="no">speaker_*</code>, <code translate="no">principal_id</code>, <code translate="no">authority_tier</code>, <code translate="no">admission_id</code>, <code translate="no">budget_scope_id</code>, <code translate="no">effective_limits</code>, <code translate="no">project_id</code></td></tr>
+</tbody>
+</table>
+<p class="note">Runtime objects such as cancel events stay in the runner's maps, never on the record. <code translate="no">JobRunner</code> takes an injected governor and driver factory, so its state machine can run without a real model.</p>
+</details>
+
+<h2 id="invariants">Invariants</h2>
+
+<ul>
+<li>Every Job ends in exactly one terminal state.</li>
+<li>States only move forward.</li>
+<li>The attach card changes with the record.</li>
+<li><code translate="no">parent_session_id</code> is immutable.</li>
+<li>Runner maps are held under a lock.</li>
+</ul>
+
+<h2 id="out-of-scope">Out of scope</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Area</th><th scope="col">Not provided</th></tr></thead>
+<tbody>
+<tr><th scope="row">Scheduling</th><td>Cross-process or multi-host workers; priorities and preemption; automatic retry (the agent decides)</td></tr>
+<tr><th scope="row">Job relations</th><td>Several target sessions on one Job; Job dependency graphs; a parent agent subscribing to a child's output mid-flight</td></tr>
+</tbody>
+</table>
+
+<h2 id="implementation-status">Implementation status</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Implemented</th><td>Record and state machine, persistent store, worker admission and execution, query and wait, cancellation at <code translate="no">JobRunner</code>, WS spawn, list, get and status, completion notices</td></tr>
+<tr><th scope="row">Partial</th><td>Attach-card lifecycle across every recovery path; resource governance across token, cost, runtime and idle limits; the full spawn, concurrent-cancel and crash test matrix</td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="control.html">Activity and control</a></p>

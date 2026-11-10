@@ -10,58 +10,21 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import {
-  agentJobFor,
+  closeSubAgentView,
   loadSubAgentTranscript,
-  promptBody,
   subAgentChatKey,
 } from "@/lib/chat/transcript/sub-agent-transcripts";
 import { useTranslation } from "@/lib/i18n";
+import { isAgentRunning } from "@/lib/chat/transcript/row-status";
 import { useSessionStore, type ChatMsg } from "@/lib/session-store";
 
-import { AssistantBubble } from "../bubbles/assistant-bubble";
-import { TodoPlans } from "./todo-plan-card";
-
-export const LIVE_STATUSES = new Set(["running", "pending", "queued"]);
-const TERMINAL = new Set(["completed", "errored", "failed", "cancelled"]);
+import { TranscriptRows } from "../list/transcript-rows";
+import { PromptTurn } from "./sub-agent-prompt";
 
 /** The store key of a spawn card's agent: its first Job, else its branch head. */
 export function subAgentKey(card: ChatMsg): string {
   const attach = card.attach || {};
   return attach.job_id || attach.head_id || card.id;
-}
-
-function PromptTurn({ msg }: { msg: ChatMsg }) {
-  const { text } = useTranslation();
-  const [open, setOpen] = useState(false);
-  const prompt = promptBody(msg.content || "");
-  if (!prompt.text) return null;
-  return (
-    <button
-      type="button"
-      className="sub-agent-prompt"
-      data-open={open ? "1" : "0"}
-      aria-expanded={open}
-      onClick={() => setOpen((value) => !value)}
-    >
-      <span className="sub-agent-prompt-label">
-        {prompt.message ? text("Message", "消息") : text("Task", "任务")}
-      </span>
-      <span className="sub-agent-prompt-text">{prompt.text}</span>
-    </button>
-  );
-}
-
-function Turn({ id, sessionId }: { id: string; sessionId: string }) {
-  const msg = useSessionStore((s) => s.messagesById[id]);
-  if (!msg) return null;
-  if (msg.role === "user") return <PromptTurn msg={msg} />;
-  return (
-    <>
-      <AssistantBubble msg={msg} sessionIdOverride={sessionId} embedded />
-      {/* The sub-agent's own plan sits under its own reply. */}
-      <TodoPlans sessionId={sessionId} rowId={id} />
-    </>
-  );
 }
 
 export function SubAgentTranscript({ card, sessionId, onTip }: {
@@ -81,7 +44,7 @@ export function SubAgentTranscript({ card, sessionId, onTip }: {
   const [loading, setLoading] = useState(false);
   const bodyRef = useRef<HTMLDivElement>(null);
   // A running agent opens at its newest output; a finished one at its task.
-  const followRef = useRef(LIVE_STATUSES.has(status));
+  const followRef = useRef(isAgentRunning(status));
   const tipRef = useRef(onTip);
   tipRef.current = onTip;
 
@@ -94,18 +57,9 @@ export function SubAgentTranscript({ card, sessionId, onTip }: {
         .finally(() => { if (live) setLoading(false); });
     };
     load();
-    // A finished turn of this agent (its first one, or a later message sent
-    // to it) is now on the server; read the branch again.
-    const onStatus = (event: WindowEventMap["op:job-status"]) => {
-      const detail = event.detail;
-      if (!detail?.job_id || detail.session_id !== sessionId) return;
-      if (!TERMINAL.has(detail.status || "")) return;
-      if (agentJobFor(detail.job_id) === key) load();
-    };
-    window.addEventListener("op:job-status", onStatus);
     return () => {
       live = false;
-      window.removeEventListener("op:job-status", onStatus);
+      closeSubAgentView(sessionId, key);
     };
   }, [sessionId, key, jobId, headId]);
 
@@ -134,14 +88,14 @@ export function SubAgentTranscript({ card, sessionId, onTip }: {
     >
       <div className="sub-agent-turns">
         {ids.length === 0 && attach.prompt ? (
-          <PromptTurn msg={{ id: `${card.id}_prompt`, role: "user", content: attach.prompt }} />
+          <PromptTurn msg={{ id: `${card.id}_prompt`, role: "user", rowKind: "user", content: attach.prompt }} />
         ) : null}
-        {ids.map((id) => <Turn key={id} id={id} sessionId={sessionId} />)}
+        <TranscriptRows sessionId={sessionId} viewKey={chatKey} ids={ids} embedded />
         {ids.length === 0 ? (
           <div className="sub-agent-empty" role="status">
             {loading
               ? text("Loading…", "加载中…")
-              : LIVE_STATUSES.has(status)
+              : isAgentRunning(status)
                 ? text("Waiting for output…", "等待输出…")
                 : text("No output.", "没有输出。")}
           </div>

@@ -4,9 +4,6 @@ from __future__ import annotations
 
 import json
 
-
-import sqlite3
-
 import time
 
 import uuid
@@ -19,7 +16,7 @@ from contextlib import closing
 from typing import Any, Collection, Mapping
 
 
-from .._schema import PROJECTION_KINDS, SCHEMA_VERSION
+from .._schema import SCHEMA_VERSION
 
 from ..model import AuditEvent, ExecutionEvent, EventCursor, EventReplay, ExecutionRecord, _json
 
@@ -27,26 +24,59 @@ from ..model import AuditEvent, ExecutionEvent, EventCursor, EventReplay, Execut
 from .shared import (
     ExecutionConflict,
     _object,
-    _projection_event_written,
+    _event_written,
 )
+from .run_tables import TableHandle
+
+_LIFECYCLE_KINDS = ("execution.created", "execution.updated")
+
 
 class EventsOperations:
     def latest_event_sequence(self, execution_id: str) -> int | None:
-        """Read the public cursor from its covering index, without event bodies."""
+        """The execution's newest public cursor, without decoding event bodies."""
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT MAX(execution_sequence) FROM execution_events WHERE execution_id = ?",
-                (execution_id,),
-            ).fetchone()
-            return int(row[0]) if row and row[0] is not None else None
+            row = connection.first("execution_events", execution_id=execution_id, order="-execution_sequence")
+            return int(row["execution_sequence"]) if row is not None else None
+
+    def latest_global_event_sequence(self) -> int:
+        with closing(self._connect()) as connection:
+            row = connection.first("execution_events", order="-sequence")
+            return int(row["sequence"]) if row is not None else 0
+
+    def list_events_after(self, sequence: int, *, limit: int = 500) -> list[ExecutionEvent]:
+        """Events of every execution written after one global sequence, in order."""
+        with closing(self._connect()) as connection:
+            rows = connection.rows(
+                "execution_events", where=lambda row: row["sequence"] > sequence, order="sequence", limit=limit,
+            )
+        return [self._event(row) for row in rows]
+
+    def get_event_by_sequence(self, sequence: int) -> ExecutionEvent | None:
+        with closing(self._connect()) as connection:
+            row = connection.get("execution_events", sequence)
+        return self._event(row) if row is not None else None
+
+    def latest_lifecycle_event(self, execution_id: str) -> ExecutionEvent | None:
+        with closing(self._connect()) as connection:
+            row = connection.first(
+                "execution_events", execution_id=execution_id, kind=_LIFECYCLE_KINDS, order="-sequence",
+            )
+        return self._event(row) if row is not None else None
+
+    def latest_lifecycle_events(self, *, since: float) -> list[ExecutionEvent]:
+        """Each execution's newest lifecycle event, for those that changed since."""
+        with closing(self._connect()) as connection:
+            rows = connection.rows(
+                "execution_events", kind=_LIFECYCLE_KINDS,
+                where=lambda row: row["created_at"] >= since, order="sequence",
+            )
+        newest = {row["execution_id"]: row for row in rows}
+        return [self._event(row) for row in sorted(newest.values(), key=lambda row: row["sequence"])]
+
 
     def list_events(self, execution_id: str) -> list[ExecutionEvent]:
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM execution_events WHERE execution_id = ? "
-                "ORDER BY sequence",
-                (execution_id,),
-            )
+            rows = connection.rows("execution_events", execution_id=execution_id, order="sequence")
             return [self._event(row) for row in rows]
 
 
@@ -55,31 +85,23 @@ class EventsOperations:
     ) -> EventReplay:
         """Read one exact execution's contiguous public event stream.
 
-        SQLite event ids are global because the projection outbox references
-        them.  Public cursors instead use ``execution_sequence`` so activity
+        Event sequences are global.  Public cursors instead use ``execution_sequence`` so activity
         in a different execution cannot manufacture a false gap. UI recovery
         can request only the record and cursor from the same read snapshot;
-        this never reads event payloads, which can include large provider inputs.
+        this never decodes event payloads, which can include large provider inputs.
         """
         if type(after_sequence) is not int or after_sequence < 0:
             raise ExecutionConflict("invalid_cursor", "after_sequence must be a non-negative integer")
-        with closing(self._connect()) as connection:
-            # One WAL read snapshot binds lifecycle state to the event cursor.
-            # A later writer must not advance bounds or status independently.
-            connection.execute("BEGIN")
+        with closing(self._connect()) as connection, self.tables.lock:
+            # One locked read binds lifecycle state to the event cursor.
             execution = self._get_execution(connection, execution_id)
             if execution is None:
                 raise ExecutionConflict("not_found", "execution does not exist")
-            bounds = connection.execute(
-                "SELECT MIN(execution_sequence) AS first_sequence, "
-                "MAX(execution_sequence) AS last_sequence "
-                "FROM execution_events WHERE execution_id = ?",
-                (execution_id,),
-            ).fetchone()
-            if bounds is None or bounds["last_sequence"] is None:
-                raise ExecutionConflict("not_found", "execution does not exist")
-            first = int(bounds["first_sequence"])
-            last = int(bounds["last_sequence"])
+            stored = connection.rows("execution_events", execution_id=execution_id, order="execution_sequence")
+            sequences = [row["execution_sequence"] for row in stored]
+            # A restarted process has an execution but none of its live feed.
+            first = int(min(sequences, default=None) or 1)
+            last = int(max(sequences, default=None) or 0)
             recovery = None
             if after_sequence > last:
                 recovery = "cursor_ahead"
@@ -90,11 +112,7 @@ class EventsOperations:
             elif not include_events:
                 rows = ()
             else:
-                rows = connection.execute(
-                    "SELECT * FROM execution_events WHERE execution_id = ? "
-                    "AND execution_sequence > ? ORDER BY execution_sequence",
-                    (execution_id, after_sequence),
-                ).fetchall()
+                rows = [row for row in stored if row["execution_sequence"] > after_sequence]
                 expected = after_sequence + 1
                 for row in rows:
                     if int(row["execution_sequence"]) != expected:
@@ -118,10 +136,7 @@ class EventsOperations:
     def get_event(self, execution_id: str, sequence: int) -> ExecutionEvent | None:
         """Return one event by its global sequence within the exact execution."""
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM execution_events WHERE execution_id = ? AND sequence = ?",
-                (execution_id, sequence),
-            ).fetchone()
+            row = connection.first("execution_events", execution_id=execution_id, sequence=sequence)
         return self._event(row) if row is not None else None
 
 
@@ -130,13 +145,10 @@ class EventsOperations:
     ) -> ExecutionRecord | None:
         """Read the nearest persisted execution snapshot at or before an event."""
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT payload_json FROM execution_events "
-                "WHERE execution_id = ? AND sequence <= ? "
-                "AND kind IN ('execution.created', 'execution.updated') "
-                "ORDER BY sequence DESC LIMIT 1",
-                (execution_id, sequence),
-            ).fetchone()
+            row = connection.first(
+                "execution_events", execution_id=execution_id, kind=_LIFECYCLE_KINDS,
+                where=lambda row: row["sequence"] <= sequence, order="-sequence",
+            )
         return (
             ExecutionRecord.from_dict(_object(row["payload_json"])["record"])
             if row is not None
@@ -153,7 +165,7 @@ class EventsOperations:
 
 
     @staticmethod
-    def _event(row: sqlite3.Row) -> ExecutionEvent:
+    def _event(row: Mapping[str, Any]) -> ExecutionEvent:
         return ExecutionEvent(
             sequence=int(row["sequence"]),
             execution_id=str(row["execution_id"]),
@@ -230,11 +242,7 @@ class EventsOperations:
             authorize_conversation_execution(actor, "audit.read", execution, store=self,
                                              session_id=conversation_session_id)
         with closing(self._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM execution_audit_events WHERE execution_id = ? "
-                "ORDER BY sequence",
-                (execution_id,),
-            ).fetchall()
+            rows = connection.rows("execution_audit_events", execution_id=execution_id, order="sequence")
         return [self._audit_event(row) for row in rows]
 
 
@@ -250,7 +258,7 @@ class EventsOperations:
 
 
     @staticmethod
-    def _audit_event(row: sqlite3.Row) -> AuditEvent:
+    def _audit_event(row: Mapping[str, Any]) -> AuditEvent:
         return AuditEvent(
             audit_id=str(row["audit_id"]),
             sequence=int(row["sequence"]),
@@ -276,7 +284,7 @@ class EventsOperations:
 
     @staticmethod
     def _append_event(
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         execution_id: str,
         kind: str,
@@ -285,53 +293,25 @@ class EventsOperations:
         execution_version: int | None = None,
         command_id: str | None = None,
     ) -> int:
-        execution_sequence = int(connection.execute(
-            "SELECT COALESCE(MAX(execution_sequence), 0) + 1 "
-            "FROM execution_events WHERE execution_id = ?",
-            (execution_id,),
-        ).fetchone()[0])
-        cursor = connection.execute(
-            "INSERT INTO execution_events "
-            "(execution_id, execution_sequence, execution_version, command_id, kind, payload_json, "
-            "created_at, schema_version) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                execution_id,
-                execution_sequence,
-                execution_version,
-                command_id,
-                kind,
-                _json(payload),
-                created_at,
-                SCHEMA_VERSION,
-            ),
-        )
-        sequence = int(cursor.lastrowid)
-        _projection_event_written.set(True)
-        # Every canonical event is fanned out to the fixed projection set in
-        # the same SQLite transaction.  Consumers are independently retryable.
-        for projection_kind in PROJECTION_KINDS:
-            connection.execute(
-                "INSERT INTO execution_projection_outbox ("
-                "outbox_id, event_sequence, execution_id, projection_kind, "
-                "dedupe_key, payload_ref, state, claim_owner, claim_expires_at, "
-                "attempts, available_at, delivered_at, last_error) VALUES "
-                "(?, ?, ?, ?, ?, ?, 'pending', NULL, NULL, 0, ?, NULL, NULL)",
-                (
-                    f"outbox_{sequence}_{projection_kind}",
-                    sequence,
-                    execution_id,
-                    projection_kind,
-                    f"execution-event:{sequence}:{projection_kind}",
-                    f"execution-event:{sequence}",
-                    created_at,
-                ),
-            )
+        latest = connection.first("execution_events", execution_id=execution_id, order="-execution_sequence")
+        stored = connection.insert("execution_events", {
+            "execution_id": execution_id,
+            "execution_sequence": int(latest["execution_sequence"]) + 1 if latest is not None else 1,
+            "execution_version": execution_version,
+            "command_id": command_id,
+            "kind": kind,
+            "payload_json": _json(payload),
+            "created_at": created_at,
+            "schema_version": SCHEMA_VERSION,
+        })
+        sequence = int(stored["sequence"])
+        _event_written.set(True)
         return sequence
 
 
     @staticmethod
     def _append_audit_event(
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         execution: ExecutionRecord,
         actor: Mapping[str, Any],
@@ -379,23 +359,29 @@ class EventsOperations:
         now = time.time()
         redacted_payload = redact_audit_payload(payload)
         refs = tuple(str(ref) for ref in evidence_refs)
-        cursor = connection.execute(
-            "INSERT INTO execution_audit_events ("
-            "audit_id, execution_id, command_id, draft_id, wait_id, correlation_id, "
-            "actor_json, surface, action, policy_version, project_binding_json, "
-            "source_version, checkpoint_id, result, reason_code, redacted_payload_json, "
-            "evidence_refs_json, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                audit_id, execution.execution_id, command_id, draft_id, wait_id,
-                correlation_id, _json(actor_binding), str(surface), str(action),
-                POLICY_VERSION, _json(dict(project_binding)), source_version,
-                checkpoint_id, str(result), reason_code, _json(redacted_payload),
-                _json(list(refs)), now,
-            ),
-        )
+        stored = connection.insert("execution_audit_events", {
+            "audit_id": audit_id,
+            "execution_id": execution.execution_id,
+            "command_id": command_id,
+            "draft_id": draft_id,
+            "wait_id": wait_id,
+            "correlation_id": correlation_id,
+            "actor_json": _json(actor_binding),
+            "surface": str(surface),
+            "action": str(action),
+            "policy_version": POLICY_VERSION,
+            "project_binding_json": _json(dict(project_binding)),
+            "source_version": source_version,
+            "checkpoint_id": checkpoint_id,
+            "result": str(result),
+            "reason_code": reason_code,
+            "redacted_payload_json": _json(redacted_payload),
+            "evidence_refs_json": _json(list(refs)),
+            "created_at": now,
+        })
         return AuditEvent(
             audit_id=audit_id,
-            sequence=int(cursor.lastrowid),
+            sequence=int(stored["sequence"]),
             execution_id=execution.execution_id,
             command_id=command_id,
             draft_id=draft_id,

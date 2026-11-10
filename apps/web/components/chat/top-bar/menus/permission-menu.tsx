@@ -7,16 +7,13 @@
  * exclusion, animated iconRef). Lives in the top-bar `.right` region.
  *
  * The dropdown follows the Claude selection-menu grammar: a "Mode"
- * GROUP_LABEL header, then the 5 permission tiers (recommended Auto
+ * GROUP_LABEL header, then the permission tiers (the default, Bypass,
  * first) as two-line itemCls rows, a muted description under each label —
  * a right-aligned ink Check on the currently-selected tier only (hover
  * tint is the only row background; selection is never a filled row),
- * then the number shortcut hint in muted text (1–5). The check / shortcut column is centred on the label line so it
- * lines up with the single-line rows of the other menus. The
- * danger-tier colour lives on the topbar chip, not in the menu rows.
- * Picking a tier switches to it and closes the menu. Picking `bypass`
- * (when not already bypass) opens the shared ConfirmDialog — the
- * switch only lands after the user confirms.
+ * then the number shortcut hint in muted text. The check / shortcut column is centred on the label line so it
+ * lines up with the single-line rows of the other menus.
+ * Picking a tier switches to it and closes the menu.
  *
  * State comes from usePermissionMode() (the same per-session store the
  * old composer plus-menu item read/wrote), so switching here is picked
@@ -35,7 +32,6 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { HoverTip, TipBody } from "@/components/ui/tooltip";
-import { ConfirmDialog } from "@/components/ui/confirm-dialog";
 import { buttonVariants } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 
@@ -61,7 +57,6 @@ export function PermissionBadge() {
   const { text } = useTranslation();
   const { mode, options, set, pending, error } = usePermissionMode();
   const [open, setOpen] = useState(false);
-  const [bypassConfirm, setBypassConfirm] = useState(false);
   const iconRef = useRef<AnimatedNavIconHandle>(null);
 
   // A `topbar-close-menus` event (fired by another top-bar dropdown)
@@ -85,12 +80,6 @@ export function PermissionBadge() {
 
   function pick(value: PermissionMode) {
     if (pending) return;
-    // bypass 高危档：不直接切，先弹确认框。其余档直接切、关菜单。
-    if (value === "bypass" && mode !== "bypass") {
-      setBypassConfirm(true);
-      setOpen(false);
-      return;
-    }
     set(value);
     setOpen(false);
   }
@@ -118,6 +107,7 @@ export function PermissionBadge() {
                 name="shield-check"
                 ref={iconRef}
                 size={16}
+                fit="fill"
                 className="shrink-0"
                 aria-hidden="true"
               />
@@ -145,12 +135,12 @@ export function PermissionBadge() {
                 onClick={() => pick(o.value)}
               >
                 <span className="min-w-0 flex-1">
-                  {/* Title line: label, then the "Recommended" tag on the
-                      session's default mode (Claude Code's Mode menu). */}
+                  {/* Title line: label, then the "Default" tag on the
+                      session's default mode. */}
                   <span className="flex items-center gap-[8px]">
                     <span className={o.description ? ITEM_TITLE : "truncate"}>{o.label}</span>
-                    {o.recommended ? (
-                      <span className={MENU_TAG}>{text("Recommended", "推荐")}</span>
+                    {o.isDefault ? (
+                      <span className={MENU_TAG}>{text("Default", "默认")}</span>
                     ) : null}
                   </span>
                   {o.description ? (
@@ -174,23 +164,6 @@ export function PermissionBadge() {
       </Popover>
 
       {error ? <span role="alert" className="text-fs-xs text-danger">{error}</span> : null}
-      {bypassConfirm ? (
-        <ConfirmDialog
-          title={text("Enable Bypass Permissions?", "启用绕过权限？")}
-          description={text(
-            "Ordinary tools run without approval. Explicit rules, mandatory approvals, and sandbox restrictions still apply.",
-            "普通工具不经审批直接执行。显式规则、强制审批和沙箱限制仍然生效。",
-          )}
-          confirmLabel={text("Enable", "启用")}
-          destructive
-          onCancel={() => setBypassConfirm(false)}
-          onConfirm={() => {
-            set("bypass");
-            setBypassConfirm(false);
-            setOpen(false);
-          }}
-        />
-      ) : null}
     </>
   );
 }

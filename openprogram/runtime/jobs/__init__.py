@@ -16,9 +16,7 @@ Status transitions (one-way):
 
 The runner submits work to a ``ThreadPoolExecutor`` and keeps a
 parallel ``threading.Event`` per job for cancel signalling. Each
-state transition writes a row to ``<session>/jobs.json`` and rides
-the session git commit machinery (commit message: ``job: <id>
-<status>``).
+state transition rewrites ``jobs.json``, a line in the session's log.
 """
 from __future__ import annotations
 

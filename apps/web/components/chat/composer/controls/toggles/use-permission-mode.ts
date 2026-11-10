@@ -2,8 +2,8 @@
 
 /**
  * Permission-mode selector state (per-session, persisted in the store's
- * session scope's settings). Five selectable modes; inherited defaults resolve server-side.
- * See docs/capabilities/permissions.md and agent/permissions/state.py.
+ * session scope's settings). Four selectable modes; inherited defaults resolve server-side.
+ * See docs/capabilities/permissions.html and agent/permissions/state.py.
  */
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -22,47 +22,47 @@ export type PermissionMode =
 export interface PermissionModeOption {
   value: PermissionMode;
   label: string;
-  key?: string;   // 数字快捷键提示（1-5）
+  key?: string;   // 数字快捷键提示
   description?: string;
-  /** The mode a session starts in (DEFAULT_MODE) — the menu tags it "Recommended". */
-  recommended?: boolean;
+  /** The mode a session starts in (DEFAULT_MODE) — the menu tags it "Default". */
+  isDefault?: boolean;
 }
 
-// Same layout as Claude Code's Mode menu: the recommended default first, then
-// the ordinary tiers by how much proceeds without asking, Bypass last (it
-// opens a confirmation). Every row carries a one-line description.
+// The default first, then the tiers by how much proceeds without asking. Every
+// row carries a one-line description. Accept edits is an unused option kept
+// valid for stored conversations, so it is listed only while it is current.
 const MODE_LABELS: {
   value: PermissionMode; en: string; zh: string; key?: string;
   enDesc?: string; zhDesc?: string;
 }[] = [
   {
-    value: "auto", en: "Auto mode", zh: "自动判定", key: "1",
-    enDesc: "Risk check decides what needs approval",
-    zhDesc: "风险检查决定是否需要批准",
+    value: "bypass", en: "Bypass permissions", zh: "Bypass permissions", key: "1",
+    enDesc: "Accepts all permissions",
+    zhDesc: "接受所有权限",
   },
   {
-    value: "ask", en: "Ask permissions", zh: "逐次确认", key: "2",
-    enDesc: "Ask before every change",
-    zhDesc: "每次修改前都询问",
+    value: "auto", en: "Auto", zh: "Auto", key: "2",
+    enDesc: "The model handles permission decisions",
+    zhDesc: "由模型处理权限决定",
   },
   {
-    value: "acceptEdits", en: "Accept edits", zh: "接受编辑", key: "3",
-    enDesc: "Auto-accept file edits",
-    zhDesc: "自动接受文件编辑",
+    value: "ask", en: "Manual", zh: "Manual", key: "3",
+    enDesc: "Always ask before making changes",
+    zhDesc: "修改前总是询问",
   },
   {
-    value: "plan", en: "Plan mode", zh: "计划模式", key: "4",
-    enDesc: "Plan only, no changes",
-    zhDesc: "只做计划，不修改",
+    value: "plan", en: "Plan", zh: "Plan", key: "4",
+    enDesc: "Create a plan before making changes",
+    zhDesc: "修改前先做计划",
   },
   {
-    value: "bypass", en: "Bypass permissions", zh: "跳过审批", key: "5",
-    enDesc: "Skip ordinary approvals",
-    zhDesc: "跳过普通审批",
+    value: "acceptEdits", en: "Accept edits", zh: "Accept edits", key: "5",
+    enDesc: "Automatically accept all file edits",
+    zhDesc: "自动接受所有文件编辑",
   },
 ];
 
-const DEFAULT_MODE: PermissionMode = "auto";
+const DEFAULT_MODE: PermissionMode = "bypass";
 
 export interface PermissionModeHook {
   mode: PermissionMode;
@@ -91,13 +91,15 @@ export function usePermissionMode(): PermissionModeHook {
     || settings.permission_mode
     || DEFAULT_MODE
   ) as PermissionMode;
-  const options: PermissionModeOption[] = MODE_LABELS.map((m) => ({
-    value: m.value,
-    label: text(m.en, m.zh),
-    key: m.key,
-    description: m.enDesc ? text(m.enDesc, m.zhDesc ?? m.enDesc) : undefined,
-    recommended: m.value === DEFAULT_MODE,
-  }));
+  const options: PermissionModeOption[] = MODE_LABELS
+    .filter((m) => m.value !== "acceptEdits" || mode === "acceptEdits")
+    .map((m) => ({
+      value: m.value,
+      label: text(m.en, m.zh),
+      key: m.key,
+      description: m.enDesc ? text(m.enDesc, m.zhDesc ?? m.enDesc) : undefined,
+      isDefault: m.value === DEFAULT_MODE,
+    }));
   const apply = useCallback((data: { mode?: unknown; version?: unknown } | null) => {
     if (!data) return;
     const patch = permissionSnapshotPatch(settingsRef.current, data);

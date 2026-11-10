@@ -162,8 +162,9 @@ class Tab:
     focused: bool = False
     # ref -> (role, name) from the latest snapshot, to find an element again.
     roles: dict[str, tuple[str, str]] = field(default_factory=dict)
-    # Per agent, its last screenshot: CSS pixels per image pixel, the last write before it, url and scroll.
-    shots: dict[str, tuple[float, int, str, int, int]] = field(default_factory=dict)
+    # Per agent, its last screenshot: CSS pixels per image pixel, the last write before it, url, scroll
+    # and the image itself, which a click by x,y is checked against once the tab was acted on.
+    shots: dict[str, tuple[float, int, str, int, int, bytes]] = field(default_factory=dict)
     # Per agent: the document (navigation count) of its last snapshot; another one has no baseline.
     documents: dict[str, int] = field(default_factory=dict)
     # Write actions as (sequence, agent), and per agent the sequence it last saw.
@@ -294,6 +295,63 @@ def _png_width(image: bytes) -> int:
     return struct.unpack(">I", image[16:20])[0]
 
 
+# The square around a click's point that must still look as it did in the screenshot, in CSS pixels.
+POINT_RADIUS_PX = 32
+# A channel difference up to this is rendering noise (anti-aliasing, a caret); when more than this
+# share of the square's pixels differ, the point shows something else now.
+_PIXEL_TOLERANCE = 32
+_CHANGED_SHARE = 0.06
+
+
+def _same_around(old: bytes, new: bytes, point: tuple[float, float], radius: int) -> bool:
+    """Whether two PNG screenshots of a tab show the same thing around ``point``, in image pixels."""
+    first, second = _pixels_around(old, point, radius), _pixels_around(new, point, radius)
+    if not first or len(first) != len(second):
+        return False
+    changed = sum(1 for i in range(0, len(first), 4)
+                  if abs(first[i] - second[i]) > _PIXEL_TOLERANCE or abs(first[i + 1] - second[i + 1]) > _PIXEL_TOLERANCE
+                  or abs(first[i + 2] - second[i + 2]) > _PIXEL_TOLERANCE)
+    return changed <= len(first) // 4 * _CHANGED_SHARE
+
+
+def _pixels_around(png: bytes, point: tuple[float, float], radius: int) -> bytes:
+    """RGBA bytes of the square of ``radius`` around ``point`` of a PNG; empty where they cannot be read."""
+    try:
+        import Foundation
+        import Quartz
+    except ImportError:
+        return b""
+    try:
+        data = Foundation.NSData.dataWithBytes_length_(png, len(png))
+        source = Quartz.CGImageSourceCreateWithData(data, None)
+        image = Quartz.CGImageSourceCreateImageAtIndex(source, 0, None) if source is not None else None
+        if image is None:
+            return b""
+        width, height = Quartz.CGImageGetWidth(image), Quartz.CGImageGetHeight(image)
+        left, top = max(0, int(point[0]) - radius), max(0, int(point[1]) - radius)
+        right, bottom = min(width, int(point[0]) + radius), min(height, int(point[1]) + radius)
+        if right <= left or bottom <= top:
+            return b""
+        part = Quartz.CGImageCreateWithImageInRect(image, Quartz.CGRectMake(left, top, right - left, bottom - top))
+        pixels = bytearray((right - left) * (bottom - top) * 4)
+        context = Quartz.CGBitmapContextCreate(pixels, right - left, bottom - top, 8, (right - left) * 4,
+                                               Quartz.CGColorSpaceCreateDeviceRGB(),
+                                               Quartz.kCGImageAlphaPremultipliedLast)
+        Quartz.CGContextDrawImage(context, Quartz.CGRectMake(0, 0, right - left, bottom - top), part)
+        return bytes(pixels)
+    except Exception:
+        _log.debug("screenshot pixels unavailable", exc_info=True)
+        return b""
+
+
+def _script_failure(exc: Exception) -> str:
+    """The page's own error from Playwright's report of a failed script, in one line."""
+    first = str(exc).split("\n", 1)[0].strip()
+    for prefix in ("Page.evaluate: ", "Frame.evaluate: "):
+        first = first.removeprefix(prefix)
+    return first or type(exc).__name__
+
+
 def _http_url(url: Any) -> str:
     text = str(url or "").strip()
     if text and "://" not in text and not text.startswith(("about:", "data:")):
@@ -326,8 +384,8 @@ class Driver:
         token = _VIEWER.set(f"{session}/{execution}" if execution else session)
         try:
             if _access_disabled():
-                return BrowserError("page_access_disabled",
-                                    "the user turned off agent access to the browser in this conversation").result()
+                from openprogram.runtime.permissions import refusal
+                return BrowserError("page_access_disabled", refusal.page_access().text).result()
             return self._run(action, args, session)
         finally:
             _VIEWER.reset(token)
@@ -351,7 +409,7 @@ class Driver:
     def _run(self, action: str, args: dict[str, Any], session: str) -> dict[str, Any]:
         try:
             if action == "tabs":
-                return self._list(session)
+                return self._list(session, bool(args.get("all")))
             if action == "open":
                 return self._open(args, session)
             tab = self._tab(args.get("tab"), session)
@@ -481,8 +539,11 @@ class Driver:
             listed = self._refresh()
         except BrowserError:
             return []
-        return [item.row() for item in listed if (item.window_id, item.tab_id) not in before
-                and (not item.opener_tab_id or item.opener_tab_id == tab.tab_id)]
+        new = [item for item in listed if (item.window_id, item.tab_id) not in before
+               and (not item.opener_tab_id or item.opener_tab_id == tab.tab_id)]
+        for item in new:
+            _note_opened(item)
+        return [item.row() for item in new]
 
     def _wait(self, tab: Tab, args: dict[str, Any]) -> dict[str, Any]:
         """Until a text is on the page, or for some seconds, without holding the browser for others."""
@@ -519,10 +580,11 @@ class Driver:
             time.sleep(0.05)
             _, busy = self._on_owner(self._activity, tab, acted.pending)
 
-    def _refresh(self) -> list[Tab]:
+    def _refresh(self, *, every_window: bool = False) -> list[Tab]:
         from openprogram.runtime.conversation import surface_context
         try:
-            captured = surface_context.capture_pages_for_listing(surface_context.current())
+            captured = (surface_context.capture_pages_for_listing() if every_window
+                        else surface_context.capture_pages_for_listing(surface_context.current()))
         except surface_context.DesktopUnavailableError as exc:
             raise BrowserError("app_unavailable", str(exc) or "the OpenProgram App is not connected") from None
         return [self._remember(surface) for surface in captured.get("surfaces") or []
@@ -537,6 +599,7 @@ class Driver:
                 # A tab moved to another window keeps its page, and its id with it.
                 moved = next((item for item in self._tabs.values() if target and item.target_id == target), None)
                 if moved is not None:
+                    _move_opened((moved.window_id, moved.tab_id), key)
                     self._tabs.pop((moved.window_id, moved.tab_id), None)
                     moved.window_id, moved.tab_id = key
                     tab = self._tabs[key] = moved
@@ -578,28 +641,43 @@ class Driver:
             self._last[_VIEWER.get()] = tab.id
 
     def _tab(self, name: Any, session: str) -> Tab:
-        """The named tab, else the one this agent used last, else its conversation's, else the focused one."""
+        """The named tab, else the one this agent used last, else its conversation's, else the focused one.
+
+        A turn no window is attached to stops before the focused one: that tab is whatever the user is doing."""
+        from openprogram.runtime.agent.turn_request import get_turn_request
+        from openprogram.runtime.permissions.identity import detached_from_window
+
+        detached = detached_from_window(get_turn_request())
         wanted = str(name or "").strip()
         tab = self._find(wanted or self._current(session))
         if tab is None:
             listed = self._refresh()
             tab = self._find(wanted) if wanted else (
                 self._find(self._current(session))
-                or next((item for item in listed if item.focused), None)
-                or next((item for item in listed if item.visible), None)
-                or (listed[0] if listed else None))
+                or (None if detached else (
+                    next((item for item in listed if item.focused), None)
+                    or next((item for item in listed if item.visible), None)
+                    or (listed[0] if listed else None))))
             if tab is None:
-                message = f"there is no tab {wanted}" if wanted else "no tab is open; open(url) opens one"
+                message = (f"there is no tab {wanted}" if wanted else
+                           "the tab in front is the user's and this turn has none of its own; open(url) opens one "
+                           "behind their work, or name one from tabs(all=true)" if detached else
+                           "no tab is open; open(url) opens one")
                 raise BrowserError("tab_not_found", message, tabs=[item.row() for item in listed])
         self._use(tab, session)
         return tab
 
-    def _list(self, session: str) -> dict[str, Any]:
-        listed = self._refresh()
-        urls = self._on_owner(self._urls, listed)
+    def _list(self, session: str, everything: bool = False) -> dict[str, Any]:
+        """The tabs this conversation opened and the one it is on; ``everything`` adds the user's and others'."""
+        every = self._refresh()
         current = self._current(session)
-        return {"ok": True, "tabs": [{**tab.row(urls.get(tab.id, "")), **({"current": True} if tab.id == current else {})}
-                                     for tab in listed]}
+        opened = _opened_by(_conversation(session))
+        listed = every if everything else [
+            tab for tab in every if (tab.window_id, tab.tab_id) in opened or tab.id == current]
+        urls = self._on_owner(self._urls, listed)
+        return {"ok": True, "other_tabs": len(every) - len(listed),
+                "tabs": [{**tab.row(urls.get(tab.id, "")), **({"current": True} if tab.id == current else {})}
+                         for tab in listed]}
 
     def _open(self, args: dict[str, Any], session: str) -> dict[str, Any]:
         from openprogram.runtime.conversation import surface_context
@@ -610,6 +688,8 @@ class Driver:
             raise BrowserError(str(opened.get("reason_code") or "open_failed"),
                                str(opened.get("error") or f"the App did not open {url}"))
         tab = self._remember(surfaces[0])
+        if opened.get("agent_owned") is True:
+            _note_opened(tab, session)
         self._use(tab, session)
         result = self._on_owner(self._operate, tab, "read", {"wait_for_load": True})
         self._publish(tab, result)
@@ -628,6 +708,8 @@ class Driver:
             raise BrowserError("tab_gone", "the tab's binding expired")
         if not closed.get("ok"):
             raise BrowserError("close_failed", str(closed.get("error") or "the App did not close the tab"))
+        from .pages import BrowserResourceStore
+        BrowserResourceStore().forget_opened_tab(tab.window_id, tab.tab_id)
         with self._lock:
             self._tabs.pop((tab.window_id, tab.tab_id), None)
         for agent, name in list(self._last.items()):
@@ -637,25 +719,32 @@ class Driver:
 
     def _screenshot(self, tab: Tab) -> dict[str, Any]:
         """The tab as the user would see it, captured by the App without bringing it forward."""
-        from openprogram.host.resources.desktop_link import request_bound_screenshot
         written = tab.last_write()
+        image, url, viewport = self._on_owner(self._capture, tab)
+        self._record_shot(tab, image, url, viewport, written)
+        return {"ok": True, "tab": tab.id, "done": "took a screenshot; x,y of pointer actions are its pixels",
+                "_images": [image]}
+
+    def _capture(self, tab: Tab) -> tuple[bytes, str, list[int]]:
+        """The tab's image, by the App or else by Playwright, with its url and viewport; on the owner thread."""
+        from openprogram.host.resources.desktop_link import request_bound_screenshot
         captured = request_bound_screenshot(tab.binding_id) if tab.binding_id else {}
         data = str(captured.get("image_data_url") or "")
         if captured.get("ok") and data.startswith("data:image/png;base64,"):
             image = base64.b64decode(data.split(",", 1)[1])
-            url, (width, scroll_x, scroll_y) = self._on_owner(self._viewport, tab)
         elif captured.get("reason_code") == "page_context_stale" or not tab.binding_id:
             raise BrowserError("tab_gone", "the tab's binding expired")
         else:
-            image, (url, (width, scroll_x, scroll_y)) = self._on_owner(self._page_screenshot, tab)
+            image = self._page(tab).screenshot(scale="css", timeout=5000)
+        url, viewport = self._viewport(tab)
+        return image, url, viewport
+
+    def _record_shot(self, tab: Tab, image: bytes, url: str, viewport: list[int], written: int) -> None:
+        """Keep the screenshot the agent's next x,y refer to."""
+        width, scroll_x, scroll_y = viewport
         pixels = _png_width(image)
         tab.shots[_VIEWER.get()] = ((float(width) / pixels) if pixels and width else 1.0, written, url,
-                                    scroll_x, scroll_y)
-        return {"ok": True, "tab": tab.id, "done": "took a screenshot; x,y of pointer actions are its pixels",
-                "_images": [image]}
-
-    def _page_screenshot(self, tab: Tab) -> tuple[bytes, tuple[str, list[int]]]:
-        return self._page(tab).screenshot(scale="css", timeout=5000), self._viewport(tab)
+                                    int(scroll_x), int(scroll_y), image)
 
     def _viewport(self, tab: Tab) -> tuple[str, list[int]]:
         page = self._page(tab)
@@ -950,7 +1039,13 @@ class Driver:
             return self._logs(tab, watch, action, args)
         if action == "evaluate":
             from openprogram.programs.applications.browser.privacy import password_values, redact_password_values
-            value = page.evaluate(pa.evaluate_source(args))
+            source = pa.evaluate_source(args)
+            try:
+                value = page.evaluate(source)
+            except Exception as exc:
+                # The script may have changed the page before it failed.
+                tab.writes.append((next(_writes), _VIEWER.get()))
+                raise BrowserError("script_error", f"the script failed: {_script_failure(exc)}") from None
             # A script may change the page like any action.
             tab.writes.append((next(_writes), _VIEWER.get()))
             return {"ok": True, "tab": tab.id,
@@ -1154,13 +1249,19 @@ class Driver:
         shot = tab.shots.get(_VIEWER.get())
         if shot is None:
             raise BrowserError("screenshot_required", "x,y are pixels of a screenshot; take one first, or use a ref")
-        scale, written, url, scroll_x, scroll_y = shot
+        scale, written, url, scroll_x, scroll_y, image = shot
+        point = (float(args["x"]), float(args.get("y") or 0))
         _, now_x, now_y = page.evaluate(_VIEWPORT)
-        if tab.last_write() != written or page.url != url or (now_x, now_y) != (scroll_x, scroll_y):
-            raise BrowserError("screenshot_stale", "the page was acted on, moved or scrolled since your screenshot, "
-                               "so its x,y may point elsewhere now; take a new screenshot, or use a ref")
+        if page.url != url or (now_x, now_y) != (scroll_x, scroll_y):
+            raise self._stale(tab, "the page moved or scrolled since your screenshot, so its x,y point elsewhere now")
+        if tab.last_write() != written:
+            # Acted on since the screenshot: the point may still show the same thing (typing elsewhere, a
+            # key that did nothing) or something else (a menu opened, a list scrolled). Its pixels decide.
+            fresh = self._capture(tab)
+            if not _same_around(image, fresh[0], point, max(1, int(POINT_RADIUS_PX / scale))):
+                raise self._stale(tab, "what your screenshot showed at that point has changed since", fresh)
         click = pa.click_options(args)
-        x, y = float(args["x"]) * scale, float(args.get("y") or 0) * scale
+        x, y = point[0] * scale, point[1] * scale
         self._aim(page, tab, None, (x, y))
         for key in click["modifiers"]:
             page.keyboard.down(key)
@@ -1170,6 +1271,18 @@ class Driver:
             for key in reversed(click["modifiers"]):
                 page.keyboard.up(key)
         return f"clicked ({args['x']}, {args.get('y')}) of the screenshot"
+
+    def _stale(self, tab: Tab, why: str, fresh: tuple[bytes, str, list[int]] | None = None) -> BrowserError:
+        """The refusal of a click by x,y, with a new screenshot so that the next one needs no extra call."""
+        written = tab.last_write()
+        try:
+            image, url, viewport = fresh or self._capture(tab)
+        except Exception:
+            _log.debug("no new screenshot for a stale click tab=%s", tab.id, exc_info=True)
+            return BrowserError("screenshot_stale", f"{why}; take a new screenshot, or use a ref")
+        self._record_shot(tab, image, url, viewport, written)
+        return BrowserError("screenshot_stale", f"{why}. A new screenshot is attached, and x,y of a click are its "
+                            "pixels now; or use a ref", _images=[image])
 
     def _aim(self, page, tab: Tab, locator, point: tuple[float, float] | None = None) -> None:
         """Note where a click lands (the element's centre once in view) for the preview's marker."""
@@ -1208,6 +1321,65 @@ class Driver:
         return {"ok": True, "tab": tab.id, "network": rows[-limit:]}
 
 
+def _conversation(session: str = "") -> str:
+    """The conversation a tab belongs to: the one running now, else the caller's."""
+    from openprogram.runtime.execution.run_control import get_current_session_id
+    return session or get_current_session_id() or ""
+
+
+def _note_opened(tab: Tab, session: str = "") -> None:
+    from .pages import BrowserResourceStore
+    conversation = _conversation(session) or str(_VIEWER.get() or "").split("/", 1)[0]
+    if conversation:
+        BrowserResourceStore().note_tab_opened(tab.window_id, tab.tab_id, conversation)
+
+
+def _move_opened(old: tuple[str, str], new: tuple[str, str]) -> None:
+    from .pages import BrowserResourceStore
+    BrowserResourceStore().move_opened_tab(old, new)
+
+
+def _opened_by(conversation: str) -> set[tuple[str, str]]:
+    from .pages import BrowserResourceStore
+    return BrowserResourceStore().tabs_opened_by(conversation) if conversation else set()
+
+
+def close_conversation_tabs(conversation: str) -> int:
+    """Close every tab this conversation's agents opened; the user's own tabs stay. Returns how many closed."""
+    from .pages import BrowserResourceStore
+    opened = _opened_by(conversation)
+    if not opened:
+        return 0
+    worker = driver()
+    listed = worker._refresh(every_window=True)
+    live = {(tab.window_id, tab.tab_id): tab for tab in listed}
+    closed = 0
+    for key in opened & set(live):
+        try:
+            worker._close(live[key])
+            closed += 1
+        except BrowserError:
+            _log.warning("could not close tab %s of conversation %s", live[key].id, conversation)
+    # A tab the user already closed needs no record; one in a window that is offline now keeps it.
+    windows = {window for window, _ in live}
+    store = BrowserResourceStore()
+    for key in opened - set(live):
+        if key[0] in windows:
+            store.forget_opened_tab(*key)
+    return closed
+
+
+def close_conversation_tabs_soon(conversation: str) -> None:
+    """Archiving or deleting a conversation never waits for the App to close its tabs."""
+    def run() -> None:
+        try:
+            close_conversation_tabs(conversation)
+        except Exception:
+            _log.warning("closing the tabs of conversation %s failed", conversation, exc_info=True)
+    if conversation:
+        threading.Thread(target=run, name="close-conversation-tabs", daemon=True).start()
+
+
 _driver: Driver | None = None
 _driver_lock = threading.Lock()
 
@@ -1234,4 +1406,5 @@ ACTIONS = ("tabs", "open", "read", "click", "type", "paste", "select", "press", 
            "upload", "navigate", "back", "forward", "reload", "wait", "screenshot", "console", "network",
            "evaluate", "close")
 
-__all__ = ["ACTIONS", "BrowserError", "Driver", "Tab", "batch", "driver"]
+__all__ = ["ACTIONS", "BrowserError", "Driver", "Tab", "batch", "close_conversation_tabs",
+           "close_conversation_tabs_soon", "driver"]

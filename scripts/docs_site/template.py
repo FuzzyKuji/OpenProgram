@@ -99,6 +99,7 @@ def render_page(
     docs_root_url: str = "",
     markdown_url: str = "",
     llms_url: str = "",
+    article_class: str = "",
 ) -> str:
     """Assemble one full HTML document.
 
@@ -158,6 +159,7 @@ def render_page(
         }
         encoded = json.dumps(payload, ensure_ascii=False, separators=(",", ":")).replace("<", "\\u003c")
         breadcrumb_data = f'<script type="application/ld+json">{encoded}</script>'
+    article_attr = f' class="{_html.escape(article_class, quote=True)}"' if article_class else ""
     alt_attr = f' data-alt-lang-url="{alt_lang_url}"' if alt_lang_url else ""
     if nav_html:
         layout_cls = ""
@@ -211,6 +213,7 @@ def render_page(
 {extra_head}
 </head>
 <body>
+<a class="skip" href="#content" data-i18n="skip">Skip to content</a>
 <header class="topbar">
   <button class="icon hamburger" aria-label="Menu">{_IC_MENU}</button>
   <a class="brand" href="{base}index.html"><img class="mark" src="{base}assets/mark.svg" alt="">OpenProgram Docs</a>
@@ -240,7 +243,7 @@ def render_page(
 
 <div class="scrim"></div>
 <div class="layout{layout_cls}">
-  {sidebar_html}<main class="content"><button class="fs-toggle" aria-label="Fullscreen" title="Fullscreen (Esc to exit)">{_IC_EXPAND}{_IC_COLLAPSE}</button><article>{breadcrumb_html}{body_html}{meta_html}{prevnext_html}</article></main>
+  {sidebar_html}<main class="content" id="content"><button class="fs-toggle" aria-label="Fullscreen" title="Fullscreen (Esc to exit)">{_IC_EXPAND}{_IC_COLLAPSE}</button><article{article_attr}>{breadcrumb_html}{body_html}{meta_html}{prevnext_html}</article></main>
   <aside class="toc">{toc_html}</aside>
 </div>
 

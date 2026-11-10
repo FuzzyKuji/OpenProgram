@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import logging
 import json
-import os
 from pathlib import Path
 
 from fastapi import Request
@@ -21,7 +20,8 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 def _state_root() -> Path:
-    return Path.home() / ".openprogram"
+    from openprogram.state.paths import get_state_dir
+    return get_state_dir()
 
 
 def _disabled_path() -> Path:
@@ -329,8 +329,12 @@ def register(app):
         description = body.get("description", "")
         category = body.get("category", "")
         skill_body = body.get("body", "")
-        target_dir = Path(os.getcwd()) / "skills" / Path(*segments)
-        if (target_dir / "SKILL.md").exists():
+        # A skill made in the UI belongs to this instance, not to whatever
+        # folder the server process happens to run in.
+        from openprogram.extensions.skills.loader import user_dir
+        target_dir = user_dir() / Path(*segments)
+        from openprogram.extensions.skills.loader import get_skill
+        if (target_dir / "SKILL.md").exists() or get_skill(name) is not None:
             return JSONResponse(content={"error": "skill already exists"}, status_code=409)
         target_dir.mkdir(parents=True, exist_ok=True)
         fm_lines = ["---", f"name: {name}", f'description: "{description}"']

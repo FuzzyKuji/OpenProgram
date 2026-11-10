@@ -78,7 +78,8 @@ def _download(session_id: str, selector: str, path: str, timeout_ms: int) -> str
     from openprogram.host.sandbox import validate_write_path
     violation = validate_write_path(path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("browser download", violation)
     try:
         page = sess["page"]
         with page.expect_download(timeout=timeout_ms) as info:

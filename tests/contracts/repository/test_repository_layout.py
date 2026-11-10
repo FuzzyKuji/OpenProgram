@@ -9,6 +9,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[3]
 TOP_LEVEL_DIRECTORIES = {
+    ".claude",
     ".github",
     "apps",
     "docs",
@@ -50,12 +51,12 @@ MAINTENANCE_TOOL_PATHS = (
 )
 CURRENT_STRUCTURE_GUIDES = (
     "README.md",
-    "docs/README.md",
-    "docs/README.zh.md",
-    "docs/capabilities/installing-programs.md",
-    "docs/capabilities/installing-programs.zh.md",
-    "docs/server/troubleshooting.md",
-    "docs/server/troubleshooting.zh.md",
+    "docs/README.html",
+    "docs/README.zh.html",
+    "docs/capabilities/installing-programs.html",
+    "docs/capabilities/installing-programs.zh.html",
+    "docs/server/troubleshooting.html",
+    "docs/server/troubleshooting.zh.html",
 )
 
 WORKSPACE_READMES = (
@@ -312,8 +313,8 @@ def test_generated_package_readmes_are_current() -> None:
 def test_user_docs_do_not_advertise_removed_bundled_skills() -> None:
     user_docs = [
         ROOT / "README.md",
-        ROOT / "docs/README.md",
-        ROOT / "docs/README.zh.md",
+        ROOT / "docs/README.html",
+        ROOT / "docs/README.zh.html",
         *sorted((ROOT / "docs/capabilities").glob("*.md")),
         *sorted((ROOT / "docs/start").glob("*.md")),
         ROOT / "openprogram/__init__.py",

@@ -1,262 +1,134 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agent 配置完整设计 — OpenProgram</title>
-<style>
-.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
-</style>
-</head>
-<body>
-<main class="ad">
-<header>
-<div class="eyebrow">OpenProgram · Agents</div>
+<title>可配置 Agent</title>
+<meta name="description" content="Agent 配置契约：对象、schema、解析、记忆、能力、API 和生命周期。">
 <h1>可配置 Agent</h1>
-<p class="lead">OpenProgram 中的 Agent 是一份保存下来、可复用的执行配置：模型与 effort、指令、可使用的 Program、技能和 MCP server、上下文设置、可选的常驻计划，以及可选的长期记忆策略。用户在 Agents 页面按八个分区（常规、程序、技能、MCP、长期记忆、上下文、常驻、高级）编辑 Agent；保存是原子的并检查 revision，两个编辑者不会悄悄覆盖彼此。对话、试运行和委派的 <code>agent</code> 工具调用都以选定的 Agent 运行；新 Agent 在用户开启前不使用记忆。本页是配置契约，下方链接的页面分别说明编辑器、能力、Programs 选择器和分阶段计划。</p>
-<a href="agent-configuration-ui.html">English</a>
-<div class="status">部分已实现 · Agents 页面、带 revision 的保存配置和记忆策略已经实现；仍属目标设计的部分见文末实现状态。链接的原型只用示例数据，不修改真实配置。</div>
-<p><a href="agent-core-configuration-ui.zh.html" style="display:inline-block;padding:10px 16px;border:1px solid currentColor;border-radius:7px;text-decoration:none;font-weight:600">打开 Agents Web UI 交互原型</a></p><p class="muted">可编辑配置、选择模型、设置记忆、保存或恢复草稿，并演示试运行和新对话。使用项目现有动态图标与主题；所有数据仅用于原型。</p>
-<nav aria-label="设计文档">
-<a href="agent-configuration-ui.zh.html">配置契约</a>
-<a href="agent-core-configuration-ui.zh.html">页面与基础配置</a>
-<a href="agent-capability-configuration-ui.zh.html">能力配置</a>
-<a href="agent-tool-configuration-ui.zh.html">Programs 选择器</a>
-<a href="agent-configuration-plan.zh.html">实施计划</a>
-</nav>
-<nav class="toc" aria-label="本页目录">
-<a href="#scope">范围与对象模型</a>
-<a href="#baseline">当前实现与剩余差距</a>
-<a href="#fields">配置结构与默认值</a>
-<a href="#wire">线格式与类型边界</a>
-<a href="#resolution">统一解析与明确合并规则</a>
-<a href="#execution">公开调用与执行边界</a>
-<a href="#memory">可选记忆：访问、保留与写入</a>
-<a href="#context">上下文、指令与环境</a>
-<a href="#capabilities">能力范围与权限</a>
-<a href="#collaboration">多 Agent 组合与选择</a>
-<a href="#api">管理 API 与原子持久化</a>
-<a href="#lifecycle">生命周期、导出与失败处理</a>
-<a href="#references">参考资料与设计取舍</a>
-<a href="#acceptance">可观察验收契约</a>
-<a href="#status">实现状态</a>
-</nav>
-</header>
-<section id="scope">
-<h2>范围与对象模型</h2>
-<p>Agent 是可复用的执行配置，可以选择关联持久状态。它不要求专门职责、人格、固定模型、工作目录、长期记忆或后台计划。Agents 页面保存的配置与 Python 临时配置使用同一套执行语义。</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>对象</th>
-<th>身份与生命周期</th>
-<th>边界</th>
-</tr>
-</thead>
+
+<p>Agent 是保存的、可复用的执行配置，分八个分区编辑（常规、Programs、Skills、MCP、记忆、上下文、常驻、高级）；保存是原子的并检查修订。新 Agent 默认关闭记忆。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">页面</th><th scope="col">内容</th></tr></thead>
 <tbody>
-<tr>
-<td>AgentConfig</td>
-<td>一次解析使用的不可变配置值，可匿名、临时创建</td>
-<td>不隐式创建持久记录、会话或记忆空间</td>
-</tr>
-<tr>
-<td>AgentSpec</td>
-<td>保存的 ID、显示名、revision 与 AgentConfig 字段</td>
-<td>保存配置与元数据，不代表正在运行的进程</td>
-</tr>
-<tr>
-<td>Execution</td>
-<td>沿用 run/job ID，持有不可变生效配置</td>
-<td>一次调用；同一 Agent 可以有多个执行</td>
-</tr>
-<tr>
-<td>Session / DAG</td>
-<td>沿用会话与执行历史</td>
-<td>是否复用历史与选择哪个 Agent 分别决定</td>
-</tr>
-<tr>
-<td>Memory space</td>
-<td>有稳定引用与访问策略的存储空间</td>
-<td>可选，不能仅凭显示名相同就自动关联</td>
-</tr>
+<tr><th scope="row"><a href="agent-core-configuration-ui.zh.html">编辑器和核心字段</a></th><td>使用示例数据的原型，不改变实际配置</td></tr>
+<tr><th scope="row"><a href="agent-capability-configuration-ui.zh.html">能力</a></th><td>Programs、Skills 和 MCP 策略</td></tr>
+<tr><th scope="row"><a href="agent-tool-configuration-ui.zh.html">Programs 选择器</a></th><td>列表、树、检查器</td></tr>
+<tr><th scope="row"><a href="agent-configuration-plan.zh.html">实现计划</a></th><td>阶段、迁移、场景细节</td></tr>
 </tbody>
 </table>
-</div>
-<p>保留 AgentSpec 作为持久化对象，AgentConfig 是其中执行字段的类型化投影，不增加第二份磁盘注册表。资源管理、上下文引擎、记忆 backend 与任务控制继续由现有子系统负责。</p>
-</section>
-<section id="baseline">
-<h2>当前实现与剩余差距</h2>
-<div class="table-wrap">
-<table>
-<thead><tr><th>范围</th><th>当前实现</th><th>剩余差距</th></tr></thead>
+
+<h2 id="scope">对象</h2>
+<table class="stack">
+<thead><tr><th scope="col">对象</th><th scope="col">身份和生命周期</th><th scope="col">边界</th></tr></thead>
 <tbody>
-<tr><td>持久化配置</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent_registry/manager.py">AgentSpec / manager</a> 保存模型、effort、指令、Program、技能、MCP、身份、会话策略、description、revision 与记忆策略</td><td>schema 2 迁移与多文件生命周期事务写入</td></tr>
-<tr><td>Agents UI</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/agents/agents-page.tsx">AgentsPage</a> 有八个分区、统一草稿、模型目录选择和保存冲突比较</td><td>带来源的生效值预览；内嵌试运行面板</td></tr>
-<tr><td>函数执行</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/agent_function.py">agent()</a> 与 <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/llm.py">llm()</a> 直接接收模型、effort、工具和指令</td><td>尚无选择已保存 Agent 或临时 <code>AgentConfig</code> 的参数</td></tr>
-<tr><td>委派</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/tools/agents/agent/agent/agent.py">agent 工具</a> 支持 agent_id、clean/inherit、后台和 to</td><td>直接调用与持久派发共用一个解析器</td></tr>
-<tr><td>管理写入</td><td>Agent 路由在写锁内按 <code>expected_revision</code>（或旧客户端的 <code>updated_at</code>）对整份配置做原子条件写入</td><td>多文件生命周期操作尚不是一个事务</td></tr>
-<tr><td>记忆</td><td>逐执行记忆策略（<code>self</code> 或 <code>legacy_global</code>）作用于执行、后台提取、派生结果与恢复，提交前重新检查策略 epoch</td><td>任意共享记忆空间目录</td></tr>
-<tr><td>工作目录</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent_registry/workspace.py">workspace helpers</a> 初始化指令文件</td><td>独立目录不等于安全隔离</td></tr>
+<tr><th scope="row">AgentConfig</th><td>一次解析的不可变值；可内联、可无名</td><td>不隐式持久化，不分配会话或记忆</td></tr>
+<tr><th scope="row">AgentSpec</th><td>保存的 ID、显示名、修订和 AgentConfig 字段</td><td>元数据和配置，不是运行中的 Worker</td></tr>
+<tr><th scope="row">Execution</th><td>运行或作业 ID 和不可变的生效配置</td><td>一次调用；多次调用可引用同一 Agent</td></tr>
+<tr><th scope="row">Session / DAG</th><td>对话和执行历史</td><td>历史复用与 Agent 选择分开决定</td></tr>
+<tr><th scope="row">记忆空间</th><td>带访问策略的稳定存储引用</td><td>可选；绝不因显示名相同而推断</td></tr>
 </tbody>
 </table>
-</div>
-</section>
-<section id="fields">
-<h2>配置结构与默认值</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>字段</th>
-<th>目标语义</th>
-<th>默认值与校验</th>
-</tr>
-</thead>
+<p class="note">AgentSpec 是持久化外壳；AgentConfig 是其类型化投影，不是第二个注册表。角色、人设、专用模型、工作区、记忆和计划都是可选的。</p>
+
+<h2 id="baseline">当前实现</h2>
+<table class="stack">
+<thead><tr><th scope="col">领域</th><th scope="col">现状</th><th scope="col">缺口</th></tr></thead>
 <tbody>
-<tr>
-<td>schema_version / revision</td>
-<td>持久化格式版本 / 单调递增的配置版本</td>
-<td>新格式为 2；revision 由 manager 分配</td>
-</tr>
-<tr>
-<td>name / description / identity</td>
-<td>显示名称、可选描述、频道身份</td>
-<td>不要求角色或描述；只有保存对象需要固定 ID</td>
-</tr>
-<tr>
-<td>model / thinking_effort</td>
-<td>带 provider 的模型引用和模型支持的思考强度</td>
-<td>未指定表示继承；明确指定但不支持时阻止执行</td>
-</tr>
-<tr>
-<td>system_prompt / instruction_files</td>
-<td>内联指令和允许范围内的 Agent 指令文件引用</td>
-<td>省略表示继承；空指令只清空这一层</td>
-</tr>
-<tr>
-<td>tools / skills / mcp</td>
-<td>独立能力策略，保存稳定引用</td>
-<td>inherit、all、selected、none；selected 空集合表示无能力</td>
-</tr>
-<tr>
-<td>memory</td>
-<td>mode、read_spaces、write_space、required</td>
-<td>新 Agent 与匿名配置明确关闭；已有 Agent 保留原行为迁移</td>
-</tr>
-<tr>
-<td>context</td>
-<td>history: inherit、clean、selected；指定节点引用</td>
-<td>旧直接调用保留继承；显式切换 Agent 或配置默认 clean</td>
-</tr>
-<tr>
-<td>environment</td>
-<td>cwd 引用与现有 sandbox 配置引用</td>
-<td>默认继承环境；明确目录不存在时执行工具前失败</td>
-</tr>
-<tr>
-<td>limits</td>
-<td>引用或覆盖现有资源管理支持的限制</td>
-<td>省略表示继承；子调用生效限制不得超过父调用</td>
-</tr>
-<tr>
-<td>session policy</td>
-<td>现有频道会话范围、重置字段与明确时区引用</td>
-<td>不决定函数的历史选择或记忆访问</td>
-</tr>
+<tr><th scope="row">保存的配置</th><td><code translate="no">runtime/agent_registry/manager.py</code> 存储模型、强度、指令、Programs、skills、MCP、身份、会话策略、描述、修订、记忆策略</td><td>Schema 2 迁移；事务化多文件生命周期</td></tr>
+<tr><th scope="row">Agents UI</th><td><code translate="no">agents-page.tsx</code>：八个分区、一个草稿、目录模型选择器、保存冲突比较</td><td>带来源的生效值预览；内嵌试用</td></tr>
+<tr><th scope="row">函数执行</th><td><code translate="no">agent()</code> 和 <code translate="no">llm()</code> 直接接收模型、强度、工具和指令</td><td>选择保存的 Agent 或内联 <code translate="no">AgentConfig</code></td></tr>
+<tr><th scope="row">委派</th><td><code translate="no">agent</code> 工具接受 <code translate="no">agent_id</code>、clean/inherit、background、<code translate="no">to</code></td><td>直接调用和持久派发共用一个解析器</td></tr>
+<tr><th scope="row">管理写入</th><td>在写锁下按 <code translate="no">expected_revision</code> 或旧 <code translate="no">updated_at</code> 对整配置做原子条件写</td><td>多文件生命周期作为一个事务</td></tr>
+<tr><th scope="row">记忆</th><td><code translate="no">self</code> 或 <code translate="no">legacy_global</code>，作用于执行、后台抽取、派生结果和恢复，带策略 epoch 复验</td><td>任意共享空间目录</td></tr>
+<tr><th scope="row">工作区</th><td><code translate="no">workspace.py</code> 生成指令文件</td><td>Agent 目录不等于隔离</td></tr>
 </tbody>
 </table>
-</div>
-<p>首期不加入任意 provider 参数、命名 Agent 之间多层继承、自定义执行引擎或任意记忆插件。匿名配置从系统默认值开始，不隐式复制调用方 Agent 的其他字段。描述可以为空，保存 Agent 只要求名称；已有可用默认模型时无需再选模型。</p>
-</section>
-<section id="wire">
-<h2>线格式与类型边界</h2>
-<p>以下为目标线格式，ID 均为示例。保留现有扁平 AgentSpec，新增类型字段，不嵌套第二份注册表。POST 接受 name 与可选执行字段；除合法旧版显式 ID 外，id/revision/时间戳由服务端分配。AgentConfig 只含执行字段。导出/导入不携带服务端元数据，导入保存时分配新身份。Python 包在 agent、llm 同一公开位置导出 AgentConfig；允许带 provider 的模型字符串作为简写，统一转成持久化的 provider/id 对象。</p>
-<pre>
-<code>{
-  &quot;schema_version&quot;: 2,
-  &quot;id&quot;: &quot;general&quot;,
-  &quot;name&quot;: &quot;General&quot;,
-  &quot;revision&quot;: 1,
-  &quot;model&quot;: {&quot;provider&quot;: &quot;provider-id&quot;, &quot;id&quot;: &quot;model-id&quot;},
-  &quot;system_prompt&quot;: &quot;&quot;,
-  &quot;tools&quot;: {&quot;mode&quot;: &quot;selected&quot;, &quot;allowed&quot;: [&quot;tool_a&quot;], &quot;disabled&quot;: []},
-  &quot;skills&quot;: {&quot;mode&quot;: &quot;none&quot;},
-  &quot;mcp&quot;: {&quot;mode&quot;: &quot;none&quot;},
-  &quot;memory&quot;: {&quot;mode&quot;: &quot;off&quot;},
-  &quot;context&quot;: {&quot;history&quot;: &quot;clean&quot;}
+
+<h2 id="fields">Schema 与默认值</h2>
+<table class="stack">
+<thead><tr><th scope="col">字段</th><th scope="col">含义</th><th scope="col">默认、校验</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">schema_version</code>、<code translate="no">revision</code></th><td>格式；单调递增的保存修订</td><td>新格式为 2；修订由 manager 分配</td></tr>
+<tr><th scope="row"><code translate="no">name</code>、<code translate="no">description</code>、<code translate="no">identity</code></th><td>显示名、可选描述、频道身份</td><td>不可变 ID 仅用于保存记录；只有名称必填，没有默认时才需要模型</td></tr>
+<tr><th scope="row"><code translate="no">model</code>、<code translate="no">thinking_effort</code></th><td>带 Provider 的引用、支持的强度</td><td>未设置则继承；不支持时阻止执行</td></tr>
+<tr><th scope="row"><code translate="no">system_prompt</code>、<code translate="no">instruction_files</code></th><td>内联指令；白名单工作区文件（<code translate="no">path</code>，<code translate="no">required</code> 默认 true）</td><td>省略则继承；空值只清除本层</td></tr>
+<tr><th scope="row"><code translate="no">tools</code>、<code translate="no">skills</code>、<code translate="no">mcp</code></th><td>独立的能力策略</td><td><code translate="no">inherit</code>、<code translate="no">all</code>、<code translate="no">selected</code>、<code translate="no">none</code>；selected 为空即无</td></tr>
+<tr><th scope="row"><code translate="no">memory</code></th><td><code translate="no">mode</code>、<code translate="no">read_spaces</code>、<code translate="no">write_space</code>、<code translate="no">required</code>（默认 false）</td><td>新配置和匿名配置关闭；现有 Agent 迁移为旧行为</td></tr>
+<tr><th scope="row"><code translate="no">context</code></th><td><code translate="no">history</code>：inherit、clean、selected；节点引用</td><td>旧内联调用继承；切换命名或内联配置时默认 clean</td></tr>
+<tr><th scope="row"><code translate="no">environment</code></th><td>cwd 引用、沙箱配置引用</td><td>继承；显式路径缺失时在工具运行前失败</td></tr>
+<tr><th scope="row"><code translate="no">limits</code></th><td>资源治理引用和覆盖</td><td>未设置则继承；子额度不超过父额度</td></tr>
+<tr><th scope="row">会话策略</th><td>频道作用域和重置、显式时区引用</td><td>不决定函数历史或记忆访问</td></tr>
+</tbody>
+</table>
+<p class="note">首个实现不包含：任意 Provider 参数、命名 Agent 间继承、自定义执行引擎、任意记忆插件。内联配置用系统默认，不带调用方保存 Agent 的隐藏字段。</p>
+
+<details id="wire">
+<summary>提议的线上形状</summary>
+<pre translate="no" tabindex="0">{
+  "schema_version": 2,
+  "id": "general",
+  "name": "General",
+  "revision": 1,
+  "model": {"provider": "provider-id", "id": "model-id"},
+  "system_prompt": "",
+  "tools": {"mode": "selected", "allowed": ["tool_a"], "disabled": []},
+  "skills": {"mode": "none"},
+  "mcp": {"mode": "none"},
+  "memory": {"mode": "off"},
+  "context": {"history": "clean"}
 }
 
 PATCH /api/agents/general
 {
-  &quot;expected_revision&quot;: 1,
-  &quot;system_prompt&quot;: &quot;Use concise answers.&quot;,
-  &quot;memory&quot;: {&quot;mode&quot;: &quot;off&quot;},
-  &quot;reset_fields&quot;: [&quot;model&quot;, &quot;thinking_effort&quot;]
-}</code>
-</pre>
-<p>memory 包含 mode、可选 read_spaces: string[]、write_space: string、required: boolean（默认 false）。启用读取至少需要一个授权空间，read_write 必须有且仅有一个同时可读的写入目标。off 使绑定不生效但不删除已存数据；编辑器可在草稿保留未启用的绑定，实际执行不获得记忆权限。instruction_files 每项包含 path: string 与 required: boolean（默认 true），路径限于 Agent workspace。未知字段、类型错误、同字段同时出现在 reset_fields 与修改值中，均在写入前拒绝。就绪信息与保存配置分开返回。</p>
-</section>
-<section id="resolution">
-<h2>统一解析与明确合并规则</h2>
-<p>基础配置只选一个来源，依次是显式 agent_id、显式 config、当前 Agent、系统默认。agent_id 与 config 互斥。只有继续同一 Agent 身份时才应用当前会话覆盖；切换 Agent 或临时配置，不继承旧 Agent 的模型、指令、工具与记忆绑定。随后应用经过授权的本次覆盖，最后执行权限约束；每次有副作用的操作仍重新检查撤销权限。</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>取值或操作</th>
-<th>含义</th>
-</tr>
-</thead>
+  "expected_revision": 1,
+  "system_prompt": "Use concise answers.",
+  "memory": {"mode": "off"},
+  "reset_fields": ["model", "thinking_effort"]
+}</pre>
+<ul>
+<li>保持扁平的 AgentSpec 外壳。POST 接受名称加可选可执行字段；id、修订和时间戳由服务器分配，除非提供有效的显式旧 ID。</li>
+<li>AgentConfig 只有可执行字段。导入导出排除服务器元数据并分配新身份。包在 agent 和 llm 旁导出 AgentConfig；带 Provider 的模型字符串规范化为 provider/id 对象。</li>
+<li>启用读取的模式至少需要一个授权读取空间；<code translate="no">read_write</code> 需要恰好一个可读写目标。关闭时绑定不生效；编辑器可在草稿中保留。</li>
+<li>未知字段、无效类型，以及同时出现在 <code translate="no">reset_fields</code> 和改动中的字段，在写入前拒绝。就绪状态与存储配置分开返回。</li>
+</ul>
+</details>
+
+<h2 id="resolution">一个解析器</h2>
+<p>基础只来自一个来源，依次为：显式 <code translate="no">agent_id</code>、显式 <code translate="no">config</code>（与前者互斥）、环境 Agent、系统默认。会话覆盖只在同一 Agent 身份下生效；切换后不继承模型、提示、工具或记忆绑定。然后应用授权的调用覆盖；权限约束最后应用，并在每个有副作用的边界复查撤销。</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">值</th><th scope="col">含义</th></tr></thead>
 <tbody>
-<tr>
-<td>省略 / UNSET</td>
-<td>继承；PATCH 省略则不改存储</td>
-</tr>
-<tr>
-<td>空字符串</td>
-<td>清空指令或描述；清除模型覆盖使用 reset_fields，不提交无效空模型 ID</td>
-</tr>
-<tr>
-<td>selected 空列表</td>
-<td>明确的空范围，不能解释为全部</td>
-</tr>
-<tr>
-<td>mode=none / memory.mode=off</td>
-<td>明确关闭，不表示继承</td>
-</tr>
-<tr>
-<td>reset_fields</td>
-<td>删除本地覆盖并恢复基础值；拒绝 JSON null</td>
-</tr>
-<tr>
-<td>列表 / 策略对象</td>
-<td>原子替换整份列表或策略，不隐式取并集</td>
-</tr>
-<tr>
-<td>普通对象中的标量</td>
-<td>只修改明确字段；策略在提交前规范化为完整对象</td>
-</tr>
-<tr>
-<td>覆盖参数冲突</td>
-<td>旧关键字参数与 overrides 指定同一字段时拒绝</td>
-</tr>
-<tr>
-<td>权限 / 配额</td>
-<td>能力取交集，拒绝优先，有限额度取较小值，不按后写覆盖</td>
-</tr>
+<tr><th scope="row">省略 / UNSET</th><td>继承；PATCH 省略时存储不变</td></tr>
+<tr><th scope="row">空字符串</th><td>清除提示或描述；清除模型用 <code translate="no">reset_fields</code></td></tr>
+<tr><th scope="row">空的 selected 列表</th><td>显式空范围，绝不是全部</td></tr>
+<tr><th scope="row"><code translate="no">mode=none</code>、<code translate="no">memory.mode=off</code></th><td>显式禁用，不是继承</td></tr>
+<tr><th scope="row"><code translate="no">reset_fields</code></th><td>删除本地覆盖，露出基础值；拒绝 JSON null</td></tr>
+<tr><th scope="row">列表、策略对象</th><td>原子整体替换；不隐式合并</td></tr>
+<tr><th scope="row">对象内标量字段</th><td>修补指定叶子；提交前规范化为完整策略</td></tr>
+<tr><th scope="row">冲突的覆盖</th><td>拒绝同时通过旧关键字和 overrides 指定的字段</td></tr>
+<tr><th scope="row">权限、配额</th><td>取交集；拒绝优先；取最小的有限额度；绝不按后写决定</td></tr>
 </tbody>
 </table>
-</div>
-<p>派发被接受时固定生效快照、Agent revision、策略版本及相关目录/预设版本。排队任务保留此意图，启动时重查撤销和必需资源。重试与恢复使用原快照，不读取后来修改的配置；独立新一轮重新解析。来源记录保存引用与散列，不保存凭据。</p>
-</section>
-<section id="execution">
-<h2>公开调用与执行边界</h2>
-<p>以下 API 是目标接口，尚未实现。在现有 Python agent()、llm() 中加入 agent_id、config、overrides 与历史选择，不建立另一套执行器。llm() 不执行 Python/Program/MCP 工具循环，即使选中 Agent 允许这些工具。保留显式 web_search=True 的 provider 原生搜索，并执行相同原生能力权限检查；仅选择 Agent 不会自动启用搜索。输出校验与返回类型保持不变。</p>
-<pre>from openprogram import Agent
+<p class="note">派发接受时固定生效快照、Agent 修订、策略版本和目录/预设版本（引用和哈希，绝无凭据）。排队、重试和恢复保留它并复查撤销；新的独立轮次重新解析。</p>
 
+<h2 id="execution">公开调用</h2>
+<table class="stack">
+<thead><tr><th scope="col">入口</th><th scope="col">创建</th><th scope="col">历史</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent()</code>、<code translate="no">llm()</code></th><td>带所选配置的执行节点；不创建保存的 Agent</td><td>同一 DAG 存储，单独过滤模型视图</td></tr>
+<tr><th scope="row">不带 <code translate="no">to</code> 的 <code translate="no">agent</code> 工具</th><td>持久的子任务或分支</td><td><code translate="no">start_from=clean/inherit/exact-node</code></td></tr>
+<tr><th scope="row">带 <code translate="no">to</code> 的 <code translate="no">agent</code> 工具</th><td>目标分支的下一轮</td><td>目标 Agent 不变；冲突的 <code translate="no">agent_id</code> 被拒绝</td></tr>
+<tr><th scope="row">聊天、CLI、调度器</th><td>现有会话和作业类型，同一解析器</td><td>计划任务每次触发时解析 Agent ID；恢复保留快照</td></tr>
+</tbody>
+</table>
+<ul>
+<li><code translate="no">llm()</code> 没有 Python、Program 或 MCP 工具循环，即使 Agent 允许。显式 <code translate="no">web_search=True</code> 保留，受原生操作检查；选择 Agent 绝不启用搜索。</li>
+<li>解析后的视图通过上下文局部作用域绑定，在 finally 中重置。绝不修改 <code translate="no">Runtime.model</code> 或进程级 Agent 状态。</li>
+<li>命名选择错误是显式的，绝不回退到 main。</li>
+<li>切换聊天 Agent 默认开始新上下文；保留历史需显式选择，并把保留的数据标记为已披露。</li>
+</ul>
+<details>
+<summary>提议的 Python API（尚不可用）</summary>
+<p>给 <code translate="no">agent()</code> 和 <code translate="no">llm()</code> 增加 <code translate="no">agent_id</code>、<code translate="no">config</code>、overrides 和历史选择；不建并行执行器。校验和返回类型不变。</p>
+<pre translate="no" tabindex="0">from openprogram import Agent
 
-
+# Explicit history sharing; records stay in the same execution DAG.
 agent(prompt, agent_id="reviewer", history="selected", context_nodes=[node_id])
 
 class ExampleAgent(Agent):
@@ -277,369 +149,192 @@ class ExampleAgent(Agent):
 
 _example_agent = ExampleAgent()
 extract = _example_agent.extract
-classify = _example_agent.classify
-</pre>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>入口</th>
-<th>创建的对象</th>
-<th>历史与继续执行</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>agent() / llm()</td>
-<td>带生效配置的执行节点，不创建保存 Agent</td>
-<td>保存在同一 DAG，模型可见历史独立过滤</td>
-</tr>
-<tr>
-<td>无 to 的 agent 工具</td>
-<td>沿用持久子任务/分支</td>
-<td>保留 start_from=clean/inherit/指定节点语义</td>
-</tr>
-<tr>
-<td>有 to 的 agent 工具</td>
-<td>在明确目标分支追加一轮</td>
-<td>不隐式改变目标 Agent；冲突 agent_id 拒绝</td>
-</tr>
-<tr>
-<td>聊天 / CLI / scheduler</td>
-<td>沿用 session/job，并使用统一解析器</td>
-<td>定时任务引用 Agent ID，每次新触发重新解析；恢复使用原快照</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>通过上下文局部作用域绑定不可变生效配置，在 finally 中恢复，包括异常和取消。不得修改共享 Runtime.model 或进程级当前 Agent。指定 Agent 不存在时明确报错，不回退 main。聊天切换 Agent 默认开始新上下文；保留历史必须明确选择，并说明数据已在历史中出现。</p>
-</section>
-<section id="memory">
-<h2>可选记忆：访问、保留与写入</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>模式</th>
-<th>自动检索与注入</th>
-<th>记忆工具</th>
-<th>后台写入与压缩前提取</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>off</td>
-<td>不读取</td>
-<td>不提供读写或重组调用</td>
-<td>不从这些执行节点提取记忆</td>
-</tr>
-<tr>
-<td>read_only</td>
-<td>仅访问授权 read_spaces</td>
-<td>只读与检索</td>
-<td>不从这些执行节点提取记忆</td>
-</tr>
-<tr>
-<td>read_write</td>
-<td>仅访问授权 read_spaces</td>
-<td>读与检索，以及一个授权 write_space</td>
-<td>按 writer 策略和执行来源写入</td>
-</tr>
-<tr>
-<td>inherit</td>
-<td>先解析成明确模式</td>
-<td>不能把未解析模式交给工具</td>
-<td>迁移仅保留已有生效行为</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>read_spaces 保存稳定引用：self、指定项目或明确选择的共享空间。write_space 只有一个，且必须也可读。保存 Agent 的 self 解析成自身空间；匿名配置没有持久身份，因此 self 无效。匿名配置可以显式绑定项目或共享空间，而无需保存 Agent。新 Agent 开启记忆时默认 self，不静默复制原全局记忆。</p>
-<ul>
-<li>关闭不删除记忆、不关闭会话历史，也不移除用户提供的指令文件。已检索并出现在消息中的内容不能被撤回；需要全新上下文才能避免后续请求继续看到它。关闭读取后，待返回的检索结果在进入模型前也要重新校验。</li>
-<li>每个执行节点记录记忆写入资格、空间引用和策略 epoch。会话结束 writer、压缩前提取、来源导出、定时整理必须排除 off/read_only 节点，不能通过扫描原始历史再次写入。关闭写入时阻止该范围尚未提交的排队写入，重新开启也不补写关闭期间内容；此前提交的记忆保留。派生输出和摘要继承实际输入上下文中最严格的记忆写入资格，拆分或更换 Agent 不能把受限数据改成可写。off 传播禁止写入限制，但不自动禁止后来执行中独立获授权的读取。对用户手动提供且不在已有来源记录内的文本，不承诺能自动识别其原始策略。</li>
-<li>后台写入提交前同时验证原执行授权与当前空间策略。撤销权限优先于固定配置；外部 backend 无法取消的操作需要明确说明。不能失败后换到权限更大的空间。</li>
-<li>关闭是框架记忆策略，不是文件系统沙箱。如果 shell 或文件工具仍可读取记忆文件，应展示限制；严格隔离需要环境策略强制执行。用户指令和上传文件即使包含个人信息，仍属于明确输入。</li>
-<li>可选记忆 backend 失败时显示降级状态并无记忆继续；required=true 则在模型执行前失败。写入失败保留任务结果，单独显示保存失败。</li>
-<li>首期不提供 write_only。复用 MemoryBackend；无法强制命名空间与访问范围的 backend 不允许开启空间隔离，不能靠提示词模拟隔离。</li>
-</ul>
-</section>
-<section id="context">
-<h2>上下文、指令与环境</h2>
-<p>clean 表示不继承对话消息，不表示移除系统或项目策略。指定历史节点必须检查调用方可见范围，同属 DAG 不等于有权访问。存储历史与模型实际上下文分开。默认继续保存执行记录，本设计不增加“无痕运行”的保留承诺。</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>来源</th>
-<th>处理方式</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>运行时 / 用户权限策略</td>
-<td>在模型外执行，Agent prompt 无权覆盖</td>
-</tr>
-<tr>
-<td>用户、项目及有作用范围的 workspace 指令</td>
-<td>沿用现有来源优先级与范围规则；显示来源和冲突诊断</td>
-</tr>
-<tr>
-<td>Agent system_prompt 与允许的指令文件</td>
-<td>可配置指令来源；空 prompt 只清空自身层</td>
-</tr>
-<tr>
-<td>Skills</td>
-<td>按允许范围按需加载，不复制进 AgentSpec</td>
-</tr>
-<tr>
-<td>记忆与工具/网页结果</td>
-<td>带来源的上下文数据，不提升为高优先级指令</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>持久化指令文件使用限定在 Agent workspace 允许列表内的路径引用；内容与散列在现有受保护执行存储中形成快照。Agent workspace 与项目 cwd 分别表达，cwd 不代表访问权限。环境配置不可用或主机/沙箱不兼容时明确失败。上下文长度沿用 Context Engine，不增加第二个摘要器，也不手动拼接原始工具结果。</p>
-</section>
-<section id="capabilities">
-<h2>能力范围与权限</h2>
-<p>Programs、Skills、MCP 和 provider 目录拥有能力定义与凭据；Agent 保存引用与默认选择。运行时先解析请求范围，再与用户授权、父执行委派上限、项目/环境限制、全局可用性和显式拒绝取交集。all 只表示当前可用且获授权的全部项目，不意味着有权使用所有已安装集成。</p>
-<ul>
-<li>selected 空列表在存储、发现和调用中都表示空。失效引用保留并显示 Missing。必需 MCP 必须同时允许且可用，矛盾规则保存时拒绝。</li>
-<li>会话和本次执行可以覆盖偏好，不能扩大强制上限。调用方的范围如果是委派限制，更换 agent_id 后仍然生效。拒绝的覆盖需要说明，不能显示为已应用。</li>
-<li>能力发现、按名称加载、技能加载和真正调用使用同一解析策略。provider 原生 web search 等动作也受能力控制；tools=[] 本身不代表全面网络限制。</li>
-<li>账户与服务引用由现有凭据服务解析，AgentSpec、快照、导出和示例不保存原始密钥。Anthropic 只使用官方 API 与合法 API key，并按 API 账户计费。</li>
-<li>Agent allowlist 不会把主机已授权的任意 Python 代码变成沙箱；工具和嵌套 agentic 调用仍在公开入口执行检查。</li>
-</ul>
-<p>能力和选择器细节分别由分项文档负责。资源管理文档继续定义准入、用量、取消和配额；本页只引用现有配置并展示生效限制。</p>
-</section>
-<section id="collaboration">
-<h2>多 Agent 组合与选择</h2>
-<p>运行分支、Job、消息和 attach 的详细契约见<a href="../collaboration/agent-collaboration.zh.md">协作设计</a>与<a href="../collaboration/agent-collab-architecture.zh.html">协作架构图</a>，数量和执行预算见<a href="../reliability/agent-resource-governance.zh.html">资源治理</a>。保存 Agent 配置与运行分支分别管理；公开执行 ID、查询/取消入口及当前完成回送差距以协作设计的实现状态为准。</p>
-<p>选择保存配置不要求指定角色。只选模型、只改表达风格、关闭记忆、使用项目记忆，都属于有效 Agent。并发复用一份配置创建多个 run，不创建多个保存 Agent。</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>操作</th>
-<th>契约</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>独立调用</td>
-<td>不自动继承上个任务历史；同一 Agent ID 可服务多个会话</td>
-</tr>
-<tr>
-<td>委派</td>
-<td>传递明确目标、输入和筛选后的上下文；取消与预算沿用现有任务控制</td>
-</tr>
-<tr>
-<td>继续已有任务</td>
-<td>明确寻址已有 run/branch，目标 Agent 身份保持稳定</td>
-</tr>
-<tr>
-<td>共享记忆</td>
-<td>明确绑定；并发写入由 backend 版本检查与执行幂等 ID 控制</td>
-</tr>
-<tr>
-<td>共享文件/浏览器</td>
-<td>有冲突的修改需要资源所有权和串行控制；名称不同不代表资源隔离</td>
-</tr>
-<tr>
-<td>自动选择</td>
-<td>后续扩展：用可选描述对已有合格配置排序；不自动创建 Agent 或扩大权限</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>单次成功不自动持久化配置变更、新技能或长期偏好。长期更新使用已有明确配置、技能或记忆写入机制并保留来源。角色编排、自动拓扑生成和市场发布不在本范围。可选 Agent/模型选择由实施计划 P6 完整定义，在所有入口支持显式选择之后实现。</p>
-</section>
-<section id="api">
-<h2>管理 API 与原子持久化</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>操作</th>
-<th>目标契约</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>GET /api/agents[/{id}]</td>
-<td>摘要/详情包含 schema_version、revision，不返回记忆正文或凭据</td>
-</tr>
-<tr>
-<td>POST /api/agents</td>
-<td>仅名称即可创建；使用明确的新默认值，可选幂等键，不调用模型</td>
-</tr>
-<tr>
-<td>PATCH /api/agents/{id}</td>
-<td>新客户端提供 expected_revision；顶层修改字段与 reset_fields；先验证整份候选，再在跨进程锁内比较并一次写入</td>
-</tr>
-<tr>
-<td>POST /api/agents/resolve</td>
-<td>拟新增只读预览：接受保存或草稿配置和调用上下文；不创建会话、不检索记忆、不返回凭据</td>
-</tr>
-<tr>
-<td>POST /api/agents/{id}/duplicate</td>
-<td>默认仅复制配置；新 ID/revision；self 指向新空空间，共享绑定明确展示</td>
-</tr>
-<tr>
-<td>POST /api/agents/{id}/default</td>
-<td>默认指针只有一个权威来源，原子更新；profile.default 是展示投影</td>
-</tr>
-<tr>
-<td>DELETE /api/agents/{id}</td>
-<td>默认 Agent 或有活跃引用时 409；用户确认前列明资源；先记录可恢复删除意图，再执行清理</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>updated_at 仅用于展示和临时旧客户端适配；旧时间戳也在同一写锁内比较，再使用取得的 revision。新客户端使用 expected_revision。两种前置条件均缺少时返回 428，版本过期 409，结构错误 400，范围无权限 403，ID 不存在 404。依赖不可用使用明确预检错误，不回退其他配置。允许保存不可用引用并显示就绪警告，但必需依赖缺失时禁止启动。未知 schema 版本拒绝解析且不重写文件。</p>
-<p>文件存储保留唯一 agent.json 并原子替换。创建、默认指针、删除涉及索引和多个资源时使用小型恢复日志，不能把多次 os.replace 称为事务。启动时先处理未完成意图，再接受写入。删除 Agent 不删除共享记忆、全局凭据或任意外部工作目录。会话/DAG 引用按实际存储枚举，不能假设都在 Agent 目录下。</p>
-</section>
-<section id="lifecycle">
-<h2>生命周期、导出与失败处理</h2>
-<ul>
-<li>匿名 AgentConfig 不创建侧栏条目、工作目录或记忆目录，保存为 Agent 是独立操作。新建保存对象只初始化配置；可选指令文件由明确操作或旧版兼容初始化创建。</li>
-<li>复制创建新配置身份，不复制会话、已学习记忆、计划或凭据。共享空间仍是引用，必须在复制预览中显示。复制指令文件正文是可选独立操作，不能与复制引用混淆。</li>
-<li>导出只包含可移植配置和明确选择的指令文本，排除记忆、历史、机器路径、凭据与自动计划。导入校验格式、解析能力引用、预览权限，不启动执行。</li>
-<li>删除非默认且空闲的 Agent 时枚举自有与引用资源。私有记忆可以保留或明确删除，共享记忆不能由此操作删除。被标记删除的 ID 不再接受新执行，未完成清理可见且可重试。</li>
-<li>预检失败不发模型请求、不执行工具。保存失败保留整份草稿。Provider 故障沿用有上限重试，不静默更换模型或策略。取消必须恢复调用作用域，不能被记录为成功。</li>
-<li>配置编辑影响新执行；显式拒绝和权限撤销在活跃执行的下个访问边界生效。关闭记忆写入还会使未提交写入失效。界面说明区别，不能暗示已经发出的推理请求能够撤回。</li>
-</ul>
-</section>
-<section id="references">
-<h2>参考资料与设计取舍</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>参考</th>
-<th>采用或调整</th>
-<th>边界</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Meta Muse — <a href="https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse">官方系统说明</a>
-</td>
-<td>持续工作；行为权限由执行模型以外的机制约束</td>
-<td>不声称 OpenProgram 已有同等 VM 隔离；记忆和人格仍可选</td>
-</tr>
-<tr>
-<td>Grok Bot — <a href="https://docs.x.ai/grok-bot/bots">管理说明</a> / <a href="https://docs.x.ai/grok-bot/overview">概览</a>
-</td>
-<td>保存配置、独立对话、明确共享资源</td>
-<td>不要求专门职责；不复制计划或已学习记忆</td>
-</tr>
-<tr>
-<td>OpenClaw — <a href="https://docs.openclaw.ai/gateway/config-agents">配置</a> / <a href="https://docs.openclaw.ai/cli/agents">CLI</a> / <a href="https://docs.openclaw.ai/agent-workspace">workspace</a> / <a href="https://docs.openclaw.ai/agent">runtime</a>
-</td>
-<td>保留逐 Agent 工作目录和策略引用</td>
-<td>工作目录不等于沙箱；不增加多层 profile 继承</td>
-</tr>
-<tr>
-<td>Claude Code — <a href="https://docs.anthropic.com/en/docs/claude-code/cli-usage">CLI 参考</a>
-</td>
-<td>模型、指令、工具、会话分别设置</td>
-<td>仅参考概念；Anthropic 接入仍使用官方 API key</td>
-</tr>
-<tr>
-<td>Codex — <a href="https://developers.openai.com/codex/config-reference">配置参考</a>
-</td>
-<td>配置、provider 和 MCP 职责分离</td>
-<td>不声称 profile 或审批语义完全相同</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>参考资料用于对照产品和配置概念，不作为内部实现已验证的证据。无固定版本的官方页面可能变化，以表内列明能力作为对照范围。不声称研究创新、基准优势或自动路由已实现。</p>
-</section>
-<section id="acceptance">
-<h2>可观察验收契约</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>ID</th>
-<th>公开入口</th>
-<th>可观察结果</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>A01</td>
-<td>Agent API / UI</td>
-<td>仅名称即可创建通用 Agent，无强制职责，默认无长期记忆</td>
-</tr>
-<tr>
-<td>A02</td>
-<td>两客户端 PATCH</td>
-<td>同一 revision 仅一方成功；模型与 tools 不出现混合或半保存</td>
-</tr>
-<tr>
-<td>A03</td>
-<td>agent()、llm()、聊天、委派</td>
-<td>相同基础和授权覆盖得到等价生效配置；llm 无 Program/MCP 工具循环；原生搜索仍需显式开启且获授权</td>
-</tr>
-<tr>
-<td>A04</td>
-<td>并发嵌套函数</td>
-<td>模型、记忆策略互不泄漏；失败与取消恢复作用域</td>
-</tr>
-<tr>
-<td>A05</td>
-<td>所有记忆读写入口</td>
-<td>关闭或只读执行不被后续扫描、提取或压缩转成长期记忆</td>
-</tr>
-<tr>
-<td>A06</td>
-<td>切换 Agent / 指定历史</td>
-<td>不隐式继承上个任务；无权 DAG 节点拒绝</td>
-</tr>
-<tr>
-<td>A07</td>
-<td>能力发现与调用</td>
-<td>空集合始终为空；失效引用可见；被拒绝动作不执行</td>
-</tr>
-<tr>
-<td>A08</td>
-<td>排队 / 重试 / 恢复</td>
-<td>保留固定 revision；新撤销能力不能执行</td>
-</tr>
-<tr>
-<td>A09</td>
-<td>复制 / 导出 / 删除</td>
-<td>不误复制或删除记忆、凭据、计划、共享资源</td>
-</tr>
-<tr>
-<td>A10</td>
-<td>Agents 页 / 窄屏 / 键盘</td>
-<td>所有分区可达，无整页溢出，草稿、错误、冲突与降级可见</td>
-</tr>
-<tr>
-<td>A11</td>
-<td>旧配置迁移</td>
-<td>保留原生效模型、能力、记忆行为及存储历史</td>
-</tr>
-<tr>
-<td>A12</td>
-<td>默认 App / CLI / scheduler</td>
-<td>统一解析证据；只使用默认 App，不增加开发 profile</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>场景输入、文件范围、阶段验证和执行顺序由实施计划负责。文档静态检查通过不代表这些运行时验收条件已满足。</p>
-</section>
-<section id="templates"><h2>内置 Agent</h2><p>决策、轻量助手和统筹规划是普通的已保存 Agent，随它们一起提供的职能 Agent 也是（见常驻 Agent 设计的“内置 Agent”）。安装操作通过现有 manager 在配置锁内创建这个实例从未装过的内置 Agent，把它们的 id 记进注册表索引，保留已有同名 ID、用户修改和默认 Agent。服务在启动时、已有默认 Agent 的前提下运行它。读取列表不创建记录，删除后不重建。没有模板目录或选择器：Agents 列表就是模板列表，新建 Agent 对话框创建空白记录。</p><p>三者是现有 Agent 类的固定参数配置，通过 AgentSpec 和 Agent.from_spec 解析，不添加角色 system prompt。任务和指令由调用处与 Context 提供，空的保存指令不会清除调用处已有指令。决策通过 Agent.choose 从给定选项中选一项：复用现有选择解析器，执行一次无工具的 llm 请求，不增加角色提示词、顾问式回答或自动重选。它返回选中项的 ID，非法答案直接报错；调用保留当前 Context 和 DAG 作用域。决策和轻量任务关闭工具；统筹规划可以检查证据并委派已授权任务。模型可编辑；本地安装明确指定已配置且可用的模型。角色名称不保证费用或输出质量。</p><h3>页面布局</h3><p>页面分为已保存 Agent 列表和完整宽度的编辑区。二级导航复用共享 ManagePage 布局与侧栏宽度变量，不为 Agents 单独设置桌面宽度。详情标题只显示名称、ID 和对话操作。七个顶部标签在所有宽度下都使用横向排列，空间不足时滚动。常规分区只显示名称、用途、模型和思考参数。可选的手动指令在高级分区编辑，保留原有草稿和调用行为。常规分区不设置内部导航列、重复说明标题或配置摘要。输入内容使用正常字重，字段标签使用中等字重。统一沿用应用字体、中性背景、控件尺寸和蓝色选中提示。全部配置分区填满标准内边距之间的可用宽度，不设置固定内容宽度上限。编辑区独立滚动，保存区固定可见。窄屏用下拉选择替代 Agent 列表，身份字段纵向排列。已保存但不兼容的思考强度继续显示，未编辑时不作为新错误播报。</p><h3>验收</h3><p>三个保存记录可见且可编辑，新建 Agent 对话框默认空白；重复安装保留用户修改；Agent.from_spec 能执行保存记录。草稿、冲突、复制和对话操作继续工作。紧凑保存区显示草稿状态；继承的旧设置不在未编辑时触发表单错误。通过真实 React 页面和默认 App 检查桌面与窄屏布局。</p></section>
+classify = _example_agent.classify</pre>
+</details>
 
-<section id="status">
-<h2>实现状态</h2><p>已实现：八分区 Agents 页面及共享草稿、模型目录选择、保存冲突比较和原有动态图标；专用保存 Agent 与 <code>Agent.from_spec</code> 执行；description、revision 与原子条件保存；新配置默认关闭、旧配置保持共享读写的记忆策略。Web 新对话使用已保存 Agent，独立试运行保存只读或关闭记忆的会话快照；必需 MCP 缺失时在模型请求前失败。记忆权限作用于执行、后台提取、派生结果与恢复入口，提交前重新检查策略 epoch；实际空间为 <code>self</code> 与 <code>legacy_global</code>。产品使用方法见 <a href="../../../../capabilities/agents.zh.md">配置 Agent</a>。</p><p>目标设计，尚未实现：完整 schema 2 迁移、多文件生命周期事务、统一 Python <code>AgentConfig</code> 接口、所有调用入口的解析一致性、任意共享空间目录、有效配置预览、内嵌试运行面板、便携导入导出及自动 Agent/模型选择。</p>
-</section>
-</main>
-</body>
-</html>
+<h2 id="memory">可选记忆</h2>
+<table class="stack">
+<thead><tr><th scope="col">模式</th><th scope="col">召回</th><th scope="col">记忆工具</th><th scope="col">后台写入</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">off</code></th><td>无</td><td>无</td><td>不从这些节点摄取</td></tr>
+<tr><th scope="row"><code translate="no">read_only</code></th><td>授权的 <code translate="no">read_spaces</code></td><td>读取和搜索</td><td>不从这些节点摄取</td></tr>
+<tr><th scope="row"><code translate="no">read_write</code></th><td>授权的 <code translate="no">read_spaces</code></td><td>另加一个授权的 <code translate="no">write_space</code></td><td>受写入策略和执行来源约束</td></tr>
+<tr><th scope="row"><code translate="no">inherit</code></th><td>先解析为具体模式</td><td>绝不未解析传入</td><td>仅用于迁移</td></tr>
+</tbody>
+</table>
+<dl class="pairs">
+<dt>空间</dt><dd>保存 Agent 的 <code translate="no">self</code> 是它自己的命名空间，匿名配置不可用。已实现：<code translate="no">self</code>、<code translate="no">legacy_global</code>。目标：选定的项目或共享空间，可供匿名使用。<code translate="no">write_space</code> 必须可读。新 Agent 开启记忆时默认 <code translate="no">self</code>，不复制旧全局存储。</dd>
+<dt>关闭不会</dt><dd>删除记忆、禁用会话历史或移除用户提供的指令文件。已在消息中的文本无法“看不见”，需开始干净上下文。待处理的召回在进入请求前作废。它不是文件系统沙箱：shell 或文件工具能读记忆文件时，UI 会说明。</dd>
+<dt>失败</dt><dd>可选后端失败时显示记忆降级并继续；<code translate="no">required=true</code> 在模型执行前失败。写入失败保留任务结果，单独报告。</dd>
+<dt>不提供</dt><dd><code translate="no">write_only</code>。无法强制命名空间的后端不能启用作用域记忆；绝不靠提示模拟隔离。</dd>
+</dl>
+<details>
+<summary>写入资格</summary>
+<ul>
+<li>每个执行节点带写入资格标签、空间引用和策略 epoch。会话结束写入、压缩抽取、来源导出和计划整理都过滤 off 和只读节点。</li>
+<li>禁用写入会阻止未结算的排队写入，重新启用时也不追溯摄取。已提交的记忆保留。</li>
+<li>派生输出和摘要带所含上下文中最严格的资格。拆分或切换 Agent 不能重新标记受限数据。off 传播禁写限制，但不禁止之后独立授权的读取。</li>
+<li>后台写入在提交时验证原授权和当前空间策略；撤销优先于固定配置。绝不用更宽的空间重试。无法取消的外部后端要写明。</li>
+<li>用户编写的指令和上传文档仍是输入，即使含个人信息；不声称能自动分类来源记录之外的文本。</li>
+</ul>
+</details>
+
+<h2 id="context">上下文、指令与环境</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">来源</th><th scope="col">处理</th></tr></thead>
+<tbody>
+<tr><th scope="row">运行时和所有者策略</th><td>在模型外强制；Agent 提示不能覆盖</td></tr>
+<tr><th scope="row">用户、项目和作用域工作区指令</th><td>现有权限和作用域规则；显示来源和冲突</td></tr>
+<tr><th scope="row">Agent <code translate="no">system_prompt</code>、白名单文件</th><td>可配置；文件是工作区路径引用，在受保护的执行存储中按内容或哈希快照</td></tr>
+<tr><th scope="row">Skills</th><td>在允许集合内按需加载</td></tr>
+<tr><th scope="row">记忆、工具和网页结果</th><td>带来源的数据，绝不提升为指令</td></tr>
+</tbody>
+</table>
+<ul>
+<li>clean 表示不继承对话消息，不是没有系统或项目策略。</li>
+<li>selected 历史按调用方可见性校验；DAG 成员资格不等于授权。执行历史默认保留，没有无痕保证。</li>
+<li>工作区和项目 cwd 分开。cwd 不是访问边界。不兼容的宿主或沙箱请求明确失败。</li>
+<li>上下文长度用现有 Context Engine 限制；没有第二个摘要器。</li>
+</ul>
+
+<h2 id="capabilities">能力范围与权限</h2>
+<p>目录拥有定义和凭据；Agent 策略拥有引用。详见 <a href="agent-capability-configuration-ui.zh.html">Agent 能力策略</a>。准入、用量、取消和配额见<a href="../reliability/agent-resource-governance.zh.html">资源治理</a>。</p>
+<ul>
+<li>会话或调用可替换偏好，但不能扩大强制上限。委派限制在 <code translate="no">agent_id</code> 变化后仍生效。被拒绝的覆盖要说明。</li>
+<li>Provider 原生搜索和其他原生操作受能力门控；仅 <code translate="no">tools=[]</code> 不是网络限制。</li>
+<li>账号通过凭据服务解析；AgentSpec、快照、导出和示例中没有原始密钥。Anthropic 连接使用官方 API 和合法获取的 API key，按 API 账户计费。</li>
+<li>宿主已授权的 Python 不受允许列表沙箱约束；工具和嵌套 agentic 调用在公开边界检查。</li>
+</ul>
+
+<h2 id="collaboration">多 Agent 组合</h2>
+<p>分支、作业、消息和附着引用见<a href="../collaboration/agent-collaboration.zh.html">协作契约</a>、<a href="../collaboration/agent-collab-architecture.zh.html">架构</a>。配置并行复用时产生不同的运行，不产生新的保存 Agent。</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">操作</th><th scope="col">契约</th></tr></thead>
+<tbody>
+<tr><th scope="row">独立调用</th><td>不自动带上一任务历史；一个 Agent ID 可服务多个会话</td></tr>
+<tr><th scope="row">委派</th><td>显式目标、输入和过滤后的上下文；父级取消和预算留在任务控制中</td></tr>
+<tr><th scope="row">继续任务</th><td>指向现有运行或分支；目标 Agent 不变</td></tr>
+<tr><th scope="row">共享记忆</th><td>显式绑定；并发写入用后端版本检查和幂等执行 ID</td></tr>
+<tr><th scope="row">共享文件、浏览器</th><td>冲突变更需要归属和串行化；Agent 名称不隔离</td></tr>
+<tr><th scope="row">自动选择</th><td>推迟到 P6；对现有合格配置排序，绝不创建 Agent 或扩大范围</td></tr>
+</tbody>
+</table>
+<p class="note">一次成功的运行绝不持久化配置改动、技能或偏好；持久更新走显式写入机制。角色编排、自动拓扑和市场发布不在范围内。</p>
+
+<h2 id="api">管理 API</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">操作</th><th scope="col">契约</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">GET /api/agents[/{id}]</code></th><td>摘要和详情 DTO，含 <code translate="no">schema_version</code> 和修订；无记忆内容或密钥</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents</code></th><td>只凭名称创建；安全的显式默认；可选幂等键；不调用 Provider</td></tr>
+<tr><th scope="row"><code translate="no">PATCH /api/agents/{id}</code></th><td><code translate="no">expected_revision</code>；顶层改动加 <code translate="no">reset_fields</code>；校验完整候选，在跨进程锁下比较并写一次</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents/resolve</code></th><td>提议的只读预览，用于保存或草稿配置；无会话、记忆搜索或凭据</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents/{id}/duplicate</code></th><td>只复制配置；新 ID 和修订；<code translate="no">self</code> 映射到新的空命名空间；显示共享绑定</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents/{id}/default</code></th><td>一个权威指针，原子更新；<code translate="no">profile.default</code> 是派生值</td></tr>
+<tr><th scope="row"><code translate="no">DELETE /api/agents/{id}</code></th><td>默认或活动引用返回 409；确认前显示受影响资源；破坏性清理前先有可恢复的意图</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead><tr><th scope="col">状态码</th><th scope="col">情况</th></tr></thead>
+<tbody>
+<tr><th scope="row">428</th><td>没有前置条件（<code translate="no">updated_at</code> 只用于显示和临时适配器）</td></tr>
+<tr><th scope="row">409</th><td>修订过期</td></tr>
+<tr><th scope="row">400</th><td>schema 无效</td></tr>
+<tr><th scope="row">403</th><td>范围被禁止</td></tr>
+<tr><th scope="row">404</th><td>未知 ID</td></tr>
+</tbody>
+</table>
+<p class="note">不可用的引用保存为带警告的草稿；必需时以类型化预检错误阻止启动。未知 schema 失败关闭，不重写。</p>
+<details>
+<summary>原子持久化</summary>
+<p>一个规范的 <code translate="no">agent.json</code>，原子替换。小型恢复日志覆盖跨索引和资源的创建、默认和删除；多次 <code translate="no">os.replace</code> 不是事务。启动时先对账未完成的意图再提供写入。删除 Agent 绝不删除共享记忆、全局凭据或外部工作区。会话和 DAG 引用通过其存储枚举。</p>
+</details>
+
+<h2 id="lifecycle">生命周期与失败</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">事件</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">匿名配置</th><td>无侧栏条目、工作区或记忆目录。保存创建只初始化配置；指令文件在显式请求或旧版引导时创建</td></tr>
+<tr><th scope="row">复制</th><td>无会话、已学记忆、计划或凭据。共享引用可见。复制指令内容与复制引用分开</td></tr>
+<tr><th scope="row">导出、导入</th><td>可移植配置和可选指令文本；无记忆、历史、机器路径、凭据或自动计划。导入校验、解析引用、预览权限，不启动执行</td></tr>
+<tr><th scope="row">删除</th><td>枚举自有和引用的资源。私有记忆保留或显式删除；共享记忆绝不删除。墓碑 ID 不接受运行；未完成的清理可见可重试</td></tr>
+<tr><th scope="row">失败</th><td>预检失败：无 Provider 请求或副作用。保存失败：保留草稿。Provider 失败：有限重试，不静默换模型或策略。取消：恢复作用域状态，绝不算成功</td></tr>
+<tr><th scope="row">策略编辑</th><td>影响新执行；拒绝或撤销在下一个访问边界生效；禁用记忆写入会作废未结算的写入。UI 显示区别</td></tr>
+</tbody>
+</table>
+
+<h2 id="templates">内置 Agent</h2>
+<p>都是普通的保存 Agent：助手加决策、轻量助手和统筹规划，以及作业 Agent（见<a href="../always-on-agents.zh.html">常驻 Agent</a>）。没有模板目录：Agents 列表就是模板，新建 Agent 从空白开始。</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">安装</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">启动时</th><td>存在默认 Agent 后，服务器通过 manager 在其锁下安装本实例从未安装过的内置项</td></tr>
+<tr><th scope="row">记录</th><td>其 id，记入注册表索引</td></tr>
+<tr><th scope="row">保留</th><td>已有 ID、编辑和默认</td></tr>
+<tr><th scope="row">读取</th><td>不创建</td></tr>
+<tr><th scope="row">删除</th><td>不触发重建</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Agent</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">三个专家</th><td>Agent 类的固定参数，经 AgentSpec 和 <code translate="no">Agent.from_spec</code>；无角色提示。任务和指令来自调用点和 Context；空的保存提示不清除环境指令。模型可编辑；本地安装分配已配置的模型。角色不保证成本或质量。</td></tr>
+<tr><th scope="row">决策</th><td><code translate="no">Agent.choose</code> 用选择解析器在一次无工具的 <code translate="no">llm</code> 请求中选出一个给定选项：无建议，不重选；返回选项 ID，拒绝无效回答。保留 Context 和 DAG 作用域。禁用工具。</td></tr>
+<tr><th scope="row">轻量助手</th><td>禁用工具</td></tr>
+<tr><th scope="row">统筹规划</th><td>检查证据并委派授权任务</td></tr>
+</tbody>
+</table>
+<details>
+<summary>页面布局</summary>
+<ul>
+<li>保存 Agent 列表和全宽编辑器。二级导航用共享的 ManagePage 分栏布局和侧栏宽度 token。</li>
+<li>头部：名称、ID、对话操作。八个标签在任何宽度都保持横向，必要时滚动。</li>
+<li>常规只有名称、用途、模型和推理。手动指令留在高级。没有内层导航列、重复介绍或设置摘要。</li>
+<li>输入正常字重，标签中等字重；应用字体、中性表面、控件尺寸、蓝色选中。</li>
+<li>面板在标准内边距内填满编辑器，无固定最大宽度。编辑器独立滚动；保存页脚常驻并报告草稿状态。</li>
+<li>窄屏用选择框替代列表，身份字段堆叠。保存的无效推理选项保持可见；继承的不兼容设置不产生编辑前错误。</li>
+</ul>
+<p class="note">验收：内置项可见可编辑；新建 Agent 从空白开始；重复安装保留编辑；<code translate="no">Agent.from_spec</code> 能运行保存记录；草稿、冲突、复制和对话流程正常；桌面和窄屏布局在真实页面和 App 上检查。</p>
+</details>
+
+<h2 id="acceptance">验收契约</h2>
+<table class="stack">
+<thead><tr><th scope="col">ID</th><th scope="col">入口</th><th scope="col">预期</th></tr></thead>
+<tbody>
+<tr><th scope="row">A01</th><td>Agent API、UI</td><td>只有名称的 Agent 能运行通用任务</td></tr>
+<tr><th scope="row">A02</th><td>两个客户端 PATCH</td><td>同修订只有一个更新成功；无混合配置或部分保存</td></tr>
+<tr><th scope="row">A03</th><td><code translate="no">agent()</code>、<code translate="no">llm()</code>、聊天、派发</td><td>相同基础和覆盖得到等价配置；llm 无工具循环；原生搜索显式且授权</td></tr>
+<tr><th scope="row">A04</th><td>并行嵌套函数</td><td>模型和记忆策略不泄漏；失败或取消后作用域重置</td></tr>
+<tr><th scope="row">A05</th><td>所有记忆入口和出口</td><td>off 和只读运行绝不成为已学记忆</td></tr>
+<tr><th scope="row">A06</th><td>切换 Agent、selected 历史</td><td>无隐式历史；不可访问节点被拒</td></tr>
+<tr><th scope="row">A07</th><td>发现和调用</td><td>空保持空；缺失可见；被拒绝的绝不执行</td></tr>
+<tr><th scope="row">A08</th><td>排队、重试、恢复</td><td>修订固定；已撤销的能力不能执行</td></tr>
+<tr><th scope="row">A09</th><td>复制、导出、删除</td><td>不意外复制或删除记忆、凭据、计划或共享资源</td></tr>
+<tr><th scope="row">A10</th><td>Agents 页、窄屏、键盘</td><td>所有分区可达；无溢出；未保存、错误、冲突和降级状态可见</td></tr>
+<tr><th scope="row">A11</th><td>旧配置迁移</td><td>生效模型、范围、记忆和历史保留</td></tr>
+<tr><th scope="row">A12</th><td>App、CLI、调度器</td><td>共享解析器证据</td></tr>
+</tbody>
+</table>
+<p class="note">场景输入和阶段门禁见<a href="agent-configuration-plan.zh.html#scenarios">实现计划</a>。静态文档检查不满足其中任何一项。</p>
+
+<details id="references">
+<summary>参考</summary>
+<table class="stack">
+<thead><tr><th scope="col">参考</th><th scope="col">采纳</th><th scope="col">边界</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse">Meta Muse</a></th><td>持续工作；策略在执行模型之外强制</td><td>不声称有 Muse VM 隔离；记忆和人设保持可选</td></tr>
+<tr><th scope="row">Grok Bot：<a href="https://docs.x.ai/grok-bot/bots">Bot 管理</a>、<a href="https://docs.x.ai/grok-bot/overview">概览</a></th><td>保存配置、独立对话、显式共享资源</td><td>不要求专门任务；不复制计划或已学记忆</td></tr>
+<tr><th scope="row">OpenClaw：<a href="https://docs.openclaw.ai/gateway/config-agents">配置</a>、<a href="https://docs.openclaw.ai/cli/agents">CLI</a>、<a href="https://docs.openclaw.ai/agent-workspace">工作区</a>、<a href="https://docs.openclaw.ai/agent">运行时</a></th><td>每个 Agent 的工作区和策略引用</td><td>工作区不是沙箱；没有配置继承图</td></tr>
+<tr><th scope="row"><a href="https://docs.anthropic.com/en/docs/claude-code/cli-usage">Claude Code</a></th><td>模型、指令、工具和会话分开选择</td><td>Anthropic 集成保持官方 API key 方式</td></tr>
+<tr><th scope="row"><a href="https://developers.openai.com/codex/config-reference">Codex</a></th><td>配置、Provider 和 MCP 职责分开</td><td>不声称配置或审批语义相同</td></tr>
+</tbody>
+</table>
+<p class="note">这些是产品和配置概念，不证明内部实现。不声称研究新颖性、基准胜出或自主路由。</p>
+</details>
+
+<h2 id="status">实现状态</h2>
+<dl class="pairs">
+<dt>已实现</dt><dd>八分区页面，含共享草稿、目录模型选择、保存冲突比较、动画图标；内置保存 Agent 和 <code translate="no">Agent.from_spec</code>；描述、修订、原子条件保存；空间为 <code translate="no">self</code> 和 <code translate="no">legacy_global</code> 的记忆策略，新配置默认关闭，旧配置保持共享读写。Web 对话使用保存的 Agent；独立试用持久化只读或关闭的会话快照。缺失必需 MCP 服务时在模型请求前失败。</dd>
+<dt>目标</dt><dd>Schema 2 迁移、事务化多文件生命周期、Python <code translate="no">AgentConfig</code>、各入口解析一致、共享空间目录、生效预览、内嵌试用、可移植导入导出、自动 Agent/模型选择。</dd>
+</dl>
+<p class="next"><a href="../../../../capabilities/agents.zh.html">配置 Agent</a></p>

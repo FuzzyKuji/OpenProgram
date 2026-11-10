@@ -29,7 +29,7 @@ def store(tmp_path, monkeypatch):
     # Pair the canonical execution database with this test's session store;
     # runner startup must not recover executions left by unrelated tests.
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "executions.db",
     )
     s = SessionStore(tmp_path / "sessions-git")
@@ -156,6 +156,7 @@ def _call_agent(
     from openprogram.runtime.execution.run_control.binding import _current_session_id
     from openprogram.state.store import _current_turn_id
     from openprogram.programs.tools.agents.agent.agent.agent import _agent_impl
+    from openprogram.runtime.permissions.refusal import Refused
 
     def _go():
         tok1 = _current_session_id.set(session_id)
@@ -167,6 +168,8 @@ def _call_agent(
                 agent_id=agent_id,
                 start_from=start_from,
             )
+        except Refused as refused:
+            return refused.text
         finally:
             _current_session_id.reset(tok1)
             _current_turn_id.reset(tok2)
@@ -456,56 +459,55 @@ def test_agent_method_ctx_and_context_parameters_are_llm_controllable():
 # --------------------------------------------------------------------------
 
 
-def test_fanout_refuses_the_spawn_past_the_limit(store, fake_dispatcher):
-    from openprogram.programs.tools.agents.agent.agent.agent import MAX_SPAWN_FANOUT
-
-    for i in range(MAX_SPAWN_FANOUT):
+def test_fanout_refuses_the_spawn_past_the_limit(store, fake_dispatcher, monkeypatch):
+    monkeypatch.setattr(
+        "openprogram.state.config.read_config",
+        lambda: {"agent": {"max_spawn_fanout": 8}},
+    )
+    for i in range(8):
         out = _call_agent(prompt=f"task {i}", session_id="p1", turn_id="a1")
-        assert "[agent refused]" not in out, f"spawn {i} was refused"
+        assert "[blocked by setting]" not in out, f"spawn {i} was refused"
     out = _call_agent(prompt="one too many", session_id="p1", turn_id="a1")
-    assert "[agent refused]" in out
-    assert f"already created {MAX_SPAWN_FANOUT} agents" in out
+    assert "[blocked by setting]" in out
+    assert "reached 8 agents" in out
     assert "agent(to=" in out  # points at reusing the agents it has
 
 
-def test_fanout_is_counted_per_turn(store, fake_dispatcher):
+def test_fanout_is_counted_per_turn(store, fake_dispatcher, monkeypatch):
     """A new turn spawns with a fresh budget — the cap stops one runaway
     turn, it is not a session-lifetime quota."""
-    from openprogram.programs.tools.agents.agent.agent.agent import MAX_SPAWN_FANOUT
-
-    for i in range(MAX_SPAWN_FANOUT + 1):
-        _call_agent(prompt=f"task {i}", session_id="p1", turn_id="a1")
-    out = _call_agent(prompt="next turn", session_id="p1", turn_id="a2")
-    assert "[agent refused]" not in out
-
-
-def test_fanout_zero_disables_the_cap(store, fake_dispatcher, monkeypatch):
-    from openprogram.programs.tools.agents.agent.agent.agent import MAX_SPAWN_FANOUT
-
     monkeypatch.setattr(
         "openprogram.state.config.read_config",
-        lambda: {"agent": {"max_spawn_fanout": 0}},
+        lambda: {"agent": {"max_spawn_fanout": 2}},
     )
-    for i in range(MAX_SPAWN_FANOUT + 2):
+    for i in range(3):
+        _call_agent(prompt=f"task {i}", session_id="p1", turn_id="a1")
+    out = _call_agent(prompt="next turn", session_id="p1", turn_id="a2")
+    assert "[blocked by setting]" not in out
+
+
+def test_no_fanout_cap_by_default(store, fake_dispatcher):
+    for i in range(12):
         out = _call_agent(prompt=f"task {i}", session_id="p1", turn_id="a1")
-        assert "[agent refused]" not in out
+        assert "[blocked by setting]" not in out
 
 
-def test_fanout_slot_is_not_spent_by_a_refused_spawn(store, fake_dispatcher):
+def test_fanout_slot_is_not_spent_by_a_refused_spawn(store, fake_dispatcher, monkeypatch):
     """The generation guard runs first, so a chain that is out of
     generations never burns its turn's fan-out slots."""
-    from openprogram.programs.tools.agents.agent.agent.agent import (
-        MAX_SPAWN_DEPTH,
-        _fanout_used,
-    )
+    from openprogram.programs.tools.agents.agent.agent.agent import _fanout_used
     from openprogram.programs.tools.agents.send_message.send_message.depth import (
         set_chain_generations,
     )
 
-    tok = set_chain_generations(MAX_SPAWN_DEPTH)
+    monkeypatch.setattr(
+        "openprogram.state.config.read_config",
+        lambda: {"agent": {"max_spawn_depth": 1, "max_spawn_fanout": 8}},
+    )
+    tok = set_chain_generations(1)
     try:
         out = _call_agent(prompt="nope", session_id="p1", turn_id="a1")
     finally:
         tok.var.reset(tok)
-    assert "generations of agents" in out
+    assert "generations" in out
     assert _fanout_used.get(("p1", "a1"), 0) == 0

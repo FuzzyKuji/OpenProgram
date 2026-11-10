@@ -36,94 +36,23 @@ globalThis.requestAnimationFrame = undefined;
 
 const { useSessionStore } = await import("../../../lib/session-store/index.ts");
 const { applyChatWsMessage } = await import("../../../lib/net/ws/chat-stream.ts");
-const { convToChatMsgs } = await import("../../../lib/chat/transcript/conv-mapper.ts");
 const { citationSources, isProviderSearch, parseSearchSources } = await import("../../../lib/chat/transcript/web-sources.ts");
 const { presentTool } = await import("../../../components/chat/messages/execution/tool-presentation.ts");
 const { summarizeToolGroup } = await import("../../../components/chat/messages/execution/tool-group-summary.ts");
 
 const en = (english) => english;
 const response = (sid, data) => applyChatWsMessage({ type: "chat_response", data: { session_id: sid, ...data } });
-const row = (id) => useSessionStore.getState().messagesById[id];
 const SOURCES = "Rust 1.80 released — https://blog.rust-lang.org/2024/07/25/Rust-1.80.0.html\nhttps://www.reddit.com/r/rust/";
 
-test("a provider-executed tool_use / tool_result pair lands as a provider search block with its sources", () => {
-  const sid = "s_provider_search";
-  useSessionStore.getState().setMessages(sid, [
-    { id: "m1", role: "user", content: "news?", status: "done" },
-    { id: "m1_reply", role: "assistant", content: "", status: "streaming" },
-  ]);
-  response(sid, { type: "stream_event", msg_id: "m1", event: {
-    type: "tool_use", tool: "web_search", tool_call_id: "ws_1",
-    input: JSON.stringify({ query: "rust 1.80" }), provider_executed: true,
-  } });
-  let reply = row("m1_reply");
-  const live = reply.blocks.find((b) => b.type === "tool");
-  assert.equal(live.provider_executed, true);
-  assert.equal(isProviderSearch(live), true);
-  assert.equal(reply.tools[0].providerExecuted, true);
-  assert.equal(reply.tools[0].status, "running");
-
-  response(sid, { type: "stream_event", msg_id: "m1", event: {
-    type: "tool_result", tool: "web_search", tool_call_id: "ws_1", result: SOURCES, provider_executed: true,
-  } });
-  reply = row("m1_reply");
-  const done = reply.blocks.find((b) => b.type === "tool");
-  assert.equal(done.provider_executed, true);
-  assert.equal(done.is_error, false);
-  assert.equal(reply.tools[0].status, "done");
-  assert.deepEqual(parseSearchSources(done.result), [
-    { url: "https://blog.rust-lang.org/2024/07/25/Rust-1.80.0.html", title: "Rust 1.80 released", label: "Rust 1.80 released" },
-    { url: "https://www.reddit.com/r/rust/", title: undefined, label: "reddit.com" },
-  ]);
-  assert.deepEqual(parseSearchSources("completed"), []);
-
-  response(sid, { type: "stream_event", msg_id: "m1", event: {
-    type: "tool_result", tool: "web_search", tool_call_id: "ws_1", result: "search failed", is_error: true, provider_executed: true,
-  } });
-  assert.equal(row("m1_reply").tools[0].status, "error");
-});
-
-test("the final frame's text block keeps its citations", () => {
-  const sid = "s_provider_cite";
-  useSessionStore.getState().setMessages(sid, [
-    { id: "m2", role: "user", content: "news?", status: "done" },
-    { id: "m2_reply", role: "assistant", content: "", status: "streaming" },
-  ]);
-  const citations = [{ url: "https://a.example/x", title: "A", start: 0, end: 4 }];
-  response(sid, { type: "result", msg_id: "m2", content: "Rust", blocks: [
-    { type: "tool", tool: "web_search", tool_call_id: "ws_2", provider_executed: true, input: "{\"query\":\"rust\"}", result: "completed" },
-    { type: "text", text: "Rust", citations },
-  ] });
-  const blocks = row("m2_reply").blocks;
-  assert.equal(blocks[0].provider_executed, true);
-  assert.deepEqual(blocks[1].citations, citations);
-});
-
-test("a history reload keeps provider_executed and citations", () => {
-  const [, reply] = convToChatMsgs([
-    { id: "u1", role: "user", content: "news?" },
-    { id: "a1", role: "assistant", content: "Rust 1.80 shipped.", blocks: [
-      { type: "tool", tool: "web_search", provider_executed: true, tool_call_id: "ws_3",
-        input: "{\"query\": \"rust 1.80\"}", result: SOURCES, is_error: false },
-      { type: "text", text: "Rust 1.80 shipped.", citations: [
-        { url: "https://blog.rust-lang.org/x", title: "Rust blog", start: 0, end: 9 },
-        { url: "https://blog.rust-lang.org/x", title: null, start: null, end: null },
-        { url: "https://www.example.org/y", title: null, start: null, end: null },
-        { title: "no url" },
-      ] },
-    ] },
-  ]);
-  const tool = reply.blocks.find((b) => b.type === "tool");
-  assert.equal(tool.provider_executed, true);
-  assert.equal(reply.tools[0].providerExecuted, true);
-  const text = reply.blocks.find((b) => b.type === "text");
-  assert.equal(text.citations.length, 3);
-  assert.deepEqual(citationSources(text.citations).map((s) => s.label), ["Rust blog", "example.org"]);
-  const [, plain] = convToChatMsgs([
-    { id: "u2", role: "user", content: "hi" },
-    { id: "a2", role: "assistant", content: "hello", blocks: [{ type: "text", text: "hello" }] },
-  ]);
-  assert.equal(plain.blocks[0].citations, undefined);
+// The server keeps provider_executed and citations on a reload (the
+// provider_citations recording); the client names each source once.
+test("a reloaded reply's citations name each source once", () => {
+  const citations = [
+    { url: "https://blog.rust-lang.org/x", title: "Rust blog", start: 0, end: 9 },
+    { url: "https://blog.rust-lang.org/x", title: null, start: null, end: null },
+    { url: "https://www.example.org/y", title: null, start: null, end: null },
+  ];
+  assert.deepEqual(citationSources(citations).map((s) => s.label), ["Rust blog", "example.org"]);
   assert.deepEqual(citationSources(undefined), []);
 });
 
@@ -147,3 +76,4 @@ test("the group summary counts provider searches as web searches", () => {
   ];
   assert.equal(summarizeToolGroup(blocks, { text: en }).label, "Searched the web 2 times");
 });
+

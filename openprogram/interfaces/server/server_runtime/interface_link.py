@@ -56,12 +56,19 @@ def session_busy(session_id: str) -> bool:
 
 
 def session_on_screen(session_id: str) -> bool:
-    """A connected client opened the session (``mark_session_read`` set its focus)."""
+    """A connected client has the session open in a window that is not hidden.
+
+    ``mark_session_read`` sets the socket's focus and ``set_window_hidden``
+    its hidden flag. Focus stays while hidden: it is also the disconnect
+    signal for a waiting question, which a background window keeps holding.
+    """
     server = _server()
     with server._ws_lock:
         connections = list(server._ws_connections)
     return any(
-        getattr(ws, "_focused_session_id", None) == session_id for ws in connections
+        getattr(ws, "_focused_session_id", None) == session_id
+        and not getattr(ws, "_window_hidden", False)
+        for ws in connections
     )
 
 
@@ -70,11 +77,11 @@ def set_active_head(session_id: str, head_id: str) -> bool:
 
 
 def document_file(page: str) -> str:
-    """The built page in the served export, else its Markdown source."""
+    """The built Markdown copy in the served export, else the HTML source."""
     from openprogram.interfaces.server.frontend import out_dir, web_dir
 
     built = out_dir() / "docs" / f"{page}.html.md"
     if built.is_file():
         return str(built)
-    source = web_dir().parents[1] / "docs" / f"{page}.md"
+    source = web_dir().parents[1] / "docs" / f"{page}.html"
     return str(source) if source.is_file() else ""

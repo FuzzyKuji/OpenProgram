@@ -1,8 +1,9 @@
 import { translateText } from "@/lib/i18n";
 import { wsRequest } from "@/lib/net/ws/ws-request";
-import { preserveSessionReadRows, sendRuntimeCommand } from "./session-load";
-import { registerSessionHistory, type HistoryPage } from "@/lib/chat/history/session-history";
-import { seedHistoryWindow } from "./session-history-loader";
+import { sendRuntimeCommand } from "./session-load";
+import { registerSessionHistory } from "@/lib/chat/history/session-history";
+import { seedTurnWindow } from "./session-history-loader";
+import type { TurnWindow, WireTurn } from "@/lib/chat/history/history-window";
 export { loadOlderSessionHistory } from "./session-history-loader";
 /**
  * Conversation / branch / channel data layer.
@@ -19,10 +20,7 @@ import {
 import { runtimeState, getSocket, type TreeEntry } from "../state";
 import { updateSessionGoal } from "../actions/goal-state";
 import { useTodoStore } from "@/lib/chat/transcript/todo-plan";
-import {
-  formatProgramResultContent,
-  setWelcomeVisible,
-} from "../helpers";
+import { setWelcomeVisible } from "../helpers";
 import {
   refreshStatusSource,
   setChannelHealth,
@@ -34,7 +32,8 @@ import {
   renderHistoryGraph,
   repaintBranchTags,
 } from "../dag";
-import { convToChatMsgs } from "@/lib/chat/transcript/conv-mapper";
+import { rowsOfTurns } from "@/lib/chat/transcript/turn-rows";
+import { applyReadToView } from "@/lib/chat/transcript/apply-read";
 import { showNewChatRoute } from "@/lib/tabs/navigation/route";
 import { useSessionStore } from "@/lib/session-store";
 import {
@@ -48,7 +47,6 @@ import { showToast } from "@/lib/format-utils/toast";
 interface LegacyConv {
   id?: string;
   title?: string;
-  messages?: LegacyMessage[];
   channel?: string | null;
   account_id?: string | null;
   peer?: string | null;
@@ -56,19 +54,6 @@ interface LegacyConv {
   head_id?: string | null;
   run_active?: boolean;
   status?: string;
-  [k: string]: unknown;
-}
-
-interface LegacyMessage {
-  role?: string;
-  content?: string;
-  display?: string;
-  function?: string | null;
-  type?: string;
-  original_content?: string;
-  context_tree?: unknown;
-  attempts?: unknown[];
-  current_attempt?: number;
   [k: string]: unknown;
 }
 
@@ -101,97 +86,6 @@ const choiceHost = draftChannelChoiceHost;
 /** `runtimeState.conversations` typed as this module's richer conv shape. */
 function convs(): Record<string, LegacyConv> {
   return runtimeState.conversations as unknown as Record<string, LegacyConv>;
-}
-
-/** Mirror a conversation's messages into the React store — the only feed
- *  for a transcript that is not the focused session. */
-function feedStoreFromConv(conv: LegacyConv): void {
-  if (!conv || !conv.id) return;
-  useSessionStore
-    .getState()
-    .setMessages(conv.id, preserveSessionReadRows(conv.id, convToChatMsgs((conv.messages as never[]) || [])));
-}
-
-/** Rebuild card + event rows when the wire list omitted them. */
-function spliceCompactionFromGraph(
-  messages: LegacyMessage[],
-  graph: unknown,
-): LegacyMessage[] {
-  if (messages.some((m) => m.kind === "compaction" && (m.slot === "card" || m.slot === "event"))) {
-    return messages;
-  }
-  if (!Array.isArray(graph)) return messages;
-  const inserts: { at: number; row: LegacyMessage }[] = [];
-  const index = new Map<string, number>();
-  messages.forEach((m, i) => {
-    if (typeof m.id === "string" && m.id) index.set(m.id, i);
-  });
-  for (const raw of graph) {
-    if (!raw || typeof raw !== "object") continue;
-    const n = raw as Record<string, unknown>;
-    const id = typeof n.id === "string" ? n.id : "";
-    if (!id) continue;
-    const covers = Array.isArray(n.covers_ids)
-      ? (n.covers_ids as unknown[]).map(String).filter(Boolean)
-      : [];
-    const active = covers.length > 0 && !n.superseded_summary;
-    const relic = !!n.superseded_summary;
-    if (!active && !relic) continue;
-    const nCov = typeof n.summarised_count === "number" ? n.summarised_count : covers.length;
-    const execTs = typeof n.compacted_at === "number" ? n.compacted_at : 0;
-    let execAt = messages.length;
-    if (execTs) {
-      let at = 0;
-      messages.forEach((m, i) => {
-        const t = typeof m.timestamp === "number" ? m.timestamp
-          : typeof m.created_at === "number" ? m.created_at : 0;
-        if (t && t <= execTs) at = i + 1;
-      });
-      execAt = at;
-    }
-    const tb = typeof n.tokens_before === "number" ? n.tokens_before : undefined;
-    const ta = typeof n.tokens_after === "number" ? n.tokens_after : undefined;
-    inserts.push({
-      at: execAt,
-      row: {
-        id: `${id}_ui`,
-        role: "system",
-        kind: "compaction",
-        slot: "event",
-        summarised_count: nCov,
-        tokens_before: tb,
-        tokens_after: ta,
-        content: tb != null && ta != null
-          ? `Context compacted here: covered ${nCov} messages, ${tb} → ${ta} tokens`
-          : `Context compacted here: covered ${nCov} messages`,
-        timestamp: execTs || n.created_at,
-      },
-    });
-    if (!active) continue;
-    const coverSet = new Set(covers);
-    const covAt = covers.map((c) => index.get(c)).filter((i): i is number => i !== undefined);
-    const fold = covAt.length
-      ? Math.max(...covAt) + 1
-      : Math.max(0, messages.findIndex((m) => typeof m.id === "string" && m.id && !coverSet.has(m.id)));
-    inserts.push({
-      at: fold,
-      row: {
-        id: `${id}_card`,
-        role: "system",
-        kind: "compaction",
-        slot: "card",
-        summarised_count: nCov,
-        covers_ids: covers,
-        content: typeof n.preview === "string" ? n.preview : "",
-        timestamp: execTs || n.created_at,
-      },
-    });
-  }
-  if (!inserts.length) return messages;
-  inserts.sort((a, b) => b.at - a.at);
-  const out = messages.slice();
-  for (const { at, row } of inserts) out.splice(at, 0, row);
-  return out;
 }
 
 /* ===== Channel icons ============================================= */
@@ -575,19 +469,18 @@ export function newSession(draftId?: string): void {
 /* ===== Load session ============================================== */
 
 export function loadSessionData(data: LegacyConv): void {
-  if (!data.messages) data.messages = [];
-  // Paginated history already contains authoritative compaction rows.
-  // Graph previews for unloaded pages must not shadow those rows by ID.
-  if (!data.history) data.messages = spliceCompactionFromGraph(data.messages, data.graph);
   const id = data.id as string;
-  seedHistoryWindow(id, data.messages, data.history as HistoryPage | undefined);
-  registerSessionHistory(id, data.history as HistoryPage | undefined);
+  const turns = (data.turns as WireTurn[] | undefined) ?? [];
+  const window = data.window as TurnWindow | undefined;
+  const served = rowsOfTurns(turns);
+  if (window) seedTurnWindow(id, turns, window);
+  registerSessionHistory(id, window);
   const map = convs();
   // Merge data into existing conv. data 里没有的字段 (例如 created_at)
   // 不该被覆盖为 undefined; 显式 filter 一下 data 里的 undefined 值.
   const cleanedData: Record<string, unknown> = {};
   for (const [k, v] of Object.entries(data)) {
-    if (v !== undefined && k !== "goal" && k !== "todos" && k !== "todo_plans") cleanedData[k] = v;
+    if (v !== undefined && k !== "goal" && k !== "todos" && k !== "todo_plans" && k !== "turns" && k !== "window") cleanedData[k] = v;
   }
   map[id] = Object.assign({}, map[id] || {}, cleanedData);
   // Keep the sidebar's store entry in sync with the freshly-loaded
@@ -605,16 +498,9 @@ export function loadSessionData(data: LegacyConv): void {
   // 回包晚到、用户已切走时, loading 态若还指着这个 id 也要释放。
   const st = useSessionStore.getState();
   if (st.transcriptLoadingId === id) st.setTranscriptLoading(null);
-  // A session loaded while NOT focused still needs its messages in the
-  // React store — that's what a split-view peer pane renders from.
-  // `renderSessionMessages` below is the only path that feeds the store,
-  // and it's gated on `currentSessionId` because the rest of what it does
-  // is legacy-DOM work for the focused chat. Feed the store directly here
-  // so a peer's transcript lands without touching the focused session.
-  if (id !== runtimeState.currentSessionId) {
-    feedStoreFromConv(map[id]);
-    return;
-  }
+  // Every read lands in its view, focused or not: a split pane draws from it.
+  applyReadToView(id, served);
+  if (id !== runtimeState.currentSessionId) return;
 
   // `refreshChannelBadge` is just `refreshStatusSource` — one call covers
   // both of the legacy pair here.
@@ -663,63 +549,11 @@ function refreshFocusedSession(id: string, data: LegacyConv): void {
   }
   // Only hit GET /context when the session payload had no snapshot.
   if (!incoming?.breakdown) {
-    warmContextBreakdown(id, headId);
+    warmContextBreakdown(id, headId, { focus: true });
   }
   // Viewport hooks restore history anchors after this data commit. Saved
   // pixels from a larger cached window are invalid in the latest page.
 
-}
-
-/* ===== Tree → messages =========================================== */
-
-export function extractMessagesFromTree(tree: TreeNode): LegacyMessage[] {
-  if (!tree || !tree.children) return [];
-  const messages: LegacyMessage[] = [];
-  const fmt = formatProgramResultContent;
-  for (const child of tree.children) {
-    if (child.name === "_chat_query") {
-      const query = child.params && child.params.query;
-      if (query) messages.push({ role: "user", content: String(query) });
-      if (child.output) {
-        messages.push({
-          role: "assistant",
-          content: fmt ? fmt(child.output) : String(child.output),
-          type: "result",
-          function: null,
-        });
-      }
-    } else if (child.name && child.name !== "_chat_query" && !child.name.startsWith("_")) {
-      const funcName = child.name;
-      const kwargs = child.params || {};
-      const argStr = Object.entries(kwargs)
-        .filter((e) => e[0] !== "runtime")
-        .map((e) => e[0] + "=" + JSON.stringify(e[1]))
-        .join(" ");
-      messages.push({
-        role: "user",
-        content: "run " + funcName + (argStr ? " " + argStr : ""),
-        display: "runtime",
-      });
-      if (child.output) {
-        messages.push({
-          role: "assistant",
-          content: fmt ? fmt(child.output) : String(child.output),
-          type: "result",
-          function: funcName,
-          display: "runtime",
-        });
-      }
-    }
-  }
-  if (messages.length > 0) {
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") {
-        messages[i].context_tree = tree;
-        break;
-      }
-    }
-  }
-  return messages;
 }
 
 /* ===== Render session messages =================================== */
@@ -733,11 +567,9 @@ function clearChatMessages(container: HTMLElement | null): void {
   });
 }
 
-export function renderSessionMessages(conv: LegacyConv, options?: { preserveStore: boolean }): void {
+export function renderSessionMessages(conv: LegacyConv): void {
   const container = document.getElementById("chatMessages");
   runtimeState.trees.length = 0;
-
-  if (!options?.preserveStore) feedStoreFromConv(conv);
 
   if (!conv.id || !(useSessionStore.getState().messageOrder[conv.id]?.length)) {
     clearChatMessages(container);

@@ -76,7 +76,7 @@ _SECRET_VALUE_PATTERNS = (
     re.compile(r"(?i)\b(?:bearer|basic|bot|token|key)\s+[\w.:\-~+/]+=*"),
     re.compile(r"\bsk-[A-Za-z0-9_\-]{8,}"),
     re.compile(r"(?i)([?&](?:api[_-]?key|access[_-]?token|token)=)[^&\s]+"),
-    re.compile(r"(?i)(https?://)[^/@\s]+:[^/@\s]+@"),
+    re.compile(r"(?i)(https?://)[^/@\s:]*:[^/@\s]+@"),
 )
 
 

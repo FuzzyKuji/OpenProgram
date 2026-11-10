@@ -21,7 +21,11 @@ def _cmd_session_archive(session_id: str, archived: bool) -> None:
     try:
         resolve_backend_endpoint()
     except OwnerAuthError:
+        was_archived = bool((default_db().get_session(session_id) or {}).get("archived"))
         found = default_db().set_archived(session_id, archived)
+        if found and archived != was_archived:
+            from openprogram.runtime.conversation.always_on.runtime import archive_changed
+            archive_changed(session_id, archived)
     else:
         from .execution import _worker_request
         status, payload = _worker_request(

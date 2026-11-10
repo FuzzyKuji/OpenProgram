@@ -54,7 +54,7 @@ def test_snapshot_carries_call_kind_and_session_across_boundary():
         snap = snapshot()
 
     # back at default (fresh spawn interpreter has the default context)
-    assert current_usage_context().call_kind == "unknown"
+    assert current_usage_context().call_kind is None
 
     apply_snapshot(snap)
     c = current_usage_context()

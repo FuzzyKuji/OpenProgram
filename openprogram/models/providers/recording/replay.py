@@ -308,7 +308,8 @@ def read_recording_file(recording_path: str | Path) -> list[RecordedCall]:
 
 # Wall-clock fields differ between the recording run and every replay run, so
 # comparing them would make every recording file mismatch on the second message.
-NON_DETERMINISTIC_FIELD_NAMES = frozenset({"timestamp"})
+# A reply's time to first token (Usage.first_token_ms / first_text_ms) is one.
+NON_DETERMINISTIC_FIELD_NAMES = frozenset({"timestamp", "first_token_ms", "first_text_ms"})
 
 
 def find_first_difference(

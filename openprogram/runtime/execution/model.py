@@ -10,6 +10,11 @@ from types import MappingProxyType
 from typing import Any, Mapping
 
 
+#: Why the session-log migration closed a run left unfinished by an older profile.
+UNFINISHED_BEFORE_SESSION_LOGS = "unfinished_before_session_logs"
+RESTART_NOT_CONTINUED = "restart_not_continued"
+
+
 class ExecutionStatus(str, Enum):
     QUEUED = "queued"
     RUNNING = "running"
@@ -293,8 +298,7 @@ class ControlCommand:
 class ExecutionEvent:
     """One canonical event.
 
-    ``sequence`` is the SQLite event identity used by projection foreign
-    keys.  ``execution_sequence`` is the public, contiguous cursor for this
+    ``sequence`` is the event identity across all executions.  ``execution_sequence`` is the public, contiguous cursor for this
     exact execution.  Keeping the two identities separate prevents events
     from unrelated executions from creating false reconnect gaps.
     """

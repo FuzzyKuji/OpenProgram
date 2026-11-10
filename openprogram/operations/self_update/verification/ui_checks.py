@@ -12,9 +12,13 @@ import re
 import secrets
 import subprocess
 import struct
+import sys
 import threading
 import time
 import zlib
+
+from ..types import UpdatePhase
+from ..types import DEFAULT_APP_PATH
 
 UI_PROTOCOL = 1
 UI_INTERACTION_PROTOCOL = 1
@@ -68,14 +72,15 @@ def _validate_png(raw, width, height):
 
 
 def admit_plan(plan, request):
-    if any(check["entry"] == "ui:main" for check in plan["checks"]):
+    # Under sealed versions there is no installed App to name; the trial's port is the target.
+    if not request.controller_version and any(check["entry"] == "ui:main" for check in plan["checks"]):
         from ..delivery.package_protocol import validate_ui_package
         from .native_checks import runtime_identity
         from .verification_plan import required_ui_protocol
-        package = validate_ui_package(Path(request.app_path))
+        package = validate_ui_package(Path(DEFAULT_APP_PATH))
         if package["protocol"] < required_ui_protocol(plan["checks"]):
             raise ValueError("App does not support guarded UI interactions")
-        runtime_identity(Path(request.app_path))
+        runtime_identity(Path(DEFAULT_APP_PATH))
         _main_connection()
 
 
@@ -88,6 +93,7 @@ def _main_connection():
 
 
 def _live(store, update_id, grant):
+    from .verification_channel import host_pid
     from .verification_channel import load_grant
     from .verification_channel import _check_job
     from openprogram.runtime.jobs.store import load_job
@@ -98,7 +104,7 @@ def _live(store, update_id, grant):
             raise ValueError("UI verifier authorization changed")
         job = load_job(record.request.session_id, grant["job_id"])
         _check_job(store, record, grant, job)
-        if grant["worker_pid"] != os.getpid() or job.status is not JobStatus.RUNNING or job.cancel_requested_at is not None:
+        if host_pid(record, grant) != os.getpid() or job.status is not JobStatus.RUNNING or job.cancel_requested_at is not None:
             raise ValueError("UI verifier is no longer running")
         return record
 
@@ -137,18 +143,23 @@ def validate_capture(body, contract):
             or len(json.dumps(body, allow_nan=False).encode()) > contract["max_output_bytes"]):
         raise ValueError("invalid or expired main-window capture")
     identity = body["identity"]
-    if (not isinstance(identity, dict) or set(identity) != {"app_path", "app_pid", "candidate_sha", "window_id",
+    if "trial_port" in contract:
+        if (not isinstance(identity, dict) or set(identity) != {"trial_port", "candidate_sha", "route"}
+                or identity["trial_port"] != contract["trial_port"] or identity["candidate_sha"] != contract["candidate_sha"]):
+            raise ValueError("page capture does not belong to the trial")
+    elif (not isinstance(identity, dict) or set(identity) != {"app_path", "app_pid", "candidate_sha", "window_id",
             "web_contents_id", "renderer_pid", "route", "bounds", "target_id"}
             or identity["app_path"] != "/Applications/OpenProgram.app"
             or identity["candidate_sha"] != contract["candidate_sha"] or identity["route"] != "/s/" + contract["session_id"]
             or any(type(identity[k]) is not int or identity[k] <= 0 for k in ("app_pid", "renderer_pid", "window_id", "web_contents_id"))
             or not isinstance(identity["target_id"], str) or not 1 <= len(identity["target_id"]) <= 128):
         raise ValueError("main-window identity differs from approved scope")
-    bounds = identity["bounds"]
-    if (not isinstance(bounds, dict) or set(bounds) != {"x", "y", "width", "height"}
-            or any(type(v) is not int for v in bounds.values()) or not 1 <= bounds["width"] <= 16384
-            or not 1 <= bounds["height"] <= 16384):
-        raise ValueError("invalid main-window bounds")
+    if "trial_port" not in contract:
+        bounds = identity["bounds"]
+        if (not isinstance(bounds, dict) or set(bounds) != {"x", "y", "width", "height"}
+                or any(type(v) is not int for v in bounds.values()) or not 1 <= bounds["width"] <= 16384
+                or not 1 <= bounds["height"] <= 16384):
+            raise ValueError("invalid main-window bounds")
     screenshot = body["screenshot"]
     if (not isinstance(screenshot, dict) or set(screenshot) != {"mime_type", "width", "height", "sha256", "data"}
             or screenshot["mime_type"] != "image/png" or not isinstance(screenshot["data"], str)
@@ -226,6 +237,68 @@ def permits_ws_command(ws, command):
     return True
 
 
+_PAGE_CAPTURE = """
+import base64, json, sys
+url = sys.stdin.read().strip()
+try:
+    from playwright.sync_api import sync_playwright
+    driver = sync_playwright().start()
+    browser = driver.chromium.launch(headless=True)
+except Exception:
+    raise SystemExit(3)
+page = browser.new_page(viewport={"width": 1280, "height": 800})
+page.goto(url, wait_until="load", timeout=30000)
+page.wait_for_selector('[contenteditable="true"]:visible, textarea:visible, .center-empty-btn:visible', timeout=25000)
+shot = page.screenshot()
+nodes = page.evaluate(\"\"\"() => Array.from(document.querySelectorAll('button,a,textarea,[role],[contenteditable="true"]'))
+  .slice(0, 10000).map(el => ({role: el.getAttribute('role') || el.tagName.toLowerCase(),
+                               name: (el.getAttribute('aria-label') || el.textContent || '').slice(0, 200)}))\"\"\")
+browser.close()
+driver.stop()
+print(json.dumps({"png": base64.b64encode(shot).decode(), "nodes": nodes or [{"role": "document", "name": ""}]}))
+"""
+
+
+def _observe_trial_page(store, record, check, grant):
+    """A trial has no App window; its page is captured on the trial's port."""
+    from openprogram.host.security.backend_endpoint import build_owner_auth_url
+    from openprogram.host.security.backend_endpoint import read_active_web_access, read_web_token
+    from .system_probe import _probe_system
+    from .system_probe import trial_target
+
+    if "interaction" in check:
+        raise ValueError("a trial captures the page only; UI interactions run after the switch")
+    target = trial_target(record)
+    seconds = min(check["timeout_seconds"], grant["deadline"] - time.time())
+    if seconds <= 0:
+        raise TimeoutError("UI verification deadline expired")
+    before = _probe_system(record, record.request.candidate_sha, min(60, seconds), target=target)
+    origin = f"http://127.0.0.1:{target.port}"
+    access = read_active_web_access(target.state_dir)
+    url = build_owner_auth_url(origin, token=read_web_token(target.state_dir), effective_origins=access.effective_origins)
+    environment = {key: os.environ[key] for key in ("HOME", "PATH", "TMPDIR", "PLAYWRIGHT_BROWSERS_PATH") if key in os.environ}
+    done = subprocess.run([sys.executable, "-I", "-B", "-c", _PAGE_CAPTURE], input=url, capture_output=True, text=True,
+                          timeout=seconds, env=environment)
+    if done.returncode != 0:
+        raise ValueError("the trial's page could not be captured")
+    captured = json.loads(done.stdout)
+    raw = base64.b64decode(captured["png"])
+    width, height = struct.unpack(">II", raw[16:24])
+    now = time.time()
+    capture = dict(
+        schema=UI_PROTOCOL, nonce=secrets.token_hex(32), update_id=record.request.update_id, attempt=record.state.attempt,
+        check_id=check["id"], worker_pid=grant["worker_pid"], observed_at=now, cleanup_complete=True,
+        identity=dict(trial_port=target.port, candidate_sha=record.request.candidate_sha, route="/chat"),
+        screenshot=dict(mime_type="image/png", width=width, height=height, sha256=hashlib.sha256(raw).hexdigest(), data=captured["png"]),
+        accessibility=dict(nodes=captured["nodes"]),
+    )
+    after = _probe_system(record, record.request.candidate_sha, min(60, seconds), target=target)
+    if before["worker_pid"] != after["worker_pid"]:
+        raise ValueError("worker changed during capture")
+    return {"system_gate": after, "observation": {"entry": "ui:main", "status": 200, "content_type": "application/json",
+                                                  "body": json.dumps(capture, allow_nan=False), "observed_at": now}}
+
+
 def observe_ui(store, record, check, grant):
     from .native_checks import runtime_identity
     from ..delivery.package_protocol import validate_ui_package
@@ -234,6 +307,8 @@ def observe_ui(store, record, check, grant):
     from openprogram.host.resources.desktop_link import request_on_ws
     if check.get("interaction", {}).get("kind") == "test_object":
         raise ValueError("test_object UI interaction is no longer supported")
+    if record.state.phase is UpdatePhase.TRIAL:
+        return _observe_trial_page(store, record, check, grant)
     connection = _main_connection()
     now = time.time()
     seconds = min(check["timeout_seconds"], grant["deadline"] - now)
@@ -246,7 +321,7 @@ def observe_ui(store, record, check, grant):
         if value <= 0 or _main_connection() != connection:
             raise ValueError("UI verification expired or disconnected")
         return value
-    app = Path(record.request.app_path)
+    app = Path(DEFAULT_APP_PATH)
     package = validate_ui_package(app)
     if package["protocol"] < required_ui_protocol([check]):
         raise ValueError("App does not support guarded UI interactions")
@@ -295,6 +370,8 @@ def validate_observation(observation, record, check, grant):
                     max_output_bytes=check["max_output_bytes"])
     if "interaction" in check:
         contract["interaction"] = check["interaction"]
+    if record.state.phase is UpdatePhase.TRIAL:
+        contract["trial_port"] = record.state.detail["trial"]["port"]
     validate_capture(body, contract)
     if observation["status"] != 200 or observation["observed_at"] != body["observed_at"]:
         raise ValueError("capture observation changed")

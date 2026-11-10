@@ -1,205 +1,323 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram installation, packaging, release, and upgrade design</title>
-<style>
-  :root{--bg:#16150f;--panel:#1d1c14;--panel2:#12110b;--border:#302e22;--text:#c5c1af;--muted:#8e8a79;--title:#f2efe6;--accent:#d4843a;--blue:#4f8ef7;--green:#5aad4e;--purple:#9d6fe0;--red:#e35b6f;--yellow:#d9a441}
-  *{box-sizing:border-box}body{margin:0;padding:38px 22px 92px;background:var(--bg);color:var(--text);font:14px/1.72 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}.wrap{max-width:1120px;margin:0 auto}h1{margin:0 0 8px;color:var(--title);font-size:25px;line-height:1.3}h2{margin:38px 0 10px;color:var(--accent);font-size:18px;scroll-margin-top:20px}h3{margin:20px 0 7px;color:var(--title);font-size:15px}p{max-width:90ch}a{color:#78a8ff}code{padding:1px 5px;border-radius:4px;background:var(--panel2);color:#e2a15e;font:12px Menlo,Consolas,monospace}pre{margin:10px 0 16px;padding:14px 16px;overflow:auto;border:1px solid var(--border);border-radius:10px;background:var(--panel2);color:#d5d1c3;font:12px/1.7 Menlo,Consolas,monospace}ul,ol{max-width:92ch}li{margin:5px 0}.sub{margin:0 0 18px;color:var(--muted);max-width:92ch}.meta{display:flex;flex-wrap:wrap;gap:8px;margin:0 0 22px}.pill{padding:4px 10px;border:1px solid var(--border);border-radius:999px;background:var(--panel);color:var(--muted);font-size:12px}.pill strong{color:var(--title)}.toc{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 24px}.toc a{padding:4px 11px;border:1px solid var(--border);border-radius:999px;background:var(--panel);color:var(--text);text-decoration:none;font-size:12px}.toc a:hover{border-color:var(--accent);color:var(--title)}.note{margin:12px 0 16px;padding:10px 14px;border-left:3px solid var(--accent);background:var(--panel);color:var(--text);border-radius:0 8px 8px 0}.note strong{color:var(--title)}.note.warn{border-left-color:var(--red)}.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}.card{padding:15px;border:1px solid var(--border);border-radius:11px;background:var(--panel)}.card .label{color:var(--muted);font:10px Menlo,monospace;letter-spacing:.16em}.card h3{margin:6px 0 7px}.card p{margin:0;font-size:13px}.desktop{border-top:3px solid var(--blue)}.cli{border-top:3px solid var(--green)}.dev{border-top:3px solid var(--purple)}.table-wrap{overflow:auto;border:1px solid var(--border);border-radius:11px;background:var(--panel)}table{width:100%;min-width:760px;border-collapse:collapse}th{padding:10px 12px;color:var(--muted);font-size:11px;text-align:left;border-bottom:1px solid var(--border)}td{padding:10px 12px;border-bottom:1px solid #29271d;vertical-align:top}tr:last-child td{border-bottom:none}td strong{color:var(--title)}.yes{color:var(--green)}.partial{color:var(--yellow)}.no{color:var(--red)}.out{color:var(--muted)}.flow{display:grid;grid-template-columns:1fr 42px 1fr 42px 1fr;align-items:stretch;gap:8px;margin:14px 0 18px}.node{padding:14px;border:1px solid var(--border);border-radius:10px;background:var(--panel)}.node strong{display:block;color:var(--title);margin-bottom:5px}.arrow{display:flex;align-items:center;justify-content:center;color:var(--accent);font-size:22px}.layers{display:grid;grid-template-columns:1fr 1fr;gap:12px}.layer{padding:14px;border-radius:10px;border:1px solid var(--border);background:var(--panel)}.layer.fixed{border-left:4px solid var(--blue)}.layer.mutable{border-left:4px solid var(--green)}.layer h3{margin-top:0}.steps{counter-reset:step;display:grid;gap:9px}.step{position:relative;padding:12px 14px 12px 48px;border:1px solid var(--border);border-radius:10px;background:var(--panel)}.step::before{counter-increment:step;content:counter(step);position:absolute;left:14px;top:12px;width:23px;height:23px;display:flex;align-items:center;justify-content:center;border-radius:50%;background:var(--panel2);color:var(--accent);font:11px Menlo,monospace}.step strong{color:var(--title)}.small{color:var(--muted);font-size:12px}@media(max-width:850px){.grid3,.layers{grid-template-columns:1fr}.flow{grid-template-columns:1fr}.arrow{transform:rotate(90deg);min-height:26px}}
-</style>
-</head>
-<body>
-<main class="wrap">
-  <h1>OpenProgram installation, packaging, release, and upgrade design</h1>
-  <p><strong>Official releases</strong>: v1.0.0</p>
-  <p class="sub">This is the normative source for OpenProgram installation and distribution. It defines user categories and platform support separately, covering macOS/Windows desktop packages, macOS/Linux/Windows CLI and server installations, browser access, Python runtime ownership, Program extension environments, versions, upgrades, and uninstallation. Official-release checking, downloading, platform installation boundaries, and current implementation evidence are detailed in<a href="automatic-updates.html">Official-release automatic update design</a>.</p>
-  <div class="meta"><span class="pill"><strong>Design status</strong>: decided</span><span class="pill"><strong>Implementation status</strong>: Windows Desktop awaits the signed-release gate</span><span class="pill"><strong>Desktop platforms</strong>: macOS / Windows</span><span class="pill"><strong>Core runtime</strong>: CPython</span></div>
-  <nav class="toc" aria-label="Contents"><a href="#decisions">Design constraints</a><a href="#current">Current implementation</a><a href="#references">Reference comparison</a><a href="#audiences">Users and platforms</a><a href="#artifacts">Release artifacts</a><a href="#desktop">Desktop packages</a><a href="#programs">Program environments</a><a href="#lifecycle">Installation and upgrades</a><a href="#security">Security boundaries</a><a href="#acceptance">Acceptance</a><a href="#status">Implementation status</a></nav>
+<title>Installation, packaging, release and upgrade</title>
+<meta name="description" content="Who installs OpenProgram how, what every release contains, and how installs are verified, upgraded and removed.">
+<h1>Installation, packaging, release and upgrade</h1>
+<p><strong>Official releases</strong>: v1.1.0 is the version this tree builds; v1.0.0 is the latest published. One complete product runtime per platform and architecture. The macOS App adds only the Electron shell to it and the CLI only launchers; Windows and Linux Apps are a <a href="#thin-shell">thin shell</a> plus a seed. Checks, downloads and platform handoff are in <a href="automatic-updates.html">Automatic updates</a>.</p>
 
-  <h2 id="decisions">1. Established design constraints</h2>
-  <ol>
-    <li>Python is the core runtime for the OpenProgram backend, CLI, Runtime, and Program execution. Installation must not be simplified by removing Python.</li>
-    <li>macOS Desktop is distributed as DMG/ZIP explicitly labeled <code>Unsigned</code> . Windows Desktop is distributed only as an Authenticode-signed x64 NSIS installer. Linux publishes only the complete CLI/server runtime.</li>
-    <li>Every nondeveloper installation uses the same complete product runtime built for its platform and architecture. Desktop adds only the Electron shell; CLI/server adds only command launchers. They must not install different sets of Web, Provider, Channel, Browser, or model-asset capabilities. The product runtime bundles no Programs.</li>
-    <li>The complete product runtime includes pinned CPython, OpenProgram, precompiled Web, Channels, Search, Playwright Chromium, and other manifest dependencies. Computer use is a built-in tool and ships no model weights. The product runtime explicitly excludes PyTorch, torchvision, OpenCV, EasyOCR, sentence-transformers, triton, and NVIDIA/CUDA distributions.</li>
-    <li>Ordinary users need no preinstalled Python or Node.js. Session and Memory Git history requires system Git on PATH; the product runtime does not bundle Git. Installers may download the complete runtime archive for the current platform, but cannot label an artifact missing manifest capabilities as a complete installation.</li>
-    <li>Desktop packages and CLI runtimes remain read-only during execution. Configuration, sessions, caches, and user-added third-party Programs go into <code>~/.openprogram</code>.</li>
-    <li>Development installations add editable source, debugging tools, local Web/Ink builds, test tools, and explicitly configured backend overlays for perception, OCR, Browser, and other components on top of full product capabilities. Perception paths requiring PyTorch, OpenCV, or EasyOCR exist only in these overlays, outside ordinary-installation manifest capabilities.</li>
-    <li><code>stable</code> denotes a published, verified version, not <code>origin/main</code>.<code>main</code> belongs only to development installations.</li>
-    <li>Official installations use no editable checkout, do not build Web or Ink on user machines, depend on no repository directory, and do not resolve product dependencies through PyPI.</li>
-    <li><code>pip install openprogram</code>, <code>pipx install openprogram</code> and <code>uv tool install openprogram</code> are not supported product installation entries. Public indexes, introductory documentation, and runtime repair messages must point only to official installers or complete packages. Wheels are used only for release runtime assembly, source development, and testing.</li>
-    <li>PyInstaller, Briefcase, and py2app are references only and do not replace the existing Electron desktop application.</li>
-    <li>The default CLI/server entry for ordinary users is <code>curl -fsSL https://openprogram.io/install | sh</code>. The site script only resolves the latest stable release, validates its version format, and downloads the installer from that immutable tag. Runtime checksums, capability manifests, and cold-start validation remain the versioned installer’s responsibility.</li>
-    <li>The only installed macOS App location is the fixed path <code>/Applications/OpenProgram.app</code>. Local desktop builds generate and validate an App in an unregistered temporary directory, then replace that fixed path. Temporary Apps are neither launched nor retained, and App directory names never contain versions or task names.</li>
-    <li>Windows x86_64 CLI/server uses the complete ZIP runtime and PowerShell installer. Windows Desktop uses the same runtime archive, a per-user NSIS installer, ConPTY, and mandatory signed-release gates. Windows sandboxing remains a separate layer.</li>
-  </ol>
-  <div class="note"><strong>Definition of complete installation:</strong>Every supported nondeveloper installation must have the same capability manifest and contain all declared components and assets, installed and verified. Playwright Chromium is inside this boundary; Programs are not. PyTorch, torchvision, OpenCV, EasyOCR, sentence-transformers, triton, and NVIDIA/CUDA distributions are outside it. Perception paths depending on those exclusions require explicit development or configuration overlays; first use must not implicitly download dependencies. Third-party Programs are additional capabilities explicitly installed by the user.</div>
+<h2>Who gets what</h2>
+<table class="stack">
+<thead><tr><th scope="col"></th><th scope="col">Desktop</th><th scope="col">CLI / server</th><th scope="col">Development</th></tr></thead>
+<tbody>
+<tr><th scope="row">Source</th><td>GitHub Release</td><td>Same Release</td><td>Git checkout</td></tr>
+<tr><th scope="row">Product runtime</th><td>macOS: platform archive + Electron. Windows, Linux: thin shell + seed</td><td>Platform archive</td><td>Same capabilities + development overlay</td></tr>
+<tr><th scope="row">System Python, Node.js</th><td>Not needed</td><td>Not needed</td><td>Toolchain needed</td></tr>
+<tr><th scope="row">Git</th><td>Bundled, pinned, first on <code translate="no">PATH</code></td><td>Same</td><td>System Git needed</td></tr>
+<tr><th scope="row">Upgrade target</th><td>Published runtime</td><td>Same</td><td>Explicit Git ref</td></tr>
+<tr><th scope="row">Channel</th><td><code translate="no">stable</code></td><td><code translate="no">stable</code></td><td><code translate="no">dev</code></td></tr>
+</tbody>
+</table>
 
-  <h2 id="current">2. Current implementation and verified gaps</h2>
-  <div class="table-wrap"><table><thead><tr><th>Scope</th><th>Current implementation</th><th>Difference from this design</th></tr></thead><tbody>
-    <tr><td><strong>Installation scripts</strong></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/install.sh">scripts/install.sh</a> clones the repository, creates or reuses a Python environment, performs an editable install, and runs npm builds locally.</td><td>This is development installation behavior, not an official release installer.</td></tr>
-    <tr><td><strong>Python wheel</strong></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/pyproject.toml">pyproject.toml</a> defines CLI entry points and package data. Release staging writes precompiled Web assets into the wheel and places a standalone Ink bundle in the platform runtime.</td><td>Clean-wheel acceptance of Web assets is complete. Ink runs on the runtime’s platform Node.js and requires no user-installed npm dependencies.</td></tr>
-    <tr><td><strong>Web UI</strong></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/server/frontend.py">frontend.py</a> prefers the Server package’s <code>_frontend</code> in release wheels; source checkouts still use <code>apps/web/out</code>.</td><td>The current source version baseline is v0.9.8. Retained v0.7.0 clean-wheel/runtime acceptance is historical evidence. Ordinary user machines do not run npm build.</td></tr>
-    <tr><td><strong>TUI</strong></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/cli/ink.py">openprogram/interfaces/cli/ink.py</a> locates <code>apps/cli/dist</code> in source checkouts, and <code>assets/tui/index.cjs</code> and <code>bin/node</code> in official runtimes. Startup depends on raw-input capability rather than disabling by operating system.</td><td>The official CLI provides both the full Ink interface with bundled Node.js and a Rich fallback independent of Node.js raw mode. Windows Terminal / ConPTY is included in local acceptance.</td></tr>
-    <tr><td><strong>Program installation</strong></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/product-runtime.json">product-runtime.json</a> pins the capability IDs; it names no Programs.</td><td>The runtime ships no Programs; users add them with <code>openprogram programs install</code> in a mutable environment. Perception dependencies such as PyTorch, OpenCV, and EasyOCR stay outside the product runtime and require explicit overlays.</td></tr>
-    <tr><td><strong>Electron</strong></td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main.js">apps/desktop/main.js</a> validates the schema 2 capability manifest in packaged mode, resolves bundled CPython and Browser/OCR/model paths from resources, and starts the worker in isolated mode;<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/package.json">apps/desktop/package.json</a> declares macOS DMG/ZIP and Windows x64 NSIS, including Windows PowerShell/ConPTY integration points.</td><td>macOS arm64/x64 DMG and ZIP have passed release acceptance. Windows assembles the same complete runtime on a native runner, requires application and installer signatures, and runs packaged smoke tests. Linux AppImage has been removed from release configuration.</td></tr>
-    <tr><td><strong>Version</strong></td><td><code>pyproject.toml</code> is the normative version source; Electron metadata retains the copy required by build tools.</td><td>The release gate must reject any mismatch among tag, Python metadata, and Electron metadata.</td></tr>
-    <tr><td><strong>Release</strong></td><td>The tag workflow first builds complete runtime archives for each platform and architecture. Desktop and CLI installer jobs then download the same-named archive. Publication uses GitHub Release only, without PyPI or macOS notarization jobs. Windows Desktop jobs require signing credentials.</td><td>Windows Desktop code and local package/runtime smoke tests are implemented. Public releases must still pass Authenticode gates with real certificates.</td></tr>
-    <tr><td><strong>Upgrade</strong></td><td>The CLI release installer downloads a new runtime archive and verifies checksums, capabilities, Browser, Programs, and worker cold-start in a separate directory before switching <code>current</code>. Source-checkout upgrades remain part of the development channel.</td><td>The four native CLI installer jobs and isolated macOS arm64 installation for v0.7.0 are historical acceptance evidence. Current source/packaging baseline is v0.9.8; remote latest-release state and installed-client interaction require separate verification.</td></tr>
-  </tbody></table></div>
+<table class="stack" id="platforms">
+<caption>Platforms</caption>
+<thead><tr><th scope="col"></th><th scope="col">Desktop</th><th scope="col">CLI / server</th><th scope="col">Development</th></tr></thead>
+<tbody>
+<tr><th scope="row">macOS arm64, x64</th><td>DMG and ZIP. Signed and notarized when Apple credentials exist, otherwise <code translate="no">-unsigned</code> with an ad-hoc signature</td><td>Supported</td><td>Supported</td></tr>
+<tr><th scope="row">Linux x86_64</th><td>deb and AppImage, thin</td><td>Complete runtime</td><td>Supported</td></tr>
+<tr><th scope="row">Linux arm64</th><td>deb and AppImage, thin</td><td>Complete runtime</td><td>Python and Linux gates</td></tr>
+<tr><th scope="row">Windows x86_64; arm64 behind a switch</th><td>Per-user NSIS, thin. <code translate="no">-unsigned.exe</code> without a certificate</td><td>ZIP + PowerShell installer</td><td>Sandbox separate: <a href="windows-support.html">Windows support</a></td></tr>
+<tr><th scope="row">iOS, Android, iPadOS</th><td>None</td><td>Not applicable</td><td>Not applicable</td></tr>
+</tbody>
+</table>
+<p class="note">Browser access works from any device to a supported host, local or remote; it does not make the client OS supported. No mobile layout commitment. Only combinations that pass browser and responsive acceptance may be labelled official.</p>
 
-  <h2 id="references">3. Official specifications and tool comparison</h2>
-  <p>This design assembles the macOS desktop shell with Electron and electron-builder, the internal product runtime with uv and standard wheels, and distributes complete platform/architecture-specific runtime archives for macOS/Linux/Windows through GitHub Release. Apple, Linux desktop packaging, and PyPA specifications explain distribution options explicitly rejected or restricted here.</p>
-  <div class="table-wrap"><table><thead><tr><th>Reference</th><th>Provided capability</th><th>Missing or inapplicable capability</th><th>OpenProgram usage</th></tr></thead><tbody>
-    <tr><td><a href="https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution">Apple distribution</a></td><td>DMG, PKG, and ZIP boundaries; Developer ID signing; nested code signing; notarization.</td><td>Developer ID requires a paid account and does not assemble Python or Electron at the project level.</td><td><strong>Signing service currently rejected</strong>: retain DMG structure, but artifacts and installation documentation must say unsigned and describe manual Gatekeeper approval. Never claim Apple verification.</td></tr>
-    <tr><td><a href="https://developer.apple.com/design/human-interface-guidelines/app-icons">Apple app icon guidance</a> / <a href="https://developer.apple.com/documentation/Xcode/creating-your-app-icon-using-icon-composer">Icon Composer guidance</a></td><td>The current layered format uses a 1024×1024 unmasked canvas, with platform shapes generated by Icon Composer and Xcode. Legacy ICNS requires full 16–1024 px representations.</td><td>The currently supported macOS 15 build machine has only Command Line Tools, without full Xcode’s <code>actool</code>, so it cannot directly compile <code>.icon</code> into an Electron-consumable artifact. Electron packages <code>.icns</code> unchanged.</td><td><strong>Adopt a compatible implementation</strong>: <code>AppIcon.icon</code> stores the maintained Apple layered source; reviewed <code>icon.icns</code> is the version-controlled Electron packaging input. Gates validate layered source, ICNS representations, and final system contour together. No fallback to hand-drawn outer-frame SVGs.</td></tr>
-    <tr><td><a href="https://www.electronjs.org/docs/latest/tutorial/distribution-overview">Electron distribution</a> / <a href="https://www.electron.build/docs/features/code-signing/code-signing-mac/">electron-builder signing</a></td><td>Electron resource packaging, macOS signing, publishing, and automatic updates.</td><td>Does not provide Python runtimes, Programs, models, or Python dependency resolution.</td><td><strong>Adopt and extend</strong>: Electron supplies only the Desktop shell and reads exactly the same product runtime archive as CLI.</td></tr>
-    <tr><td><a href="https://www.electron.build/docs/linux/">electron-builder Linux targets</a> / <a href="https://www.electron.build/appimage/">AppImage</a></td><td>Linux artifacts including AppImage, deb, rpm, Snap, and Flatpak. AppImage is a single-file artifact requiring no root.</td><td>Does not solve Python runtimes, glibc baseline differences, or OpenProgram capability acceptance. The current complete AppImage fails at electron-builder’s block-map stage and has no acceptable artifact.</td><td><strong>Publication currently rejected</strong>: do not publish reduced packages or claim support for AppImages that have not passed public-entry acceptance. Linux provides product capabilities through the complete CLI/server runtime.</td></tr>
-    <tr><td><a href="https://briefcase.beeware.org/en/latest/reference/platforms/macOS/index.html">BeeWare Briefcase</a></td><td>Python applications, CPython support packages, signed apps, DMG/PKG/ZIP, and notarization.</td><td>Generates its own application container, duplicating the existing Electron application’s responsibility.</td><td><strong>Adopt the structural principle</strong>: Python and dependencies belong in the app bundle; do not adopt Briefcase as the top-level builder.</td></tr>
-    <tr><td><a href="https://pyinstaller.org/en/stable/">PyInstaller</a></td><td>Assembles interpreter, application, and dependencies into an artifact requiring no preinstalled Python.</td><td>Standalone executable packaging does not suit OpenProgram’s Python library entry, dynamic Program discovery, and mutable extension dependencies.</td><td><strong>Reject</strong>: do not use PyInstaller; retain standard CPython and wheel semantics.</td></tr>
-    <tr><td><a href="https://py2app.readthedocs.io/en/stable/">py2app</a></td><td>Creates a standalone macOS app containing Python.framework and Mach-O dependencies.</td><td>Would also introduce a second app build layer and cannot replace the Electron shell.</td><td><strong>Reference</strong>: use to check Python.framework, Mach-O, and app bundle layout, without direct adoption.</td></tr>
-    <tr><td><a href="https://docs.astral.sh/uv/pip/environments/">uv environments</a></td><td>A standalone binary independent of Python, virtual environments, fixed interpreter installation targets, Python downloads, and dependency synchronization.</td><td><a href="https://docs.astral.sh/uv/concepts/tools/">uv tool</a> environments should not be modified directly by pip, conflicting with current Program installation behavior.</td><td><strong>Adopt with restrictions</strong>: CLI installation and Program environments use controlled uv; do not use <code>uv tool install openprogram</code> as an official installation method.</td></tr>
-    <tr><td><a href="https://packaging.python.org/en/latest/tutorials/packaging-projects/">PyPA packaging</a> / <a href="https://docs.pypi.org/trusted-publishers/using-a-publisher/">PyPI Trusted Publishing</a></td><td>wheel/sdist, entry points, build isolation, and OIDC-based publication.</td><td>Wheels lack CPython, browsers, and models, so cannot meet the unified ordinary-user installation contract.</td><td><strong>Restrict to developer artifacts</strong>: builds continue to use wheels as internal Python source inputs. Ordinary users do not install the product through <code>pip install</code> or PyPI.</td></tr>
-  </tbody></table></div>
+<h2>What is in the product</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Included</th><td>Pinned CPython (3.12.10), pinned <code translate="no">uv</code> (0.11.16), pinned Git, OpenProgram, prebuilt Web, standalone Ink bundle with Node.js. Capabilities in <code translate="no">scripts/release/product-runtime.json</code>: <code translate="no">web providers mcp memory channels search tui.ink browser.playwright</code></td></tr>
+<tr><th scope="row">Excluded</th><td>Programs, PyTorch, torchvision, OpenCV, EasyOCR, sentence-transformers, triton, NVIDIA/CUDA. Computer use is a built-in tool and ships no weights</td></tr>
+<tr><th scope="row">Office editor</th><td>Pinned in the manifest as optional; installed after user consent</td></tr>
+<tr><th scope="row">Mutable data</th><td><code translate="no">~/.openprogram</code>: configuration, sessions, caches, user-added Programs. The runtime stays read-only</td></tr>
+<tr><th scope="row">Development overlays</th><td>Editable source, debugging, local Web and Ink builds, tests, explicit perception, OCR or Browser backends. Never a product dependency, and the baseline capability manifest must still pass</td></tr>
+<tr><th scope="row">Not product entries</th><td><code translate="no">pip install openprogram</code>, <code translate="no">pipx</code>, <code translate="no">uv tool install</code>. Wheels are for assembly, development and tests. Docs and runtime errors point only to official installers</td></tr>
+<tr><th scope="row">Missing dependency</th><td>Reinstall the complete product. First use downloads nothing implicitly</td></tr>
+</tbody>
+</table>
 
-  <h2 id="audiences">4. User categories and platform support</h2>
-  <p>Three user categories describe installation purpose; the platform matrix describes product commitments. Maintain them separately rather than substituting user categories for platform coverage.</p>
-  <div class="grid3">
-    <section class="card desktop"><div class="label">DESKTOP</div><h3>macOS and Windows desktop users</h3><p>macOS downloads unsigned DMGs; Windows installs signed EXEs only. Desktop bundles the complete product runtime without reading system Python, Node.js, or Git. Linux currently publishes no desktop package.</p></section>
-    <section class="card cli"><div class="label">CLI / SERVER</div><h3>macOS, Linux, and Windows command-line users</h3><p>Run a pinned release installer and download the complete runtime archive. Its capabilities match supported Desktop, without an Electron window.</p></section>
-    <section class="card dev"><div class="label">DEVELOPMENT</div><h3>Developers</h3><p>Clone the repository, adding editable source, tests, debugging, local frontend builds, and replaceable OCR/Browser backends on top of complete product capabilities. Developer wheels are not an ordinary-user installation method.</p></section>
-  </div>
-  <div class="table-wrap" style="margin-top:14px"><table><thead><tr><th>Property</th><th>Desktop</th><th>CLI / Server</th><th>Development</th></tr></thead><tbody>
-    <tr><td>Version source</td><td>GitHub Release</td><td>Same GitHub Release</td><td>Git checkout</td></tr><tr><td>Product Runtime</td><td>Platform runtime archive + Electron</td><td>Same platform runtime archive</td><td>Equivalent product capabilities + development overlay</td></tr><tr><td>System Python / Node.js</td><td>Not required</td><td>Not required</td><td>Development toolchain required</td></tr><tr><td>System Git</td><td>Required for Session/Memory history</td><td>Required for Session/Memory history</td><td>Required for development and history</td></tr><tr><td>Capabilities</td><td>Complete capability manifest</td><td>Same capability manifest</td><td>Same product capabilities, permitting explicit backend overlays</td></tr><tr><td>Upgrade target</td><td>Published complete runtime</td><td>Same published complete runtime</td><td>Explicit Git ref</td></tr><tr><td>Default channel</td><td><code>stable</code></td><td><code>stable</code></td><td><code>dev</code></td></tr>
-  </tbody></table></div>
-  <h3>4.1 Platform support matrix</h3>
-  <div class="table-wrap"><table><thead><tr><th>Platform</th><th>Native desktop</th><th>CLI / Server</th><th>Browser access</th><th>Development</th></tr></thead><tbody>
-    <tr><td><strong>macOS arm64 / x64</strong></td><td class="yes">Official support: DMG</td><td class="yes">Officially supported</td><td class="yes">Local or remote</td><td class="yes">Officially supported</td></tr>
-    <tr><td><strong>Linux x86_64</strong></td><td class="out">No desktop package</td><td class="yes">Complete runtime verified</td><td class="yes">Local or remote</td><td class="yes">Officially supported</td></tr>
-    <tr><td><strong>Linux arm64</strong></td><td class="out">No desktop package</td><td class="yes">Complete runtime verified</td><td class="yes">Local or remote</td><td class="partial">Verified by Python/Linux gates</td></tr>
-    <tr><td><strong>Windows x86_64</strong></td><td class="yes">Signed EXE; release gate</td><td class="yes">Complete ZIP runtime + PowerShell installer</td><td class="yes">Local or remote access</td><td class="partial">Sandbox deferred</td></tr>
-    <tr><td><strong>iOS / Android / iPadOS</strong></td><td class="out">No native application</td><td class="out">Not applicable</td><td class="partial">Access supported hosts only; no mobile layout commitment</td><td class="out">Not applicable</td></tr>
-  </tbody></table></div>
-  <p class="small">Browser access does not make the client operating system a natively supported platform. Servers must use supported macOS, Linux, or Windows installations. Only combinations passing browser and responsive-layout acceptance may be labeled officially supported.</p>
+<h2>One version, one artifact set</h2>
+<p><code translate="no">pyproject.toml</code> is the version source; Electron metadata keeps a copy. The tag, runtime manifest, release manifest and health endpoint must equal it, and the tag must point at the built commit. Tags are immutable: fixes take a higher patch version.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Artifact</th><th scope="col">Platforms</th></tr></thead>
+<tbody>
+<tr><th scope="row">Runtime archive + checksum</th><td>macOS arm64, x64; Linux x86_64, arm64; Windows x86_64 (ZIP), arm64 behind a switch</td></tr>
+<tr><th scope="row">Desktop</th><td>macOS DMG and ZIP; Windows NSIS EXE; Linux deb and AppImage; each with <code translate="no">SHA256SUMS-&lt;os&gt;-&lt;arch&gt;</code></td></tr>
+<tr><th scope="row">Version-free App copies</th><td><code translate="no">OpenProgram-&lt;os&gt;-&lt;arch&gt;.&lt;ext&gt;</code>, for <code translate="no">releases/latest/download</code> links. Kept out of the manifest</td></tr>
+<tr><th scope="row">Update assets</th><td><code translate="no">version-</code>, <code translate="no">base-</code> and <code translate="no">toolchain-&lt;platform&gt;.tar.zst</code>, <code translate="no">repo.bundle</code>, <code translate="no">SHA256SUMS</code>, signed <code translate="no">update-manifest.json</code></td></tr>
+<tr><th scope="row">Developer</th><td>Wheel and sdist, not user entries</td></tr>
+<tr><th scope="row"><code translate="no">release-manifest.json</code></th><td>Schema 1: version, and path, bytes, SHA-256 per file</td></tr>
+</tbody>
+</table>
+<p class="note">arm64 and x64 build separately, no universal2. A platform leg that fails leaves its files out and is named under "Not in this release"; publication stops only when the wheel or every macOS and Linux runtime is missing. Thin Apps need a trusted update signing key, because without one they could never update.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Repository variable</th><th scope="col">Leg</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_RELEASE_WINDOWS_RUNTIME</code>, <code translate="no">OPENPROGRAM_RELEASE_DESKTOP_MAC</code>, <code translate="no">_WINDOWS</code>, <code translate="no">_LINUX</code></th><td>On unless <code translate="no">false</code></td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_RELEASE_WINDOWS_ARM64</code>, <code translate="no">_MAC_THIN</code>, <code translate="no">_CLI_SEEDS</code></th><td>Off unless <code translate="no">true</code></td></tr>
+</tbody>
+</table>
+<details>
+<summary>Release workflow rules</summary>
+<ul>
+<li>Tag push <code translate="no">v*</code>, or manual dispatch of an existing tag; every checkout stays pinned to it.</li>
+<li>Runtime archives first; Desktop and CLI installer jobs download the same-named archive.</li>
+<li>Signing runs when its secrets exist. macOS: Apple secrets (<a href="developer-id.html">Developer ID</a>). Windows: <code translate="no">WINDOWS_CSC_LINK</code>, <code translate="no">WINDOWS_CSC_KEY_PASSWORD</code>. Without them macOS gets an ad-hoc signature, Windows must verify as NotSigned, and both take <code translate="no">-unsigned</code> names. No PyPI credentials.</li>
+<li>Release uses the short-lived repository token. No Keychain, keyring or Credential Manager integration.</li>
+<li>Notes come from <code translate="no">.github/release-notes/vX.Y.Z.md</code>, must be English (CJK rejected), lead with user-visible changes, and include a download table. Doc-only corrections update notes without moving the tag.</li>
+<li>A public release is never overwritten; only a draft may be finished. The public <code translate="no">latest</code> entry is checked afterwards.</li>
+<li><code translate="no">smoke-packaged-runtime.sh</code> runs on system Bash 3.2; the deferred-browser flag is explicit, normal validation runs the complete browser check.</li>
+</ul>
+</details>
 
-  <h2 id="artifacts">5. One version and one release artifact set</h2>
-  <p><code>pyproject.toml</code> ’s project version is normative. Electron metadata retains a copy required by build tools. Release gates verify exact equality with runtime manifest, release manifest, and tag. The tag must point to the commit being built.</p>
-  <div class="flow" aria-label="Release artifact relationships"><div class="node"><strong>One release build</strong><code>vX.Y.Z</code><br>Pin source, lockfile, CPython, and uv</div><div class="arrow">→</div><div class="node"><strong>Platform product runtime</strong>CPython + complete dependencies<br>Web + Browser + OCR</div><div class="arrow">→</div><div class="node"><strong>Supported public entries</strong>macOS Desktop: DMG/ZIP<br>Windows Desktop: signed EXE<br>macOS/Linux CLI: tar.gz + launcher<br>Windows CLI: ZIP + PowerShell launcher</div></div>
-  <p>Each release generates at least:</p>
-  <ul><li>Complete runtime archives for macOS arm64/x64, Linux x86_64/arm64, and Windows x86_64;</li><li>macOS arm64/x64 unsigned DMG/ZIP and Windows x64 signed EXE;</li><li>Developer wheel/sdist, not ordinary-user installation entries;</li><li>A release manifest with version, capability IDs, model identifiers, file sizes, and SHA-256.</li></ul>
-  <p>The first official release builds arm64 and x64 separately, without universal2. Native Python wheels, Browser, OCR, models, and Electron helpers vary by platform or architecture. Each platform has its own runtime, but every entry in the shared capability manifest must be <code>present</code> and <code>verified</code>, or the entire platform is withheld from release.</p>
-  <div class="note"><strong>Versioned artifacts and installed state are distinct:</strong>GitHub Release DMGs, ZIPs, runtime archives, and checksums must include versions and remain permanently associated with the published tag. The local Applications directory retains only the unversioned <code>OpenProgram.app</code>. Intermediate Apps from local builds are deleted after the installation transaction, not kept as historical versions.</div>
+<h2>Installing</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Entry</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">macOS Desktop</th><td>Architecture-matched DMG, copy <code translate="no">OpenProgram.app</code> to Applications, or <code translate="no">~/Applications</code> without administrator rights. <code translate="no">-unsigned</code> assets need Privacy &amp; Security → Open Anyway</td></tr>
+<tr><th scope="row">Windows Desktop</th><td>Per-user NSIS wizard. <code translate="no">-unsigned.exe</code>: SmartScreen <strong>More info → Run anyway</strong>; under Smart App Control use the CLI</td></tr>
+<tr><th scope="row">Linux Desktop</th><td>deb through <code translate="no">apt</code>, or AppImage with FUSE 2 or <code translate="no">APPIMAGE_EXTRACT_AND_RUN=1</code></td></tr>
+<tr><th scope="row">macOS, Linux CLI</th><td><code translate="no">curl -fsSL https://openprogram.io/install | sh</code></td></tr>
+<tr><th scope="row">Windows CLI</th><td><code translate="no">irm https://openprogram.io/install.ps1 | iex</code>, or <code translate="no">install.cmd</code> from Command Prompt</td></tr>
+<tr><th scope="row">Development</th><td>Repository checkout, <code translate="no">uv sync</code>, Web and Ink builds, same capability probes as a release</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Stage</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Version</th><td>Latest stable unless <code translate="no">OPENPROGRAM_VERSION</code> is set; only three-part numeric versions</td></tr>
+<tr><th scope="row">No package for the platform</th><td>Stops and names the platform</td></tr>
+<tr><th scope="row">Installer source</th><td>That immutable tag; never a checkout</td></tr>
+<tr><th scope="row">Unpack</th><td>Exact archive and checksum, to <code translate="no">runtime/cli/releases/X.Y.Z</code> under the state directory</td></tr>
+<tr><th scope="row">Switch</th><td>Probes with absolute paths, then atomically switches the <code translate="no">current</code> symlink (Windows: replaces the launcher and keeps its predecessor)</td></tr>
+<tr><th scope="row">Failure</th><td>Keeps the old version</td></tr>
+<tr><th scope="row">Download</th><td>States its size, checks free space first, resumes through a partial file, names <code translate="no">HTTPS_PROXY</code> on network failure</td></tr>
+<tr><th scope="row">Linux, before any download</th><td>musl is refused; missing libraries are named with the <code translate="no">apt</code> line</td></tr>
+<tr><th scope="row"><code translate="no">PATH</code> (macOS, Linux)</th><td>Adds one marked line unless <code translate="no">OPENPROGRAM_NO_MODIFY_PATH</code> or <code translate="no">OPENPROGRAM_BIN_DIR</code> is set</td></tr>
+</tbody>
+</table>
 
-  <h2 id="desktop">6. macOS and Windows desktop packages</h2>
-  <h3>6.1 Icon assets</h3>
-  <ul><li><code>apps/desktop/build/AppIcon.icon</code> is the maintained Apple layered source. Four SVG layers use a 1024×1024 unmasked canvas;<code>apps/desktop/build/icon.icns</code> is the version-controlled compatibility artifact packaged by Electron.</li><li>Legacy ICNS retains the visible extent, rounded contour, transparent corners, and controlled shadow accepted against system Apps. The layered <code>.icon</code> itself must not pre-draw the system frame.</li><li>The lavender cell and its three flat discs stay centered within the safe area, without text, question marks, or embedded rasters. The <a href="../ui/desktop/app-icon.html">App icon specification</a> defines the mark.</li><li>Build gates verify layered source structure, brand-graphic constraints, ICNS representations, 256 px contours and solid area, transparent corners, and ICNS round trips. Final Dock, Finder, and Launchpad display is checked only through the installed <code>/Applications/OpenProgram.app</code> .</li></ul>
-  <h3>6.2 Logical contents</h3>
-  <pre>OpenProgram.dmg → OpenProgram.app/Contents/
+<h2>Upgrading and removing</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Install</th><th scope="col">How</th></tr></thead>
+<tbody>
+<tr><th scope="row">Desktop</th><td>macOS: Settings downloads and verifies; the user confirms in the installer. Windows, Linux: <code translate="no">openprogram upgrade</code> on the version store; the App file only when the release needs a newer shell</td></tr>
+<tr><th scope="row">CLI, server</th><td><code translate="no">openprogram upgrade</code>. Any failed default-asset check prevents activation. Restart a running worker yourself</td></tr>
+<tr><th scope="row">Development</th><td>The same command fetches, builds, probes and restarts an explicit ref</td></tr>
+<tr><th scope="row">Programs</th><td>Migrate in separate environments; a failed migration disables only that Program</td></tr>
+<tr><th scope="row">Remove Desktop</th><td>Delete <code translate="no">OpenProgram.app</code>; Installed apps on Windows; <code translate="no">apt remove openprogram-desktop</code>; delete the AppImage</td></tr>
+<tr><th scope="row">Remove CLI</th><td>macOS, Linux: <code translate="no">~/.local/bin/openprogram</code> and <code translate="no">~/.openprogram/runtime/cli</code>. Windows: <code translate="no">%LOCALAPPDATA%\OpenProgram\bin</code> and <code translate="no">%USERPROFILE%\.openprogram\runtime\cli</code></td></tr>
+<tr><th scope="row">Remove data</th><td>Only an explicit purge of <code translate="no">~/.openprogram</code></td></tr>
+</tbody>
+</table>
+<p class="note">Worker startup never applies product updates.</p>
 
-macOS desktop resource directory
-        ├── MacOS/
-        │   └── OpenProgram                 # Electron launcher
-        ├── Frameworks/
-        │   ├── Electron Framework.framework
-        │   └── Electron helpers
-        └── Resources/
-            ├── app.asar                    # Electron main/preload
-            └── runtime/
-                ├── python/                  # Pinned portable CPython + complete product dependencies
-                ├── bin/uv                   # Pinned uv
-                ├── wheel/                   # Build-time wheel evidence
-                ├── assets/playwright/       # Pinned Playwright Chromium
-                └── runtime-manifest.json</pre>
-  <p>Portable CPython for macOS and Linux comes from python-build-standalone artifacts indexed by the pinned uv version. The runtime manifest records OpenProgram, Python, uv, capability results, asset paths, and product manifest SHA-256;<code>product-runtime.json</code> records the capability IDs; the release manifest records final artifact hashes. Never copy arbitrary runtimes from the packaging machine’s system Python.</p>
-  <h3>6.3 Startup</h3>
-  <ol><li>Electron reads the in-app runtime manifest and verifies the complete capability manifest and required files.</li><li>Electron uses the in-app Python worker launcher through an explicit absolute path, without searching PATH.</li><li>Python starts with <code>-I -B</code> , ignoring system <code>PYTHONPATH</code>, user site-packages, and system Python configuration, and prohibiting bytecode writes into the app.</li><li>The launcher sets the bundled Playwright Chromium asset path.</li><li>The worker listens on a local port and returns runtime status and the capability manifest hash through <code>/healthz</code> .</li><li>Electron obtains the authenticated URL and loads Web UI. Startup failures show the error category, log location, and repair action.</li></ol>
-  <h3>6.4 Prohibited behavior</h3>
-  <ul><li>Do not invoke PATH’s <code>openprogram</code>, <code>python</code>, <code>node</code> or <code>git</code>.</li><li>The running App and automatic updater do not modify their own bundle directly. Only a local installation transaction or verified official-update transaction may replace the fixed <code>/Applications/OpenProgram.app</code>.</li><li>After acquiring the fixed-path installation lock, the local installer copies and validates the candidate App, then rereads and compares the current App against the immutable transaction copy’s version. A lower candidate version must be rejected before stopping the worker or moving files. Version segments use arbitrary-precision decimal integer comparison. An existing fixed path that cannot be verified must be preserved and cause failure; comparison cannot be skipped.</li><li>Same-version development refresh must synchronize Electron main/preload, the official updater implementation, and runtime dependencies. It must not generate an <code>app.asar</code> referencing current source while retaining old modules. After the refresh build, verify wheel metadata and recheck source, wheel, and current App inside the fixed-path lock shared with the full installer before stopping the worker or writing Python/asar.</li><li>Do not download Python, Web, default Browser, default OCR, or detector weights on first use.</li><li>Do not read <code>apps/web/out</code>, Program checkouts, or development configuration from repository directories.</li><li>Do not run npm build, pip dependency resolution, or git clone on user machines.</li></ul>
-  <h3>6.5 Windows packaging and signing</h3>
-  <ul><li>Electron-builder produces an x64 per-user NSIS installer with a selectable directory, running as <code>asInvoker</code> .</li><li>The packaging input is the official Windows runtime ZIP. First use the PowerShell release installer to verify archive, manifest, capabilities, and worker cold-start, then move it into Desktop resources.</li><li>Both application executable and installer must pass Authenticode. Missing certificates or invalid signatures fail the release job; unsigned Windows Desktop must never be uploaded.</li><li>Local unsigned builds are only for development package smoke tests, not public installation entries.</li><li>Terminal uses Windows PowerShell/ConPTY. Browser profile import uses normal Windows installation and Local AppData locations; these paths do not change user ACLs.</li></ul>
+<h2>Desktop bundle</h2>
+<pre translate="no" tabindex="0">OpenProgram.app/Contents/
+├── MacOS/OpenProgram         # Electron launcher
+├── Frameworks/               # Electron Framework and helpers
+└── Resources/
+    ├── app.asar              # Electron main, preload
+    └── runtime/
+        ├── python/           # portable CPython + dependencies
+        ├── bin/uv
+        ├── wheel/            # build evidence
+        ├── assets/playwright/
+        └── runtime-manifest.json</pre>
+<p class="note">CPython comes from python-build-standalone indexed by the pinned <code translate="no">uv</code>, never the build machine. The runtime manifest (schema 2) records OpenProgram, Python, uv, capability results, asset paths and the product manifest hash.</p>
+<ol>
+<li>Electron reads the in-App runtime manifest and verifies capabilities and required files.</li>
+<li>It starts the in-App Python worker by absolute path, with <code translate="no">-I -B</code>, ignoring <code translate="no">PYTHONPATH</code>, user site and system configuration.</li>
+<li>The launcher sets the bundled Playwright path.</li>
+<li>The worker reports status and capability hash at <code translate="no">/healthz</code>.</li>
+<li>Electron gets the authenticated URL from bundled Python and loads Web UI. A failure shows category, log location and repair action.</li>
+</ol>
+<details>
+<summary>Prohibited at runtime</summary>
+<ul>
+<li>PATH lookups of <code translate="no">openprogram</code>, <code translate="no">python</code>, <code translate="no">node</code>, <code translate="no">git</code>.</li>
+<li>The App or updater rewriting its own bundle. An AppImage update replaces the file beside it after verification.</li>
+<li>First-use downloads of Python, Web, Browser, OCR or detector weights.</li>
+<li>Reading <code translate="no">apps/web/out</code>, Program checkouts or development configuration from the repository.</li>
+<li><code translate="no">npm build</code>, pip resolution or <code translate="no">git clone</code> on user machines.</li>
+</ul>
+</details>
+<details>
+<summary>Icons</summary>
+<ul>
+<li><code translate="no">apps/desktop/build/AppIcon.icon</code> is the Apple layered source: SVG layers on a 1024×1024 unmasked canvas, no pre-drawn frame.</li>
+<li><code translate="no">icon.icns</code> is the committed Electron input, keeping the accepted extent, contour, transparent corners and shadow.</li>
+<li>The lavender cell and three discs stay centred, with no text or rasters. <code translate="no">actool</code> is unavailable on the build machine, so <code translate="no">.icon</code> is not compiled.</li>
+<li>Gates cover layer structure, ICNS representations, 256 px contour, corners and round trip. Dock, Finder and Launchpad are checked only on the installed App.</li>
+</ul>
+</details>
+<details>
+<summary>Windows package</summary>
+<ul>
+<li>Per-user NSIS, selectable directory, <code translate="no">asInvoker</code>. Thin: the shell and a seed; x64 by default.</li>
+<li>With a certificate, <code translate="no">OpenProgram.exe</code> and the installer must be Authenticode Valid. Without one both must be NotSigned and the installer takes the <code translate="no">-unsigned.exe</code> name.</li>
+<li>Terminal uses Windows PowerShell and ConPTY. Chrome, Edge, Brave and Chromium profiles are discovered under normal paths. No ACL changes.</li>
+</ul>
+</details>
+<details>
+<summary>Linux package</summary>
+<ul>
+<li><code translate="no">executableName</code> <code translate="no">openprogram-desktop</code>, installed under <code translate="no">/opt/OpenProgram</code>. The deb lists its libraries, including the <code translate="no">t64</code> alternatives, and recommends <code translate="no">bubblewrap</code>; its desktop entry has a Recovery action.</li>
+<li>electron-builder's deb post-install adds an AppArmor profile on systems that support it, so the Chromium sandbox works on Ubuntu 24.04; an AppImage has no such step.</li>
+<li>Built on Ubuntu 22.04. Bundled Git needs glibc 2.34; the supported floor stays Ubuntu 22.04 (glibc 2.35).</li>
+<li>An AppImage records <code translate="no">$APPIMAGE</code> so every relaunch and update uses the same file.</li>
+</ul>
+</details>
 
-  <h2 id="programs">7. Complete product runtime and development extensions</h2>
-  <div class="layers"><section class="layer fixed"><h3>Read-only complete product</h3><p>The platform runtime archive contains CPython, OpenProgram, Web, Channels, Search, and Playwright Chromium. It bundles no Programs and excludes PyTorch, torchvision, OpenCV, EasyOCR, sentence-transformers, triton, and NVIDIA/CUDA distributions. Desktop and CLI reuse this directory without entry-specific capability removal.</p></section><section class="layer mutable"><h3>Developer and user additions</h3><p><code>~/.openprogram</code> contains configuration, sessions, and caches. Developers may explicitly configure perception, OCR, or Browser backend overlays and enable debugging. Users may explicitly install third-party Programs outside the product manifest.</p></section></div>
-  <pre>~/.openprogram/
-├── programs/
-│   ├── src/&lt;program-id&gt;/
-│   ├── manifests/&lt;program-id&gt;.json
-│   └── environments/
-│       └── &lt;runtime-id&gt;/
-│           ├── releases/&lt;generation&gt;/
-│           └── current -&gt; releases/&lt;generation&gt;
-├── config/
-├── sessions/
-├── logs/
-└── cache/</pre>
-  <p><code>runtime-id</code> includes at least CPython minor version, CPU architecture, dependency lock, and model identifiers. Desktop and CLI on the same platform/architecture must share runtime IDs and capability manifest hashes.</p>
-  <p>Program install, upgrade, and remove use the same transaction:</p>
-  <ol><li>Resolve the Program source and declarations and write a temporary directory;</li><li>Create a staging environment using in-app uv and CPython;</li><li>Resolve and install dependencies from all enabled Program manifests, recording exact versions and artifact hashes;</li><li>Run import probes, Program registration checks, and worker cold-start probes;</li><li>After all pass, atomically switch <code>current</code>; on failure, delete staging and retain the original environment.</li></ol>
-  <div class="note warn"><strong>Trust boundary:</strong>The hash-verified product runtime contains no Programs. Programs added at runtime fall outside release integrity and must use a separate environment, never overwriting <code>openprogram</code> or product dependencies. macOS unsigned artifacts provide neither Apple developer identity nor notarization guarantees. Users must manually allow opening as documented and verify files with GitHub Release checksums.</div>
+<h2>Programs</h2>
+<pre translate="no" tabindex="0">~/.openprogram/programs/
+├── src/&lt;program-id&gt;/
+├── manifests/&lt;program-id&gt;.json
+└── environments/&lt;runtime-id&gt;/
+    ├── releases/&lt;generation&gt;/
+    └── current -&gt; releases/&lt;generation&gt;</pre>
+<p><code translate="no">runtime-id</code> covers at least CPython minor, architecture and dependency lock; Desktop and CLI on one platform share it. Install, upgrade and remove are one transaction:</p>
+<ol>
+<li>Resolve source and declarations into a temporary directory.</li>
+<li>Create a staging environment with in-App <code translate="no">uv</code> and CPython.</li>
+<li>Install dependencies from all enabled manifests; record exact versions and hashes.</li>
+<li>Import probes, registration checks, worker cold start.</li>
+<li>Atomically switch <code translate="no">current</code>. Failure deletes staging.</li>
+</ol>
+<p class="note">Programs fall outside release integrity, use separate environments, never overwrite <code translate="no">openprogram</code>, and are never installed by a wizard.</p>
 
-  <h2 id="lifecycle">8. Installation, upgrades, and uninstallation</h2>
-  <h3>8.1 Desktop installation</h3><ol><li>macOS users download the architecture-matched DMG with <code>unsigned</code> in its filename, verify SHA-256, copy the sole <code>OpenProgram.app</code> into Applications replacing the previous version, then approve first launch through “Privacy & Security → Open Anyway.”</li><li>Windows users download only the exact release-attached <code>win-x64.exe</code>, verify SHA-256 and Authenticode, and run the per-user NSIS wizard. Versions without a signed EXE use CLI/server.</li><li>When local macOS developers run <code>npm --prefix apps/desktop run dist</code> , the script builds an unpacked App in a random temporary directory, validates bundle identifier, version, main executable, and embedded runtime, then stops the official running App and default worker. A candidate older than the current fixed App must be rejected before any App, worker, or Launch Services changes.</li><li><code>scripts/refresh-local-app.sh</code> supports same-version macOS source refresh only: checkout Python/desktop versions, existing bundle, runtime manifest, and bundled Python distribution metadata must match exactly. Any difference fails before wheel build, App shutdown, or runtime writes. Version upgrades require repackaging and installing the full App.</li><li>macOS packaging uses a user-level lock independent of worktrees. The installer also holds an atomic lock in the target Applications directory throughout the transaction. Concurrent calls must fail explicitly before changing the App or services; cleanup removes only locks held by the current PID.</li><li>If the default profile has a launchd service, unload its KeepAlive service before replacement, then stop the worker actually holding the lock. After success, reinstall the service with the new App’s embedded Python and <code>-I -B</code> , wait for <code>/healthz</code> success, then open the App. Service ProgramArguments must not retain conda, source-checkout, or deleted-App paths.</li><li>macOS scripts stage on the Applications volume first. Only after staging completes does the old App move temporarily into the same transaction directory and the new App activate. Activation failure restores the old App, launchd service, and prior App/worker running state. Success removes the old App, Python wheel build cache, runtime staging, build directory, and transaction directory.</li><li>After macOS activation, explicitly register the fixed <code>/Applications/OpenProgram.app</code> with Launch Services. If a subsequent failure restores the old App, best-effort re-register the restored fixed path while preserving the original failure status.</li><li>Both platforms’ Desktop artifacts embed platform runtime archives that passed complete capability probes. First launch creates only configuration and state directories; the worker uses bundled CPython. Packaged-mode authenticated URLs are also generated exclusively by bundled Python, without relying on system CLI.</li><li>Linux has no desktop installation; users install the complete CLI/server runtime and use Web UI or TUI.</li></ol>
-  <h3>8.1.1 Same-version local refresh completion</h3><p>The local refresh starts the new embedded worker once: installed launchd service installation dispatches its start, otherwise the embedded CLI starts one detached worker. Health polling on default port 18100 has a 120-second deadline and individually bounded probes; polling never issues repeated worker starts. Timeout records the failed health endpoint and worker log location and remains a failure. After the complete App passes code-signing verification, completion cleanup attempts to reopen that same App even if health or worker-identity verification fails. Reopening occurs once, preserves the primary failure status, and reports a secondary reopen failure. Failures before signature verification do not launch a partially updated or unverified App. Cleanup retains its staging-directory removal error while attempting the remaining cleanup. A primary failure takes precedence; otherwise the cleanup error becomes the exit status. Cleanup failure never reports refresh success. Existing committed-source, version, foreign-signature, and lock gates still apply.</p>
-  <h3>8.2 CLI / Server installation</h3><ol><li>macOS/Linux uses <code>curl -fsSL https://openprogram.io/install | sh</code>; Windows uses <code>irm https://openprogram.io/install.ps1 | iex</code>. When <code>OPENPROGRAM_VERSION</code> is unspecified, the short bootstrap resolves the stable version through GitHub latest release.</li><li>Bootstrap accepts only three-part numeric versions, then downloads the platform-compatible entry from the corresponding immutable tag: <code>scripts/install-release.sh</code> or <code>scripts/install-release.ps1</code>, followed by the official implementation from the same tag.</li><li>The official installer downloads the exact OS/architecture runtime archive and checksum from the same GitHub Release, without PyPI access.</li><li>After verification, extract into <code>runtime/cli/releases/X.Y.Z</code> under the user state directory. macOS Desktop uses the same archive as a build input; Linux and Windows use the complete archive directly as the official product entry.</li><li>The installer uses absolute runtime paths for version, capability, Browser/OCR asset, and worker cold-start probes.</li><li>After all checks pass, macOS/Linux atomically switches the <code>current</code> symlink; Windows atomically replaces the PowerShell launcher while preserving its predecessor. Failure retains the old version.</li></ol>
-  <h3>8.3 Development installation</h3><p>Development documentation uses a repository checkout,<code>uv sync</code>, Web/Ink builds, and test tools. Development environments must run the same capability probes as releases and permit explicitly configured OCR/Browser backends, Program source editing, and diagnostics. These overlays do not alter the product manifest.</p>
-  <h3>8.4 Upgrades</h3>
-  <ul><li><strong>macOS Desktop:</strong>Automatically check the latest official Release. Settings downloads the complete architecture-matched DMG, verifies byte count and SHA-256, and opens it for user-confirmed App replacement.</li><li><strong>Windows Desktop:</strong>Select the exact signed EXE, verify byte count, SHA-256, and Authenticode, then open it for user-confirmed installation.</li><li><strong>CLI / Server: </strong><code>openprogram upgrade</code> downloads a new complete runtime archive, validates it in a new version directory, then switches <code>current</code>. Failure preserves the previous version; the user explicitly restarts a running worker.</li><li><strong>Development:</strong>The same command retains fetch, build, complete capability probes, and restart in source checkouts; the target ref must be explicit.</li><li><strong>Compatibility command:</strong>Legacy <code>update</code> is a compatibility alias for <code>upgrade</code> ; worker startup never automatically applies product updates.</li></ul>
-  <p>The product runtime upgrades atomically; any default-asset validation failure prevents activation of the entire new runtime. Programs migrate in separate environments; failed migration disables only that Program without changing the verified product capability manifest.</p>
-  <h3>8.5 Uninstallation</h3><ul><li>Deleting <code>OpenProgram.app</code> removes only the desktop application, retaining by default <code>~/.openprogram</code>.</li><li>CLI uninstall removes launchers and OpenProgram-managed CLI runtimes, retaining state by default.</li><li>Only explicit <code>purge</code> deletes configuration, sessions, Programs, and caches. Show exact directories and require confirmation before execution.</li></ul>
+<h2>Failures</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">What happened</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Runtime files or manifest mismatch</th><td>Worker does not start; reinstall instructions</td></tr>
+<tr><th scope="row">Missing capability or asset</th><td>The whole platform artifact is blocked; no reduced install</td></tr>
+<tr><th scope="row">Older checkout or App over the current App</th><td>Fails before build, service stop or writes</td></tr>
+<tr><th scope="row">Older unsigned macOS file</th><td>Manual approval and SHA-256 per its filename</td></tr>
+<tr><th scope="row">System injects Python paths</th><td>Ignored by isolated start</td></tr>
+<tr><th scope="row">Program dependency overwrites a core package</th><td>Environment activation rejected</td></tr>
+<tr><th scope="row">New runtime fails probes</th><td><code translate="no">current</code> unchanged; Desktop artifact not published</td></tr>
+<tr><th scope="row">Versions disagree</th><td>Build or release blocked</td></tr>
+</tbody>
+</table>
 
-  <h2 id="security">9. Security, integrity, and failure handling</h2>
-  <div class="table-wrap"><table><thead><tr><th>Condition</th><th>Detection</th><th>Result</th></tr></thead><tbody>
-    <tr><td>Missing runtime files or manifest mismatch</td><td>Validate hashes before Desktop/CLI startup</td><td>Do not start the worker; show reinstallation instructions.</td></tr><tr><td>Missing product capability, default backend, or asset</td><td>Platform runtime build and public-entry probe</td><td>Block release of the entire platform artifact; no reduced installation.</td></tr><tr><td>Old checkout or App overwrites the current App</td><td>Compare three-part numeric versions before installation; source refresh requires exact version equality everywhere</td><td>Fail before build, service shutdown, or file writes; retain the current App.</td></tr><tr><td>Apple cannot verify macOS file origin</td><td>Unsigned filename, installation instructions, and SHA-256</td><td>Explicitly instruct manual approval; claim neither Developer ID nor notarization.</td></tr><tr><td>System environment injects Python paths</td><td>Isolated startup arguments and explicit sys.path</td><td>Ignore system environment and user site.</td></tr><tr><td>Third-party Program dependencies overwrite core packages</td><td>Reserved package rules, path ordering, and import probes</td><td>Reject environment activation.</td></tr><tr><td>New runtime cannot start or fails capability probes</td><td>Complete probes before switching</td><td>Do not change CLI <code>current</code>; do not publish the Desktop artifact.</td></tr><tr><td>Release tag, runtime, Python, and Electron versions disagree</td><td>release workflow version gate</td><td>Block build or release.</td></tr>
-  </tbody></table></div>
-  <p>Release needs no Apple or PyPI credentials. Windows Desktop publication requires code-signing certificate secrets. GitHub Actions creates Releases with the repository-provided short-lived token. Model sources and runtime archive hashes enter the release manifest. This document adds no system Keychain, keyring, or Credential Manager integration.</p>
+<h2 id="local-app">Local fixed App</h2>
+<p>The only stable local App is <code translate="no">/Applications/OpenProgram.app</code>, with a sibling development App (see <a href="dev-instance.html">dev instance</a>). No App name carries a version, commit or task. Build Apps are never launched or kept.</p>
+<details>
+<summary>Full install: <code translate="no">npm --prefix apps/desktop run dist</code></summary>
+<ul>
+<li>Builds in a random temporary directory; validates bundle ID, version, main executable, embedded runtime.</li>
+<li>Rejects a candidate older than the current App before touching App, worker or Launch Services. Version segments compare as arbitrary-precision integers; an unverifiable existing App fails, it is kept.</li>
+<li>A user-level lock plus an atomic lock in Applications: concurrent runs fail before any change, and cleanup removes only locks held by this PID.</li>
+<li>Unloads a launchd KeepAlive service, stops the lock-holding worker, staging on the Applications volume, then moves the old App into the transaction directory and activates the new one.</li>
+<li>Reinstalls the service with the new embedded Python and <code translate="no">-I -B</code>; waits for <code translate="no">/healthz</code>; opens the App. Service arguments must not retain conda, checkout or deleted-App paths.</li>
+<li>Failure restores old App, launchd service and run state. Success removes old App, wheel cache, staging, build and transaction directories.</li>
+<li>Registers only the fixed path with Launch Services; on restore, best-effort re-registers and keeps the original failure status.</li>
+<li>electron-builder ad-hoc signs components; a fixed local certificate signs the App and helpers; strict recursive verification follows.</li>
+</ul>
+</details>
+<details>
+<summary>Local App refresh: <code translate="no">scripts/refresh-local-app.sh</code></summary>
+<ul>
+<li>Installs only <code translate="no">refs/heads/stable</code>. Without a <code translate="no">stable</code> branch, the checkout must contain local <code translate="no">main</code> and fetched <code translate="no">origin/main</code>.</li>
+<li>Paths are resolved first, so slashes, dot components and symlink aliases share checks and lock. A genuinely custom App keeps its own source check.</li>
+<li>Tracked, staged or non-ignored untracked changes refuse, before packaging, after it, and under the lock. HEAD changes during packaging rebuild; after the payload is frozen they abort.</li>
+<li>Checkout, bundle, runtime manifest and bundled Python metadata must have one version, except that the source may be newer than the installed App, whose Electron and bundle metadata are then upgraded. A downgrade is refused.</li>
+<li>Synchronizes main, preload, updater and runtime dependencies; never an <code translate="no">app.asar</code> over old modules. Rechecks source, wheel and App under the shared lock.</li>
+<li>Extraction loses execute bits on unpacked <code translate="no">node-pty</code> files, so staging restores installed modes and forces <code translate="no">spawn-helper</code> executable. Symlinks are not followed.</li>
+<li>Starts the embedded worker once; polls <code translate="no">:18100/healthz</code> for up to 120 s, with no repeat starts. Timeout reports endpoint and log.</li>
+<li>After signature verification, reopens the App once even on failure, keeping the primary status; failures before that launch nothing. Cleanup errors never report success.</li>
+</ul>
+</details>
 
-  <h2 id="acceptance">10. Public-entry acceptance criteria</h2>
-  <h3>10.1 Platform product runtime</h3><ol><li>Build on native runners from a pinned OpenProgram commit, and dependency lock.</li><li><code>openprogram --version</code>, worker cold-start, <code>/healthz</code>, <code>/chat</code> and hashed Web assets succeed.</li><li>Import/asset probes pass for Channels, Search, and Playwright Chromium.</li><li>Verify installed distributions exclude PyTorch, torchvision, OpenCV, EasyOCR, sentence-transformers, triton, and NVIDIA/CUDA entries.</li><li>Generate the capability manifest and runtime archive SHA-256; any missing item fails.</li></ol>
-  <h3>10.2 macOS DMG</h3><ol><li>Verify separately on clean arm64 and x64 environments with system Git but without OpenProgram, Python, or Node.js installed.</li><li>Filenames, Release notes, and installation pages explicitly say unsigned; verify “Privacy & Security → Open Anyway.”</li><li>With networking disabled, complete first startup, worker, Web, and Playwright Chromium probes. First use must not implicitly install perception overlays.</li><li>The Python path started by Electron and capability manifest hash must come from the embedded runtime archive.</li></ol>
-  <p>Local complete packaging first uses electron-builder to ad-hoc sign Electron components and complete resource signatures, then a fixed local certificate signs the main OpenProgram App and runtime helpers, followed by strict recursive signature verification. Build mode must not skip component signing because publication certificates are unnecessary. Full App build, strict signature verification, runtime checks, fixed-path installation, and default-worker refresh are verified.</p><h3>10.2.1 Local fixed-App replacement</h3><ol><li>After two consecutive local desktop builds, Applications contains only <code>OpenProgram.app</code>, with no App containing a version, commit, task name, or <code>before</code> suffix.</li><li>When two worktrees or installers run concurrently, only one process enters the target-App transaction. The other fails before changing the App or services. No nested App is created, and the success-log version matches the final installed version.</li><li>A corrupt candidate bundle, copy failure, or activation failure must not delete a usable old App. Successful replacement leaves neither old nor build bundles.</li><li>Apps in build and staging paths never execute <code>open</code>; the final launch command accepts only the fixed installation path.</li><li>Validate the installed bundle identifier, version, main executable, ICNS, and embedded runtime. The bundle, runtime manifest,<code>openprogram --version</code> , and bundled Python distribution metadata must report the same version. Launch Services needs only the fixed installation path registered.</li><li>When checkout version X refreshes fixed-App version Y, only X=Y may proceed. Both X&lt;Y and X&gt;Y require a full App build. Full candidates older than the current App must also be rejected before stopping App and worker.</li></ol>
-  <h3>10.2.2 Windows signed EXE</h3><ol><li>Native Windows runners use the same complete runtime ZIP as the CLI installer and validate the runtime manifest, bundled Python, worker health, and Web chat from <code>win-unpacked</code> .</li><li><code>OpenProgram.exe</code> and the NSIS installer must have Valid Authenticode status; missing signing credentials immediately fail release.</li><li>Terminal’s Windows PowerShell and Claude presets start through ConPTY. Chrome, Edge, Brave, and Chromium profile discovery pass Windows-path tests.</li><li>Updater selects only the exact x64 EXE. Any size/hash/signature failure deletes temporary files and prohibits opening.</li></ol>
-  <h3>10.3 Linux desktop release gate</h3><ol><li>Linux desktop artifacts must package the same complete runtime as CLI/server, without removing capabilities, Programs, OCR, models, or Browser assets.</li><li>They must start through public entries on clean x86_64 Linux without system OpenProgram, Python, Node.js, or Git, and complete all probes offline.</li><li>The current AppImage fails in electron-builder’s block-map stage for the complete runtime, so no artifact passes this gate. Release configuration must neither build nor publish AppImage.</li><li>Restore Linux desktop support claims only after a new complete desktop artifact satisfies every condition in this section.</li></ol>
-  <h3>10.4 Programs and development overlays</h3><ol><li>The first-start wizard installs no Programs.</li><li>Programs modify only <code>~/.openprogram/programs</code> and separate environments, never the product runtime.</li><li>After developers replace OCR/Browser backends or enable debugging, the baseline capability manifest must still pass.</li></ol>
-  <h3>10.5 CLI / Server</h3><ol><li>macOS/Linux shell bootstrap and Windows PowerShell bootstrap both resolve the latest stable release and download a pinned runtime archive in clean user environments, without PyPI or repository clones.</li><li>Both automatic version resolution and explicit <code>OPENPROGRAM_VERSION</code> version pinning in the short bootstrap require offline entry tests. Resolved versions must be three-part numeric versions; downloads must use the corresponding immutable tag.</li><li>Installed runtime archive and capability manifest hashes match the release manifest. macOS and Windows Desktop use the same platform build inputs.</li><li>Installers run complete probes through absolute runtime paths; old versions remain startable after failed upgrades.</li></ol>
-  <h3>10.6 release</h3><p>Release notes lead with user-visible changes, provide a platform and architecture download table with direct links to published assets, and separate upgrade instructions from developer recovery details. Installation commands stay in copyable code blocks. Documentation-only release-note corrections update the canonical notes and public release body without moving the tag or replacing artifacts.</p><ol><li>Tag, runtime archive, Electron package, manifests, and health endpoint report one version.</li><li>GitHub Release contains macOS runtime archives and unsigned DMG/ZIP, Linux runtime archives, Windows runtime ZIP and signed Desktop EXE, checksums, and capability manifest. It excludes Linux desktop packages failing gates and unsigned Windows Desktop.</li><li>Public GitHub Release titles and bodies use English throughout. Workflows reject release notes containing Chinese, Japanese, or Korean characters before publication.</li><li>Ordinary-user documentation, site indexes, and product-runtime errors must not contain <code>pip install openprogram</code>, PyPI product-download entries, optional-by-default Programs, or component-installation steps. Missing bundled dependencies require reinstalling the complete product.</li><li>Published tags are immutable; fixes use a higher patch version.</li></ol>
+<h2 id="thin-shell">Thin signed shell</h2>
+<p>A thin App is the shell alone, in <code translate="no">apps/desktop/shell/</code>, plus a seed under <code translate="no">Resources/seed</code>. Windows and Linux Apps are thin. The macOS App stays embedded unless <code translate="no">OPENPROGRAM_RELEASE_MAC_THIN</code> is on.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Mode</th><th scope="col">Selected at start by</th></tr></thead>
+<tbody>
+<tr><th scope="row">Developer</th><td><code translate="no">&lt;root&gt;/developer.json</code></td></tr>
+<tr><th scope="row">Embedded</th><td><code translate="no">Resources/instance.json</code>, <code translate="no">Resources/runtime</code> or an unpackaged App. The old path, unchanged</td></tr>
+<tr><th scope="row">Managed</th><td>Anything else: the shell reads <code translate="no">current</code> and loads that sealed version's <code translate="no">desktop/main.js</code> through <code translate="no">start(context)</code></td></tr>
+</tbody>
+</table>
+<h3>First start</h3>
+<ol>
+<li>Write <code translate="no">.seeding</code>, unpack with progress.</li>
+<li>Run <code translate="no">install_seed.py</code> with the base's Python: rename the build root in the version, rewrite the seal's file table, install the identity and tools, create <code translate="no">repo/</code>, write the pointer.</li>
+<li>Remove <code translate="no">.seeding</code> last, so an interrupted install starts over.</li>
+</ol>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Seed</th><td><code translate="no">base.tar.zst</code>, <code translate="no">version.tar.zst</code>, <code translate="no">repo.bundle</code>, the launcher (on macOS the signed helper bundle, the one identity privacy grants attach to), <code translate="no">shell-compat.json</code>, the stdlib <code translate="no">bootstrap/</code> tools. The command-line installers use the same seed as <code translate="no">.tar.gz</code>; <code translate="no">scripts/release/build-release-seed.sh</code> builds both</td></tr>
+<tr><th scope="row">Start counting</th><td>The worker starts through the launcher, so the guard counts every start; short authentication commands use the version's Python and do not count</td></tr>
+<tr><th scope="row">Desktop load</th><td>A failure is recorded in <code translate="no">boot/&lt;id&gt;.desktop-failed</code> for that shell version and the App relaunches on the fallback. Success writes <code translate="no">boot/&lt;id&gt;.desktop-ready</code></td></tr>
+<tr><th scope="row">Recovery page</th><td>No version can load; <code translate="no">/healthz</code> has failed for 120 s on the fallback; the App menu (<strong>File</strong> on Windows and Linux); Shift held at start on macOS and Windows; <code translate="no">--recovery</code> and the deb launcher action on Linux</td></tr>
+<tr><th scope="row">Git</th><td>A base ships a pinned Git on macOS, Windows and Linux, first on <code translate="no">PATH</code></td></tr>
+<tr><th scope="row">Shell change</th><td>When the shell version changes, it refreshes <code translate="no">shell-compat</code>, the Python minor and the launcher, renaming a locked Windows launcher aside</td></tr>
+<tr><th scope="row">Running worker</th><td>A worker whose version differs from the App is restarted, once per launch</td></tr>
+<tr><th scope="row">macOS placement</th><td>An App opened from a disk image or Downloads offers to move to Applications, or <code translate="no">~/Applications</code> when the shared folder is not writable</td></tr>
+</tbody>
+</table>
 
-  <p class="note"><strong>Implementation record:</strong>Task breakdown, RED/GREEN, reviews, and gate records are in <a href="implementation-plan.html">Installation and distribution implementation plan</a>. That record does not change this document’s conceptual boundaries.</p>
+<h2>Acceptance</h2>
+<details>
+<summary>Runtime and macOS</summary>
+<ul>
+<li>Native runners, pinned commit and lock. <code translate="no">--version</code>, cold start, <code translate="no">/healthz</code>, <code translate="no">/chat</code>, hashed Web assets. Import and asset probes; excluded distributions absent.</li>
+<li>DMG on clean arm64 and x64 with system Git only. Offline first start, worker, Web and Chromium probes. Python path and capability hash from the embedded runtime.</li>
+<li>Two consecutive builds leave only the one App. Concurrent installers: one enters. A corrupt candidate or failed activation keeps the old App.</li>
+<li>Bundle, runtime manifest, <code translate="no">--version</code> and Python metadata agree.</li>
+</ul>
+</details>
+<details>
+<summary>Windows, CLI, release</summary>
+<ul>
+<li>Windows: same ZIP as the CLI; manifest, Python, worker health and Web chat from the unpacked App; ConPTY presets; browser paths. Updater takes only the exact EXE.</li>
+<li>CLI: both bootstraps with latest and pinned versions; no PyPI or clone; hashes match; old version starts after a failed upgrade.</li>
+<li>Release: one version everywhere; every published asset passed its own leg; a build with no publisher signature carries <code translate="no">-unsigned</code> in its name.</li>
+<li>Linux Desktop: <code translate="no">scripts/release/smoke-linux-desktop.sh</code> under Xvfb on clean Ubuntu 22.04 and 24.04 with Git removed: deb install, desktop entry, <code translate="no">node-pty</code>, first-run seed, restart after unpacking, worker health, <code translate="no">/chat</code>, the launcher, and the AppImage with <code translate="no">APPIMAGE_EXTRACT_AND_RUN=1</code>.</li>
+<li>Docs, indexes and runtime errors contain no <code translate="no">pip install openprogram</code> or component-install steps.</li>
+</ul>
+</details>
+<details>
+<summary>References</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Reference</th><th scope="col">Use</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://www.electronjs.org/docs/latest/tutorial/distribution-overview">Electron</a>, electron-builder (<a href="https://www.electron.build/docs/features/code-signing/code-signing-mac/">signing</a>, <a href="https://www.electron.build/docs/linux/">Linux targets</a>)</th><td>Desktop shell; reads the same runtime archive as the CLI</td></tr>
+<tr><th scope="row"><a href="https://developer.apple.com/documentation/xcode/packaging-mac-software-for-distribution">Apple distribution</a></th><td><a href="developer-id.html">Developer ID</a></td></tr>
+<tr><th scope="row">Apple <a href="https://developer.apple.com/design/human-interface-guidelines/app-icons">icon guidance</a>, <a href="https://developer.apple.com/documentation/Xcode/creating-your-app-icon-using-icon-composer">Icon Composer</a></th><td>Layered source plus compatible ICNS</td></tr>
+<tr><th scope="row"><a href="https://www.electron.build/appimage/">AppImage</a>, deb, rpm, Snap, Flatpak</th><td>deb and AppImage carry the Linux App. rpm, Snap and Flatpak are not published. None of them sets the glibc baseline; the Ubuntu 22.04 build does</td></tr>
+<tr><th scope="row"><a href="https://briefcase.beeware.org/en/latest/reference/platforms/macOS/index.html">Briefcase</a></th><td>Principle only: Python belongs in the app bundle</td></tr>
+<tr><th scope="row"><a href="https://pyinstaller.org/en/stable/">PyInstaller</a></th><td>Rejected: does not suit dynamic Program discovery and extension dependencies</td></tr>
+<tr><th scope="row"><a href="https://py2app.readthedocs.io/en/stable/">py2app</a></th><td>Layout reference for Python.framework and Mach-O</td></tr>
+<tr><th scope="row">uv (<a href="https://docs.astral.sh/uv/pip/environments/">environments</a>, <a href="https://docs.astral.sh/uv/concepts/tools/">tools</a>)</th><td>Adopted for CLI install and Program environments; <code translate="no">uv tool install openprogram</code> is not an entry</td></tr>
+<tr><th scope="row"><a href="https://packaging.python.org/en/latest/tutorials/packaging-projects/">PyPA</a>, <a href="https://docs.pypi.org/trusted-publishers/using-a-publisher/">Trusted Publishing</a></th><td>Wheels are developer artifacts only</td></tr>
+</tbody>
+</table>
+</details>
 
-  <h2 id="status">11. Implementation status</h2>
-  <div class="table-wrap"><table><thead><tr><th>Capability</th><th>Status</th><th>Current evidence or gap</th></tr></thead><tbody>
-    <tr><td>Single-port worker hosts Web</td><td class="yes">Implemented</td><td>The worker and single-port design jointly provide API, WebSocket, and prebuilt Web UI.</td></tr>
-    <tr><td>Electron worker monitoring and recovery</td><td class="yes">Implemented</td><td>Health checks, recovery logic, and embedded-Python startup are connected.</td></tr>
-    <tr><td>Web ships with wheel/runtime</td><td class="yes">Implemented</td><td>Release asset staging, clean-wheel package-resource checks, and platform runtime probes share the same prebuilt assets.</td></tr>
-    <tr><td>Unified complete capability manifest</td><td class="yes">Implemented</td><td>Schema 2 pins capabilities, lock hash, actual distributions, and asset paths.</td></tr>
-    <tr><td>Runtime bundles no Programs</td><td class="yes">Implemented</td><td>The runtime verifier covers Playwright Chromium and checks that the manifest names no Programs.</td></tr>
-    <tr><td>Desktop and CLI reuse one platform runtime archive</td><td class="yes">Implemented</td><td>The release workflow builds one runtime archive per platform/architecture. macOS/Windows Desktop and CLI jobs consume the same-named artifact.</td></tr>
-    <tr><td>Local single-App build and replacement</td><td class="yes">Implemented</td><td><code>npm run dist</code> builds the complete runtime and replaces only OpenProgram.app at the fixed Applications path.</td></tr>
-    <tr><td>macOS icon assets</td><td class="yes">Implemented</td><td>Layered <code>AppIcon.icon</code> and version-controlled legacy ICNS both pass build gates.</td></tr>
-    <tr><td>CPython bundled in macOS DMG/ZIP</td><td class="yes">Implemented</td><td>arm64/x64 DMG and ZIP use controlled CPython and the complete product runtime.</td></tr>
-    <tr><td>macOS unsigned DMG/ZIP</td><td class="yes">Published</td><td>The current channel explicitly says unsigned and publishes SHA-256 manifests.</td></tr>
-    <tr><td>Windows signed NSIS EXE</td><td class="yes">Implemented; release gate pending</td><td>Native workflows require signing secrets, verify app/installer Authenticode, and run packaged runtime smoke tests.</td></tr>
-    <tr><td>Linux desktop package</td><td class="out">Not published</td><td>Linux uses the complete CLI/server runtime without a reduced Desktop substitute.</td></tr>
-    <tr><td>CLI release installer</td><td class="yes">Implemented</td><td>macOS/Linux shell installers and Windows PowerShell installers all perform checksums, complete verification, worker cold-start, and atomic activation.</td></tr>
-    <tr><td>Tag-driven GitHub Release</td><td class="yes">Implemented</td><td>The release workflow uploads platform runtime archives, checksums, Desktop artifacts, developer Python artifacts, and release manifest.</td></tr>
-    <tr><td>pip / PyPI product installation</td><td class="out">Unsupported</td><td>Ordinary users use only official installers or platform packages. Wheels remain inputs for builds, source development, and testing.</td></tr>
-    <tr><td>Windows distribution</td><td class="yes">CLI/server and Desktop implemented</td><td>Windows x86_64 uses complete ZIP runtimes, PowerShell installers, and atomic launchers. Desktop uses the same runtime, signed NSIS, ConPTY, update-signature validation, and native CI. Sandboxing proceeds separately.</td></tr>
-    <tr><td>System credential-store integration</td><td class="out">Explicitly outside scope</td><td>This document does not plan Keychain, keyring, or Credential Manager.</td></tr>
-  <tr><td>Local refresh completion</td><td class="out">Pending verification</td><td>Local refresh completion: Public-script regression cases and affected distribution tests pass in isolation. Contracts include an optional model-catalogue cache skip. Independent reviews and installed-App acceptance remain pending.</td></tr>
-  </tbody></table></div>
-
-  <h2>12. Explicit exclusions</h2>
-  <ul><li>macOS App Store, Developer ID signing, and notarization;</li><li>System Keychain, keyring, Credential Manager, or similar credential-store integration;</li><li>Rewriting OpenProgram to eliminate Python;</li><li>Replacing Electron with PyInstaller, Briefcase, py2app, or Tauri;</li><li>Per-Program process isolation in the first phase;</li><li>Automatic installation of arbitrary third-party Programs;</li><li>Treating replaceable OCR, stealth browser backends, or debugging tools as ordinary-user product dependencies.</li></ul>
-  <p class="small">Related designs:<a href="../cli/single-port.html">Single-port worker and frontend</a>; <a href="../runtime/self-update.html">Self-update</a>. This document takes precedence for conflicting installation/distribution content and is referenced by related designs.</p>
-<section><h2>Release build inputs</h2><p>Clean release runners receive a pinned Office resource archive from the draft release. The archive contains only inventoried editor resources, source materials and licenses. Builders verify its SHA-256 and the Office manifest before staging. A release retry can dispatch the existing immutable tag through a newer build controller; every product checkout remains pinned to that tag. Publication uploads the complete artifact manifest and finalizes the draft only after every native build and installer check succeeds. An already public release is never overwritten.</p></section>
-</main>
-<section style="max-width:1120px;margin:32px auto;padding:0 22px"><h2>Windows public installer publication</h2><p>The website assembly publishes install.ps1 at the domain root, next to the POSIX /install entry. A behavioral test executes the actual assembly step against temporary site inputs and checks both root installers byte-for-byte. The bootstrap uses an immutable release tag and never silently falls back to a source checkout. A missing Windows release installer explains that the selected version has no complete Windows release and directs users to the documented source-development installation.</p><p>Implementation status: the root-installer assembly regression and independent source reviews pass. Restoring the website entry requires site publication; usable managed Windows installation additionally requires a release containing the versioned installer, complete runtime ZIP and checksum. Local source verification does not establish either publication.</p></section><section><h2>Release platform selection</h2><p>Release matrices default to macOS and Linux. Set the repository variable <code>OPENPROGRAM_RELEASE_WINDOWS=true</code> to include Windows runtime, installer and Desktop jobs. Windows Desktop publication still requires <code>WINDOWS_CSC_LINK</code> and <code>WINDOWS_CSC_KEY_PASSWORD</code>; missing signing credentials fail the selected release. Platform selection is shared by runtime and installer jobs.</p></section>
-<section><h2>System shell compatibility</h2><p>The macOS packaged-runtime smoke check supports the system Bash 3.2. Its verifier argument array always includes the runtime directory; the optional deferred-browser flag is appended only when explicitly requested. Normal release validation runs the complete browser check.</p></section>
-<section><h2>Local desktop refresh permissions</h2>
-<p>The refresh script extracts the installed ASAR, replaces desktop modules, and repacks node-pty as unpacked files. Electron ASAR records executable metadata for packed files only; extraction writes unpacked files with default permissions. This removes execute permission from the node-pty spawn-helper and prevents terminal creation.</p>
-<p>The staging step restores original unpacked file modes from the installed unpacked directory before repacking. Known node-pty spawn-helper files under prebuilds and build/Release receive execute bits even when a previous refresh already damaged their installed mode. Other files retain their installed modes. Symlinks are not followed for permission repair.</p>
-<p>Reference: the installed @electron/asar insertFile and extractAll implementation. Preserving the unpacked source metadata is adopted; recursive executable chmod and changes to OS privacy permissions are excluded. Signing and installation remain the existing refresh workflow.</p>
-</section>
-<section><h2>Local refresh source integrity</h2><p>The default /Applications/OpenProgram.app is refreshed only from a committed, clean checkout containing both local main and any locally fetched origin/main. Target paths are resolved before source checks, runtime paths and the installation lock are selected: trailing slashes, dot components and symlink aliases of the default App share the same checks and lock. A genuinely different custom App retains its existing source-check behavior. Tracked edits, staged changes and non-ignored untracked files cause refusal before packaging. The same checks run after packaging and under the installation lock before changing the App, the PATH installation or the worker. Committed HEAD changes during packaging retain the existing rebuild behavior; a later change after the payload is frozen aborts installation. Ignored build outputs and local evidence do not dirty the source gate. GUI Harness continues to use its pinned committed archive, and the existing source/wheel/App version checks remain required. Source-integrity regression tests use temporary Git repositories and fake App/runtime commands; they do not update the installed App. Independent review and combined implementation verification remain pending.</p></section>
-</body>
-</html>
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Status</th></tr></thead>
+<tbody>
+<tr><th scope="row">Single-port worker, health and recovery, Web in the runtime, capability manifest, shared runtime archive, fixed-App install, icons, CLI installers, tag-driven Release</th><td>Implemented</td></tr>
+<tr><th scope="row">macOS signed DMG and ZIP</th><td>Implemented; Apple gates are <a href="developer-id.html">external</a></td></tr>
+<tr><th scope="row">Windows Desktop</th><td>Implemented, first published with v1.1.0; never run on real Windows. <a href="windows-support.html#implementation-status">Windows support</a></td></tr>
+<tr><th scope="row">Thin shell and seed</th><td>Implemented, used by Windows and Linux Apps from v1.1.0. The packaged shell passes the macOS smoke; Linux deb and AppImage pass under Xvfb on arm64. Open: x86_64 Linux packages, a real Windows run, and the macOS privacy-grant gate (<a href="developer-id.html">Developer ID</a>) before the macOS App can turn thin. <code translate="no">legacy_app</code> and the App ties in the supervisor still exist</td></tr>
+<tr><th scope="row">Linux Desktop</th><td>Implemented, first published with v1.1.0. Update activation and going back on Linux need one more end-to-end run</td></tr>
+<tr><th scope="row">Release workflow</th><td>Independent legs and unsigned forms implemented and tested as scripts; the workflow itself has not yet run on GitHub</td></tr>
+<tr><th scope="row">Local refresh completion</th><td>Regression cases pass; installed-App acceptance open</td></tr>
+<tr><th scope="row"><code translate="no">openprogram update</code></th><td>Leftover command: its handler imports helpers that no longer exist and raises <code translate="no">ImportError</code>. <code translate="no">upgrade</code> is the update command</td></tr>
+</tbody>
+</table>
+<p class="note">Out of scope: App Store, credential-store integration, replacing Python or Electron, per-Program process isolation, automatic third-party Program installs.</p>
+<p class="next"><a href="../cli/single-port.html">Single-port worker</a></p>

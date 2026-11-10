@@ -16,6 +16,8 @@ Tests:
 """
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 
@@ -69,6 +71,8 @@ def fake_dispatcher(monkeypatch):
             "source": req.source,
             "predecessor": req.branch_from,
             "model_override": req.model_override,
+            "permission_mode": req.permission_mode,
+            "permission_rules": req.permission_rules,
         })
         from openprogram.runtime.context.session_db import default_db
         store = default_db()
@@ -204,84 +208,19 @@ def test_dispatcher_failure_surfaces(parent_store, monkeypatch):
     assert out.error and "provider exploded" in out.error
 
 
-# --- live spawn card streaming -------------------------------------------
+# --- spawn card identity -------------------------------------------------
 #
-# A synchronous spawn blocks the caller's tool call for as long as the
-# sub-agent runs. Without a "running" event the caller's turn renders
-# nothing until it finishes, which is what made spawns invisible in the
-# web UI. These cover the event payload and the id reuse that keeps the
-# live card and the reloaded DAG row from rendering as two cards.
+# A synchronous spawn writes its running card before the run and the end
+# write reuses that id, so the transcript updates one card in place.
 
 
-@pytest.fixture
-def captured_frames(monkeypatch):
-    import openprogram.runtime.events as events
-
-    frames: list[dict] = []
-    monkeypatch.setattr(events, "emit_ws_frame", frames.append)
-    return frames
-
-
-def test_emit_spawn_event_payload_shape(captured_frames):
-    """The event carries the same ``attach`` dict the DAG persists, so
-    the live and reload paths build identical attachCards entries."""
-    from openprogram.runtime.conversation.sub_agent_run import emit_spawn_event
-
-    emit_spawn_event(
-        session_id="p1",
-        status="running",
-        label="probe",
-        prompt="do the thing",
-        chosen_agent="worker",
-        card_id="card123",
-        tool_call_id="tc_9",
-    )
-
-    assert len(captured_frames) == 1
-    frame = captured_frames[0]
-    assert frame["type"] == "chat_response"
-    data = frame["data"]
-    assert data["type"] == "stream_event"
-    assert data["session_id"] == "p1"
-
-    ev = data["event"]
-    assert ev["type"] == "sub_agent"
-    assert ev["card_id"] == "card123"
-    assert ev["tool_call_id"] == "tc_9"
-    assert ev["agent_id"] == "worker"
-    assert ev["attach"]["status"] == "running"
-    assert ev["attach"]["label"] == "probe"
-    assert ev["attach"]["prompt"] == "do the thing"
-    assert ev["attach"]["session_id"] == "p1"
-
-
-def test_emit_spawn_event_truncates_prompt(captured_frames):
-    from openprogram.runtime.conversation.sub_agent_run import emit_spawn_event
-
-    emit_spawn_event(
-        session_id="p1", status="running", label=None,
-        prompt="x" * 5000, chosen_agent="w", card_id="c1",
-    )
-    assert len(captured_frames[0]["data"]["event"]["attach"]["prompt"]) == 500
-
-
-def test_spawn_event_pair_shares_card_id_with_attach_node(
-    parent_store, fake_dispatcher, captured_frames,
-):
-    """running + terminal events use one card_id, and that same id
-    becomes the persisted attach node — so a refresh mid-spawn shows
-    one card, not a duplicate."""
+def test_the_end_write_reuses_the_running_card_id(parent_store, fake_dispatcher):
     from openprogram.runtime.conversation.sub_agent_run import (
-        emit_spawn_event,
         _execute_agent_turn,
         write_attach_pointer_for_spawn,
     )
 
     card_id = "fixedcard01"
-    emit_spawn_event(
-        session_id="p1", status="running", label="probe",
-        prompt="go", chosen_agent="worker", card_id=card_id,
-    )
     result = _execute_agent_turn(
         session_id="p1", prompt="go", agent_id="worker", branch_from="a1",
     )
@@ -291,26 +230,8 @@ def test_spawn_event_pair_shares_card_id_with_attach_node(
         label="probe", prompt="go", chosen_agent="worker",
         node_id=card_id,
     )
-    emit_spawn_event(
-        session_id="p1", status="completed", label="probe",
-        prompt="go", chosen_agent="worker", card_id=card_id,
-        head_id=result.head_id, content=result.final_text,
-    )
 
-    # The persisted DAG row a reload reads back is the card the client
-    # already drew.
     assert node_id == card_id
-
-    # write_attach_pointer_for_spawn also broadcasts session_reload —
-    # keep only the spawn-card events.
-    events = [
-        f["data"]["event"] for f in captured_frames
-        if f["type"] == "chat_response"
-    ]
-    assert [e["attach"]["status"] for e in events] == ["running", "completed"]
-    assert {e["card_id"] for e in events} == {card_id}
-    # Terminal event carries the pointer the card needs for "Switch ↗".
-    assert events[-1]["attach"]["head_id"] == result.head_id
 
 
 def test_write_attach_pointer_mints_id_when_not_supplied(
@@ -358,3 +279,27 @@ def test_spawn_without_pick_leaves_model_to_profile(parent_store,
     _execute_agent_turn(session_id="p1", prompt="go", agent_id="main",
                         branch_from="a1")
     assert fake_dispatcher["calls"][-1]["model_override"] is None
+
+
+def test_a_sub_agent_with_no_parent_turn_uses_the_default(parent_store, fake_dispatcher):
+    from openprogram.runtime.conversation.sub_agent_run import _execute_agent_turn
+
+    _execute_agent_turn(session_id="p1", prompt="go", agent_id="main", branch_from="a1")
+    assert fake_dispatcher["calls"][-1]["permission_mode"] == "bypass"
+
+
+def test_a_sub_agent_inherits_its_parents_mode_and_rules(parent_store, fake_dispatcher, monkeypatch):
+    from openprogram.runtime.agent.turn_request import TurnRequest, reset_turn_request, set_turn_request
+    from openprogram.runtime.conversation.sub_agent_run import _execute_agent_turn
+    from openprogram.runtime.permissions.modes import PermissionRules
+
+    rules = PermissionRules(deny=["bash"])
+    parent = TurnRequest(session_id="p1", user_text="", agent_id="main", source="cron",
+                         permission_mode="ask", permission_rules=rules)
+    token = set_turn_request(parent)
+    try:
+        _execute_agent_turn(session_id="p1", prompt="go", agent_id="main", branch_from="a1")
+    finally:
+        reset_turn_request(token)
+    last = fake_dispatcher["calls"][-1]
+    assert (last["permission_mode"], last["permission_rules"]) == ("ask", rules)

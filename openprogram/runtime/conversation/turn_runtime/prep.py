@@ -105,7 +105,8 @@ def prepare_turn(
     # as a prefix block inside the wire user message. Recomputing it per LLM
     # call would be pointless — it only ever varies with the user's input.
     memory_prefetch = ""
-    if req.user_text:
+    recall_query = req.user_text if req.recall_query is None else req.recall_query
+    if recall_query:
         try:
             from openprogram.state.authority import normalize_authority
             from openprogram.state.memory import get_backend
@@ -115,7 +116,7 @@ def prepare_turn(
             # runs, a pairing could have changed, and the answer belongs to
             # the request as it was authorized.
             memory_prefetch = get_backend().search(
-                req.user_text,
+                recall_query,
                 session_id=req.session_id,
                 tier=normalize_authority(req).get("authority_tier"),
             ) or ""
@@ -170,6 +171,11 @@ def prepare_turn(
     # branch chain), so leaving it visible doesn't pollute main.
     if is_runtime_prompt(req):
         user_msg["display"] = "runtime"
+    # What kind of row this is must not be read back from its text.
+    if req.message_origin:
+        user_msg["origin"] = req.message_origin
+    elif req.speaker_kind in ("owner", "human") and not is_runtime_prompt(req):
+        user_msg["origin"] = "person"
     if req.restart_resume:
         # The chat draws this turn's reply as the rest of the reply the
         # restart cut off, with no row for the prompt (Codex likewise keeps
@@ -177,6 +183,10 @@ def prepare_turn(
         user_msg["trigger"] = "restart"
     if req.notice:
         user_msg["notice"] = req.notice
+    if req.automation:
+        # Still drawn as the message it is; a reader of the history can tell
+        # that nobody typed it (always_on/pending.py).
+        user_msg["automation"] = req.automation
     if memory_prefetch:
         # Replay reproduces the exact wire user message from the node.
         user_msg["memory_prefetch"] = memory_prefetch
@@ -263,6 +273,16 @@ def prepare_turn(
             history = rendered_history(
                 db, req.session_id, head_id=user_msg_id,
             ) or history
+
+    # A prompt that starts a turn is a point the session can rewind to.
+    if (
+        req.source != "agent_spawn"
+        and not is_runtime_prompt(req)
+        and not req.restart_resume
+        and getattr(req, "advance_head", True)
+    ):
+        from openprogram.state.store.snapshot.checkpoint.helpers import capture_prompt_checkpoint
+        capture_prompt_checkpoint(db, req.session_id, user_msg_id)
 
     # 事件层 tap：无论哪条持久化路径（webui 先存 / dispatcher 自己存），
     # "用户消息提交了"都成立，所以放在分支外。

@@ -46,7 +46,8 @@ runtimeState.currentSessionId = null;
 
 const { sendChatMessage } = await import("../../../components/chat/composer/submit/send-chat-message.ts");
 const pendingUserText = await import("../../../lib/chat/send/pending-user-text.ts");
-const { useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { selectRow, useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { transcriptRows } = await import("../../_support/transcript-rows.mjs");
 const { applyChatWsMessage } = await import("../../../lib/net/ws/chat-stream.ts");
 const { releaseChatOperationError } = await import("../../../lib/net/ws/use-ws.ts");
 const { useSendQueue, releaseStopHold } = await import("../../../lib/chat/send/send-queue.ts");
@@ -57,7 +58,15 @@ const attachmentDb = await import("../../../components/chat/composer/attach/atta
 const { stopSession } = await import("../../../components/chat/composer/submit/use-chat-submit.ts");
 
 const store = () => useSessionStore.getState();
-const message = (id) => store().messagesById[id];
+const transcript = transcriptRows(useSessionStore, selectRow);
+/** The row with this id in whichever view holds it. */
+const message = (id) => {
+  for (const view of Object.keys(store().rowsByView)) {
+    const row = selectRow(view, id)(store());
+    if (row) return row;
+  }
+  return undefined;
+};
 const provisional = "local_duplicate_send";
 const send = (text) => sendChatMessage({ text, sessionId: provisional, thinking: "medium", webSearchEnabled: false });
 const forget = (sid) => {
@@ -100,11 +109,10 @@ describe("first ACK of a draft", () => {
     forget(sid);
   });
 
-  test("the live user bubble and reply placeholder carry the original send time", () => {
+  test("the live user bubble carries the original send time", () => {
     const sentAt = pendingUserText.getPendingUserTimestamp(provisional);
     applyChatWsMessage({ type: "chat_ack", data: { session_id: provisional, msg_id: "sent-user-1", text: "first" } });
     assert.equal(message("sent-user-1").timestamp, sentAt);
-    assert.ok(Number.isFinite(message("sent-user-1_reply").timestamp));
   });
 });
 
@@ -167,7 +175,7 @@ describe("ACK boundary", () => {
 
 describe("message timestamps", () => {
   test("every live message appended to the store gets a timestamp", () => {
-    store().appendMessage("timestamp-system", { id: "system-without-explicit-time", role: "system", content: "transient notice", status: "done" });
+    transcript.localRow("timestamp-system", { id: "system-without-explicit-time", role: "system", rowKind: "system_event", content: "transient notice", status: "done" });
     assert.ok(Number.isFinite(message("system-without-explicit-time").timestamp));
   });
 
@@ -177,7 +185,7 @@ describe("message timestamps", () => {
     const realNow = Date.now;
     Date.now = () => loadTime;
     try {
-      store().setMessages("timestamp-history", [
+      transcript.replaceRows("timestamp-history", [
         { id: "history-authoritative-time", role: "assistant", content: "persisted", status: "done", timestamp: persisted },
         { id: "history-missing-time", role: "user", content: "legacy", status: "done" },
         { id: "history-second-missing-time", role: "assistant", content: "legacy reply", status: "done" },
@@ -192,16 +200,16 @@ describe("message timestamps", () => {
 
   test("mid-run hydration prefers a persisted time, else keeps the live start time", () => {
     const persisted = 1_700_000_000;
-    store().appendMessage("timestamp-hydrate", { id: "live-placeholder", role: "assistant", content: "", status: "streaming", timestamp: 1_111 });
-    store().setMessages("timestamp-hydrate", [
+    transcript.putRow("timestamp-hydrate", { id: "live-placeholder", role: "assistant", content: "", status: "streaming", timestamp: 1_111 });
+    transcript.replaceRows("timestamp-hydrate", [
       { id: "live-placeholder", role: "assistant", content: "", status: "running", timestamp: persisted },
     ]);
     assert.equal(message("live-placeholder").timestamp, persisted);
 
-    store().appendMessage("timestamp-hydrate-missing", {
+    transcript.putRow("timestamp-hydrate-missing", {
       id: "live-placeholder-without-persisted-time", role: "assistant", content: "", status: "streaming", timestamp: 2_222,
     });
-    store().setMessages("timestamp-hydrate-missing", [
+    transcript.replaceRows("timestamp-hydrate-missing", [
       { id: "unrelated-before-placeholder", role: "user", content: "older", status: "done" },
       { id: "live-placeholder-without-persisted-time", role: "assistant", content: "", status: "running" },
     ]);
@@ -210,7 +218,7 @@ describe("message timestamps", () => {
 
   test("nested runtime and attach rows inherit their parent's time", () => {
     const persisted = 1_700_000_000;
-    store().setMessages("timestamp-nested", [{
+    transcript.replaceRows("timestamp-nested", [{
       id: "parent-with-nested-rows", role: "assistant", content: "parent", status: "done", timestamp: persisted,
       runtimeChildren: [{ id: "nested-runtime", role: "assistant", content: "", status: "running" }],
       attachCards: [{ id: "nested-attach", role: "assistant", content: "", status: "running" }],
@@ -220,15 +228,6 @@ describe("message timestamps", () => {
     assert.equal(parent.attachCards[0].timestamp, persisted);
   });
 
-  test("a peer user_message keeps its server time, in seconds or milliseconds", () => {
-    for (const [id, timestamp] of [["peer-user-seconds", 1_700_000_000], ["peer-user-ms", 1_700_000_000_123]]) {
-      applyChatWsMessage({
-        type: "chat_response",
-        data: { type: "user_message", session_id: "timestamp-peer", msg_id: id, content: "peer", timestamp },
-      });
-      assert.equal(message(id).timestamp, timestamp);
-    }
-  });
 });
 
 describe("failed and local sends", () => {
@@ -417,7 +416,7 @@ describe("Stop and execution commands", () => {
 
   test("Stop marks the live reply cancelled and frees the slot, without a cancelling flag", () => {
     reset();
-    store().appendMessage(sid, { id: "exec-1", role: "assistant", content: "partial", status: "streaming" });
+    transcript.putRow(sid, { id: "exec-1", role: "assistant", rowKind: "assistant", content: "partial", status: "running" });
     store().setRunningTaskFor(sid, { session_id: sid, msg_id: "u1", execution_id: "exec-1", status_version: 3 });
     const frames = [];
     stopSession(sid, (frame) => { frames.push(frame); return true; });

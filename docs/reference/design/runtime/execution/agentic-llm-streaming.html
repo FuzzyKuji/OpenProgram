@@ -1,694 +1,143 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Nested Agentic LLM streaming · Complete design · OpenProgram</title>
-<style>
-:root{
-  --bg:#0f1115;--elev:#151820;--panel:#161920;--text:#e8eaef;--muted:#8b919e;--faint:#5c6370;
-  --line:rgba(255,255,255,.07);--line2:rgba(255,255,255,.14);
-  --acc:#5b8cff;--acc-soft:rgba(91,140,255,.12);--ok:#3dba8a;--warn:#e0b020;--danger:#e85d5d;
-  --think:#a78bfa;--llm:#34d399;--font:Inter,system-ui,-apple-system,"PingFang SC","Hiragino Sans GB",sans-serif;
-  --mono:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;color-scheme:dark;
-}
-*{box-sizing:border-box}
-html{scroll-behavior:smooth}
-body{margin:0;min-height:100vh;color:var(--text);font:14.5px/1.65 var(--font);background:var(--bg);-webkit-font-smoothing:antialiased}
-body::before{content:"";position:fixed;inset:0;pointer-events:none;z-index:0;background:
-  radial-gradient(900px 520px at 14% -10%,rgba(91,140,255,.08),transparent 55%),
-  radial-gradient(700px 480px at 90% 0%,rgba(52,211,153,.05),transparent 50%)}
-main{position:relative;z-index:1;max-width:1100px;margin:0 auto;padding:36px 22px 96px}
-.eyebrow{display:inline-flex;align-items:center;gap:8px;font-size:11px;letter-spacing:.14em;text-transform:uppercase;color:var(--faint);font-weight:600}
-.eyebrow::before{content:"";width:16px;height:1px;background:var(--line2)}
-h1{font-size:clamp(26px,3.6vw,38px);line-height:1.2;letter-spacing:-.03em;font-weight:650;margin:12px 0 10px;max-width:22ch}
-.lede{font-size:15.5px;color:var(--muted);max-width:72ch;margin:0 0 8px}
-.lede b{color:#dfe3ec;font-weight:600}
-.meta{display:flex;flex-wrap:wrap;gap:8px;margin:16px 0 8px}
-.pill{display:inline-flex;align-items:center;gap:6px;font-size:11.5px;padding:4px 10px;border-radius:999px;border:1px solid var(--line2);background:var(--panel);color:var(--muted)}
-.pill.acc{border-color:rgba(91,140,255,.4);color:#a8c4ff;background:var(--acc-soft)}
-.pill.warn{border-color:rgba(224,176,32,.4);color:#e0c48a;background:#3a3228}
-.pill.ok{border-color:rgba(61,186,138,.4);color:#8fd4b0;background:#1e2a24}
-.toc{display:flex;flex-wrap:wrap;gap:8px;margin:22px 0 8px;padding:12px 14px;border:1px solid var(--line);border-radius:12px;background:var(--elev)}
-.toc a{color:var(--muted);text-decoration:none;font-size:12.5px;padding:4px 8px;border-radius:8px;border:1px solid transparent}
-.toc a:hover{color:var(--text);background:rgba(255,255,255,.04);border-color:var(--line)}
-section{margin-top:40px;scroll-margin-top:18px}
-h2{font-size:1.35rem;margin:0 0 12px;padding-left:12px;border-left:3px solid var(--acc);letter-spacing:-.02em}
-h3{font-size:1.05rem;margin:22px 0 8px;color:#d5dae6}
-p,li{color:#c5cad6}
-ul,ol{padding-left:1.35rem}
-code,pre{font-family:var(--mono);font-size:12.5px}
-code{background:rgba(255,255,255,.06);padding:1px 6px;border-radius:5px;overflow-wrap:anywhere}
-pre{background:#0c0e12;border:1px solid var(--line2);border-radius:12px;padding:14px 16px;overflow:auto;line-height:1.5;color:#d7dbe6}
-.card{border:1px solid var(--line);border-radius:14px;background:var(--panel);padding:16px 18px;margin:14px 0}
-.card.soft{background:linear-gradient(180deg,#14171e,#10131a)}
-.grid2{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-@media(max-width:820px){.grid2{grid-template-columns:1fr}}
-table{width:100%;border-collapse:collapse;font-size:13px;min-width:640px}
-.scroll{overflow-x:auto;margin:12px 0;border:1px solid var(--line);border-radius:12px}
-th,td{border-bottom:1px solid var(--line);padding:10px 12px;text-align:left;vertical-align:top}
-th{background:#12151b;color:#b8bfd0;font-weight:600;position:sticky;top:0}
-td{color:#c8cdd8}
-.callout{border-left:3px solid var(--acc);padding:10px 14px;margin:14px 0;background:var(--acc-soft);border-radius:0 10px 10px 0;color:#c9d7f5}
-.callout.warn{border-left-color:var(--warn);background:rgba(224,176,32,.08);color:#e8d7a8}
-.callout.ok{border-left-color:var(--ok);background:rgba(61,186,138,.08);color:#b7e6d0}
-.callout.danger{border-left-color:var(--danger);background:rgba(232,93,93,.08);color:#f0b4b4}
-.tabs{display:flex;gap:0;overflow-x:auto;border-bottom:1px solid var(--line);margin:8px 0 0;background:#10131a;border-radius:12px 12px 0 0}
-.tabs button{appearance:none;border:0;border-bottom:2px solid transparent;background:transparent;color:var(--muted);font:inherit;font-size:12.5px;font-weight:500;padding:11px 14px;cursor:pointer;white-space:nowrap}
-.tabs button:hover{color:#c5c9d4;background:rgba(255,255,255,.03)}
-.tabs button.on{color:#e8eaef;border-bottom-color:var(--acc);background:var(--acc-soft)}
-.panel{display:none;border:1px solid var(--line);border-top:0;border-radius:0 0 12px 12px;background:var(--elev);padding:16px}
-.panel.on{display:block}
-.mock{border:1px solid var(--line2);border-radius:12px;background:#0c0e12;padding:14px;font-family:var(--mono);font-size:12px}
-.step{display:flex;gap:10px;align-items:flex-start;padding:8px 0;border-bottom:1px dashed var(--line)}
-.step:last-child{border-bottom:0}
-.icon{width:22px;height:22px;border-radius:6px;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex:0 0 auto}
-.icon.llm{background:rgba(52,211,153,.15);color:var(--llm)}
-.icon.fn{background:rgba(91,140,255,.15);color:#9db8ff}
-.icon.th{background:rgba(167,139,250,.15);color:var(--think)}
-.note{color:var(--muted);flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.note .grow{color:#dfe7f5}
-.badge{font-size:10.5px;padding:2px 7px;border-radius:999px;border:1px solid var(--line2);color:var(--muted)}
-.badge.run{color:#9db8ff;border-color:rgba(91,140,255,.4);background:var(--acc-soft)}
-.badge.done{color:#8fd4b0;border-color:rgba(61,186,138,.4)}
-.badge.err{color:#f0b4b4;border-color:rgba(232,93,93,.4)}
-.badge.cancel{color:#e0c48a;border-color:rgba(224,176,32,.4)}
-.ctrl{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
-.btn{appearance:none;border:1px solid var(--line2);background:#1a1e28;color:var(--text);font:inherit;font-size:12.5px;padding:7px 12px;border-radius:9px;cursor:pointer}
-.btn:hover{border-color:#4a5568;background:#222734}
-.btn.primary{background:var(--acc-soft);border-color:rgba(91,140,255,.45);color:#c5d8ff}
-.btn:disabled{opacity:.35;cursor:default}
-.q{display:grid;gap:10px}
-.qitem{border:1px solid var(--line);border-radius:12px;padding:14px;background:#12151b}
-.qitem h4{margin:0 0 6px;font-size:13.5px}
-.choices{display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
-.choices label{display:inline-flex;align-items:center;gap:6px;padding:6px 10px;border-radius:999px;border:1px solid var(--line2);cursor:pointer;font-size:12px;color:var(--muted)}
-.choices label.on{border-color:rgba(91,140,255,.5);background:var(--acc-soft);color:#c5d8ff}
-.choices input{accent-color:var(--acc)}
-.mermaid{white-space:pre;font-family:var(--mono);font-size:12px;line-height:1.45;color:#c9d0de;overflow:auto;background:#0c0e12;border:1px solid var(--line2);border-radius:12px;padding:14px 16px}
-.phase{counter-reset:ph}
-.phase li{margin-bottom:8px}
-.phase li::marker{color:var(--acc);font-weight:700}
-.kbd{font-family:var(--mono);font-size:11px;border:1px solid var(--line2);border-bottom-width:2px;border-radius:5px;padding:0 5px;color:#c5cad6}
-footer{margin-top:48px;padding-top:16px;border-top:1px solid var(--line);color:var(--faint);font-size:12px}
-a{color:#9db8ff}
-</style>
-</head>
-<body>
-<main>
-  <div class="eyebrow">OpenProgram · Design · Runtime</div>
-  <h1>Nested Agentic LLM streaming</h1>
-  <p class="lede">Complete product design, not a spike. Goal: in the <b>Agent method</b> execution tree, provide <code>llm()</code> / <code>runtime.exec(..., execution_kind="llm")</code> with <strong>per-node, per-channel</strong> real-time token streams, covering ExecutionStrip cards, right-side details, collapsible thinking, cancellation, reconnection, parallel LLMs, and both in-process and subprocess paths.<b>Define the contract first, then implement the same design in phases</b>—consistent with the context-manager design philosophy.</p>
-  <div class="meta">
-    <span class="pill acc">Authoritative draft · Open questions require user decisions</span>
-    <span class="pill">Aligned with existing <code>chat_response</code> / <code>stream_event</code> / <code>tree_update</code></span>
-    <span class="pill ok">No product code · No commit</span>
-    <span class="pill warn">Mac path unreachable → stored in repository docs</span>
-  </div>
+<title>Nested LLM streaming</title>
+<meta name="description" content="How each model call inside an Agent method streams its attempts and blocks to the execution tree.">
+<meta name="covers" content="apps/web/lib/execution-stream/ openprogram/runtime/execution/">
+<h1>Nested LLM streaming</h1>
 
-  <nav class="toc" aria-label="Contents">
-    <a href="#s0">0 Current state and gaps</a>
-    <a href="#s1">1 End-to-end behavior</a>
-    <a href="#s2">2 Event protocol</a>
-    <a href="#s3">3 Sequence</a>
-    <a href="#s4">4 FE state</a>
-    <a href="#s5">5 Persistence</a>
-    <a href="#s6">6 Failure/cancellation</a>
-    <a href="#s7">7 Process modes</a>
-    <a href="#s8">8 UI wording</a>
-    <a href="#s9">9 Acceptance</a>
-    <a href="#s10">10 Non-goals</a>
-    <a href="#s11">11 Implementation phases</a>
-    <a href="#s12">12 Open questions</a>
-    <a href="#demo">Interactive demonstration</a>
-  </nav>
+<p>Each <code translate="no">llm()</code> or <code translate="no">runtime.exec(..., execution_kind="llm")</code> inside an Agent method streams over <code translate="no">execution_stream.v1</code>, in-process or from a subprocess, with the same result on screen. The node's expanded layout is in <a href="../dag/nested-llm-node-content.html">Nested LLM node content</a>.</p>
 
-  <!-- 0 -->
-  <section id="s0">
-    <h2>0. Current state and gaps</h2>
-    <div class="scroll"><table>
-      <tr><th>Layer</th><th>Existing capability</th><th>Gap</th></tr>
-      <tr><td>Top-level chat stream</td><td><code>chat_response.data.type=stream_event</code>, inner <code>event.type ∈ {text,thinking,tool_*}</code>; FE coalesces into the assistant reply using rAF</td><td>Unrelated to nested LLM nodes</td></tr>
-      <tr><td>Execution tree</td><td><code>tree_update</code> polls at ~1.2s; LLM nodes <code>node_type:"exec"</code>, opening nodes with <code>status=running</code> / closing nodes writes <code>output</code>+<code>raw_reply</code></td><td>Before node closure, <code>output</code> is empty: TreeStep shows only the prompt note, not the growing reply.</td></tr>
-      <tr><td>Runtime stream</td><td><code>Runtime.on_stream</code> already forwards provider <code>text</code>/<code>thinking</code> delta</td><td>The nested path does not propagate <code>node_id</code> to WS; subprocesses forward only existing envelopes through the queue.</td></tr>
-      <tr><td>FE TreeStep</td><td>note = parameter summary + duration + <code>→ short(output|raw_reply)</code>; detail-panel Prompt(<code>params._content</code>) / LLM Reply(<code>raw_reply</code>)</td><td>No <code>Map&lt;nodeId, PartialStream&gt;</code>, so running cards cannot display deltas.</td></tr>
-    </table></div>
-    <div class="callout">Evidence references: <code>_event_parsing.agent_event_to_envelope</code>, <code>execution.dag._poll</code> / <code>live_progress</code>, <code>runtime/history._open_model_call_node</code>, <code>apps/web/lib/net/ws/chat-stream.ts</code>, <code>execution-strip.tsx#TreeStep</code>, <code>process_runner.run_agentic_in_subprocess</code>.</div>
-  </section>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 176" role="img" aria-label="Provider events enter CallStreamState, which merges deltas, numbers revisions and writes checkpoints. A transport carries the frames to the browser store, which keeps one state per node and applies frames by revision. On a gap or refresh the browser subscribes and receives a snapshot.">
+  <defs><marker id="st-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="40">Provider</text>
+  <text class="t-soft" x="0" y="66">text, thinking,</text>
+  <text class="t-soft" x="0" y="86">tool and retry events</text>
+  <line class="ln" x1="86" y1="33" x2="150" y2="33" marker-end="url(#st-a)"/>
+  <text class="t-big" translate="no" x="160" y="40">CallStreamState</text>
+  <text class="t-soft" x="160" y="66">merges, numbers revisions</text>
+  <text class="t-soft" x="160" y="86">checkpoints the node</text>
+  <line class="ln" x1="304" y1="33" x2="352" y2="33" marker-end="url(#st-a)"/>
+  <text class="t-big" x="364" y="40">Transport</text>
+  <text class="t-soft" x="364" y="66">subprocess frames</text>
+  <text class="t-soft" x="364" y="86">are checked by the parent</text>
+  <line class="ln" x1="450" y1="33" x2="522" y2="33" marker-end="url(#st-a)"/>
+  <text class="t-big" x="534" y="40">Browser store</text>
+  <text class="t-soft" x="534" y="66">one state per node</text>
+  <text class="t-soft" x="534" y="86">applied by revision</text>
+  <path class="ln-faint" d="M590 100V132H220V104" fill="none" marker-end="url(#st-a)"/>
+  <text class="t-soft mid" x="405" y="158">Gap or refresh: subscribe, receive a snapshot</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>Provider</strong><small>text, thinking, tool and retry events</small></li>
+  <li><strong><code translate="no">CallStreamState</code></strong><small>merges deltas, numbers revisions, checkpoints the node</small></li>
+  <li><strong>Transport</strong><small>subprocess frames are checked by the parent</small></li>
+  <li class="flow-end"><strong>Browser store</strong><small>one state per node, applied by revision; a gap or refresh subscribes for a snapshot</small></li>
+</ol>
+</figure>
 
-  <!-- 1 -->
-  <section id="s1">
-    <h2>1. End-to-end product behavior</h2>
-    <h3>1.1 ExecutionStrip cards (TreeStep · LLM rows)</h3>
-    <ul>
-      <li><b>Open node</b>: an LLM row appears in the tree, <span class="badge run">running</span>; the secondary note may still show a prompt summary (see §8 / §12).</li>
-      <li><b>tokens</b>: the main content is a <strong>continuously growing reply preview</strong> (text channel). Thinking defaults to a collapsed “Thinking…” label or last-line summary, consistent with top-level ThinkingStep.</li>
-      <li><b>Close node</b>: status becomes completed/error/cancelled; the note settles to <code>→ short(final)</code> plus duration. Clear the stream buffer and return authority to tree-node <code>output</code>/<code>raw_reply</code>.</li>
-      <li><b>tree_update</b>: still drives structure (child additions/removals and status changes); streamed text <strong>does not depend on</strong> the 1.2s poll and is driven by <code>llm_delta</code>.</li>
-    </ul>
-    <h3>1.2 Right-side details panel</h3>
-    <ul>
-      <li>Selecting a running LLM node: Prompt still reads <code>params._content</code>; Reply prioritizes the full FE buffer with scrolling, falling back to tree fields if no buffer exists.</li>
-      <li>After completion: Reply = persisted <code>raw_reply</code>/<code>output</code>; Thinking, if present, comes from <code>metadata.blocks</code>.</li>
-    </ul>
-    <h3>1.3 Multiple parallel LLMs</h3>
-    <p>Multiple LLM children of one RuntimeBlock may run concurrently. Every <code>node_id</code> has an independent buffer and <code>seq</code> space; UI rows grow independently without overwriting each other.</p>
-    <h3>1.4 Cancellation</h3>
-    <p>User Stop / execution.cancel → node <code>status=cancelled</code>; retain generated partial text as visible, persisted output; clear the buffer; show a “Cancelled” badge and reject further deltas for that node.</p>
-    <h3>1.5 Reconnection / refresh</h3>
-    <ul>
-      <li>After refresh, read the running LLM node’s <strong>throttled partial output</strong> from SessionDB (§5); the card immediately shows existing text and running state.</li>
-      <li>If the run remains active, WS recovery resumes new <code>llm_delta</code> / <code>tree_update</code> without requiring historical-delta replay.</li>
-      <li>If the worker died, streaming-resume’s abort sweep marks the node aborted; UI shows partial output and aborted.</li>
-    </ul>
-    <h3>1.6 In-process and subprocess</h3>
-    <p>User experience is <b>identical</b>. Only backend bridging differs (§7). Mode detection is diagnostic/logging only and does not branch frontend logic.</p>
-  </section>
+<h2 id="channels">Channels</h2>
 
-  <!-- 2 -->
-  <section id="s2">
-    <h2>2. Complete event protocol</h2>
-    <p>All events remain within the existing top-level envelope:</p>
-<pre>{
-  "type": "chat_response",
-  "data": { /* see below */ }
-}</pre>
+<table class="stack">
+<thead><tr><th scope="col">Carrier</th><th scope="col">Holds</th><th scope="col">Limit</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">execution_stream</code></th><td>Attempts, blocks and text of one LLM node. Driven per frame.</td><td>Never touches the assistant reply content</td></tr>
+<tr><th scope="row"><code translate="no">tree_update</code></th><td>Tree structure, status and <code translate="no">stream_preview</code> from the checkpoint. Polled about every 1.2 s.</td><td>A terminal status is a critical frame</td></tr>
+<tr><th scope="row"><code translate="no">Call.output</code></th><td>Final output, written when the node closes</td><td>Stream state is a preview, never the final result</td></tr>
+</tbody>
+</table>
 
-    <h3>2.1 Add <code>data.type = "llm_delta"</code></h3>
-    <p>At the same level as <code>stream_event</code> / <code>tree_update</code> (nested LLM output is not top-level assistant-bubble text, so do not use inner <code>event.type:"text"</code> or accidentally write to reply.content).</p>
-<pre>// text channel
-{
-  "type": "chat_response",
-  "data": {
-    "type": "llm_delta",
-    "session_id": "sess_7c2a",
-    "msg_id": "runtime_a1b2",          // RuntimeBlock / live_progress reference (also called runtime_id)
-    "node_id": "call_9f3e",            // DAG LLM Call.id (TreeStep aligns by path/id)
-    "channel": "text",                 // "text" | "thinking"
-    "delta": "Hello",
-    "seq": 12                          // Optional; monotonically increasing within node_id+channel
-  }
-}
+<p>Only <code translate="no">result</code>, <code translate="no">error</code> and <code translate="no">retry_result</code> frames finalize chat bookkeeping. A nested stream frame never clears the parent run, overwrites reply text or refreshes branch metadata.</p>
 
-// thinking channel
-{
-  "type": "chat_response",
-  "data": {
-    "type": "llm_delta",
-    "session_id": "sess_7c2a",
-    "msg_id": "runtime_a1b2",
-    "node_id": "call_9f3e",
-    "channel": "thinking",
-    "delta": "First, decompose the requirements…",
-    "seq": 3
-  }
-}</pre>
+<h2 id="frames">Frames</h2>
 
-    <h3>2.2 Related existing events (field names unchanged)</h3>
-<pre>// Shortly after node opening / structural change (poll or forced flush)
-{
-  "type": "chat_response",
-  "data": {
-    "type": "tree_update",
-    "session_id": "sess_7c2a",
-    "msg_id": "runtime_a1b2",
-    "function": "gui_agent",
-    "tree": {
-      "path": "…/gui_agent",
-      "name": "gui_agent",
-      "status": "running",
-      "children": [{
-        "path": "call_9f3e",
-        "name": "gpt-5",
-        "node_type": "exec",
-        "status": "running",
-        "params": { "_content": "Summarize the page…" },
-        "output": "",
-        "raw_reply": ""
-      }]
-    }
-  }
-}
+<pre translate="no" tabindex="0">{"type": "chat_response", "data": {
+  "type": "execution_stream", "schema_version": 1,
+  "session_id": "...", "execution_id": "...", "node_id": "...",
+  "generation": 1, "display_msg_id": "...",
+  "op": "block_delta", "base_revision": 11, "revision": 12,
+  "attempt_id": "...", "message_id": "...", "block_id": "...",
+  "kind": "text", "delta": "Hello"}}</pre>
 
-// Final tree_update after closure (root/child status=completed|error|cancelled)
-// child.output / raw_reply = full text; FE treats it as authoritative and clears buffers
-</pre>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">attempt_started</code></th><td>A provider attempt begins. A running predecessor becomes <code translate="no">superseded</code>.</td></tr>
+<tr><th scope="row"><code translate="no">block_started</code>, <code translate="no">block_delta</code>, <code translate="no">block_finished</code></th><td>One ordered block of an attempt</td></tr>
+<tr><th scope="row"><code translate="no">attempt_finished</code></th><td>Status <code translate="no">completed</code>, <code translate="no">failed</code>, <code translate="no">cancelled</code> or <code translate="no">superseded</code>, with validation</td></tr>
+<tr><th scope="row"><code translate="no">snapshot</code></th><td>Full state; replaces what the client holds</td></tr>
+<tr><th scope="row"><code translate="no">node_finished</code></th><td>Terminal decision with a full snapshot</td></tr>
+<tr><th scope="row"><code translate="no">sync_required</code></th><td>The client must resynchronize</td></tr>
+</tbody>
+</table>
 
-    <h3>2.3 Lifecycle events (optional, but adopted here)</h3>
-    <div class="scroll"><table>
-      <tr><th>Event</th><th>When</th><th>Purpose</th></tr>
-      <tr><td><code>llm_delta</code></td><td>token</td><td>Only high-frequency path</td></tr>
-      <tr><td><code>tree_update</code></td><td>Node open/close, subtree changes, ~1.2s, forced flush</td><td>Structure + terminal state + throttled partial-output mirror</td></tr>
-      <tr><td>Do not add <code>llm_open</code>/<code>llm_close</code></td><td>—</td><td>Express opening/closing through DAG + tree_update to avoid races between two channels.</td></tr>
-    </table></div>
+<details>
+<summary>Block kinds, phases and budgets</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Block kinds</th><td><code translate="no">text</code>, <code translate="no">reasoning_summary</code>, <code translate="no">tool_ref</code>, <code translate="no">tool_arguments</code>, <code translate="no">parallel_group</code>, <code translate="no">refusal</code>, <code translate="no">unsupported</code>. Opaque signatures are never accumulated as text.</td></tr>
+<tr><th scope="row">Node phases</th><td><code translate="no">created</code>, <code translate="no">running</code>, <code translate="no">retry_wait</code>, <code translate="no">validating</code>, <code translate="no">finalizing</code>, <code translate="no">completed</code>, <code translate="no">cancelling</code>, <code translate="no">cancelled</code>, <code translate="no">failed</code>, <code translate="no">paused</code>, <code translate="no">reconciliation_required</code></td></tr>
+<tr><th scope="row">Delta merge</th><td>Same block, within 25 ms and under 16 KiB. Never across nodes or blocks.</td></tr>
+<tr><th scope="row">Checkpoint</th><td>To <code translate="no">Call.metadata.stream</code> every 0.25 s or 64 KiB of new content, skipped for ephemeral streams</td></tr>
+<tr><th scope="row">Frame size</th><td>Target 64 KiB, inline preview 32 KiB. The parent rejects a child frame over 96 KiB.</td></tr>
+<tr><th scope="row">Send queue</th><td>256 frames and 4 MiB per connection. Adjacent <code translate="no">block_delta</code> frames of one block with continuous revisions merge; other operations are critical.</td></tr>
+</tbody>
+</table>
+</details>
 
-    <h3>2.4 Ordering, coalescing, and backpressure</h3>
-    <ul>
-      <li><b>Ordering</b>: for the same <code>(node_id, channel)</code>, if <code>seq</code> is present, append by seq; otherwise use arrival order. Drop out-of-order lower seq values rather than reordering history.</li>
-      <li><b>Server coalescing</b>: combine deltas within a 16–32ms window for the same node before broadcast (still one <code>llm_delta</code> with concatenated delta). Never coalesce across nodes or channels.</li>
-      <li><b>FE coalesce</b>: reuse the top-level rAF strategy—<code>Map&lt;nodeId, PartialStream&gt;</code> writes occur immediately, while DOM/store stamps update at most once per frame.</li>
-      <li><b>Backpressure</b>: bound the WS send queue (suggested: 512 frames per session). On overflow, discard intermediate text deltas first while retaining the latest snapshot frame (periodic full-snapshot llm_delta, using delta since the prior snapshot or a separate <code>snapshot</code> field). V1 skips intermediates on overflow but guarantees a complete final close tree. Thinking follows the same policy with more aggressive dropping.</li>
-      <li><b>Relationship to tree_update</b>: deltas never write into the <code>tree</code> subtree. §5 throttles partial text into nodes, which the next tree_update then includes.</li>
-    </ul>
-  </section>
+<h2 id="applying">Applying a frame</h2>
 
-  <!-- 3 -->
-  <section id="s3">
-    <h2>3. Sequence diagram</h2>
-<pre>sequenceDiagram
-  participant AF as Agent method
-  participant RT as Runtime.exec(llm)
-  participant DAG as SessionStore/DAG
-  participant BR as Broadcast(WS)
-  participant FE as Web FE
+<table class="stack fixed">
+<thead><tr><th scope="col">Frame</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Older generation</th><td>Rejected</td></tr>
+<tr><th scope="row">Newer generation with a snapshot</th><td>Replaces the state even with a smaller revision, unless the node is terminal</td></tr>
+<tr><th scope="row">Revision not above the current one</th><td>Ignored as a duplicate</td></tr>
+<tr><th scope="row"><code translate="no">base_revision</code> differs from the current revision</th><td>Requests a snapshot; never appends blindly</td></tr>
+<tr><th scope="row">Any running update on a terminal node</th><td>Rejected; terminal nodes never return to syncing</td></tr>
+<tr><th scope="row"><code translate="no">sync_required</code> with reason <code translate="no">owner_unavailable</code></th><td>Ends this recovery and keeps the content. It cannot trigger another identical request; a later stream event may.</td></tr>
+</tbody>
+</table>
 
-  AF-&gt;&gt;RT: llm(prompt)
-  RT-&gt;&gt;DAG: _open_model_call_node (running)
-  Note over BR,FE: tree_update (child appears, output="")
-  BR--&gt;&gt;FE: tree_update
-  FE-&gt;&gt;FE: TreeStep running; create PartialStream[nodeId]
+<p class="note">The browser store is a display replica keyed by session, execution and node, so parallel calls do not mix. <code translate="no">subscribe_execution_stream</code> answers from the live owner, else from the checkpoint.</p>
 
-  loop tokens
-    RT-&gt;&gt;BR: llm_delta(node_id, channel, delta, seq?)
-    BR--&gt;&gt;FE: llm_delta
-    FE-&gt;&gt;FE: buffer.append; rAF updates note/details
-  end
+<h2 id="tree-row">Execution tree row</h2>
 
-  RT-&gt;&gt;DAG: _close_model_call_node(output, status)
-  Note over BR,FE: terminal tree_update (output=full text)
-  BR--&gt;&gt;FE: tree_update
-  FE-&gt;&gt;FE: replace with tree text; clear PartialStream[nodeId]
-</pre>
-    <div class="callout">FE buffer lifecycle: <b>create</b> on the first llm_delta for node_id (or pre-create an empty buffer when a running exec node appears) → <b>append</b> on every delta → <b>clear</b> on terminal tree_update, cancellation, session unload, or node disappearance.</div>
-  </section>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Running</th><td>Growing reply from the stream, else <code translate="no">stream_preview</code>, else output. Reasoning shows from <code translate="no">reasoning_summary</code>. Prompt and parameters stay in the short note; the full prompt is in details.</td></tr>
+<tr><th scope="row">Finished</th><td><code translate="no">output</code> or <code translate="no">raw_reply</code>, with duration</td></tr>
+<tr><th scope="row">Syncing</th><td>Note reads "resyncing…"</td></tr>
+<tr><th scope="row">Retrying</th><td>Note reads "retrying (…)"; older attempts stay available</td></tr>
+</tbody>
+</table>
 
-  <!-- 4 -->
-  <section id="s4">
-    <h2>4. FE state architecture</h2>
-    <h3>4.1 Recommended store shape</h3>
-<pre>// Alongside the existing Zustand session store, or as a new slice in it
-type PartialStream = {
-  text: string;
-  thinking: string;
-  lastSeqText?: number;
-  lastSeqThinking?: number;
-  updatedAt: number;
-};
+<h2 id="failure">Failure and reconnection</h2>
 
-llmStreamsBySession: {
-  [sessionId: string]: {
-    // key = DAG node id (aligned with tree child.path / Call.id)
-    [nodeId: string]: PartialStream;
-  }
-}
-</pre>
-    <ul>
-      <li><b>Do not </b>write high-frequency deltas into message-row <code>contextTree</code> (avoid deep-cloning the entire tree).</li>
-      <li>TreeStep / DetailPanel reads buffers through <code>(sessionId, node.path|id)</code>. With a buffer and running node, display streaming output; otherwise read note/raw_reply from tree fields.</li>
-      <li>Isolate this from top-level <code>pendingDeltas</code> (assistant reply): nested LLMs never write to reply.content.</li>
-    </ul>
-    <h3>4.2 TreeStep selection rules</h3>
-    <div class="scroll"><table>
-      <tr><th>Condition</th><th>note / main preview</th></tr>
-      <tr><td>running ∧ text buffer exists</td><td>Primary: growing text (short tail or full scrollable text); prompt secondary (§8)</td></tr>
-      <tr><td>running ∧ no buffer</td><td>Keep current behavior: parameter summary; optionally show “Generating…”</td></tr>
-      <tr><td>terminal ∧ output/raw_reply exists</td><td><code>→ short(output)</code> + duration (current logic)</td></tr>
-      <tr><td>terminal ∧ no text</td><td>“No text output”</td></tr>
-      <tr><td>thinking</td><td>Separate collapsible row or in-Step fold; running shows the last line, done the first line (aligned with ThinkingStep)</td></tr>
-    </table></div>
-    <h3>4.3 Clearing rules</h3>
-    <ul>
-      <li>Node tree status ∈ {completed, error, cancelled, interrupted, aborted}</li>
-      <li>or <code>clearSessionByMsgId</code> / session_loaded changes session</li>
-      <li>or RuntimeBlock unmounts with no running children</li>
-      <li>Before clearing, if the tree has no final output yet, backfill once from the buffer to avoid losing the last tokens in a race.</li>
-    </ul>
-  </section>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"></th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">User cancel</th><td>Phase <code translate="no">cancelled</code>; partial text kept; later deltas rejected</td></tr>
+<tr><th scope="row">Provider error</th><td>Phase <code translate="no">failed</code>; partial text and the error stay visible</td></tr>
+<tr><th scope="row">Transport retry or structured-output repair</th><td>The attempt ends and a new one starts</td></tr>
+<tr><th scope="row">Refresh or reconnect</th><td>Saved snapshot renders first; live frames continue. Deltas are not replayed.</td></tr>
+<tr><th scope="row">Owner gone</th><td>Checkpoint snapshot, or <code translate="no">owner_unavailable</code> when there is none</td></tr>
+</tbody>
+</table>
 
-  <!-- 5 -->
-  <section id="s5">
-    <h2>5. Persistence policy (decision within this design)</h2>
-    <div class="callout ok"><b>Decision (v1)</b>: each WS token is <b>not</b> written to the event log; DAG LLM nodes throttle partial writes of <b>text</b> to ~250ms. Thinking is throttled into <code>metadata.streaming_thinking</code>, folded into <code>metadata.blocks</code> on closure, and streaming fields are deleted. Terminal authority is <code>_close_model_call_node</code>.</div>
-    <ul>
-      <li><b>Live authority</b>: FE PartialStream (lowest latency).</li>
-      <li><b>Recoverable authority</b>: throttled node <code>output</code>/<code>raw_reply</code> snapshots plus terminal full text.</li>
-      <li><b>Do not </b>create child nodes or an append-only token table for every delta (non-goal).</li>
-      <li>At the same level as <code>operations/streaming-resume</code> alignment: placeholder + last_update_at; worker-restart abort sweeps also cover nested LLM nodes.</li>
-    </ul>
-  </section>
+<details>
+<summary>Subprocess path</summary>
+<p>The child never opens a WebSocket. It puts frames on the existing <code translate="no">event_queue</code>; the parent checks schema version, known operation, session, execution, a generation not ahead of the launch record, and size, then forwards them. The parent never reallocates a revision or writes the child's checkpoint.</p>
+</details>
 
-  <!-- 6 -->
-  <section id="s6">
-    <h2>6. Failure / cancellation / error UX</h2>
-    <div class="scroll"><table>
-      <tr><th>Situation</th><th>DAG</th><th>WS</th><th>UI</th></tr>
-      <tr><td>User cancellation</td><td>status=cancelled; output=generated partial</td><td>Stop deltas; terminal tree_update</td><td>Cancelled badge; retain partial; clear buffers</td></tr>
-      <tr><td>Provider error</td><td>status=error; error field; optional partial output</td><td>tree_update; optional runtime-error envelope</td><td>Red error note; Error block in details; retain partial for debugging</td></tr>
-      <tr><td>Timeout</td><td>Same as error + reason=timeout</td><td>Same as above</td><td>Distinguish “Timed out” in text</td></tr>
-      <tr><td>WS disconnect/reconnect</td><td>Partial output already persisted</td><td>Continue new deltas; no replay</td><td>Render persisted partial first, then resume streaming</td></tr>
-      <tr><td>Worker crash</td><td>abort sweep → aborted</td><td>None</td><td>Partial + aborted; streaming cannot resume</td></tr>
-      <tr><td>Sequence gaps</td><td>—</td><td>—</td><td>Ignore; terminal tree overwrites</td></tr>
-    </table></div>
-  </section>
+<h2 id="non-goals">Not covered</h2>
 
-  <!-- 7 -->
-  <section id="s7">
-    <h2>7. In-process vs Subprocess</h2>
-    <div class="grid2">
-      <div class="card soft">
-        <h3>In-process</h3>
-        <p><code>Runtime.on_stream</code> → wrap as <code>llm_delta</code> (fill current <code>_active_llm_node_id</code>)→ <code>_broadcast_chat_response</code>.</p>
-        <p><code>live_progress(..., on_event=None)</code> directly broadcasts <code>tree_update</code>.</p>
-      </div>
-      <div class="card soft">
-        <h3>Subprocess (required for complete coverage)</h3>
-        <p>The subprocess sends the same <code>llm_delta</code> envelope to <code>mp.Queue</code>; the parent drain thread <code>on_event(env)</code> → broadcasts through the existing placeholder/tree_update/goal_update bridge.</p>
-        <p><code>run_agentic_in_subprocess</code> already has a queue; this design requires <b>llm_delta to use the same bridge</b>, never a direct subprocess WS connection.</p>
-      </div>
-    </div>
-    <h3>Mode detection (diagnostics only)</h3>
-    <ul>
-      <li>Parent: <code>process_runner</code> checks whether this <code>execution_id</code> has a live <code>Process</code>.</li>
-      <li>Child: whether <code>QueueTransport</code> / a subprocess event_queue is installed.</li>
-      <li>Log field <code>agentic_isolation: "inprocess"|"subprocess"</code>; no frontend branching.</li>
-    </ul>
-  </section>
+<ul>
+<li>Token-level audit logs or replayable delta recordings</li>
+<li>Changes to top-level <code translate="no">stream_event.text</code>; full terminal-interface parity</li>
+<li>Per-field highlights for structured output; image deltas</li>
+<li>Cross-session stream subscriptions</li>
+<li>Replacing <code translate="no">tree_update</code></li>
+</ul>
 
-  <!-- 8 -->
-  <section id="s8">
-    <h2>8. UI wording and behavior (default proposal)</h2>
-    <ul>
-      <li><b>Primary card content</b>: while streaming, show growing <b>reply</b> (text); after completion, an <code>→</code> summary.</li>
-      <li><b>Prompt <code>_content</code></b>: remains <strong>secondary</strong> by default. While running without tokens, show a short prompt; after tokens arrive, reply takes precedence. Full prompt remains available in details.</li>
-      <li><b>Thinking</b>: collapsed by default, titled “Thinking”; show the latest line while running; click to expand full text in details or an inline fold.</li>
-      <li>Do not copy nested LLM text into the outer assistant bubble.</li>
-    </ul>
-    <div class="callout warn">See open question Q1 on pinning the prompt to the note’s left side. Use this default until decided.</div>
-  </section>
-
-  <!-- 9 -->
-  <section id="s9">
-    <h2>9. Acceptance criteria (complete feature)</h2>
-    <h3>9.1 Manual</h3>
-    <ol>
-      <li>A single <code>llm()</code> inside an agentic function: node opens → card grows token by token → closure matches raw_reply and removes the buffer.</li>
-      <li>Dual thinking/text channels: thinking collapses while main text grows.</li>
-      <li>Two parallel LLMs or consecutive loop calls: independent growing rows, no cross-contamination.</li>
-      <li>Stop: deltas stop immediately; partial remains; status is cancelled.</li>
-      <li>Mid-run refresh: partial is visible; new deltas resume if still running.</li>
-      <li>Subprocess tools such as gui_agent provide the same UX as in-process execution.</li>
-      <li>Details-panel Reply matches the card.</li>
-    </ol>
-    <h3>9.2 Suggested automation</h3>
-    <ul>
-      <li>Unit: envelope shape (node_id/channel/seq), lower out-of-order seq rejection, and no cross-node coalescing.</li>
-      <li>Unit: subprocess queue forwards llm_delta using mock Process/Queue.</li>
-      <li>Component: TreeStep running+PartialStream snapshot; terminal buffer clearing.</li>
-      <li>Contract: llm_delta in the chat-stream reducer does not contaminate reply.content.</li>
-      <li>Optional E2E: fake provider emits fixed deltas; assert DOM text.</li>
-    </ul>
-  </section>
-
-  <!-- 10 -->
-  <section id="s10">
-    <h2>10. Non-goals (v1)</h2>
-    <ul>
-      <li>Token-level audit logs or replayable delta recordings.</li>
-      <li>Changing top-level chat <code>stream_event.text</code> semantics or complete TUI parity (TUI may later read and ignore llm_delta).</li>
-      <li>Per-field streaming highlights for structured output.</li>
-      <li>Multimodal image deltas.</li>
-      <li>Cross-session LLM stream subscriptions.</li>
-      <li>Replacing tree_update with llm_delta.</li>
-    </ul>
-  </section>
-
-  <!-- 11 -->
-  <section id="s11">
-    <h2>11. Implementation phases (ordered delivery of one complete design, not a minimal release followed by reconsideration)</h2>
-    <ol class="phase">
-      <li><b>Protocol and backend emission</b>: in the <code>_active_llm_node_id</code> context, Runtime converts on_stream to llm_delta; add broadcast helpers and envelope unit tests.</li>
-      <li><b>Subprocess bridge</b>: confirm queue forwarding, add isolation-mode diagnostics, and test both paths.</li>
-      <li><b>Throttled persistence</b>: partial output/thinking on running nodes, including close-race tests.</li>
-      <li><b>FE store + chat-stream</b>: llmStreams slice, reducer, clearing rules, and no reply contamination.</li>
-      <li><b>TreeStep + Detail</b>: selection rules, thinking fold, and styling.</li>
-      <li><b>Cancellation/reconnection/parallelism</b>: complete §6 and §1 behavior and sign off the manual checklist.</li>
-      <li><b>Documentation and check scripts</b>: mark this page adopted; use check-*.mjs to preserve UI contracts where necessary.</li>
-    </ol>
-    <div class="callout">No phase may unilaterally narrow product semantics, such as deferring subprocess support or persistence, which would turn it into a spike. Change this design before code if semantics must change.</div>
-  </section>
-
-  <!-- 12 -->
-  <section id="s12">
-    <h2>12. Open questions (user decisions required · at most four)</h2>
-    <div class="q" id="questions">
-      <div class="qitem" data-q="q1">
-        <h4>Q1 · How prominent should the prompt be in the card note?</h4>
-        <p>A) Reply fully replaces prompt after tokens arrive (default)   B) Keep a short prompt on the left and reply on the right   C) Show only reply while running; prompt only in details</p>
-        <div class="choices" data-for="q1">
-          <label><input type="radio" name="q1" value="A" checked> A Replace</label>
-          <label><input type="radio" name="q1" value="B"> B Both pinned</label>
-          <label><input type="radio" name="q1" value="C"> C Details only</label>
-        </div>
-      </div>
-      <div class="qitem" data-q="q2">
-        <h4>Q2 · Should thinking expand by default?</h4>
-        <p>A) Collapsed by default (default)   B) Expand while running, collapse on completion   C) Remember the user’s last choice</p>
-        <div class="choices" data-for="q2">
-          <label><input type="radio" name="q2" value="A" checked> A Collapsed</label>
-          <label><input type="radio" name="q2" value="B"> B Expand while running</label>
-          <label><input type="radio" name="q2" value="C"> C Remember choice</label>
-        </div>
-      </div>
-      <div class="qitem" data-q="q3">
-        <h4>Q3 · Should partial persistence include thinking?</h4>
-        <p>A) Throttle both text and thinking to 250ms (default)   B) Persist text only; thinking only in terminal blocks   C) Persist no partials, only terminal output (harms reconnection; not recommended)</p>
-        <div class="choices" data-for="q3">
-          <label><input type="radio" name="q3" value="A" checked> A Persist both</label>
-          <label><input type="radio" name="q3" value="B"> B Text only</label>
-          <label><input type="radio" name="q3" value="C"> C No partials</label>
-        </div>
-      </div>
-      <div class="qitem" data-q="q4">
-        <h4>Q4 · <code>msg_id</code> reference when a model-called agentic function is attached to an assistant reply?</h4>
-        <p>A) Always use the runtime placeholder-row ID, consistent with current tree_update for display=runtime (default)   B) Use the outer assistant msg_id and distinguish by node_id   C) Include both <code>msg_id</code>+<code>runtime_id</code> fields</p>
-        <div class="choices" data-for="q4">
-          <label><input type="radio" name="q4" value="A" checked> A runtime id</label>
-          <label><input type="radio" name="q4" value="B"> B assistant id</label>
-          <label><input type="radio" name="q4" value="C"> C Both fields</label>
-        </div>
-      </div>
-    </div>
-    <p style="margin-top:10px;color:var(--faint);font-size:12px">Choices are recorded in <span class="kbd">localStorage</span> under key <code>op.design.llmStream.decisions</code> for review comparison, not as a formal vote.</p>
-  </section>
-
-  <!-- demo -->
-  <section id="demo">
-    <h2>Interactive demonstration · Card lifecycle</h2>
-    <div class="tabs" role="tablist">
-      <button type="button" class="on" data-tab="happy">Single LLM</button>
-      <button type="button" data-tab="parallel">Parallel</button>
-      <button type="button" data-tab="cancel">Cancel</button>
-      <button type="button" data-tab="reconnect">Reconnect</button>
-    </div>
-    <div class="panel on" id="tab-happy">
-      <div class="ctrl">
-        <button class="btn primary" id="btn-run">Play stream</button>
-        <button class="btn" id="btn-reset">Reset</button>
-        <span class="badge" id="mode-badge">idle</span>
-      </div>
-      <div class="mock" id="mock-tree" aria-live="polite"></div>
-      <p style="font-size:12px;color:var(--faint);margin-top:8px">Simulation: open → llm_delta×N → tree_update close. See buffer lifecycle in the log on the right.</p>
-      <pre></pre>
-    </div>
-    <div class="panel" id="tab-parallel">
-      <p>Two nodes append in parallel with isolated keys: </p>
-      <div class="mock" id="mock-parallel"></div>
-      <div class="ctrl"><button class="btn primary" id="btn-parallel">Play parallel streams</button></div>
-    </div>
-    <div class="panel" id="tab-cancel">
-      <p>Cancel midway: retain partial, set cancelled status, and clear the buffer.</p>
-      <div class="mock" id="mock-cancel"></div>
-      <div class="ctrl">
-        <button class="btn primary" id="btn-cancel-run">Start and cancel</button>
-      </div>
-    </div>
-    <div class="panel" id="tab-reconnect">
-      <p>After refresh, render persisted partial first (example: “Persisted: Hello, world”), then continue deltas.</p>
-      <div class="mock" id="mock-reconnect"></div>
-      <div class="ctrl"><button class="btn primary" id="btn-reconnect">Simulate refresh and resumed stream</button></div>
-    </div>
-  </section>
-
-  <footer>
-    Source conventions: FuzzyKuji/OpenProgram · Page path <code>docs/reference/design/runtime/execution/agentic-llm-streaming.zh.html</code> ·
-    Related <a href="../operations/streaming-resume.md">streaming-resume</a> ·
-    When machine <code>7cea4eda-…</code> is unreachable, use this repository / GitHub as authoritative.
-  </footer>
-<p>Only result, error, and retry_result frames finalize chat bookkeeping. Nested execution_stream frames belong to their stream reducer and never clear the parent run, overwrite reply text, or refresh branch metadata. A recovery response cannot itself trigger another identical recovery request. An owner_unavailable response ends the recovery request while preserving existing content; terminal nodes never return to syncing. Future stream events may request recovery again.</p>
-</main>
-<script>
-(function(){
-  // tabs
-  document.querySelectorAll('.tabs button').forEach(btn=>{
-    btn.addEventListener('click',()=>{
-      btn.parentElement.querySelectorAll('button').forEach(b=>b.classList.remove('on'));
-      btn.classList.add('on');
-      const id=btn.getAttribute('data-tab');
-      document.querySelectorAll('.panel').forEach(p=>p.classList.toggle('on', p.id==='tab-'+id));
-    });
-  });
-
-  // decisions
-  const KEY='op.design.llmStream.decisions';
-  try{
-    const saved=JSON.parse(localStorage.getItem(KEY)||'{}');
-    Object.entries(saved).forEach(([q,v])=>{
-      const input=document.querySelector(`input[name="${q}"][value="${v}"]`);
-      if(input){input.checked=true; paintChoice(q);}
-    });
-  }catch(_){}
-  document.querySelectorAll('.choices').forEach(group=>{
-    paintChoice(group.getAttribute('data-for'));
-    group.addEventListener('change',()=>{
-      const q=group.getAttribute('data-for');
-      paintChoice(q);
-      const v=group.querySelector('input:checked')?.value;
-      try{
-        const cur=JSON.parse(localStorage.getItem(KEY)||'{}');
-        cur[q]=v; localStorage.setItem(KEY, JSON.stringify(cur));
-      }catch(_){}
-    });
-  });
-  function paintChoice(q){
-    const group=document.querySelector(`.choices[data-for="${q}"]`);
-    if(!group) return;
-    group.querySelectorAll('label').forEach(l=>{
-      l.classList.toggle('on', l.querySelector('input')?.checked);
-    });
-  }
-
-  // mock helpers
-  const streams={};
-  function renderTree(el, nodes, opts={}){
-    el.innerHTML = nodes.map(n=>{
-      const buf=streams[n.id];
-      const running=n.status==='running';
-      const text = running && buf?.text ? buf.text : (n.output||'');
-      const prompt = n.prompt||'';
-      let note='';
-      if(running && text) note = text;
-      else if(running) note = prompt ? ('prompt · '+prompt) : 'Generating…';
-      else if(n.status==='cancelled') note = (text||n.output||'') + ' · Cancelled';
-      else note = text ? ('→ '+text) : 'No text output';
-      if(n.ms && n.status!=='running') note += ' · '+n.ms+'ms';
-      const badge = n.status==='running'?'run':n.status==='cancelled'?'cancel':n.status==='error'?'err':'done';
-      const th = buf?.thinking ? `<div class="step"><span class="icon th">TH</span><span class="note">Thinking · ${escapeHtml(buf.thinking.slice(-40))}</span></div>` : '';
-      return `${th}<div class="step"><span class="icon llm">LLM</span><span class="note"><span class="grow">${escapeHtml(note)}</span></span><span class="badge ${badge}">${n.status}</span></div>`;
-    }).join('');
-  }
-  function escapeHtml(s){return String(s).replace(/[&<>"']/g,c=>({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));}
-  function log(msg){
-    const pre=document.getElementById('mock-log');
-    pre.textContent += msg+'\n';
-    pre.scrollTop=pre.scrollHeight;
-  }
-
-  let timer=null;
-  const sample='Hello, world. This demonstrates streaming replies from nested llm().';
-  document.getElementById('btn-reset').onclick=()=>{
-    clearInterval(timer); Object.keys(streams).forEach(k=>delete streams[k]);
-    document.getElementById('mode-badge').textContent='idle';
-    document.getElementById('mode-badge').className='badge';
-    document.getElementById('mock-log').textContent='';
-    renderTree(document.getElementById('mock-tree'),[{id:'n1',status:'idle',prompt:'Summarize…',output:''}]);
-  };
-  document.getElementById('btn-reset').click();
-
-  document.getElementById('btn-run').onclick=()=>{
-    clearInterval(timer);
-    Object.keys(streams).forEach(k=>delete streams[k]);
-    document.getElementById('mock-log').textContent='';
-    const node={id:'n1',status:'running',prompt:'Summarize…',output:''};
-    streams.n1={text:'',thinking:'First read the page structure…',updatedAt:Date.now()};
-    log('tree_update: open node n1 running');
-    log('llm_delta thinking');
-    renderTree(document.getElementById('mock-tree'),[node]);
-    const badge=document.getElementById('mode-badge');
-    badge.textContent='streaming'; badge.className='badge run';
-    let i=0;
-    timer=setInterval(()=>{
-      i++;
-      streams.n1.text = sample.slice(0,i);
-      log('llm_delta text seq='+i+' delta='+JSON.stringify(sample[i-1]));
-      renderTree(document.getElementById('mock-tree'),[node]);
-      if(i>=sample.length){
-        clearInterval(timer);
-        node.status='completed'; node.output=sample; node.ms=842;
-        delete streams.n1;
-        log('tree_update: close node output=full; clear PartialStream');
-        badge.textContent='done'; badge.className='badge done';
-        renderTree(document.getElementById('mock-tree'),[node]);
-      }
-    },40);
-  };
-
-  document.getElementById('btn-parallel').onclick=()=>{
-    streams.a={text:''}; streams.b={text:''};
-    const nodes=[
-      {id:'a',status:'running',prompt:'Task A',output:''},
-      {id:'b',status:'running',prompt:'Task B',output:''}
-    ];
-    let i=0;
-    const ta='Alpha stream…'; const tb='Beta parallel stream…';
-    const t=setInterval(()=>{
-      i++;
-      streams.a.text=ta.slice(0,Math.min(i,ta.length));
-      streams.b.text=tb.slice(0,Math.min(i,tb.length));
-      renderTree(document.getElementById('mock-parallel'),nodes);
-      if(i>=Math.max(ta.length,tb.length)){
-        clearInterval(t);
-        nodes[0].status='completed'; nodes[0].output=ta; nodes[0].ms=400;
-        nodes[1].status='completed'; nodes[1].output=tb; nodes[1].ms=510;
-        delete streams.a; delete streams.b;
-        renderTree(document.getElementById('mock-parallel'),nodes);
-      }
-    },50);
-  };
-
-  document.getElementById('btn-cancel-run').onclick=()=>{
-    const node={id:'c1',status:'running',prompt:'Long…',output:''};
-    streams.c1={text:''};
-    let i=0; const s='This partial text will be cancelled and will stop growing.';
-    const t=setInterval(()=>{
-      i++; streams.c1.text=s.slice(0,i);
-      renderTree(document.getElementById('mock-cancel'),[node]);
-      if(i===12){
-        clearInterval(t);
-        node.status='cancelled'; node.output=streams.c1.text;
-        delete streams.c1;
-        renderTree(document.getElementById('mock-cancel'),[node]);
-      }
-    },40);
-  };
-
-  document.getElementById('btn-reconnect').onclick=()=>{
-    const node={id:'r1',status:'running',prompt:'…',output:'Hello, world'}; // disk partial
-    streams.r1={text:node.output};
-    renderTree(document.getElementById('mock-reconnect'),[node]);
-    const more='—continued after reconnection.';
-    let i=0;
-    const t=setInterval(()=>{
-      i++; streams.r1.text = node.output + more.slice(0,i);
-      renderTree(document.getElementById('mock-reconnect'),[node]);
-      if(i>=more.length){
-        clearInterval(t);
-        node.status='completed'; node.output=streams.r1.text; node.ms=900;
-        delete streams.r1;
-        renderTree(document.getElementById('mock-reconnect'),[node]);
-      }
-    },45);
-  };
-})();
-</script>
-</body>
-</html>
+<p class="next"><a href="control.html">Activity and control</a></p>

@@ -25,7 +25,7 @@ def _paused_source(tmp_path):
         capabilities=CapabilitySet(pause=True, steer=True, fork=True, retry=True, safe_point_kinds=("after",)),
     )
     attempts = AttemptStore(store)
-    lease, reserved = attempts.lease(execution.execution_id, expected_version=1, owner_id="owner", ttl_seconds=30)
+    lease, reserved = attempts.lease(execution.execution_id, expected_version=1, owner_id="owner")
     active, running = attempts.activate(lease.attempt_id, generation=1, expected_execution_version=reserved.status_version)
     service = RuntimeControlService(store, attempts, DriverRegistry())
     pausing = asyncio.run(service.request_pause(

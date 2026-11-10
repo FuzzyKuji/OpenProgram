@@ -293,7 +293,7 @@ def _apply_branch_workspace_intent(
         "decision": "restore_branch_code",
         "updated_at": time.time(),
     }
-    def compare_alignment_head(expected, target) -> bool:
+    def compare_alignment_head(expected, target, rollback=False) -> bool:
         if expected != target or expected != head_id:
             return False
         files_are_target = all(

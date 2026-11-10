@@ -162,7 +162,8 @@ def test_bound_project_falls_back_to_the_session_meta(state, tmp_path, monkeypat
     work = tmp_path / "Research"; work.mkdir()
     repo = state / "projects" / "p1" / "chats" / "local_s1"
     repo.mkdir(parents=True)
-    (repo / "meta.json").write_text(json.dumps({"id": "local_s1", "project_id": "p1"}))
+    from openprogram.state.store.session.session_log import SessionLog
+    SessionLog(repo).write_meta({"id": "local_s1", "project_id": "p1"})
     (repo / "events.jsonl").write_text("")
     monkeypatch.setattr(project_store, "project_for_session", lambda _sid: None)
     monkeypatch.setattr(project_store, "get_project",
@@ -580,7 +581,7 @@ def test_channel_uploads_the_file_and_drops_the_marker(monkeypatch):
     reply = ("Here is the chart.\n\n"
              + att.format_marker("chart.png", "/w/chart.png", 2048))
     out = _conversation._deliver_outbound_files(
-        "telegram", "default", "42", reply)
+        "telegram", "default", "42", reply, attached_files=["/w/chart.png"])
     assert calls == [("telegram", "42", "/w/chart.png")]
     assert out == "Here is the chart."
 
@@ -594,7 +595,8 @@ def test_channel_without_file_upload_says_so_in_words(monkeypatch):
         _transport, "post_file",
         lambda *a, **k: _transport.SendResult.fail("not_supported", "no api"))
     reply = "Done.\n\n" + att.format_marker("chart.png", "/w/chart.png", 2048)
-    out = _conversation._deliver_outbound_files("wechat", "default", "u", reply)
+    out = _conversation._deliver_outbound_files(
+        "wechat", "default", "u", reply, attached_files=["/w/chart.png"])
     assert "[attachment:" not in out
     assert "chart.png" in out and "/w/chart.png" in out
 
@@ -602,7 +604,8 @@ def test_channel_without_file_upload_says_so_in_words(monkeypatch):
 def test_channel_text_without_markers_is_untouched():
     from openprogram.interfaces.channels import _conversation
     reply = "just words, and a [bracket] for good measure"
-    assert _conversation._deliver_outbound_files("t", "d", "1", reply) == reply
+    assert _conversation._deliver_outbound_files(
+        "t", "d", "1", reply, attached_files=[]) == reply
 
 
 # ---------------------------------------------------------------------------
@@ -646,6 +649,7 @@ def test_dispatcher_appends_the_marker_to_the_reply(state, tmp_path,
 
     assert result.final_text.startswith("Here is the chart.")
     assert att.find_markers(result.final_text)[0][2] == str(chart)
+    assert result.attached_files == [str(chart)]
     stored = [m for m in db.get_messages("s1") if m.get("role") == "assistant"]
     assert att.find_markers(stored[-1]["content"])
 
@@ -692,17 +696,25 @@ def test_a_resumed_turn_keeps_files_sent_before_the_pause(in_session, monkeypatc
                         lambda **kwargs: (stored.append(kwargs["final_text"]) or {"id": "a1"}, [], calls, {}))
     monkeypatch.setattr(finalize, "finalize_turn", lambda **kwargs: False)
     monkeypatch.setattr(turn_writer.TurnWriter, "head_for_finalize", lambda self, _id: "a1")
-    request = SimpleNamespace(session_id="s1", advance_head=True, source="web")
+    request = SimpleNamespace(session_id="s1", advance_head=True, source="web", last_round_text="")
     continuation = SimpleNamespace(
         request=request, assistant_message_id="a1",
-        state=SimpleNamespace(payload={"turn": {"user_message_id": "u1"}}),
+        user_message_id="u1",
     )
+    bound: list[list[str]] = []
+    monkeypatch.setattr(
+        "openprogram.runtime.conversation.bound_reply.attach",
+        lambda *args, **kwargs: SimpleNamespace(
+            tap=lambda on_event: on_event,
+            finish=lambda _text, *, attached_files=(): bound.append(list(attached_files))))
 
     result = T.execute_continuation.__wrapped__(continuation)
 
     sent = [path for _name, _meta, path in att.find_markers(result.final_text)]
     assert sent == [str(before), str(after)]
     assert stored == [result.final_text]
+    assert result.attached_files == [str(before), str(after)]
+    assert bound == [[str(before), str(after)]]
 
 
 def test_the_default_project_is_not_a_root(state, monkeypatch):

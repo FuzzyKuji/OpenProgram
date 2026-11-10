@@ -15,11 +15,14 @@ import uuid
 from ..control.rollback_intent import load_rollback_intent
 from ..store import SelfUpdateStore
 from ..types import UpdatePhase
+from ..types import VERIFIER_PHASES
 from .verifier_config import load_verifier_config
 from .verifier_config import verifier_prompt
 from .verification import validate_verifier_result
 
 _MAX_JSON = 2_097_152
+_GRANT_SECONDS = 600
+_TRIAL_GRANT_SECONDS = 900
 _REFERENCE = re.compile(r"observation:([0-9a-f]{32}):([0-9a-f]{64})")
 
 
@@ -54,11 +57,22 @@ def _paths(store, record):
     return directory, directory / f"verifier-grant-{record.state.attempt}.json", directory / f"verifier-result-{record.state.attempt}.json"
 
 
+def _grant_seconds(record) -> int:
+    return _TRIAL_GRANT_SECONDS if record.state.phase is UpdatePhase.TRIAL else _GRANT_SECONDS
+
+
+def host_pid(record, grant) -> int:
+    """The worker that runs the Job. A trial's Job runs in the live worker and observes the trial."""
+    if record.state.phase is UpdatePhase.TRIAL:
+        return record.state.detail.get("trial", {}).get("host_pid")
+    return grant["worker_pid"]
+
+
 def issue_grant(store, update_id: str, system_gate: dict) -> dict:
     """Controller-only issuance; the returned token must not enter model context."""
     with store._locked():
         record = store._load_unlocked(update_id)
-        if record.state.phase is not UpdatePhase.ACTIVATING:
+        if record.state.phase not in {UpdatePhase.ACTIVATING, UpdatePhase.TRIAL}:
             raise ValueError("verifier grant requires activating state")
         _, path, _ = _paths(store, record)
         if path.exists() or path.is_symlink():
@@ -67,7 +81,7 @@ def issue_grant(store, update_id: str, system_gate: dict) -> dict:
         grant = dict(schema=1, update_id=update_id, candidate_sha=record.request.candidate_sha,
                      attempt=record.state.attempt, job_id=f"self-update:{update_id}:verify:{record.state.attempt}",
                      worker_pid=system_gate["worker_pid"], system_gate_sha256=_digest(system_gate),
-                     issued_at=now, deadline=min(now + 600, record.request.created_at + record.request.timeout_seconds),
+                     issued_at=now, deadline=min(now + _grant_seconds(record), record.request.created_at + record.request.timeout_seconds),
                      token=secrets.token_urlsafe(32))
         if grant["deadline"] <= now:
             raise ValueError("verification deadline expired before grant")
@@ -76,7 +90,7 @@ def issue_grant(store, update_id: str, system_gate: dict) -> dict:
 
 
 def load_grant(store, record) -> dict:
-    if record.state.phase is not UpdatePhase.VERIFYING or load_rollback_intent(store, record) is not None:
+    if record.state.phase not in VERIFIER_PHASES or load_rollback_intent(store, record) is not None:
         raise ValueError("verification is not active")
     _, path, _ = _paths(store, record)
     grant = _read(path)
@@ -95,7 +109,7 @@ def load_grant(store, record) -> dict:
         or not isinstance(grant["token"], str) or not re.fullmatch(r"[A-Za-z0-9_-]{43}", grant["token"])
         or any(type(grant[k]) not in (int, float) or not math.isfinite(grant[k]) for k in ("issued_at", "deadline"))
         or not record.request.created_at <= grant["issued_at"] <= time.time() < grant["deadline"]
-        or grant["deadline"] > min(grant["issued_at"] + 600, record.request.created_at + record.request.timeout_seconds)
+        or grant["deadline"] > min(grant["issued_at"] + _grant_seconds(record), record.request.created_at + record.request.timeout_seconds)
     ):
         raise ValueError("verifier grant does not match the active update or deadline")
     return grant
@@ -112,7 +126,7 @@ def _check_job(store, record, grant, job) -> None:
         or normalize_authority(job) != config["authority"]
         or any(getattr(job, key) != config[key] for key in ("profile_snapshot", "model_override", "tools_override", "response_format"))
         or record.state.dispatch is None or record.state.dispatch.job_id != job.id
-        or record.state.dispatch.claimed_by != f"worker:{grant['worker_pid']}"
+        or record.state.dispatch.claimed_by != f"worker:{host_pid(record, grant)}"
     ):
         raise ValueError("verifier Job differs from its frozen execution contract")
 
@@ -131,7 +145,7 @@ def _observation_context(store):
     req = get_turn_request()
     if (req is None or req.source != "self_update_verify" or req.session_id != record.request.session_id
         or req.principal_id != owner_principal_id() or req.authority_tier != "owner"
-        or get_current_execution_id() != grant["job_id"] or grant["worker_pid"] != os.getpid()
+        or get_current_execution_id() != grant["job_id"] or host_pid(record, grant) != os.getpid()
         or is_cancelled(record.request.session_id)):
         raise ValueError("observation requires the authorized running verifier")
     job = load_job(record.request.session_id, grant["job_id"])
@@ -229,8 +243,9 @@ def _resolve_evidence(store, record, grant, result):
                 if check["entry"] in NATIVE_ENTRIES:
                     from ..repair.source_repair import _config
                     candidate_config = _config(store, record) if check["entry"] == "test:python" else None
+                    from .native_checks import trial_version_dir
                     validate_execution(observed, check, record.request, passed=assertion.status == "pass",
-                                       candidate_config=candidate_config)
+                                       candidate_config=candidate_config, runtime_root=trial_version_dir(record))
                 if (evidence.get("plan_sha256") != _digest(config["verification_plan"])
                         or evidence.get("assertion_id") != assertion.id or check["assertion_id"] != assertion.id
                         or observed.get("entry") != check["entry"]

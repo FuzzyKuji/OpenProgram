@@ -137,7 +137,7 @@ def _cmd_web(web_port: int | None, open_browser: bool | None) -> None:
             ui = _browser_url(port)
             print(f"openprogram web is already running (port {port} in use).")
             print(f"  Open the UI:  {ui}")
-            print("  Or stop the other instance first:  pkill -f 'openprogram web'")
+            print("  Or stop it first:  openprogram stop")
             if open_browser:
                 from openprogram.host._platform.environment import open_browser_url
                 from openprogram.host.security.backend_endpoint import OwnerAuthError
@@ -185,14 +185,23 @@ def _cmd_web(web_port: int | None, open_browser: bool | None) -> None:
               "(the port may be in use). Try `openprogram status`.")
         sys.exit(1)
 
-    # Wait briefly for the frontend to bind before opening the browser, so
-    # the user doesn't land on a connection-refused page.
+    # Wait for the server to bind before opening the browser: the sign-in
+    # link can only be minted once it answers, and a page opened without
+    # it loads nothing. A first start can take well over a minute on
+    # Windows (Defender scans the runtime), so wait as long as the TUI does.
+    print("Starting the background service…")
+    listening = False
     try:
+        from openprogram.host._platform.environment import tui_worker_ready_timeout_seconds
         from openprogram.interfaces.cli.ink import _wait_until_listening
-        _wait_until_listening(web_port, timeout=10.0)
+        listening = _wait_until_listening(web_port, timeout=tui_worker_ready_timeout_seconds())
     except Exception:
-        # Open the browser anyway; the page retries the connection.
         _log.debug("wait for web port %s failed", web_port, exc_info=True)
+    if not listening:
+        print(f"The background service is still starting on port {web_port}.")
+        print("Run `openprogram web` again in a moment to open the page signed in.")
+        print("Stop it with:  openprogram stop")
+        return
 
     # Only now: the access snapshot naming the real browser Origin is
     # written by the server as it binds, so reading it earlier would
@@ -210,5 +219,7 @@ def _cmd_web(web_port: int | None, open_browser: bool | None) -> None:
             print(f"Browser not opened: {exc}")
 
     print(f"Web UI: {ui_url}")
+    print("To open it again signed in, run `openprogram web`; the bare address")
+    print("above shows an empty page until it is opened that way.")
     print("Running in the background — close this terminal any time.")
     print("Stop it with:  openprogram stop")

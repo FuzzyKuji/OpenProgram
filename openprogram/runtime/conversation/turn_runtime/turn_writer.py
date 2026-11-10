@@ -186,7 +186,11 @@ class TurnWriter:
     def record_failure(self, head_for_next: Optional[str]) -> None:
         """Mark the session failed; move head to the failed turn ONLY
         on an advancing turn — a spawned turn's error stays on its
-        side branch and never steals the user's window."""
+        side branch and never steals the user's window. A background
+        turn's failure is recorded by whoever started it, not on the
+        conversation."""
+        if getattr(self.req, "background", False):
+            return
         try:
             mark_session_finished(
                 self.db, self.req.session_id, failed=True,

@@ -22,6 +22,8 @@ import { RailCount, RailGroupLabel, RailItem, SecondaryRail } from "@/components
 import { ChevronDown, ChevronRight, ChevronsDownUp, ChevronsUpDown, ChevronUp } from "lucide-react";
 import { ManageEmptyState, ManageIconButton } from "@/components/ui/manage-page";
 import { cn } from "@/lib/utils";
+import { ChannelLogo } from "@/components/channels/channel-logo";
+import { channelBrand } from "@/lib/channels/channel-brands";
 import { Card, CardContent } from "@/components/ui/card";
 import { useTranslation, type Locale } from "@/lib/i18n";
 import { parseAttachments } from "@/components/chat/messages/attachments/user-attachments";
@@ -113,10 +115,11 @@ export function ChatsPage({
     let arr = Object.values(conversations) as ConvSummary[];
     if (include) arr = arr.filter(include);
     if (q) {
-      // Match the label the row actually renders (channel brand +
-      // preview fallback), not just the raw title — otherwise searching
-      // for text you can see on screen returns nothing.
-      arr = arr.filter((c) => labelFor(c, untitled).toLowerCase().includes(q));
+      // Match what the row shows (the title with its preview fallback,
+      // and the channel the logo stands for), not just the raw title —
+      // otherwise searching for what you can see returns nothing.
+      arr = arr.filter((c) =>
+        `${channelBrand(c.channel)} ${labelFor(c, untitled)}`.toLowerCase().includes(q));
     }
     if (statusFilter === "active") {
       arr = arr.filter((c) => !c.archived);
@@ -416,8 +419,9 @@ function ChatRow({
   untitled: string;
   onClick: () => void;
 }) {
-  // Same label the sidebar renders: channel brand prefix, placeholder
-  // titles resolved to the preview, "[attached: …]" markers stripped.
+  // Same label the sidebar renders: placeholder titles resolved to the
+  // preview, "[attached: …]" markers stripped. A channel chat shows its
+  // app's logo in the icon slot instead of the chat bubble.
   const title = labelFor(conv, untitled);
   // The second line is the latest question asked, so a row says what the
   // chat is about now. An untitled chat already shows it as its name.
@@ -431,9 +435,14 @@ function ChatRow({
       onClick={onClick}
       className="flex w-full min-w-0 items-center gap-3 px-4 py-3 text-left transition-colors outline-none hover:bg-muted/60 focus-visible:bg-muted/60 focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:ring-inset"
     >
-      <span className="flex shrink-0 text-text-muted" aria-hidden="true"><MessageCircleIcon size={16} /></span>
+      <span className="flex shrink-0 text-text-muted" aria-hidden="true">
+        {conv.channel ? <ChannelLogo channel={conv.channel} size={16} /> : <MessageCircleIcon size={16} />}
+      </span>
       <span className="flex min-w-0 flex-1 flex-col gap-0.5">
-        <span className="truncate text-fs-base font-medium text-text-primary">{title}</span>
+        <span className="truncate text-fs-base font-medium text-text-primary">
+          {conv.channel ? <span className="sr-only">{channelBrand(conv.channel)}: </span> : null}
+          {title}
+        </span>
         {asked ? <span className="truncate text-fs-base text-text-muted">{asked}</span> : null}
       </span>
       <span className="shrink-0 text-fs-xs text-text-muted">{formatRelativeTime(activityTs(conv), locale)}</span>

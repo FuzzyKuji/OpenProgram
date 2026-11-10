@@ -92,7 +92,7 @@ def test_trash_stays_outside_the_session_repo(db):
     journal = db.delete_nodes("s1", ["u2"])
     trash = db.root_path / ".deleted-nodes" / "s1" / journal["op_id"]
     assert (trash / "journal.json").is_file()
-    assert list((trash / "history").glob("*-u2.json"))
+    assert [node["id"] for node in journal["nodes"]].count("u2") == 1
 
 
 def test_structure_nodes_refuse(db):

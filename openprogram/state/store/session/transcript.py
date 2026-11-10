@@ -95,12 +95,7 @@ def session_read_violation(store: Any, session_id: str) -> str | None:
     from openprogram.host.sandbox import validate_read_path
 
     directory = store._session_dir(session_id)
-    history = directory / "history"
-    for path in (directory, directory / "meta.json", history):
-        violation = validate_read_path(str(path))
-        if violation:
-            return violation
-    for path in history.glob("*.json"):
+    for path in (directory, directory / "main.jsonl", *directory.glob("agents/*.jsonl")):
         violation = validate_read_path(str(path))
         if violation:
             return violation

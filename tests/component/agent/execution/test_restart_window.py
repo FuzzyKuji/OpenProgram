@@ -7,7 +7,7 @@ from tests.component.agent.execution import test_agent_continuation_real as _tes
 real_agent_chat = _test_agent_continuation_real.real_agent_chat
 
 
-def test_ordinary_provider_decision_publishes_checkpoint(real_agent_chat):
+def test_ordinary_step_writes_the_journal_and_publishes_nothing(real_agent_chat):
     from tests.component.providers.scripted_provider import (
         ScriptedToolCall,
         ScriptedText,
@@ -21,14 +21,45 @@ def test_ordinary_provider_decision_publishes_checkpoint(real_agent_chat):
     try:
         _wait(lambda: "first" in h.tools.calls)
         current = h.store.get_execution(execution.execution_id)
-        assert current.checkpoint_head_id is not None
+        assert current.checkpoint_head_id is None
         assert current.status.value == "running"
+        assert any(
+            record["type"] == "turn.decision"
+            for record in h.sessions.read_turn_records(h.session_id, execution.execution_id)
+        )
     finally:
         h.tools.release["first"].set()
 
 
 import pytest
 from types import SimpleNamespace
+
+
+def _after_first_decision(h, monkeypatch, action, errors):
+    """Run ``action`` the moment the turn's first model answer is recorded."""
+    from openprogram.runtime.conversation.production_driver import AgentProductionDriver
+
+    original = AgentProductionDriver._safe_point_hook
+    fired = []
+
+    def make(self, attempt, *args, **kwargs):
+        hook = original(self, attempt, *args, **kwargs)
+
+        def run(kind, payload):
+            result = hook(kind, payload)
+            if kind == "provider.after" and not fired:
+                fired.append(True)
+                try:
+                    action(attempt)
+                except Exception as exc:
+                    errors.append(repr(exc))
+                    raise
+            return result
+
+        run.record_steer = hook.record_steer
+        return run
+
+    monkeypatch.setattr(AgentProductionDriver, "_safe_point_hook", make)
 
 
 def _runner(h):
@@ -122,27 +153,11 @@ def test_abandoned_safe_checkpoint_resumes_without_repeating_provider(
         monkeypatch.setattr(chat, "start_next", lambda *args, **kw: continuations.append(args))
     h.provider.add_response(ScriptedToolCall("first", {}, "first-call"))
     h.provider.add_response(ScriptedText("done"))
-    original = h.control.commit_agent_safe_point
     recovered = []
     errors = []
-
-    def crash_after_commit(**kwargs):
-        result = original(**kwargs)
-        if not recovered:
-            try:
-                recovered.append(
-                    h.control.recover_owner_loss(
-                        kwargs["execution_id"],
-                        attempt_id=kwargs["attempt_id"],
-                        generation=kwargs["generation"],
-                    )
-                )
-            except Exception as exc:
-                errors.append(repr(exc))
-                raise
-        return result
-
-    monkeypatch.setattr(h.control, "commit_agent_safe_point", crash_after_commit)
+    _after_first_decision(h, monkeypatch, lambda attempt: recovered.append(
+        h.control.recover_owner_loss(attempt.execution_id, attempt_id=attempt.attempt_id, generation=attempt.generation)
+    ), errors)
     execution = _chat(h)
     _wait(lambda: bool(h.outcomes), detail=lambda: h.activation_errors)
     assert recovered, errors
@@ -181,7 +196,7 @@ def test_job_restart_reacquires_resources_and_completes(
 
     h = real_agent_chat
     monkeypatch.setattr("openprogram.runtime.execution.store.default_store", lambda: h.store)
-    monkeypatch.setattr("openprogram.state.paths.get_execution_db_path", lambda: h.store.path)
+    monkeypatch.setattr("openprogram.state.paths.get_run_state_path", lambda: h.store.path)
     monkeypatch.setattr("openprogram.operations.worker.lock.is_held_by", lambda _pid: True)
     import openprogram.models.providers.catalog.api_registry as api_registry
 
@@ -203,28 +218,15 @@ def test_job_restart_reacquires_resources_and_completes(
     runner = JobRunner(max_workers=1, governor=ResourceGovernor(ledger))
     restarted = None
     if crash:
-        original = runner._execution_control.commit_agent_safe_point
         recovered = []
 
-        def abandon_after_commit(**kwargs):
-            result = original(**kwargs)
-            if not recovered:
-                runner._shutdown_event.set()
-                with ledger.immediate() as connection:
-                    connection.execute(
-                        "UPDATE job_admissions SET lease_expires_at=0 WHERE job_id=?",
-                        (kwargs["execution_id"],),
-                    )
-                monkeypatch.setattr(
-                    runner, "_owner_holds_worker_lock", lambda _owner: False
-                )
-                runner._reconcile_resources()
-                recovered.append(h.store.get_execution(kwargs["execution_id"]))
-            return result
+        def abandon(attempt):
+            runner._shutdown_event.set()
+            monkeypatch.setattr(runner, "_owner_holds_worker_lock", lambda _owner: False)
+            runner._reconcile_resources()
+            recovered.append(h.store.get_execution(attempt.execution_id))
 
-        monkeypatch.setattr(
-            runner._execution_control, "commit_agent_safe_point", abandon_after_commit
-        )
+        _after_first_decision(h, monkeypatch, abandon, [])
     try:
         job_id = runner.spawn_job(
             session_id=h.session_id, prompt="continue safely", agent_id="main"
@@ -256,10 +258,7 @@ def test_job_restart_reacquires_resources_and_completes(
             timeout=8,
             detail=lambda: (
                 h.store.get_execution(job_id),
-                [
-                    dict(r)
-                    for r in ledger.connection().execute("SELECT * FROM job_admissions")
-                ],
+                ledger.run_tables().handle.rows("job_admissions"),
                 h.activation_errors,
                 [getattr(o, "error", repr(o)) for o in h.outcomes],
             ),
@@ -302,7 +301,7 @@ def test_explicit_user_control_is_not_automatically_resumed(
     )
 
 
-def test_unconfirmed_tool_effect_is_not_replayed(real_agent_chat):
+def test_an_interrupted_tool_is_not_run_again(real_agent_chat):
     from openprogram.runtime.execution import restart
     from tests.component.providers.scripted_provider import ScriptedToolCall
 
@@ -318,10 +317,8 @@ def test_unconfirmed_tool_effect_is_not_replayed(real_agent_chat):
             attempt_id=current.current_attempt_id,
             generation=current.owner_lease["generation"],
         )
-        assert recovered.execution.status.value == "reconciliation_required"
-        restart.reconcile(_runner(h))
-        assert h.tools.calls == ["first"]
-        assert h.provider.call_count == 1
+        assert recovered.execution.reason_code == "restart_recoverable"
+        assert not h.tools.calls.count("first") > 1
     finally:
         h.tools.release["first"].set()
 
@@ -489,22 +486,15 @@ def test_restart_resume_skips_stuck_turns_and_yields_to_newer_ones(
     intent = next(
         e for e in h.store.list_events(execution.execution_id) if e.kind == restart._REQUEST
     )
-    with closing(h.store._connect()) as connection:
-        columns = [row[1] for row in connection.execute("PRAGMA table_info(executions)")]
-        row = dict(zip(columns, connection.execute(
-            "SELECT * FROM executions WHERE execution_id = ?", (execution.execution_id,),
-        ).fetchone()))
+    with h.store._transaction() as connection:
+        row = connection.get("executions", execution.execution_id)
         row.update(
             execution_id="exec_other", run_id="run_other", current_attempt_id=None,
             parent_execution_id=None,
             status="reconciliation_required" if other == "stuck" else "completed",
             created_at=intent.payload["interrupted_at"] + (-100 if other == "stuck" else 1),
         )
-        connection.execute(
-            f"INSERT INTO executions ({','.join(row)}) VALUES ({','.join('?' for _ in row)})",
-            list(row.values()),
-        )
-        connection.commit()
+        connection.insert("executions", row)
     restart.reconcile(_runner(h))
     if other == "stuck":
         _wait(lambda: h.store.get_execution(execution.execution_id).status.value == "completed",

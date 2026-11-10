@@ -134,6 +134,21 @@ def test_empty_input_renders_nothing():
     assert L.format_skills_for_prompt([]) == ""
 
 
+def test_a_description_written_as_a_block_scalar_is_read_whole(sources):
+    """Skills published elsewhere fold a long description over several
+    lines (``description: >-``); the listing shows its text, not ``>-``."""
+    d = sources["user"] / "figures"
+    d.mkdir()
+    (d / "SKILL.md").write_text(
+        "---\nname: figures\ndescription: >-\n  Covers publication figures: bars\n  and trends.\n"
+        "notes: |\n  first\n  second\nversion: 2\n---\n\nbody\n", encoding="utf-8")
+    (skill,) = L.list_skills()
+    assert skill.description == "Covers publication figures: bars and trends."
+    assert skill.version == "2"
+    fm, body = L._h.parse_frontmatter((d / "SKILL.md").read_text(encoding="utf-8"))
+    assert fm["notes"] == "first\nsecond" and body.strip() == "body"
+
+
 def test_explicit_dirs_use_the_same_parser_and_rule(tmp_path):
     low, high = tmp_path / "low", tmp_path / "high"
     _write_skill(low, "deploy", "from low")
@@ -206,3 +221,17 @@ def test_skill_tool_reports_a_bad_name(sources):
     _write_skill(sources["project"], "deploy", "ship it")
     assert "no skill named" in _run_skill_tool(name="nope")
     assert "pass a skill name" in _run_skill_tool(name="")
+
+
+def test_skill_paths_follow_the_active_profile(tmp_path, monkeypatch):
+    # The dev instance (profile "dev") must read its own skills, not the
+    # stable instance's ~/.openprogram/skills.
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("OPENPROGRAM_PROFILE", "dev")
+    from openprogram.extensions.skills import loader, tool
+    from openprogram.interfaces.server.routes.catalog import skills as skills_route
+    root = tmp_path / ".openprogram-dev"
+    assert loader.user_dir() == root / "skills"
+    assert loader.remote_cache_dir() == root / "cache" / "skills"
+    assert tool._log_path() == root / "skills" / "invoke_log.jsonl"
+    assert skills_route._state_root() == root

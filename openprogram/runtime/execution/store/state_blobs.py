@@ -5,9 +5,6 @@ import hashlib
 
 import json
 
-
-import sqlite3
-
 import time
 
 
@@ -29,6 +26,7 @@ from .shared import (
     _STATE_HASH_LENGTH,
     _STATE_REF_PREFIX,
 )
+from .run_tables import TableHandle
 
 class StateBlobsOperations:
     def put_state_blob(
@@ -53,11 +51,7 @@ class StateBlobsOperations:
     def get_state_blob(self, execution_id: str, ref: str) -> dict[str, Any] | None:
         self._validate_state_ref(ref)
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT ref, sha256, payload, byte_length, media_type, schema_version "
-                "FROM execution_state_blobs WHERE execution_id = ? AND ref = ?",
-                (execution_id, ref),
-            ).fetchone()
+            row = connection.get("execution_state_blobs", execution_id, ref)
         if row is None:
             return None
         payload = bytes(row["payload"])
@@ -79,42 +73,38 @@ class StateBlobsOperations:
             execution = self._require_execution(connection, execution_id)
             if execution.status not in TERMINAL_EXECUTION_STATUSES:
                 raise ExecutionConflict("state_gc_not_terminal", "state blobs remain while execution is nonterminal")
-            referenced: set[str] = set()
-            for row in connection.execute(
-                "SELECT state_refs_json, effect_receipts_json FROM checkpoints WHERE execution_id = ?",
-                (execution_id,),
-            ):
-                for raw in (row["state_refs_json"], row["effect_receipts_json"]):
-                    self._collect_state_refs(json.loads(raw), referenced)
-            self._expand_state_blob_refs(connection, execution_id, referenced)
-            for row in connection.execute(
-                "SELECT receipt_json FROM effects WHERE execution_id = ?", (execution_id,),
-            ):
-                self._collect_state_refs(json.loads(row["receipt_json"]), referenced)
-            self._expand_state_blob_refs(connection, execution_id, referenced)
-            # A blob explicitly attached by name (ExecutionStateBlobStore.attach_ref)
-            # is referenced too; the refs table also constrains the blob row.
-            for row in connection.execute(
-                "SELECT ref FROM execution_state_blob_refs WHERE execution_id = ?", (execution_id,),
-            ):
-                referenced.add(str(row["ref"]))
-            self._expand_state_blob_refs(connection, execution_id, referenced)
-            if referenced:
-                placeholders = ",".join("?" for _ in referenced)
-                result = connection.execute(
-                    f"DELETE FROM execution_state_blobs WHERE execution_id = ? AND ref NOT IN ({placeholders})",
-                    (execution_id, *sorted(referenced)),
-                )
-            else:
-                result = connection.execute(
-                    "DELETE FROM execution_state_blobs WHERE execution_id = ?", (execution_id,)
-                )
-            return int(result.rowcount)
+            referenced = self._referenced_state_refs(connection, execution_id)
+            return connection.delete(
+                "execution_state_blobs", execution_id=execution_id,
+                where=lambda row: row["ref"] not in referenced,
+            )
+
+
+    def _referenced_state_refs(self, connection: TableHandle, execution_id: str) -> set[str]:
+        """Every state blob of this execution that something still points at.
+
+        Checkpoints (and the Agent payload their manifests expand to),
+        effect receipts, and refs attached by name all count.
+        """
+        referenced: set[str] = set()
+        for row in connection.rows("checkpoints", execution_id=execution_id):
+            for raw in (row["state_refs_json"], row["effect_receipts_json"]):
+                self._collect_state_refs(json.loads(raw), referenced)
+        self._expand_state_blob_refs(connection, execution_id, referenced)
+        for row in connection.rows("effects", execution_id=execution_id):
+            self._collect_state_refs(json.loads(row["receipt_json"]), referenced)
+        self._expand_state_blob_refs(connection, execution_id, referenced)
+        # A blob explicitly attached by name (ExecutionStateBlobStore.attach_ref)
+        # is referenced too; the refs table also constrains the blob row.
+        for row in connection.rows("execution_state_blob_refs", execution_id=execution_id):
+            referenced.add(str(row["ref"]))
+        self._expand_state_blob_refs(connection, execution_id, referenced)
+        return referenced
 
 
     @classmethod
     def _collect_state_refs(cls, value: Any, refs: set[str]) -> None:
-        # AgentCheckpointV1 uses bare refs for well-known durable fields;
+        # A checkpoint uses bare refs for well-known durable fields;
         # effect receipts use ``receipt_ref``.  Treat every valid-looking
         # execstate string as a reference, regardless of surrounding shape.
         if isinstance(value, str) and value.startswith(_STATE_REF_PREFIX):
@@ -135,7 +125,7 @@ class StateBlobsOperations:
 
     @classmethod
     def _expand_state_blob_refs(
-        cls, connection: sqlite3.Connection, execution_id: str, refs: set[str],
+        cls, connection: TableHandle, execution_id: str, refs: set[str],
     ) -> None:
         """Expand the child refs of the one versioned Agent checkpoint schema.
 
@@ -151,11 +141,7 @@ class StateBlobsOperations:
             if ref in visited:
                 continue
             visited.add(ref)
-            row = connection.execute(
-                "SELECT payload, media_type, schema_version FROM execution_state_blobs "
-                "WHERE execution_id = ? AND ref = ?",
-                (execution_id, ref),
-            ).fetchone()
+            row = connection.get("execution_state_blobs", execution_id, ref)
             if row is None or row["media_type"] != "application/json" or int(row["schema_version"]) != 1:
                 continue
             try:
@@ -195,7 +181,7 @@ class StateBlobsOperations:
 
     def _put_state_blob_in_transaction(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         execution_id: str,
         payload: bytes | str,
@@ -211,18 +197,18 @@ class StateBlobsOperations:
         self._require_execution(connection, execution_id)
         digest = hashlib.sha256(payload).hexdigest()
         ref = f"{_STATE_REF_PREFIX}{digest}"
-        row = connection.execute(
-            "SELECT sha256, payload, byte_length, media_type, schema_version "
-            "FROM execution_state_blobs WHERE execution_id = ? AND ref = ?",
-            (execution_id, ref),
-        ).fetchone()
+        row = connection.get("execution_state_blobs", execution_id, ref)
         if row is None:
-            connection.execute(
-                "INSERT INTO execution_state_blobs "
-                "(execution_id, ref, sha256, payload, byte_length, media_type, schema_version, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                (execution_id, ref, digest, payload, len(payload), media_type, schema_version, time.time()),
-            )
+            connection.insert("execution_state_blobs", {
+                "execution_id": execution_id,
+                "ref": ref,
+                "sha256": digest,
+                "payload": payload,
+                "byte_length": len(payload),
+                "media_type": media_type,
+                "schema_version": schema_version,
+                "created_at": time.time(),
+            })
         elif (
             row["sha256"] != digest or bytes(row["payload"]) != payload
             or int(row["byte_length"]) != len(payload)

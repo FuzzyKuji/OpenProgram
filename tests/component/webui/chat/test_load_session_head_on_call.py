@@ -4,7 +4,6 @@ import json
 
 from openprogram.state.store import SessionStore
 from openprogram.interfaces.server.ws_actions import session as ws_session
-from openprogram.interfaces.server.session_history import close_snapshots
 
 
 def test_head_on_a_call_row_loads_the_turn_it_belongs_to(tmp_path, monkeypatch):
@@ -25,9 +24,6 @@ def test_head_on_a_call_row_loads_the_turn_it_belongs_to(tmp_path, monkeypatch):
     monkeypatch.setattr(server, '_canonical_foreground_task', lambda _sid: None)
 
     class WS:
-        _bounded_history = True
-        _history_protocol = 1
-
         def __init__(self):
             self.frames = []
 
@@ -43,6 +39,5 @@ def test_head_on_a_call_row_loads_the_turn_it_belongs_to(tmp_path, monkeypatch):
         ids = [m['id'] for m in loaded['messages']]
         assert 'u1' in ids and 'a1' in ids
     finally:
-        close_snapshots(ws)
         with server._sessions_lock:
             server._sessions.pop(sid, None)

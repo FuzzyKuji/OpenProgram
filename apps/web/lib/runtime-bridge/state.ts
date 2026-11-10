@@ -77,7 +77,6 @@ export interface RuntimeState {
   /** Sessions whose branch was just moved by retry/edit: the next turn
    *  result triggers a wholesale load_session instead of a mirror push
    *  (chat-handlers self-heal — the reload and the stream race). */
-  _pendingBranchReload: Record<string, boolean>;
   /** DAG node id → lane colour, published by the DAG render pass so the
    *  branches panel can match its rows to the graph's lanes. */
   _branchLaneColorMap: Record<string, string>;
@@ -91,7 +90,6 @@ export interface RuntimeState {
   _pendingExpandAttach: { head: string; anchor: string } | null;
   /** Session ids whose transcripts must be reloaded when their running tasks
    *  clear (dispatched function runs whose cards are already on disk). */
-  __reloadOnTaskClear: Set<string>;
   /** Optimistic exact-cancel entries awaiting their command acknowledgement.
    *  The command frame is the only response that can distinguish a stale
    *  rejection from the terminal execution update that follows it. */
@@ -162,11 +160,9 @@ export const runtimeState: RuntimeState = {
   _webSearchProviderTier: "",
   _pendingChannelChoice: null,
   _branchesByConv: {},
-  _pendingBranchReload: {},
   _branchLaneColorMap: {},
   _postCheckoutScrollTo: null,
   _pendingExpandAttach: null,
-  __reloadOnTaskClear: new Set<string>(),
   _optimisticCancels: {},
   _optimisticStops: {},
 };

@@ -47,7 +47,7 @@ export function MicButton({ state, onToggle }: { state: VoiceState; onToggle: ()
         onMouseDown={(event) => event.preventDefault()}
         onClick={onToggle}
       >
-        <SolarIcon name="microphone-2" size={16} aria-hidden="true" />
+        <SolarIcon name="microphone-2" size={16} fit="fill" aria-hidden="true" />
       </button>
     </HoverTip>
   );

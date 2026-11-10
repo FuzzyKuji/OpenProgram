@@ -1,1 +1,40 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><title>本地模型 Provider</title><body><h1>本地模型 Provider</h1><p>OpenProgram 可以使用用户自己机器或网络上部署的模型。它内置 Ollama、LM Studio、vLLM 和 llama.cpp 预设以及一个通用本地端点，全部通过与云端 Provider 相同的 OpenAI Chat Completions 传输连接，因此流式输出、工具调用、取消和重试的行为一致。推理服务由用户启动；OpenProgram 负责发现模型、检查连接并发送请求，不安装模型、不分配 GPU、也不启动推理服务。</p><h2>Provider 接入</h2><p>本地预设和自定义本地端点使用可选凭证。模型发现、连接验证和推理采用相同配置地址。设置界面提供模型发现、手动限制和明确的连接失败状态。</p><h2>接口依据</h2><p>依据 Ollama、LM Studio 和 vLLM 的官方兼容接口，复用已有流式输出、工具调用、取消、重试和结构化输出实现。原生模型下载与管理接口不在范围内。</p><h2>功能约定</h2><p>Ollama、LM Studio、vLLM、llama.cpp 预设和通用本地端点的默认地址离线可用，本地服务允许可选凭证，不能继承无关 OpenAI key。保留配置 URL 安全检查。模型发现使用部署服务，不能使用云端模型目录。主机 URL 自动补充 /v1，发现、连接检查和推理采用一致地址。启用状态通过现有注册表持久保存。</p><p>设置界面提供地址编辑、可选账户、连接检查、模型发现、手动模型 ID 和 token 限制。云端鉴权行为不变。无效 URL 和非 JSON 响应显示错误。模型能力和限制依据部署服务返回信息或明确配置。</p><h2>请求鉴权</h2><p>无凭证本地推理向 SDK 传入明确的占位 key，防止回退到环境变量，并在每次 Chat Completions 请求中显式省略 Authorization header。SDK 的鉴权校验要求在请求级别声明省略；仅移除默认 header 不足以满足校验。本地服务配置 key 时使用该 key，云端请求仍然需要所属 Provider 的凭证。</p><h2>验收</h2><p>Provider 列表显示本地预设。无凭证时可发现和检查 loopback 服务。显式 key 仅发送给配置端点。启用模型通过公共调度入口输出文本和工具调用。保存新地址后，后续发现和推理使用新地址。服务不存在、HTTP 失败或响应无效时报告失败。</p><h2>实现状态</h2><p>Provider、服务器和设置界面已实现并通过独立审查。loopback 测试覆盖模型发现、鉴权、流式文本、工具调用和图片输入。真实本地模型推理需要用户提供的服务，尚未做端到端验证。</p></body></html>
+<title>本地模型 Provider</title>
+<meta name="description" content="Ollama、LM Studio、vLLM 和 llama.cpp 预设，走共用的 OpenAI Chat Completions 传输。">
+<h1>本地模型 Provider</h1>
+
+<table class="stack">
+<thead><tr><th scope="col">预设</th><th scope="col">默认</th><th scope="col">说明</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://docs.ollama.com/api/openai-compatibility">Ollama</a></th><td><code translate="no">localhost:11434/v1</code></td><td>已安装的模型标识。不使用原生管理 API。</td></tr>
+<tr><th scope="row"><a href="https://lmstudio.ai/docs/developer/openai-compat">LM Studio</a></th><td><code translate="no">localhost:1234/v1</code></td><td>模型和流式聊天</td></tr>
+<tr><th scope="row"><a href="https://docs.vllm.ai/en/latest/serving/online_serving/openai_compatible_server/">vLLM</a></th><td><code translate="no">localhost:8000/v1</code></td><td>可选的服务器 API key</td></tr>
+<tr><th scope="row">llama.cpp、通用端点</th><td>配置的地址</td><td>离线解析</td></tr>
+</tbody>
+</table>
+
+<p class="note">全部走云端 provider 使用的 Chat Completions 传输：流式、工具调用、取消、重试和结构化输出。服务器由用户启动；OpenProgram 不安装模型、不分配 GPU、不启动推理服务器。</p>
+
+<h2>约定</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">地址</th><td>只写主机的 URL 在发现、校验和推理中一致解析到 <code translate="no">/v1</code>。修改对之后的调用生效，包括已保存的模型。</td></tr>
+<tr><th scope="row">发现</th><td>来自配置的服务器，绝不用云端目录</td></tr>
+<tr><th scope="row">凭据</th><td>可选。绝不继承无关的 OpenAI key。只发送给配置的端点。</td></tr>
+<tr><th scope="row">URL 安全</th><td>沿用现有的配置 URL 检查</td></tr>
+<tr><th scope="row">启用状态</th><td>通过现有的 provider 和模型注册表持久化</td></tr>
+<tr><th scope="row">设置</th><td>地址、可选账户、连通性、发现、手动模型 ID 和上限</td></tr>
+<tr><th scope="row">错误</th><td>无效 URL、服务器不存在、HTTP 失败和非 JSON 回复都作为可操作的失败报告</td></tr>
+<tr><th scope="row">兼容性</th><td>保守的 OpenAI 兼容设置</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>请求认证</summary>
+<p>没有 key：显式的 SDK 占位符防止回退到环境变量，每个 Chat Completions 请求都省略 Authorization 头。必须按请求省略，因为 SDK 认证校验器不认只移除默认头的做法。有 key：使用配置的服务器 key。云端请求仍需各自的凭据。</p>
+</details>
+
+<h2 id="status">实现状态</h2>
+
+<p>尚未对真实本地部署的模型做端到端推理；这需要运维方提供服务器。</p>

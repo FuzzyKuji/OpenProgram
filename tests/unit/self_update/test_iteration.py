@@ -78,10 +78,10 @@ def test_stopping_conditions(overrides, reason) -> None:
     "openprogram/operations/self_update/control/supervisor.py", "openprogram/host/sandbox/__init__.py",
     "apps/desktop/scripts/install-app.sh",
 ])
-def test_sensitive_changes_require_approval_even_with_broad_scope(path) -> None:
+def test_no_path_needs_approval_of_its_own(path) -> None:
     request = _request()
     request = replace(request, iteration_policy=replace(request.iteration_policy, allowed_paths=("*",)))
-    assert _evaluate(request, changed_paths=(path,)).reason == "protected-change"
+    assert _evaluate(request, changed_paths=(path,)).reason == "within-approved-envelope"
 
 
 def test_bounded_policy_without_deadline_cannot_auto_activate() -> None:

@@ -17,8 +17,11 @@ def register(app):
 
     @app.post('/api/framework/commands/{name}')
     async def command(name: str, body: dict, request: Request):
+        from openprogram.runtime.permissions.refusal import Refused
         try:
             return await invoke(request, name, body)
+        except Refused as exc:
+            return JSONResponse({'ok': False, 'error': exc.text, 'reason_code': exc.refusal.code}, status_code=400)
         except (ValueError, KeyError, TypeError) as exc:
             return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
 

@@ -11,12 +11,15 @@ from __future__ import annotations
 import re
 
 _FRONTMATTER_RE = re.compile(r"\A---\n(.*?)\n---\n?(.*)\Z", re.DOTALL)
+_BLOCK_SCALARS = frozenset({">", ">-", ">+", "|", "|-", "|+"})
 
 
 def parse_frontmatter(text: str) -> tuple[dict, str]:
     """Return ``(frontmatter_dict, body)``. Empty dict when missing.
 
-    Yaml-lite: flat scalars and one-level lists (``- "x"`` indented).
+    Yaml-lite: flat scalars, one-level lists (``- "x"`` indented) and
+    block scalars (``key: >-`` or ``key: |`` followed by indented lines;
+    ``>`` joins the lines with spaces, ``|`` keeps them).
     Good enough for our hybrid schema.
     """
     m = _FRONTMATTER_RE.match(text)
@@ -25,7 +28,21 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
     raw_fm, body = m.group(1), m.group(2)
     fm: dict = {}
     current_key: str | None = None
+    block: tuple[str, str, list[str]] | None = None  # key, ">" or "|", lines
+
+    def close_block() -> None:
+        nonlocal block
+        if block is not None:
+            key, style, lines = block
+            fm[key] = (" " if style == ">" else "\n").join(lines).strip()
+            block = None
+
     for line in raw_fm.splitlines():
+        if block is not None:
+            if not line.strip() or line[0] in " \t":
+                block[2].append(line.strip())
+                continue
+            close_block()
         if line.startswith("  - ") or line.startswith("- "):
             if current_key is None:
                 continue
@@ -40,6 +57,9 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
         if not val:
             current_key = key
             fm[key] = []
+        elif val in _BLOCK_SCALARS:
+            current_key = None
+            block = (key, val[0], [])
         else:
             current_key = None
             # Inline list form: `tags: [a, b, c]`
@@ -51,6 +71,7 @@ def parse_frontmatter(text: str) -> tuple[dict, str]:
                     fm[key] = [_strip_quotes(x.strip()) for x in inner.split(",")]
             else:
                 fm[key] = _strip_quotes(val)
+    close_block()
     return fm, body
 
 

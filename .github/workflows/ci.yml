@@ -1,11 +1,12 @@
 name: CI
 
-# Runs only when started by hand: pushes, pull requests and schedules start
-# nothing, so publishing a version does not set off CI runs.
+# The full suite. Runs only when started by hand, before a release: pushes,
+# pull requests and schedules start nothing. Routine work runs
+# scripts/testing/affected_tests.py instead.
 on:
   workflow_dispatch:
 
-# Superseded checks must not hold scarce Windows ARM64 runners ahead of HEAD.
+# A newer run on the same ref cancels the older one, freeing the Windows ARM64 runners.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true

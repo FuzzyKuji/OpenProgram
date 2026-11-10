@@ -67,8 +67,14 @@ const DICT = {
   // /settings/general page
   "general.title": { en: "General", zh: "通用" },
   "general.meta": {
-    en: "App-wide preferences. Theme, font and language are per-browser; version info is read-only.",
-    zh: "应用级偏好。主题、字体和语言按浏览器保存；版本信息只读。",
+    en: "App-wide preferences. Language is per-browser; version info is read-only. How the interface looks is in Appearance.",
+    zh: "应用级偏好。语言按浏览器保存；版本信息只读。界面外观在「外观」里。",
+  },
+  // /settings/appearance page
+  "appearance.title": { en: "Appearance", zh: "外观" },
+  "appearance.meta": {
+    en: "How the interface looks: colours, theme, text, conversation layout, effects and custom CSS. Saved in this browser.",
+    zh: "界面的样子：颜色、主题、文字、对话布局、效果和自定义 CSS。保存在本浏览器。",
   },
   "general.section.preferences": { en: "Preferences", zh: "偏好设置" },
   "general.appearance": { en: "Appearance", zh: "外观" },
@@ -104,7 +110,9 @@ const DICT = {
   "settings.tab.memory": { en: "Memory", zh: "记忆" },
   "settings.tab.permissions": { en: "Permissions", zh: "权限" },
   "settings.tab.general": { en: "General", zh: "通用" },
+  "settings.tab.appearance": { en: "Appearance", zh: "外观" },
   "settings.tab.system": { en: "System", zh: "系统" },
+  "settings.tab.versions": { en: "Versions", zh: "版本" },
   "settings.tab.browser": { en: "Browser", zh: "浏览器" },
 
   // Token usage page

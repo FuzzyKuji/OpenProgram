@@ -1,65 +1,94 @@
-<style>
-.runtime-doc { max-width: 100%; }
-.runtime-doc .lead, .runtime-doc .toc { background: var(--bg-code); border: 1px solid var(--bd); border-radius: 8px; padding: 14px 18px; margin: 18px 0; }
-.runtime-doc .doc-intro { border-left: 3px solid var(--acc); padding: 4px 0 4px 18px; margin: 18px 0 28px; }
-.runtime-doc .doc-scroll { max-width: 100%; overflow-x: auto; margin: 16px 0; }
-.runtime-doc .doc-scroll:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
-.runtime-doc table { min-width: 720px; }
-.runtime-doc code { overflow-wrap: anywhere; word-break: break-word; }
-.runtime-doc h2 { scroll-margin-top: 16px; }
-.runtime-doc blockquote { border-left: 3px solid var(--bd); padding: 8px 16px; margin: 16px 0; }
-@media (max-width: 680px) {
-  .runtime-doc table { min-width: 640px; font-size: 13px; }
-  .runtime-doc h1 { font-size: 26px; }
-}
-</style>
-<div class="runtime-doc">
+<title>分支命名</title>
+<meta name="description" content="DAG 分支如何从短 id 变成渐进的 LLM 名称，以及什么会锁定名称。">
 <h1>分支命名</h1>
-<p>状态： <strong>当前设计与实现参考</strong></p>
-<blockquote>分支有名称时显示自身名称，否则显示短标识符。自动命名逐步完善，不得覆盖用户控制的名称。</blockquote>
-<blockquote>规范实现位于 <code>openprogram/state/store/session/session_store.py</code>, <code>openprogram/runtime/conversation/turn_runtime/titles.py</code>, <code>openprogram/runtime/conversation/turn_runtime/finalize.py</code>，以及 <code>openprogram/interfaces/server/ws_actions/branch.py</code>.</blockquote>
 
-<h2 id="branch-contract">1. 当前合同</h2>
-<ul>
-<li>主干没有自动合成的 <code>main</code> 特殊名称。未命名分支使用短十六进制标识符；已命名分支使用自身名称。</li>
-<li>手动分支命名由分支 WebSocket 动作处理。未存储名称时回退到短标识符。</li>
-<li>自动命名是后台操作，在轮次结束时按配置阈值触发。它读取分支上下文，并在写入前重新检查锁。</li>
-<li>自动命名不得替换用户锁定的名称。存储的分支元数据不再符合操作前置条件时，丢弃过期后台结果。</li>
-</ul>
+<p>DAG 里的分支就是带名字的叶子，分叉不创建单独对象。主干没有合成的 <code translate="no">main</code> 名称，规则与其他分支相同。</p>
 
-<h2 id="branch-paths">2. 已实现路径</h2>
-<div class="doc-scroll" role="region" tabindex="0" aria-label="分支命名证据表"><table><thead><tr><th>关注点</th><th>当前源码</th><th>证据</th></tr></thead><tbody>
-<tr><td>存储的分支名与回退</td><td><code>openprogram/state/store/session/session_store.py</code></td><td>读取分支元数据时不合成 main 名称；未命名条目回退到短 id。</td></tr>
-<tr><td>渐进式 LLM 命名</td><td><code>openprogram/runtime/conversation/turn_runtime/titles.py</code></td><td><code>maybe_auto_name_branch</code> 执行阈值检查、后台生成和写回保护。</td></tr>
-<tr><td>轮次结束触发</td><td><code>openprogram/runtime/conversation/turn_runtime/finalize.py</code></td><td>轮次结束收尾调用自动分支命名。</td></tr>
-<tr><td>手动与 WebSocket 动作</td><td><code>openprogram/interfaces/server/ws_actions/branch.py</code></td><td>当前分支动作提供重命名、短 id 回退、锁处理和按需命名。</td></tr>
-<tr><td>Composer 命令</td><td><code>apps/web/components/chat/composer/slash/slash-commands.ts</code></td><td><code>/branch</code> 和 <code>auto_name_branch</code> 已注册为当前命令。</td></tr>
-</tbody></table></div>
+<h2 id="branch-policy">谁优先</h2>
 
-<h2 id="branch-policy">3. 命名策略</h2>
-<div class="doc-scroll" role="region" tabindex="0" aria-label="分支命名证据表"><table><thead><tr><th>来源</th><th>优先级</th><th>自动命名可以覆盖吗？</th></tr></thead><tbody>
-<tr><td>用户重命名</td><td>最高</td><td>不可以；它会设置持久锁。</td></tr>
-<tr><td>已有持久分支名</td><td>存储值</td><td>仅当本次自动操作通过锁检查和过期写入检查时可以。</td></tr>
-<tr><td>LLM 自动结果</td><td>后台完善</td><td>分支被锁定或前置条件变化时不可以。</td></tr>
-<tr><td>短标识符</td><td>回退</td><td>仅在有效名称保存后替换。</td></tr>
-</tbody></table></div>
+<table class="stack">
+<thead><tr><th scope="col">层级</th><th scope="col">来源</th><th scope="col">加锁</th><th scope="col">自动命名可否覆盖</th></tr></thead>
+<tbody>
+<tr><th scope="row">最高</th><td>用户重命名（<code translate="no">rename_branch</code>、分支面板、<code translate="no">/branch &lt;名字&gt;</code>）或用户请求的 LLM 命名（<code translate="no">auto_name_branch</code>、<code translate="no">/branch</code>、TUI <code translate="no">/branch rename</code>）</td><td>设置 <code translate="no">name_locked</code></td><td>否</td></tr>
+<tr><th scope="row">spawn</th><td>派生任务的标签</td><td>否</td><td>写回检查通过时可以</td></tr>
+<tr><th scope="row">自动</th><td>到阈值时的后台 LLM 名称</td><td>否</td><td>可以</td></tr>
+<tr><th scope="row">兜底</th><td><code translate="no">head_msg_id</code> 前 8 位十六进制</td><td>否</td><td>有存储名称即替换</td></tr>
+</tbody>
+</table>
 
-<h2 id="branch-lifecycle">4. 状态与生命周期</h2>
-<ol>
-<li>创建分支时同时建立元数据；不存在名称时可以立即使用短 id 展示。</li>
-<li>轮次收尾时，按渐进命名阈值检查该分支自身上下文和轮次数量。</li>
-<li>LLM 在后台生成。写入前重新读取分支/会话状态；发现手动锁或过期前置条件时放弃结果。</li>
-<li>WebSocket 消费者通过当前分支/会话更新路径收到分支变更；生成期间 UI 必须保留短 id 回退。</li>
+<p class="note">名称受不受保护，取决于是不是用户要的，不取决于是不是 LLM 写的。</p>
+
+<h2 id="branch-lifecycle">分支上的一轮</h2>
+
+<ol class="flow">
+<li><strong><code translate="no">finalize_turn</code></strong><small>后台轮次跳过，它们的分支结束后隐藏。</small></li>
+<li><strong><code translate="no">carry_branch_entry</code></strong><small>把条目从这一轮延伸的 tip 移到新 head，名称、锁和计数器跟着分支走。分叉点不动，分叉重新开始。</small></li>
+<li><strong><code translate="no">maybe_auto_name_branch</code></strong><small>已锁定或已归档则停止，否则 <code translate="no">turns</code> + 1。</small></li>
+<li><strong><code translate="no">turns</code> 为 1、6、16、40</strong><small>后台线程：最后 6 条消息，最多 2000 字符，2 到 6 个词，上限 40 字符。</small></li>
+<li class="flow-end"><strong>写回</strong><small>重读条目，已锁定或已归档则丢弃；否则写入并刷新 <code translate="no">branches_list</code>。</small></li>
 </ol>
 
-<h2 id="branch-boundaries">5. 边界</h2>
+<h2 id="branch-contract">状态</h2>
+
+<pre translate="no" tabindex="0">branches: {
+  &lt;head_msg_id&gt;: {
+    name, created_at, updated_at,
+    auto_named: bool,
+    name_locked: bool,
+    name_gen_count: int,
+    turns: int,
+  }
+}</pre>
+
+<p class="note">存在会话 <code translate="no">meta.json</code>，由 <code translate="no">set_branch_name</code> 合并写入，只改名称不会丢掉锁和计数器。</p>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">显示位置</th><th scope="col">内容</th></tr></thead>
+<tbody>
+<tr><th scope="row">分支面板</th><td>名称，否则短 id（<code translate="no">graph/branches.py</code>）</td></tr>
+<tr><th scope="row">DAG 徽标</th><td>名称，否则用户在该分支上问的文字，否则短 id（<code translate="no">dag/render/labels/badges.ts</code>）</td></tr>
+</tbody>
+</table>
+
+<p class="note">对话内容放在 <code translate="no">&lt;branch&gt;</code> 标签内，并要求当作数据，消息无法借此改分支名。</p>
+
+<details>
+<summary>与会话标题对比</summary>
+<table class="stack">
+<thead><tr><th scope="col"></th><th scope="col">会话</th><th scope="col">分支</th></tr></thead>
+<tbody>
+<tr><th scope="row">占位</th><td>首行 50 字符（<code translate="no">_title_from_text</code>）</td><td>短 id：分支是同一位置的另一种可能</td></tr>
+<tr><th scope="row">Prompt</th><td><code translate="no">_TITLE_SYSTEM_PROMPT</code>，3 到 7 个词</td><td><code translate="no">build_branch_name_prompt</code>，2 到 6 个词；语义不同，各自维护</td></tr>
+<tr><th scope="row">阈值</th><td><code translate="no">_RETITLE_AT_TURNS</code></td><td>同一常量</td></tr>
+<tr><th scope="row">轮数</th><td>整个会话的 assistant 消息数</td><td>分支自己的 <code translate="no">turns</code>：不受其他分支影响，不用回溯分叉点</td></tr>
+<tr><th scope="row">锁</th><td><code translate="no">_user_titled</code>，<code translate="no">meta.json</code> 顶层</td><td><code translate="no">name_locked</code>，在分支条目内</td></tr>
+<tr><th scope="row">广播</th><td><code translate="no">session_updated</code></td><td>刷新 <code translate="no">branches_list</code></td></tr>
+<tr><th scope="row">后台线程</th><td><code translate="no">titles.py</code> 的 <code translate="no">_bg()</code></td><td>自己的线程；写回位置不同，不共享</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>代码位置</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">内容</th><th scope="col">源码</th></tr></thead>
+<tbody>
+<tr><th scope="row">条目、搬移、计数器</th><td><code translate="no">openprogram/state/store/session/session_store/branches.py</code></td></tr>
+<tr><th scope="row">阈值、prompt、后台命名</th><td><code translate="no">openprogram/runtime/conversation/turn_runtime/titles.py</code></td></tr>
+<tr><th scope="row">轮次结束触发</th><td><code translate="no">openprogram/runtime/conversation/turn_runtime/finalize.py</code></td></tr>
+<tr><th scope="row">重命名和按需命名动作</th><td><code translate="no">openprogram/interfaces/server/ws_actions/branch.py</code>。两者默认用会话的 <code translate="no">head_id</code>。按需命名是同步的，用聊天 runtime。</td></tr>
+<tr><th scope="row">输入框命令</th><td><code translate="no">apps/web/components/chat/composer/slash/slash-commands.ts</code></td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="branch-boundaries">边界</h2>
+
 <ul>
-<li>本设计不增加第二套分支实体、命名存储或主干特殊名称。</li>
-<li>分支命名不改变会话标题合同或 DAG 父子关系。</li>
-<li>具体提示词和未来阈值变化属于实现细节；任何变化都必须同步更新规范 Markdown 与本可视化。</li>
-<li>本页不宣称实现跨函数命名协调、跨会话命名策略或旧分支元数据历史迁移。</li>
+<li>没有第二种分支实体或命名存储。</li>
+<li>分支命名不改变会话标题，也不改变 DAG 父边。</li>
 </ul>
 
-<h2 id="branch-verification">6. 验证说明</h2>
-<p>上述实现证据说明源码路径合同，不代表每种浏览器状态或竞态均已穷尽测试。验证应覆盖手动重命名与并发自动结果、未命名主干回退、分叉分支的渐进命名，以及后台命名后的 WebSocket 更新。</p>
-</div>
+<h2 id="branch-verification">实现状态</h2>
+
+<p>已实现。改动时值得测：手动重命名与并发自动结果、未命名主干、分叉推进、后台命名后的 WebSocket 更新。</p>

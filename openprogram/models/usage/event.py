@@ -32,7 +32,8 @@ CALL_KIND_SUBAGENT = "subagent"
 CALL_KIND_TOOL = "tool"            # LLM call from inside a tool (e.g. moa)
 CALL_KIND_TITLE = "title"
 CALL_KIND_PREDICTION = "prediction"  # suggested next message in the composer
-CALL_KIND_UNKNOWN = "unknown"
+CALL_KIND_PERMISSION = "permission"  # safety check on a tool call
+CALL_KIND_DIRECT = "direct"        # code called a model with no turn or Runtime around it
 
 
 class UsageEvent(BaseModel):
@@ -48,7 +49,7 @@ class UsageEvent(BaseModel):
     session_id: Optional[str] = None
     parent_session_id: Optional[str] = None
     agent_id: Optional[str] = None
-    call_kind: str = CALL_KIND_UNKNOWN
+    call_kind: str = CALL_KIND_DIRECT
     call_label: Optional[str] = None
     origin_pid: int = Field(default_factory=os.getpid)
     job_id: Optional[str] = None
@@ -81,6 +82,10 @@ class UsageEvent(BaseModel):
     cost_total: float = 0.0
     cost_source: str = "unknown"  # model_catalog | configured | provider_reported | unknown
 
+    # latency: time to the reply's first content and first text (ms)
+    first_token_ms: Optional[int] = None
+    first_text_ms: Optional[int] = None
+
     # provenance
     token_source: str = "provider_usage"  # provider_usage | anthropic_count_api | estimate
     schema_version: int = SCHEMA_VERSION
@@ -96,5 +101,5 @@ __all__ = [
     "UsageEvent", "SCHEMA_VERSION",
     "CALL_KIND_CHAT", "CALL_KIND_EXEC", "CALL_KIND_COMPACTION",
     "CALL_KIND_SUMMARIZE", "CALL_KIND_MEMORY", "CALL_KIND_SUBAGENT",
-    "CALL_KIND_TOOL", "CALL_KIND_TITLE", "CALL_KIND_UNKNOWN",
+    "CALL_KIND_TOOL", "CALL_KIND_TITLE", "CALL_KIND_PERMISSION", "CALL_KIND_DIRECT",
 ]

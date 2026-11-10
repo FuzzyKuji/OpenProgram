@@ -88,6 +88,16 @@ def outbound_files(tool_calls: list[dict] | None, session_id: str | None) -> lis
     return entries
 
 
+def attached_paths(tool_calls: list[dict] | None, session_id: str | None) -> list[str]:
+    """The files this turn may upload to a chat platform.
+
+    A marker in the reply is only text the model can also write, so the
+    channel delivery step uploads a marker's file only when its path is
+    in this list.
+    """
+    return [entry["path"] for entry in outbound_files(tool_calls, session_id)]
+
+
 def markers_for(entries: list[dict]) -> str:
     """The entries as attachment markers, one per line ("" when empty)."""
     from openprogram.state.attachments import format_marker
@@ -185,5 +195,5 @@ def _check(path: str, session_id: str | None) -> dict | str:
 # the file on every surface, so a per-file caption would only duplicate
 # it; add one when a platform needs the text welded to the upload.
 
-__all__ = ["send_file", "_send_file_impl", "outbound_files", "markers_for",
+__all__ = ["send_file", "_send_file_impl", "outbound_files", "attached_paths", "markers_for",
            "with_attachments", "MAX_SEND_BYTES"]

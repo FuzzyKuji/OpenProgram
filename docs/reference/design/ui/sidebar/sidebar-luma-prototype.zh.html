@@ -3,6 +3,7 @@
 <head>
 <meta charset="utf-8">
 <title>Sidebar Luma draft</title>
+<meta name="description" content="Luma 侧栏的交互原型。">
 <style>
   /* ===== 真实 token：apps/web/app/styles/themes/beige-light.css / beige-dark.css ===== */
   :root, [data-theme="light"] {
@@ -173,13 +174,12 @@
   </div>
 </div>
 
-<p class="note">
-  三版都是官方 <code>Sidebar</code> 组件自带的 <code>variant</code>，行、分组标题、二级列表、页脚全部按官方度量在 14px 根字号下换算
-  （行高 31.5 / 二级 28 / 圆角 10.5 / 图标 16）。
-  <b>B</b> 把左右栏做成和输入框同一种"无边框白色浮起卡片"（<code>--bg-input</code> + <code>shadow-raised</code>，7px 留白，14px 圆角）；
+<p class="note">三版都是官方 <code>Sidebar</code> 组件自带的 <code>variant</code>，行、分组标题、二级列表、页脚全部按官方度量在 14px 根字号下换算
+  （行高 31.5 / 二级 28 / 圆角 10.5 / 图标 16）。</p>
+<p class="note"><b>B</b> 把左右栏做成和输入框同一种"无边框白色浮起卡片"（<code>--bg-input</code> + <code>shadow-raised</code>，7px 留白，14px 圆角）；
   <b>A</b> 保持现在的"深一层米色 + 发丝线"，只换行的度量；
   <b>C</b> 反过来让中间聊天区浮起、侧边栏沉底。切换主题和描边看效果。
-</p>
+  目前使用的组件风格是 Nova，当前侧栏几何见<a href="sidebars-resizing.zh.html">侧栏宽度与折叠状态</a>；本页比较 Luma 的几种变体。</p>
 
 <div class="stage">
   <p class="cap" id="cap"></p>

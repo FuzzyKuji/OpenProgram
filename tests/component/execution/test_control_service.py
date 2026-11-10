@@ -76,7 +76,6 @@ def _execution(tmp_path, *, active: bool):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker_1",
-        ttl_seconds=30,
         attempt_id="attempt_1",
     )
     active_attempt, running = attempts.activate(
@@ -449,7 +448,6 @@ def test_cancel_delivery_dedupe_is_cleared_after_terminal_and_recovery(
         second.execution_id,
         expected_version=second.status_version,
         owner_id="worker_2",
-        ttl_seconds=30,
         attempt_id="attempt_2",
     )
     second_attempt, running = attempts.activate(
@@ -822,13 +820,12 @@ def test_owner_loss_fences_the_recovered_attempt_owner(tmp_path) -> None:
 
     recovered = service.recover_owner_loss(execution.execution_id)
     assert recovered.attempt is not None
-    assert recovered.attempt.lease_expires_at == 0
+    assert recovered.attempt.fenced
 
     with pytest.raises(AttemptConflict) as heartbeat:
-        attempts.heartbeat(
+        attempts.ensure_held(
             attempt.attempt_id,
             generation=attempt.generation,
-            ttl_seconds=30,
         )
     assert heartbeat.value.code == "stale_owner"
 
@@ -1066,7 +1063,6 @@ def test_replacement_binds_while_recovery_is_before_registry_unbind(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker_1",
-        ttl_seconds=30,
         attempt_id="attempt_1",
     )
     registry = DriverRegistry()
@@ -1103,7 +1099,6 @@ def test_replacement_binds_while_recovery_is_before_registry_unbind(
             execution.execution_id,
             expected_version=recovered.status_version,
             owner_id="worker_2",
-            ttl_seconds=30,
             attempt_id="attempt_2",
         )
         _bind(registry, reserved, replacement, RecordingDriver(executions))
@@ -1126,10 +1121,9 @@ def test_replacement_binds_while_recovery_is_before_registry_unbind(
         generation=replacement.generation,
     ).attempt_id == replacement.attempt_id
     with pytest.raises(AttemptConflict) as stale_owner:
-        attempts.heartbeat(
+        attempts.ensure_held(
             attempt.attempt_id,
             generation=attempt.generation,
-            ttl_seconds=30,
         )
     assert stale_owner.value.code == "stale_owner"
 
@@ -1150,7 +1144,6 @@ def test_owner_loss_recovers_leased_idle_execution(tmp_path, idle_status) -> Non
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker_1",
-        ttl_seconds=30,
         attempt_id="attempt_1",
     )
     service = RuntimeControlService(executions, attempts, DriverRegistry())
@@ -1162,12 +1155,11 @@ def test_owner_loss_recovers_leased_idle_execution(tmp_path, idle_status) -> Non
     assert recovered.execution.owner_lease == {}
     assert recovered.attempt is not None
     assert recovered.attempt.status.value == "ended"
-    assert recovered.attempt.lease_expires_at == 0
+    assert recovered.attempt.fenced
     with pytest.raises(AttemptConflict) as heartbeat:
-        attempts.heartbeat(
+        attempts.ensure_held(
             leased.attempt_id,
             generation=leased.generation,
-            ttl_seconds=30,
         )
     assert heartbeat.value.code == "stale_owner"
     with pytest.raises(AttemptConflict) as finish:
@@ -1184,7 +1176,6 @@ def test_owner_loss_recovers_leased_idle_execution(tmp_path, idle_status) -> Non
         execution.execution_id,
         expected_version=recovered.execution.status_version,
         owner_id="worker_2",
-        ttl_seconds=30,
         attempt_id="attempt_2",
     )
     assert replacement.generation == leased.generation + 1
@@ -1207,7 +1198,6 @@ def test_startup_recovery_recovers_leased_idle_execution(tmp_path, idle_status) 
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker_1",
-        ttl_seconds=30,
         attempt_id="attempt_1",
     )
     service = RuntimeControlService(executions, attempts, DriverRegistry())

@@ -50,7 +50,7 @@ def test_reminder_task_signs_its_conversation_and_wake(scheduler_env, in_convers
     from openprogram.programs.tools.jobs.cron import cron as cron_tool
 
     task = _reminder(wake=True)
-    spec, _policy, error = cron_tool._verify_execution_spec(task["execution"])
+    spec, error = cron_tool._verify_execution_spec(task["execution"])
     assert error is None
     assert task["reminder"] == "Stand up and stretch" and task["wake"] is True
     assert (spec["kind"], spec["session_id"], spec["wake"]) == ("reminder", "sess-1", True)
@@ -119,7 +119,7 @@ def _event(**payload):
     return SimpleNamespace(id="ev1", payload={**base, **payload})
 
 
-def _patch_delivery(monkeypatch, session):
+def _patch_delivery(monkeypatch, session, result=None):
     import openprogram.runtime.events as events
     from openprogram.interfaces.channels import outbound
     from openprogram.runtime.scheduler import reminders
@@ -143,7 +143,7 @@ def _patch_delivery(monkeypatch, session):
 
     def start(session_id, agent_id, text, **kw):
         turns.append((session_id, agent_id, text))
-        kw["on_done"](SimpleNamespace(final_text="Done stretching."))
+        kw["on_done"](result or SimpleNamespace(final_text="Done stretching."))
         done.set()
         return "exec-1"
     import openprogram.runtime.conversation.owner_turn as owner_turn
@@ -177,6 +177,27 @@ def test_waking_reminder_starts_a_turn_and_sends_its_answer(monkeypatch):
     assert sent == [("wechat", "acc", "peer", "Done stretching.")]
 
 
+def test_a_paused_reminder_turn_sends_nothing_and_its_resumed_attempt_carries_the_answer(monkeypatch):
+    from openprogram.runtime.conversation import bound_reply
+    from openprogram.runtime.context import session_db
+    from openprogram.runtime.scheduler import reminders
+
+    session = {"agent_id": "writer", "channel": "wechat", "account_id": "acc", "peer_id": "peer"}
+    frames, sent, turns, done = _patch_delivery(monkeypatch, session, result=SimpleNamespace(
+        final_text="", _execution_safe_point_handoff=True))
+    reminders.deliver(_event(wake=True))
+    assert done.wait(30)
+    assert sent == [], "the pause has no answer to send yet"
+    # After the approval the same turn resumes; its text goes out through the
+    # chat's bound reply, because a reminder's source is not the channel.
+    monkeypatch.setattr(session_db, "default_db", lambda: SimpleNamespace(get_session=lambda _id: session))
+    target = bound_reply.ReplyTarget("wechat", "acc", "peer")
+    monkeypatch.setattr(bound_reply, "reply_target", lambda *_a, **_k: target)
+    request = SimpleNamespace(session_id="sess-1", source="web", background=False, user_msg_id="m1")
+    resumed = bound_reply.attach(request, "m1_reply", resumed=True)
+    assert resumed is not None and resumed.target == target and resumed.resumed
+
+
 def test_reminder_without_a_live_conversation_only_notifies(monkeypatch):
     from openprogram.runtime.scheduler import reminders
 
@@ -184,6 +205,17 @@ def test_reminder_without_a_live_conversation_only_notifies(monkeypatch):
     reminders.deliver(_event(wake=True))
     assert frames[0]["data"]["wake"] is False and frames[0]["data"]["session_id"] == ""
     assert sent == [] and turns == []
+
+
+def test_waking_reminder_in_an_archived_conversation_only_notifies(monkeypatch):
+    from openprogram.runtime.scheduler import reminders
+
+    session = {"agent_id": "writer", "channel": "wechat", "account_id": "acc", "peer_id": "peer", "archived": True}
+    frames, sent, turns, done = _patch_delivery(monkeypatch, session)
+    reminders.deliver(_event(wake=True))
+    assert done.wait(30)
+    assert frames[0]["data"]["wake"] is False
+    assert turns == [] and sent == [("wechat", "acc", "peer", "⏰ Stand up")]
 
 
 def test_remind_tool_resolves_times_and_creates_reminders(scheduler_env, in_conversation, monkeypatch):
@@ -277,7 +309,7 @@ def test_worker_posts_the_system_notification_when_no_desktop_app_did(monkeypatc
 
 
 @pytest.mark.parametrize("in_bundle", [True, False])
-def test_macos_notification_comes_from_the_app_bundle_when_there_is_one(monkeypatch, in_bundle):
+def test_macos_notification_comes_from_the_app_bundle_when_there_is_one(monkeypatch, in_bundle, _no_system_notifications):
     from openprogram.runtime.scheduler import reminders
 
     ran = []
@@ -285,5 +317,31 @@ def test_macos_notification_comes_from_the_app_bundle_when_there_is_one(monkeypa
     monkeypatch.setattr(reminders, "_bundle_notify", lambda *_a: in_bundle)
     monkeypatch.setattr(reminders.subprocess, "run",
                         lambda cmd, **_kw: ran.append(cmd[0]) or SimpleNamespace(returncode=0))
-    assert reminders.system_notify("OpenProgram ⏰", "Stand up") is True
+    assert _no_system_notifications.system_notify("OpenProgram ⏰", "Stand up") is True
     assert ran == ([] if in_bundle else ["osascript"])
+
+
+def test_a_waking_reminders_turn_is_marked_as_nobody_typing_it(monkeypatch):
+    from openprogram.runtime.conversation import owner_turn
+    from openprogram.runtime.scheduler import reminders
+
+    seen = {}
+    monkeypatch.setattr(owner_turn, "start_owner_turn_when_free", lambda *_a, **kw: seen.update(kw) or "e1")
+    reminders._wake({"session_id": "s", "task_id": "t", "message": "Stand up", "agent_id": "main",
+                     "fired_at": 1.0}, {"agent_id": "main"})
+    assert seen["automation"] == "reminder"
+
+
+@pytest.mark.parametrize("platform, tool", [("darwin", "osascript"), ("linux", "notify-send")])
+def test_a_text_starting_with_a_dash_is_not_read_as_an_option(monkeypatch, platform, tool, _no_system_notifications):
+    from openprogram.runtime.scheduler import reminders
+
+    ran = []
+    monkeypatch.setattr(reminders.sys, "platform", platform)
+    monkeypatch.setattr(reminders, "_bundle_notify", lambda *_a: False)
+    monkeypatch.setattr(reminders.shutil, "which", lambda name: f"/usr/bin/{name}")
+    monkeypatch.setattr(reminders.subprocess, "run",
+                        lambda cmd, **_kw: ran.append(cmd) or SimpleNamespace(returncode=0))
+    assert _no_system_notifications.system_notify("-Scout", "-3% revenue") is True
+    assert ran[0][0] == tool
+    assert ran[0][-3:] == ["--", "-Scout", "-3% revenue"]

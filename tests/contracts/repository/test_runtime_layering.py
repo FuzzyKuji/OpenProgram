@@ -33,7 +33,79 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
-from openprogram.runtime.execution._schema import _RUNTIME_ENTRYPOINT_PREFIXES
+_RUNTIME_ENTRYPOINT_PREFIXES = (
+    # The runtime packages, before they were grouped under openprogram.runtime.
+    *(
+        (f"openprogram.{old}", f"openprogram.runtime.{new}")
+        for old, new in (
+            ("agent", "agent"),
+            ("agentic_programming", "agentic_programming"),
+            ("execution", "execution"),
+            ("context", "context"),
+            ("commands", "commands"),
+            ("events", "events"),
+            ("proactive", "proactive"),
+            ("surfaces.scheduler", "scheduler"),
+        )
+    ),
+    # The modules of the former openprogram.runtime.agent package, which was
+    # split by concept. Its questions and process_runner modules kept their
+    # paths; the call core then took the package name.
+    *(
+        (f"openprogram.runtime.agent.{old}", new)
+        for old, new in (
+            ("agent_loop", "openprogram.runtime.agent.loop"),
+            ("agent", "openprogram.runtime.agent.loop.driver"),
+            ("session", "openprogram.runtime.agent.loop.session"),
+            ("types", "openprogram.runtime.agent.loop.types"),
+            ("messages", "openprogram.runtime.agent.loop.messages"),
+            ("retry", "openprogram.runtime.agent.loop.retry"),
+            ("failure_policy", "openprogram.runtime.agent.loop.failure_policy"),
+            ("provider_lifecycle", "openprogram.runtime.agent.loop.provider_lifecycle"),
+            ("turn_runtime", "openprogram.runtime.conversation.turn_runtime"),
+            ("dispatcher", "openprogram.runtime.conversation.turn_runtime"),
+            ("chat", "openprogram.runtime.conversation.chat"),
+            ("session_config", "openprogram.runtime.conversation.session_config"),
+            ("session_model", "openprogram.runtime.conversation.session_model"),
+            ("inbox", "openprogram.runtime.conversation.inbox"),
+            ("open_work", "openprogram.runtime.conversation.open_work"),
+            ("owner_turn", "openprogram.runtime.conversation.owner_turn"),
+            ("sub_agent_run", "openprogram.runtime.conversation.sub_agent_run"),
+            ("_rewind", "openprogram.runtime.conversation.rewind"),
+            ("internals._event_parsing", "openprogram.runtime.conversation.event_parsing"),
+            ("internals._merge", "openprogram.runtime.conversation.merge"),
+            ("internals._model_tools", "openprogram.runtime.conversation.model_tools"),
+            ("internals._revert", "openprogram.runtime.conversation.revert"),
+            ("internals._turn_lifecycle", "openprogram.runtime.conversation.turn_lifecycle"),
+            ("internals._workdir", "openprogram.runtime.conversation.workdir"),
+            ("history_ownership", "openprogram.runtime.conversation.history_ownership"),
+            ("workspace_alignment", "openprogram.runtime.conversation.workspace_alignment"),
+            ("surface_context", "openprogram.runtime.conversation.surface_context"),
+            ("turn_request_context", "openprogram.runtime.conversation.turn_request_context"),
+            ("plan_mode", "openprogram.runtime.conversation.plan_mode"),
+            ("always_on", "openprogram.runtime.conversation.always_on"),
+            ("production_driver", "openprogram.runtime.conversation.production_driver"),
+            ("continuation", "openprogram.runtime.conversation.checkpoint"),
+            ("run_control", "openprogram.runtime.conversation.run_control"),
+            ("management.gating", "openprogram.extensions.gating"),
+            ("management", "openprogram.runtime.agent_registry"),
+            ("job", "openprogram.runtime.jobs"),
+            ("resource_governance", "openprogram.runtime.jobs.resource_governance"),
+            ("permissions", "openprogram.runtime.permissions"),
+            ("authority", "openprogram.runtime.permissions.authority"),
+            ("attended", "openprogram.runtime.permissions.attended"),
+            ("session_db", "openprogram.runtime.context.session_db"),
+            ("exec", "openprogram.host.processes.command"),
+        )
+    ),
+    # The call core, before it took the name openprogram.runtime.agent. Three
+    # of its modules were renamed so no current module reuses the name of a
+    # submodule listed above.
+    ("openprogram.runtime.agentic_programming.agent", "openprogram.runtime.agent.agent_function"),
+    ("openprogram.runtime.agentic_programming.continuation", "openprogram.runtime.agent.durable_steps"),
+    ("openprogram.runtime.agentic_programming.session", "openprogram.runtime.agent.follow_up_session"),
+    ("openprogram.runtime.agentic_programming", "openprogram.runtime.agent"),
+)
 
 ROOT = Path(__file__).resolve().parents[3]
 PACKAGE = ROOT / "openprogram"
@@ -138,6 +210,17 @@ def _scan() -> tuple[dict[tuple[str, str], str], list[str]]:
 def test_no_module_imports_a_removed_runtime_package():
     _, removed = _scan()
     assert removed == []
+
+
+def test_runtime_and_state_do_not_import_the_server():
+    offenders = sorted(
+        f"{_module_name(path)} imports {name}"
+        for top in ("runtime", "state")
+        for path in (PACKAGE / top).rglob("*.py")
+        for name in _imported_modules(path)
+        if _within(name, ("openprogram.interfaces.server",))
+    )
+    assert offenders == []
 
 
 def test_runtime_packages_import_in_one_direction():

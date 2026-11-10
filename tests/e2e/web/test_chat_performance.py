@@ -23,9 +23,9 @@ window.longTasks=[];new PerformanceObserver(list=>window.longTasks.push(...list.
 const rows=Array.from({length:300},(_,i)=>({id:`m${i}`,role:'assistant',status:'completed',content:`## Message ${i}\n\n`+('A paragraph with **bold** and `code`.\n\n'.repeat(30))}));
 runtimeState.currentSessionId='perf';runtimeState.conversations.perf={id:'perf'};
 useSessionStore.setState({currentSessionId:'perf',activeChatKey:'perf'});
-useSessionStore.getState().setMessages('perf',rows);
+useSessionStore.getState().applyRead('perf',rows);
 window.start=performance.now();const root=createRoot(document.getElementById('mount'));root.render(<MessageList/>);
-window.drop=()=>{root.unmount();useSessionStore.getState().setMessages('perf',[]);};
+window.drop=()=>{root.unmount();useSessionStore.getState().applyRead('perf',[]);};
 window.scrollProbe=()=>new Promise(resolve=>{const intervals=[];window.scrollStart=performance.now();let last=performance.now(),i=0;const a=document.getElementById('chatArea');function tick(now){intervals.push(now-last);last=now;a.scrollTop=(i%40)/39*(a.scrollHeight-a.clientHeight);if(++i<120)requestAnimationFrame(tick);else {window.scrollEnd=performance.now();resolve(intervals.slice(1));}}requestAnimationFrame(tick);});
 window.churn=()=>{for(let i=0;i<256;i++)renderMd(`# Large ${i}\n`+'long content '.repeat(10000));};
 '''

@@ -62,12 +62,71 @@ def kill_process_tree(pid: int) -> bool:
         return False
 
 
+def _windows_command_line(pid: int) -> str | None:
+    """Read a process's command line through the kernel, or None.
+
+    Asks NtQueryInformationProcess for ProcessCommandLineInformation (class
+    60, Windows 8.1 and later) on a limited-query handle. A PowerShell CIM
+    query needs a new PowerShell each time, which on a freshly installed or
+    busy machine takes longer than its timeout and answers nothing; that
+    made ``worker stop`` report a running worker as not running. None means
+    the kernel could not answer (no such process, no access, older Windows)
+    and the caller falls back to CIM.
+    """
+    try:
+        import ctypes
+        from ctypes import wintypes
+
+        kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+        ntdll = ctypes.WinDLL("ntdll")
+    except (AttributeError, OSError):
+        return None
+
+    class _UnicodeString(ctypes.Structure):
+        _fields_ = [
+            ("Length", wintypes.USHORT),
+            ("MaximumLength", wintypes.USHORT),
+            ("Buffer", ctypes.c_void_p),
+        ]
+
+    kernel.OpenProcess.argtypes = [wintypes.DWORD, wintypes.BOOL, wintypes.DWORD]
+    kernel.OpenProcess.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel.CloseHandle.restype = wintypes.BOOL
+    query = ntdll.NtQueryInformationProcess
+    query.argtypes = [
+        wintypes.HANDLE, ctypes.c_ulong, ctypes.c_void_p, ctypes.c_ulong,
+        ctypes.POINTER(ctypes.c_ulong),
+    ]
+    query.restype = ctypes.c_long
+    handle = kernel.OpenProcess(0x1000, False, pid)  # QUERY_LIMITED_INFORMATION
+    if not handle:
+        return None
+    try:
+        size = ctypes.c_ulong(0)
+        query(handle, 60, None, 0, ctypes.byref(size))
+        if not size.value:
+            return None
+        buffer = ctypes.create_string_buffer(size.value)
+        if query(handle, 60, buffer, size.value, ctypes.byref(size)) < 0:
+            return None
+        text = _UnicodeString.from_buffer(buffer)
+        if not text.Buffer or not text.Length:
+            return ""
+        return ctypes.wstring_at(text.Buffer, text.Length // 2)
+    finally:
+        kernel.CloseHandle(handle)
+
+
 def process_command_line(pid: int) -> str:
     """Best-effort command line query for one process on this host."""
 
     if pid <= 0:
         return ""
     if _sys.platform == "win32":
+        native = _windows_command_line(int(pid))
+        if native is not None:
+            return native.strip()
         output = terminal._windows_powershell(
             "$p=Get-CimInstance Win32_Process -Filter \"ProcessId = "
             f"{int(pid)}\";if($null -ne $p){{[Console]::Out.Write($p.CommandLine)}}"

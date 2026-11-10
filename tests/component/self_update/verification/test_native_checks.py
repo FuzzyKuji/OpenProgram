@@ -2,6 +2,7 @@
 from copy import deepcopy
 import json
 from pathlib import Path
+import shlex
 import sys
 import time
 
@@ -186,3 +187,44 @@ def test_native_command_limits(tmp_path, case):
             repair_candidate._test(command, candidate, scratch, 5, check, verification=True, output_limit=100)
     assert time.monotonic() - started < 5
     assert not (scratch / "test.log").exists()
+
+
+def test_plans_are_admitted_on_a_sealed_version_with_no_installed_app(monkeypatch):
+    from types import SimpleNamespace
+
+    from openprogram.operations.self_update.verification import ui_checks
+
+    def no_app(*_args, **_kwargs):
+        raise AssertionError("a sealed version has no App bundle to inspect")
+
+    monkeypatch.setattr(native_checks, "runtime_identity", no_app)
+    monkeypatch.setattr("openprogram.operations.self_update.control.supervisor._sandbox_executable", no_app)
+    monkeypatch.setattr("openprogram.operations.self_update.delivery.package_protocol.validate_ui_package", no_app)
+    request = SimpleNamespace(controller_version="v1")
+
+    native_checks.admit_plan({"checks": [{"entry": "cli:version"}]}, request)
+    ui_checks.admit_plan({"checks": [{"entry": "ui:main"}]}, request)
+
+
+def test_a_sealed_runtime_is_readable_by_a_required_test(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.versions import layout as paths
+
+    root = tmp_path / "runtime"
+    venv = root / "versions" / "v1" / "venv"
+    runtime = paths.CurrentRuntime(paths.Layout(root), "v1")
+    monkeypatch.setattr(paths, "current_runtime", lambda: runtime)
+
+    reads = repair_candidate._sealed_runtime_reads(str(venv / "bin" / "python"))
+
+    assert root / "versions" / "v1" in reads and venv in reads
+
+
+def test_no_sandbox_tool_outside_macos_does_not_stop_a_required_test(tmp_path, monkeypatch):
+    monkeypatch.setattr(repair_candidate.platform, "system", lambda: "Linux")
+    monkeypatch.setattr("openprogram.operations.self_update.trial.sandbox.shutil.which", lambda _name: None)
+    (tmp_path / "candidate").mkdir()
+    (tmp_path / "scratch").mkdir()
+
+    code, output = repair_candidate._test(f"{shlex.quote(sys.executable)} -c \"print('ran')\"", tmp_path / "candidate", tmp_path / "scratch", 30, lambda: 30)
+
+    assert code == 0 and "ran" in output and (tmp_path / "scratch" / "test.log").read_text() == output

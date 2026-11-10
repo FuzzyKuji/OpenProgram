@@ -1,6 +1,6 @@
 """Provider-side web search: intent resolution, loop pass-through, projection.
 
-Contract: docs/reference/design/providers/web-search.md.
+Contract: docs/reference/design/providers/web-search.html.
 """
 from __future__ import annotations
 

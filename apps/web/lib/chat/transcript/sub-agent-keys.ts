@@ -9,6 +9,11 @@ export function subAgentChatKey(sessionId: string, agentKey: string): string {
   return `${sessionId}${SUB_AGENT_KEY}${agentKey}`;
 }
 
+/** Whether a store chat key names a sub-agent transcript, of any session. */
+export function isSubAgentChatKey(key: string): boolean {
+  return key.indexOf(SUB_AGENT_KEY) > 0;
+}
+
 /** Whether a store chat key holds one of this session's sub-agent transcripts. */
 export function ownsSubAgentChatKey(sessionId: string, key: string): boolean {
   return key.startsWith(`${sessionId}${SUB_AGENT_KEY}`);

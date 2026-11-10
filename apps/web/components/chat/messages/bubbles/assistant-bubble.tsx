@@ -8,34 +8,39 @@
  * While the turn is still streaming with
  * nothing rendered yet, a typing indicator stands in.
  */
+import { RewindErrorActions, useRewindOffered } from "../../rewind/rewind-error-actions";
 import { memo, useLayoutEffect, useMemo, useRef } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronDown, CircleAlert, Square } from "lucide-react";
 
 import {
+  selectRow,
+  selectViewRows,
   useSessionStore,
   type AssistantBlock,
   type ChatMsg,
 } from "@/lib/session-store";
 import { useTranslation } from "@/lib/i18n";
-import { AgentAvatarById } from "@/components/agents/agent-avatar";
 
 import { AttachCard } from "../cards/attach-card";
+import { RetryStep, RetryStrip, RetryTag } from "../execution/retry-status";
 import {
   ExecutionStrip,
   FunctionStep,
   ProviderSearchStep,
   RestartStep,
-  SPAWNING_TOOL_NAMES,
   SubAgentStep,
+  SubAgentStrip,
   StepRow,
   ThinkingStep,
   toolOutcome,
 } from "../execution/execution-strip";
+import { StepExpansionScope } from "../execution/step-expansion";
 import type { TNode } from "../execution/tree-types";
 import { MessageActions, MessageTimestamp } from "./message-actions";
 import { typesetMath } from "@/lib/runtime-bridge/dom/markdown-render";
 import { renderMermaidLazily } from "@/lib/chat/markdown/mermaid-lazy";
+import { mountVisualsIn } from "@/lib/chat/markdown/visual-frames";
 import { renderMarkdown, useMarkdownReady } from "./markdown";
 import { splitMarkdownBlocks } from "@/lib/chat/markdown/streaming-blocks";
 import { TurnFilesChips } from "../turn-files/turn-files-chips";
@@ -45,13 +50,17 @@ import { AssistantFileCards, sentFilePath } from "../attachments/assistant-file-
 import { parseAttachments } from "../attachments/user-attachments";
 import { ThinkingStatus } from "../execution/thinking-status";
 import { UserBubble } from "./user-bubble";
+import { PendingSteers } from "./pending-steers";
 import { CitationSources } from "./web-sources";
 import { isProviderSearch } from "@/lib/chat/transcript/web-sources";
-import { fallbackBlocks as flatBlocks, joinedReply, restartPredecessors } from "@/lib/chat/transcript/restart-continuation";
+import { blockIds, ownedChildren, spawnFacts } from "@/lib/chat/transcript/owned-children";
+import { isLive, isStopped } from "@/lib/chat/transcript/row-status";
+import { continuedRows, fallbackBlocks as flatBlocks, joinedReply } from "@/lib/chat/transcript/restart-continuation";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
-function SteeringInput({block, sessionId}: {block: AssistantBlock; sessionId?: string}) {
-  const user = useSessionStore(s => block.message_id ? s.messagesById[block.message_id] : undefined);
-  const message: ChatMsg = user ?? {id:block.message_id!,role:"user",content:block.text ?? "",steering:true,status:"done",timestamp:block.timestamp};
+function SteeringInput({block, sessionId, viewKey}: {block: AssistantBlock; sessionId?: string; viewKey?: string}) {
+  const user = useSessionStore(selectRow(viewKey, block.message_id));
+  const message: ChatMsg = user ?? {id:block.message_id!,role:"user",rowKind:"user",content:block.text ?? "",steering:true,status:"done",timestamp:block.timestamp};
   return <div className="steering-input"><UserBubble msg={message} sessionIdOverride={sessionId}/></div>;
 }
 
@@ -64,14 +73,14 @@ function LegacyRuntimeTrace({ children: calls, sessionId }: { children: ChatMsg[
     result: call.content || undefined, is_error: call.status === "error",
     outcome: call.status === "cancelled" ? "cancelled" : undefined,
   }));
-  const running = calls.some((call) => call.status === "running" || call.status === "streaming");
+  const running = calls.some((call) => isLive(call.status));
   return (
     <ExecutionStrip
       streaming={running}
       label={summarizeToolGroup(blocks, {
         text,
         active: running,
-        runningIds: new Set(calls.filter((call) => call.status === "running" || call.status === "streaming").map((call) => call.id)),
+        runningIds: new Set(calls.filter((call) => isLive(call.status)).map((call) => call.id)),
       })}
     >
       {calls.map((call, index) => (
@@ -79,7 +88,7 @@ function LegacyRuntimeTrace({ children: calls, sessionId }: { children: ChatMsg[
           sessionId={sessionId}
           block={blocks[index]}
           tree={call.contextTree as TNode | undefined}
-          running={call.status === "running" || call.status === "streaming"}
+          running={isLive(call.status)}
         />
       ))}
     </ExecutionStrip>
@@ -89,9 +98,10 @@ function LegacyRuntimeTrace({ children: calls, sessionId }: { children: ChatMsg[
 /** Categorized, actionable headline for a failed turn, by error reason
  *  (see docs/design/providers/reliability/error-taxonomy-propagation.md). Returns null
  *  for reasons with no copy better than the raw message. */
-function errorHeadline(
+export function errorHeadline(
   msg: ChatMsg,
   text: (en: string, zh: string) => string,
+  rewindOffered: boolean,
 ): string | null {
   const after = msg.errorRetryAfterS ? Math.ceil(msg.errorRetryAfterS) : 0;
   switch (msg.errorReason) {
@@ -110,15 +120,25 @@ function errorHeadline(
         "无权限 —— 检查该模型的套餐 / 访问权限。",
       );
     case "context":
-      return text(
-        "This conversation is too long — compact it or start a new chat.",
-        "对话太长 —— 压缩或新开对话。",
-      );
+      return rewindOffered
+        ? text(
+          "This conversation is too long — rewind to an earlier message, compact it or start a new chat.",
+          "对话太长 —— 回退到更早的消息、压缩或新开对话。",
+        )
+        : text(
+          "This conversation is too long — compact it or start a new chat.",
+          "对话太长 —— 压缩或新开对话。",
+        );
     case "policy":
-      return text(
-        "The provider blocked this request (content policy).",
-        "提供商按内容政策拦截了此请求。",
-      );
+      return rewindOffered
+        ? text(
+          "The provider blocked this request (content policy). Rewind to change the message.",
+          "提供商按内容政策拦截了此请求，可以回退后修改这条消息。",
+        )
+        : text(
+          "The provider blocked this request (content policy).",
+          "提供商按内容政策拦截了此请求。",
+        );
     case "provider":
     case "transport":
       return text(
@@ -139,6 +159,7 @@ const SettledMarkdown = memo(function SettledMarkdown({ text }: { text: string }
     if (ref.current) {
       typesetMath(ref.current);
       renderMermaidLazily(ref.current);
+      mountVisualsIn(ref.current);
     }
   }, [html]);
   return (
@@ -185,14 +206,28 @@ function StreamingMarkdown({ text }: { text: string }) {
       blocks.push({ src, nodes });
     });
     renderMermaidLazily(host);
+    mountVisualsIn(host);
   }, [text]);
   return <div ref={ref} className="chat-text message-content" />;
 }
 
 /** A settled reply renders its whole text at once; a streaming one keeps
  *  finished blocks and redraws only the last. */
-function MarkdownText({ text, streaming = false }: { text: string; streaming?: boolean }) {
+export function MarkdownText({ text, streaming = false }: { text: string; streaming?: boolean }) {
   return streaming ? <StreamingMarkdown text={text} /> : <SettledMarkdown text={text} />;
+}
+
+/** Whether a reply is still being worked on, as its execution reports it
+ *  (a status can lag the execution's end), and whether it waits on an approval. */
+export function useReplyLive(msg: ChatMsg, sessionId: string | undefined) {
+  const waitingApproval = useSessionStore((s) => s.pendingDecisions.some((decision) => {
+    const order = s.executionUpdateOrders[decision.executionId];
+    return decision.kind === "approval" && decision.sessionId === sessionId
+      && order?.sessionId === sessionId && !order.terminal
+      && order.messageIds.includes(msg.id);
+  }));
+  const streaming = isLive(msg.status);
+  return { streaming, waitingApproval };
 }
 
 function TypingIndicator() {
@@ -203,46 +238,39 @@ function TypingIndicator() {
   );
 }
 
-export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embedded = false }: {
+export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embedded = false, viewKey }: {
   msg: ChatMsg;
   sessionIdOverride?: string;
   /** A sub-agent's reply inside its step row's transcript: no header or action row. */
   embedded?: boolean;
+  /** The view these rows belong to, when it is not the conversation itself. */
+  viewKey?: string;
   /** Internal Goal report, using the same trace and detail panel as tools. */
   verdict?: { summary: string; json: string };
 }) {
   // Subscribed so the bubble re-renders once `renderMd` lands and the
   // markdown can be rendered for real instead of escaped.
   useMarkdownReady();
+  const bubbleSessionId = useRowSessionId(sessionIdOverride || undefined) || undefined;
+  const bubbleView = viewKey ?? bubbleSessionId;
   // A reply that carries on work a worker restart cut off draws the cut-off
   // reply's steps in front of its own, as one reply.
-  const cutOff = useSessionStore(useShallow((s) => restartPredecessors(s.messagesById, ownMsg)));
+  const cutOff = useSessionStore(useShallow((s) => continuedRows(selectViewRows(bubbleView)(s), ownMsg)));
   const msg = useMemo(
     () => joinedReply(cutOff, ownMsg, (content) => parseAttachments(content).text),
     [cutOff, ownMsg],
   );
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
-  const bubbleSessionId = sessionIdOverride || currentSessionId || undefined;
+  const rewindOffered = useRewindOffered(bubbleSessionId, msg.errorReason);
   const { text } = useTranslation();
-  const stoppedAs = !msg.goalVerification && (msg.status === "cancelled" || msg.status === "interrupted")
-    ? msg.status : undefined;
+  const stoppedAs = !msg.goalVerification && isStopped(msg.status) ? msg.status : undefined;
   // Set while drawing the blocks: whether the last row took the stopped tag.
   let stopTagged = false;
-  const waitingApproval = useSessionStore((s) => s.pendingDecisions.some((decision) => {
-    const order = s.executionUpdateOrders[decision.executionId];
-    return decision.kind === "approval" && decision.sessionId === bubbleSessionId
-      && order?.sessionId === bubbleSessionId && !order.terminal
-      && order.messageIds.includes(msg.id);
-  }));
-  const settledExecution = useSessionStore((s) => Object.values(s.executionUpdateOrders).some((order) =>
-    order.terminal && order.sessionId === bubbleSessionId && order.messageIds.includes(msg.id),
-  ));
-  const streaming = !settledExecution && (
-    msg.status === "streaming" ||
-    msg.status === "pending" ||
-    msg.status === "running" ||
-    msg.status === "cancelling");
+  const { streaming, waitingApproval } = useReplyLive(msg, bubbleSessionId);
   const activeExecution = streaming && !waitingApproval && !msg.retryStatus;
+  // A retry the reply waits on rides the last tool group's row when the
+  // reply ends in one, else it is a row of its own (retry-status.tsx).
+  const retry = streaming && !waitingApproval ? msg.retryStatus : undefined;
+  let retryPlaced = false;
   const tools = msg.tools ?? [];
   const runningToolIds = new Set(tools.filter((tool) => tool.status === "running").map((tool) => tool.id));
   // Files the turn handed back via ``send_file`` ride the reply text as
@@ -276,42 +304,15 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
     : [];
   const placedFiles = [...new Set(sentFiles(effBlocks ?? []))];
 
-  const AGENTIC_TOOL_NAMES = new Set(["gui_agent"]);
-  // Agentic runtime cards are matched to their call site by ORDER, not
-  // by id: `_wrap_agentic_runtime_block` persists no placeholder row —
-  // the canonical record is the Agent method's own DAG code node,
-  // whose id is a graph node id carrying no back-reference to the LLM's
-  // `tool_call_id`. Both sides are single-turn sequences built in
-  // execution order (blocks by `chat-stream`/`conv-mapper` in emit
-  // order, runtimeChildren by predecessor append order), so the k-th
-  // agentic tool block owns the k-th runtime child.
-  //
-  // Where this is wrong: agentic calls dispatched CONCURRENTLY within
-  // one turn can finish out of order, so the cards swap. Fixing that
-  // needs the backend to stamp the LLM tool_call_id onto the code node
-  // (then match on it here and keep FIFO only as the fallback).
+  // Who owns each card and call tree (owned-children.ts).
+  const blockKeys = effBlocks ? blockIds(effBlocks) : [];
+  const owned = ownedChildren(effBlocks ?? [], blockKeys, {
+    attachCards: msg.attachCards,
+    runtimeChildren: msg.runtimeChildren,
+    callRoots: msg.callRoots as unknown as TNode[] | undefined,
+  });
   const runtimeChildren = msg.runtimeChildren ?? [];
-  // Spawned/attach 卡按调用顺序排队：每遇到一个 tool==="agent" 的块就取
-  // 一张，画在该工具块的紧后面——思考 → 工具调用 → Spawned 卡 → 回复
-  //（在哪调用就画在哪）。剩下没配到块的卡（老数据没记 blocks）兜底画
-  // 在回复文本之前。
-  const attachFifo = (msg.attachCards ?? []).filter((card) =>
-    !card.attach?.manual
-    && (!bubbleSessionId || !card.attach?.session_id
-      || card.attach.session_id === bubbleSessionId));
-  const externalAttachCards = (msg.attachCards ?? []).filter((card) =>
-    card.attach?.manual
-    || (!!bubbleSessionId && !!card.attach?.session_id
-      && card.attach.session_id !== bubbleSessionId));
-  const spawnNames = (cards: ChatMsg[]) => cards.map((card) =>
-    (card.attach?.label || "").trim()
-    || (card.attach?.head_id || "").slice(0, 8)
-    || text("sub-agent", "子代理"));
-  const spawnHeads = (cards: ChatMsg[]) =>
-    cards.map((card) => card.attach?.head_id);
-  const spawnStates = (cards: ChatMsg[]) =>
-    cards.map((card) => card.attach?.status || "completed");
-  // A reply from a named agent (not the default "main") carries its name.
+  // Screen readers announce the agent that wrote the reply; nothing is drawn.
   const namedAgent = msg.agentId && msg.agentId !== "main" ? msg.agentId : null;
   const sender = namedAgent ?? text("Assistant", "助手");
   return (
@@ -319,6 +320,7 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
       className={embedded ? "message assistant sub-agent-reply" : "message assistant"}
       data-msg-id={msg.id}
       data-agent-id={msg.agentId || undefined}
+      data-session-id={bubbleSessionId}
       /* Each turn is an article so screen readers can jump message to
          message (and announce the sender) instead of hearing the whole
          transcript as one undifferentiated run of text. Streaming text
@@ -328,15 +330,12 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
       role="article"
       aria-label={sender}
     >
-      {!embedded && namedAgent ? <div className="message-agent-name"><AgentAvatarById agentId={namedAgent} size={16} />{namedAgent}</div> : null}
       {(
         <div className="chat-stream-body">
+          <StepExpansionScope view={viewKey ?? bubbleSessionId} row={msg.id}>
           {effBlocks ? (
             (() => {
-              // Ordered pool of agentic runtime children — each agentic
-              // tool block claims the next one (see the note above the
-              // `runtimeChildren` binding for why order is the key).
-              const fifo = [...runtimeChildren];
+
               // Legacy backfill: pre-block-schema sessions only
               // persisted tool blocks (no text/thinking), but
               // ``msg.content`` carries the LLM's final narration.
@@ -371,14 +370,9 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                         return s;
                       })();
                 seg.items.push({ b, i });
-                if (b.type === "tool" && SPAWNING_TOOL_NAMES.has(b.tool || "")
-                    && attachFifo.length > 0) {
-                  seg.cards.push(attachFifo.shift()!);
-                }
+                const card = owned.cards.get(blockKeys[i]);
+                if (card) seg.cards.push(card);
               });
-              const callRootsFifo = [
-                ...((msg.callRoots as unknown as TNode[] | undefined) ?? []),
-              ];
               const rendered: React.ReactNode[] = [];
               const drawnFiles = new Set<string>();
               // A turn stopped while it worked marks its last row; one stopped
@@ -387,28 +381,31 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
               stopTagged = Boolean(stoppedAs && lastSeg?.kind === "exec");
               segs.forEach((seg, si) => {
                 if (seg.kind === "steering") {
-                  rendered.push(<SteeringInput key={`steer_${seg.b.message_id}`} block={seg.b} sessionId={bubbleSessionId}/>);
+                  rendered.push(<SteeringInput key={blockKeys[seg.i]} block={seg.b} sessionId={bubbleSessionId} viewKey={bubbleView}/>);
                   return;
                 }
                 if (seg.kind === "text") {
-                  rendered.push(<MarkdownText key={`txt_${seg.i}`} text={seg.b.text || ""} streaming={streaming && seg.i === lastBlockIdx} />);
+                  rendered.push(<MarkdownText key={blockKeys[seg.i]} text={seg.b.text || ""} streaming={streaming && seg.i === lastBlockIdx} />);
                   if (seg.b.citations?.length) {
-                    rendered.push(<CitationSources key={`cite_${seg.i}`} citations={seg.b.citations} />);
+                    rendered.push(<CitationSources key={`cite:${blockKeys[seg.i]}`} citations={seg.b.citations} />);
                   }
                   return;
                 }
-                const cardFifo = seg.cards.slice();
+
                 // 时间线步骤（chat-turn-visual-spec.html）——流式与落定
                 // 同一条路径：进行中折叠为 shimmer 摘要条，点击展开实时
                 // 列表；运行中的行呼吸点。thinking → 思考行；spawn 调用
                 // → 子代理行；agentic 工具 → 函数行 + context_tree 递归
                 // 子层级；普通工具 → 函数行。
+                const stripId = `exec:${blockKeys[seg.items[0].i]}`;
                 const steps: React.ReactNode[] = [];
                 seg.items.forEach(({ b, i }) => {
+                  const blockId = blockKeys[i];
                   if (b.type === "thinking") {
                     steps.push(
                       <ThinkingStep
-                        key={`thk_${i}`}
+                        key={blockId}
+                        expansionId={blockId}
                         text={b.text || ""}
                         running={activeExecution && i === lastBlockIdx}
                       />,
@@ -416,17 +413,17 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                     return;
                   }
                   if (b.type === "restart") {
-                    steps.push(<RestartStep key={`restart_${i}`} />);
+                    steps.push(<RestartStep key={blockId} />);
                     return;
                   }
                   if (b.type !== "tool") return;
-                  const tname = b.tool || "";
                   if (isProviderSearch(b)) {
                     // The provider ran it: no call tree, no runtime row,
                     // no function card — one "Searched the web" row.
                     steps.push(
                       <ProviderSearchStep
-                        key={`web_${i}`}
+                        key={blockId}
+                        expansionId={blockId}
                         block={b}
                         running={activeExecution && !!b.tool_call_id && runningToolIds.has(b.tool_call_id)}
                         sessionId={bubbleSessionId}
@@ -435,26 +432,17 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                     );
                     return;
                   }
-                  if (SPAWNING_TOOL_NAMES.has(tname) && cardFifo.length > 0) {
-                    const card = cardFifo.shift()!;
-                    steps.push(
-                      <SubAgentStep key={`sub_${card.id}`} card={card} />,
-                    );
+                  const card = owned.cards.get(blockId);
+                  if (card) {
+                    steps.push(<SubAgentStep key={blockId} expansionId={blockId} card={card} />);
                     return;
                   }
-                  let tree: TNode | null = null;
-                  if (AGENTIC_TOOL_NAMES.has(tname)) {
-                    const rc = fifo.shift();
-                    tree = (rc?.contextTree as TNode | undefined) || null;
-                  }
-                  if (!tree && callRootsFifo.length) {
-                    // caller 链折出来的调用树：按工具名 FIFO 认领。
-                    const ci = callRootsFifo.findIndex((r) => r.name === tname);
-                    if (ci >= 0) tree = callRootsFifo.splice(ci, 1)[0];
-                  }
+                  const tree = (owned.runtimeChildren.get(blockId)?.contextTree as TNode | undefined)
+                    || owned.callRoots.get(blockId) || null;
                   steps.push(
                     <FunctionStep
-                      key={`fn_${i}`}
+                      key={blockId}
+                      expansionId={blockId}
                       block={b}
                       tree={tree}
                       running={activeExecution && !!b.tool_call_id && runningToolIds.has(b.tool_call_id)}
@@ -463,18 +451,20 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                     />,
                   );
                 });
-                // 没配到 spawn 块的卡兜底成子代理行，不丢。
-                cardFifo.forEach((card) => {
-                  steps.push(
-                    <SubAgentStep key={`sub_${card.id}`} card={card} />,
-                  );
-                });
+                const carriesRetry = !!retry && si === segs.length - 1;
+                if (carriesRetry) {
+                  steps.push(<RetryStep key="retry" retry={retry} />);
+                  retryPlaced = true;
+                }
+                const cardFacts = spawnFacts(seg.cards, text);
                 rendered.push(
                   <ExecutionStrip
-                    key={`seg_${si}`}
+                    key={stripId}
+                    expansionId={stripId}
+                    status={carriesRetry ? <RetryTag retry={retry} /> : undefined}
                     stopped={stopTagged && si === segs.length - 1 ? stoppedAs : undefined}
                     streaming={activeExecution && seg.items.some(({ i }) => i === lastBlockIdx)}
-                    subagentHeads={spawnHeads(seg.cards)}
+                    subagentHeads={cardFacts.spawnHeads}
                     label={summarizeToolGroup(seg.items.map(({ b }) => {
                       const outcome = b.type === "tool"
                         ? toolOutcome(b, msg.status, activeExecution && !!b.tool_call_id && runningToolIds.has(b.tool_call_id))
@@ -484,9 +474,7 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                       text,
                       active: activeExecution && seg.items.some(({ i }) => i === lastBlockIdx),
                       runningIds: runningToolIds,
-                      spawnNames: spawnNames(seg.cards),
-                      spawnStates: spawnStates(seg.cards),
-                      spawnHeads: spawnHeads(seg.cards),
+                      ...cardFacts,
                       sessionId: bubbleSessionId,
                       turnFiles: msg.turnFiles,
                       turnBlocks: effBlocks,
@@ -502,7 +490,7 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                 });
                 if (segFiles.length) {
                   rendered.push(
-                    <AssistantFileCards key={`files_${si}`} msg={msg} sessionId={bubbleSessionId} attachments={outboundFiles} only={segFiles} />,
+                    <AssistantFileCards key={`files:${stripId}`} msg={msg} sessionId={bubbleSessionId} attachments={outboundFiles} only={segFiles} />,
                   );
                 }
               });
@@ -511,28 +499,17 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                   <MarkdownText key="legacy_content" text={contentText} streaming={streaming} />,
                 );
               }
-              if (fifo.length > 0) {
-                rendered.push(<LegacyRuntimeTrace key="legacy_runtime" sessionId={bubbleSessionId}>{fifo}</LegacyRuntimeTrace>);
+              if (owned.unpairedRuntimeChildren.length > 0) {
+                rendered.push(<LegacyRuntimeTrace key="legacy_runtime" sessionId={bubbleSessionId}>{owned.unpairedRuntimeChildren}</LegacyRuntimeTrace>);
               }
-              // 兜底：blocks 里没记 agent/task 调用块的老数据。仍使用
-              // 同一时间线行，不退回 AttachCard，避免刷新前后形态变化。
-              if (attachFifo.length > 0) {
+              // A card no block owns still draws as a timeline row, never as
+              // AttachCard, so it reads the same before and after a reload.
+              if (owned.unpairedCards.length > 0) {
                 rendered.push(
-                  <ExecutionStrip
-                    key="legacy_subagents"
-                    streaming={activeExecution}
-                    subagentHeads={spawnHeads(attachFifo)}
-                    label={summarizeToolGroup([], {
-                      text, spawnNames: spawnNames(attachFifo), spawnStates: spawnStates(attachFifo), spawnHeads: spawnHeads(attachFifo), sessionId: bubbleSessionId,
-                    })}
-                  >
-                    {attachFifo.map((card) => (
-                      <SubAgentStep key={`sub_${card.id}`} card={card} />
-                    ))}
-                  </ExecutionStrip>,
+                  <SubAgentStrip key="subagents" cards={owned.unpairedCards} streaming={activeExecution} sessionId={bubbleSessionId} expansionId="subagents" />,
                 );
               }
-              externalAttachCards.forEach((card) => {
+              owned.references.forEach((card) => {
                 rendered.push(
                   <div
                     key={`attach_${card.id}`}
@@ -548,20 +525,10 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
           ) : (
             <>
               {/* 无 blocks 的旧会话仍用普通时间线行，不切回卡片 UI。 */}
-              {attachFifo.length > 0 ? (
-                <ExecutionStrip
-                  streaming={activeExecution}
-                  subagentHeads={spawnHeads(attachFifo)}
-                  label={summarizeToolGroup([], {
-                      text, spawnNames: spawnNames(attachFifo), spawnStates: spawnStates(attachFifo), spawnHeads: spawnHeads(attachFifo), sessionId: bubbleSessionId,
-                    })}
-                >
-                  {attachFifo.map((card) => (
-                    <SubAgentStep key={`sub_${card.id}`} card={card} />
-                  ))}
-                </ExecutionStrip>
+              {owned.unpairedCards.length > 0 ? (
+                <SubAgentStrip cards={owned.unpairedCards} streaming={activeExecution} sessionId={bubbleSessionId} expansionId="subagents" />
               ) : null}
-              {externalAttachCards.map((card) => (
+              {owned.references.map((card) => (
                 <div key={`attach_${card.id}`} className="attach-row" data-msg-id={card.id}>
                   <AttachCard msg={card} />
                 </div>
@@ -570,7 +537,7 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                 ? <LegacyRuntimeTrace sessionId={bubbleSessionId}>{runtimeChildren}</LegacyRuntimeTrace> : null}
               {hasContent && (msg.status !== "error" || !!msg.errorDetail) ? <MarkdownText text={contentText} streaming={streaming} /> : null}
               {streaming && !hasContent && !waitingApproval && !verdict && !msg.retryStatus
-                && !msg.function && msg.display !== "runtime" && runtimeChildren.length === 0
+                && msg.rowKind === "assistant" && runtimeChildren.length === 0
                 && !msg.attachCards?.length && !msg.callRoots?.length ? <TypingIndicator /> : null}
             </>
           )}
@@ -578,12 +545,13 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
             <div className="turn-error" role="status">
               <span className="turn-error-icon"><CircleAlert size={20} aria-hidden="true" /></span>
               <div className="turn-error-body">
-                <div className="turn-error-title">{errorHeadline(msg, text)
+                <div className="turn-error-title">{errorHeadline(msg, text, rewindOffered && !embedded)
                   || text("This reply could not be completed.", "本次回复未能完成。")}</div>
                 <details className="turn-error-details">
                   <summary>{text("Error details", "错误详情")}<ChevronDown size={12} aria-hidden="true" /></summary>
                   <pre>{msg.errorDetail || msg.content || text("Request failed.", "请求失败。")}</pre>
                 </details>
+                {embedded ? null : <RewindErrorActions msg={msg} sessionId={bubbleSessionId} />}
               </div>
             </div>
           ) : null}
@@ -595,6 +563,9 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
                 : text("This reply was interrupted.", "这次回复被中断了。")}
             </div>
           ) : null}
+          {streaming && !embedded && bubbleSessionId && msg.id
+            ? <PendingSteers sessionId={bubbleSessionId} replyId={msg.id} />
+            : null}
           {waitingApproval ? (
             <div className="pending-body" role="status">
               <span className="pending-label">{text("Waiting for approval", "等待审批")}</span>
@@ -616,26 +587,7 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
               />
             </ExecutionStrip>
           ) : null}
-          {streaming && !waitingApproval && msg.retryStatus ? (
-            <div className="pending-body" role="status" aria-live="polite">
-              <span className="pending-label">
-                {msg.retryStatus.reason === "network_wait" ? (
-                  text(
-                    `Waiting for the network · checking again in ${Math.round((msg.retryStatus.delayMs || 0) / 1000)}s`,
-                    `等待网络恢复 · ${Math.round((msg.retryStatus.delayMs || 0) / 1000)} 秒后再试`,
-                  )
-                ) : <>
-                {text("Retrying", "正在重试")}
-                {` ${msg.retryStatus.attempt}${msg.retryStatus.maxAttempts ? `/${msg.retryStatus.maxAttempts}` : ""}`}
-                {msg.retryStatus.reason === "transport"
-                  ? text(" · connection interrupted", " · 连接中断")
-                  : msg.retryStatus.reason === "output_limit"
-                    ? text(" · continuing output", " · 继续生成")
-                    : text(" · response incomplete", " · 响应未完成")}
-                </>}
-              </span>
-            </div>
-          ) : null}
+          {retry && !retryPlaced ? <RetryStrip retry={retry} /> : null}
           {showFiles ? (
             <AssistantFileCards msg={msg} sessionId={bubbleSessionId} attachments={outboundFiles} skip={placedFiles} />
           ) : null}
@@ -649,6 +601,7 @@ export function AssistantBubble({ msg: ownMsg, verdict, sessionIdOverride, embed
               sessionIdOverride={sessionIdOverride}
             />
           ) : null}
+          </StepExpansionScope>
         </div>
       )}
       {/* Action row at the BOTTOM-RIGHT of the message — you finish

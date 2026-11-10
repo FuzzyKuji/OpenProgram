@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 const {
-  normalizePlans, placedAnchor, planSummary, plansByRow, turnState, useTodoStore,
+  normalizePlans, carryUnfinishedPlan, placedAnchor, planShown, planWindow, plansByRow, turnState, useTodoStore,
 } = await import("../../../lib/chat/transcript/todo-plan.ts");
 
 // A placed plan as the backend sends it (todo/shared.py place_plan).
@@ -79,14 +79,36 @@ test("only a turn still running counts as live", () => {
   assert.equal(turnState(undefined, false), "ended");
 });
 
-test("the one-line form counts done tasks and says how the turn ended", () => {
-  const [open] = normalizePlans([placed("a", "1", ["completed", "in_progress", "pending"])]);
-  const [finished] = normalizePlans([placed("a", "1", ["completed", "completed"])]);
-  assert.deepEqual(planSummary(open, "stopped"), { done: 1, total: 3, outcome: "stopped" });
-  assert.deepEqual(planSummary(open, "failed"), { done: 1, total: 3, outcome: "failed" });
-  assert.deepEqual(planSummary(open, "ended"), { done: 1, total: 3, outcome: null });
-  assert.deepEqual(planSummary(finished, "ended"), { done: 2, total: 2, outcome: "done" });
-  assert.deepEqual(planSummary(finished, "stopped"), { done: 2, total: 2, outcome: "done" });
+const make = (...statuses) => ({ scope: "", todos: statuses.map((status, i) => ({ id: String(i), subject: "s", status })) });
+
+test("what stays after a turn ends", () => {
+  assert.equal(planShown(make("completed"), "running", false), true);
+  assert.equal(planShown(make("pending"), "ended", true), false);
+  assert.equal(planShown(make("pending"), "ended", true, 1), true);
+  assert.equal(planShown(make("in_progress"), "stopped", true), true);
+  assert.equal(planShown(make("in_progress"), "failed", false), false);
+  assert.equal(planShown(make("completed"), "stopped", true), false);
+});
+
+test("a running turn without a plan carries the unfinished one", () => {
+  const byRow = new Map();
+  const live = { r: { role: "assistant", status: "running" } };
+  carryUnfinishedPlan(byRow, [make("completed", "pending")], ["r"], live);
+  assert.equal(byRow.get("r")[0].stale, true);
+  const done = new Map();
+  carryUnfinishedPlan(done, [make("completed")], ["r"], live);
+  assert.equal(done.size, 0);
+  const idle = new Map();
+  carryUnfinishedPlan(idle, [make("pending")], ["r"], { r: { role: "assistant", status: "done" } });
+  assert.equal(idle.size, 0);
+});
+
+test("the window starts one before the current step", () => {
+  const todos = make(...Array.from({ length: 30 }, (_, i) => (i < 5 ? "completed" : i === 5 ? "in_progress" : "pending"))).todos;
+  const view = planWindow(todos);
+  assert.equal(view.hiddenBefore, 4);
+  assert.equal(view.visible.length, 12);
+  assert.equal(view.openAfter, 14);
 });
 
 test("the store keeps each session's placed plans apart", () => {

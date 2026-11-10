@@ -292,7 +292,7 @@ def test_continuation_installs_memory_policy(runtime, monkeypatch):
     global_root = state / 'memory'
     global_root.mkdir(parents=True, exist_ok=True)
     (global_root / 'core.md').write_text('# Core\nGLOBAL_SECRET')
-    continuation = SimpleNamespace(request=req, state=SimpleNamespace(payload={'turn': {'user_message_id': req.user_msg_id}}), assistant_message_id=req.user_msg_id + '_reply')
+    continuation = SimpleNamespace(request=req, user_message_id=req.user_msg_id, assistant_message_id=req.user_msg_id + '_reply')
     observations = []
     def resume(**kwargs):
         observations.append((current(), memory_get(path='core.md')))
@@ -315,7 +315,7 @@ def test_continuation_preserves_consumed_placeholder_restriction(runtime, monkey
     db.merge_node_metadata('s', reply_id, {'memory_policy': {**req.memory_policy_snapshot, 'eligible': False}})
     if not restore_request_snapshot:
         req.memory_policy_snapshot = None
-    continuation = SimpleNamespace(request=req, state=SimpleNamespace(payload={'turn': {'user_message_id': req.user_msg_id}}), assistant_message_id=reply_id)
+    continuation = SimpleNamespace(request=req, user_message_id=req.user_msg_id, assistant_message_id=reply_id)
     observations = []
     def resume(**kwargs):
         observations.append((current(), memory_update(base_revision='unused')))
@@ -384,3 +384,154 @@ def test_memory_prompt_read_failure_stops_required_before_provider(runtime, monk
         assert calls.count('provider') == 1
         assert req.memory_degraded_reason == 'MEMORY_UNAVAILABLE'
         assert any(event[0] == 'memory.degraded' and len(event) > 3 and event[3] == {'session': 's'} for event in events)
+
+
+def _post_report(db, monkeypatch):
+    from openprogram.runtime.conversation.always_on import runtime as always_on
+    monkeypatch.setattr(always_on, '_broadcast', lambda *_: None)
+    return always_on.post_report_message('s', 'private', {'id': 'r1', 'title': 'Found it', 'body': 'REPORT_BODY'})
+
+
+def _writable(monkeypatch, *, counter=len):
+    from openprogram.state.memory import writing
+    monkeypatch.setattr(writing, '_agent', lambda *_: object())
+    monkeypatch.setattr(writing, '_counter', lambda: counter)
+    monkeypatch.setattr(writing, '_run_agent', lambda *_, **__: [{'tool': 'agent'}])
+    return writing
+
+
+def test_owner_turn_after_a_report_still_writes_memory(runtime, monkeypatch):
+    from openprogram.state.memory import session_watcher
+    from openprogram.state.memory.policy import eligible
+    _, db, profile, state = runtime
+    profile['memory']['mode'] = 'read_write'
+    writing = _writable(monkeypatch)
+    _turn(runtime)
+    report_id = _post_report(db, monkeypatch)
+    report = next(row for row in db.get_branch('s') if row['id'] == report_id)
+    assert eligible(report)
+
+    req, result = _turn(runtime)
+
+    assert not result.failed, result.error
+    assert req.memory_policy_snapshot['eligible'] is True
+    session_watcher._process_session('s', db.get_branch('s'))
+    from openprogram.state.memory.workspace_layout import runtime_dir
+    space = (runtime_dir(state / 'memory-spaces' / 'agents' / 'private') / 'workspace-id').read_text().strip()
+    rows = {row['id']: row for row in db.get_branch('s') if row.get('role') in ('user', 'assistant')}
+    assert rows[report_id].get(writing.WRITTEN_NODE_MARKER) is None
+    assert all(
+        row.get(writing.WRITTEN_NODE_MARKER) == space for key, row in rows.items() if key != report_id
+    )
+    assert not (state / 'memory').exists() or not list((state / 'memory').rglob('*.md'))
+
+
+def test_other_policyless_rows_of_a_self_space_agent_stay_ineligible(runtime):
+    from openprogram.state.memory.policy import eligible
+    _, _, profile, _ = runtime
+    profile['memory']['mode'] = 'read_write'
+    assert not eligible({'id': 'old', 'role': 'assistant', 'agent_id': 'private', 'content': 'x'})
+
+
+def test_already_stamped_conversation_stays_ineligible_after_a_report(runtime, monkeypatch):
+    _, db, profile, _ = runtime
+    profile['memory']['mode'] = 'read_write'
+    first, _ = _turn(runtime)
+    db.merge_node_metadata('s', first.user_msg_id, {'memory_policy': {**first.memory_policy_snapshot, 'eligible': False}})
+    _post_report(db, monkeypatch)
+    req, result = _turn(runtime)
+    assert not result.failed, result.error
+    assert req.memory_policy_snapshot['eligible'] is False
+
+
+@pytest.mark.parametrize('cut_off', [False, True])
+def test_idle_pass_skips_a_scheduled_branch_over_threshold(runtime, monkeypatch, cut_off):
+    from openprogram.state.memory import session_watcher
+    _, db, profile, _ = runtime
+    profile['memory']['mode'] = 'read_write'
+    writing = _writable(monkeypatch, counter=lambda _text: 10**6)
+    req, _ = _turn(runtime)
+    head = db.get_session('s')['head_id']
+    policy = req.memory_policy_snapshot
+    db.append_message('s', {'id': 'task_user', 'role': 'user', 'content': 'SCHEDULED', 'predecessor': head,
+                            'source': 'scheduler', 'timestamp': 2.0, 'memory_policy': policy})
+    if not cut_off:
+        db.append_message('s', {'id': 'task_user_reply', 'role': 'assistant', 'content': 'RAN', 'predecessor': 'task_user',
+                                'source': 'scheduler', 'timestamp': 3.0, 'memory_policy': policy})
+    db.set_head('s', head)
+    tip = 'task_user' if cut_off else 'task_user_reply'
+    assert writing._scheduled_branch(db.get_branch('s', tip))
+
+    session_watcher._process_session('s', db.get_branch('s'))
+
+    rows = {row['id']: row for row in db.get_messages('s')}
+    assert rows['task_user'].get(writing.WRITTEN_NODE_MARKER) is None
+    assert rows.get(tip, {}).get(writing.WRITTEN_NODE_MARKER) is None
+    assert rows[head].get(writing.WRITTEN_NODE_MARKER)
+
+
+def test_branch_the_owner_replied_on_is_not_skipped(monkeypatch):
+    from openprogram.state.memory import writing
+    assert not writing._scheduled_branch([
+        {'role': 'user', 'source': 'scheduler'}, {'role': 'assistant'}, {'role': 'user', 'source': 'web'},
+    ])
+
+
+def _scheduled_turn(runtime, **kwargs):
+    from openprogram.runtime.permissions.authority import local_owner_authority
+    D, db, _, _ = runtime
+    authority = {**local_owner_authority(), 'speaker_kind': 'runtime', 'speaker_id': 'runtime/scheduler', 'speaker_display': 'scheduler'}
+    req = agent_turn_request.TurnRequest(session_id='s', user_text='SCHEDULED', agent_id='private', source='scheduler', advance_head=False,
+                                         branch_from=db.get_session('s')['head_id'], **authority, **kwargs)
+    result = D.process_user_turn(req)
+    assert not result.failed, result.error
+    return req, result
+
+
+def test_idle_pass_skips_a_real_scheduled_turn(runtime, monkeypatch):
+    from openprogram.state.memory import session_watcher
+    _, db, profile, _ = runtime
+    profile['memory']['mode'] = 'read_write'
+    writing = _writable(monkeypatch, counter=lambda _text: 10**6)
+    _turn(runtime)
+    head = db.get_session('s')['head_id']
+    req, result = _scheduled_turn(runtime)
+    assert db.get_session('s')['head_id'] == head
+    assert writing._scheduled_branch(db.get_branch('s', result.assistant_msg_id))
+
+    session_watcher._process_session('s', db.get_branch('s'))
+
+    rows = {row['id']: row for row in db.get_messages('s')}
+    assert rows[req.user_msg_id].get(writing.WRITTEN_NODE_MARKER) is None
+    assert rows[result.assistant_msg_id].get(writing.WRITTEN_NODE_MARKER) is None
+    assert rows[head].get(writing.WRITTEN_NODE_MARKER)
+
+
+def test_per_turn_pass_skips_a_checked_out_scheduled_branch(runtime, monkeypatch):
+    _, db, profile, _ = runtime
+    profile['memory']['mode'] = 'read_write'
+    writing = _writable(monkeypatch, counter=lambda _text: 10**6)
+    _turn(runtime)
+    req, result = _scheduled_turn(runtime)
+    db.set_head('s', result.assistant_msg_id)
+
+    assert writing.write('s', token_threshold=1) is None
+
+    assert not any(row.get(writing.WRITTEN_NODE_MARKER) for row in db.get_messages('s'))
+
+
+def test_report_is_not_a_source_for_an_agent_writing_to_the_shared_space(runtime, monkeypatch):
+    from openprogram.state.memory import session_watcher
+    _, db, profile, _ = runtime
+    profile['memory'] = {'mode': 'read_write', 'read_spaces': ['legacy_global'], 'write_space': 'legacy_global', 'required': False}
+    profile['memory_policy_epoch'] = 0
+    writing = _writable(monkeypatch)
+    _turn(runtime)
+    report_id = _post_report(db, monkeypatch)
+    _turn(runtime)
+
+    session_watcher._process_session('s', db.get_branch('s'))
+
+    rows = {row['id']: row for row in db.get_branch('s') if row.get('role') in ('user', 'assistant')}
+    assert rows[report_id].get(writing.WRITTEN_NODE_MARKER) is None
+    assert all(row.get(writing.WRITTEN_NODE_MARKER) for key, row in rows.items() if key != report_id)

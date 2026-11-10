@@ -37,6 +37,43 @@ _lock = threading.Lock()
 _clients: dict[tuple[str, str], Any] = {}
 _translator = None
 
+# Where each browser keeps its profiles (macOS, Windows, Linux).
+_DATA_DIRS = {
+    "darwin": {"chrome": "Library/Application Support/Google/Chrome",
+               "edge": "Library/Application Support/Microsoft Edge"},
+    "win32": {"chrome": "Google/Chrome/User Data", "edge": "Microsoft/Edge/User Data"},
+    "linux": {"chrome": ".config/google-chrome", "edge": ".config/microsoft-edge"},
+}
+
+
+def _data_dir(browser: str) -> Path:
+    import os
+    import sys
+    platform = "win32" if sys.platform.startswith("win") else "darwin" if sys.platform == "darwin" else "linux"
+    relative = _DATA_DIRS[platform][browser]
+    if platform == "win32":
+        return Path(os.environ.get("LOCALAPPDATA") or Path.home() / "AppData" / "Local") / relative
+    return Path.home() / relative
+
+
+def installed(browser: str) -> bool:
+    """Whether the Playwright Extension is installed in one of ``browser``'s profiles.
+
+    A store install unpacks into ``<profile>/Extensions/<id>``, which is what
+    Playwright MCP looks for too. Only files are read; the browser is not touched.
+    """
+    root = _data_dir(browser)
+    try:
+        profiles = [entry for entry in root.iterdir() if entry.is_dir()]
+    except OSError:
+        return False
+    return any((profile / "Extensions" / EXTENSION_ID).is_dir() for profile in profiles)
+
+
+def installed_browsers() -> tuple[str, ...]:
+    """The user's browsers this module can reach: those with the extension installed."""
+    return tuple(browser for browser in BROWSERS if installed(browser))
+
 
 def browser_of(args: Mapping[str, Any]) -> str:
     """``chrome`` or ``edge`` when the call names the user's browser, else ``""`` (built-in)."""
@@ -72,10 +109,19 @@ def _client(session: str, browser: str):
             return client
         _clients.pop(key, None)
     env = {"PLAYWRIGHT_MCP_EXTENSION_TOKEN": token()} if token() else {}
+    background_tabs = Path(__file__).parent / "web_use" / "playwright_background_tabs.cjs"
+    env["NODE_OPTIONS"] = f'--require "{background_tabs}"'
     client = _SyncMCPClient(_command(browser), timeout=_TIMEOUT, env=env)
     with _lock:
         _clients[key] = client
     return client
+
+
+def connected(session: str, browser: str) -> bool:
+    """Whether this conversation already holds a connection to ``browser``."""
+    with _lock:
+        client = _clients.get((session, browser))
+    return client is not None and client.is_alive()
 
 
 def close_session(session: str) -> None:
@@ -143,6 +189,10 @@ class ExtensionBrowser:
         text, _, failed = self._call("browser_evaluate", {**({"target": ref} if ref else {}), "function": function})
         return text, failed
 
+    def _hidden(self) -> bool:
+        text, failed = self._evaluate("() => document.visibilityState")
+        return not failed and "hidden" in _evaluated(text)
+
     def run(self, command: str, arguments: Mapping[str, Any]) -> dict[str, Any]:
         """One ``browser`` command (``list_pages``, ``observe``, ``verify``, ``close``) or act action."""
         args = dict(arguments)
@@ -166,7 +216,11 @@ class ExtensionBrowser:
 
     def _observe(self, args: dict[str, Any]) -> dict[str, Any]:
         if args.get("url"):
-            text, images, failed = self._call("browser_tabs", {"action": "new", "url": str(args["url"])})
+            # The extension's "connected" page has done its job: it becomes the tab the Agent works in.
+            listed, _, unlisted = self._call("browser_tabs", {"action": "list"})
+            on_connect_page = not unlisted and re.search(r"\(current\)[^\n]*/connect\.html", listed)
+            text, images, failed = (self._call("browser_navigate", {"url": str(args["url"])}) if on_connect_page
+                                    else self._call("browser_tabs", {"action": "new", "url": str(args["url"])}))
             if failed:
                 return self._result(text, images, failed)
         elif args.get("page") not in (None, ""):
@@ -177,7 +231,8 @@ class ExtensionBrowser:
                         "message": "page is a tab index from list_pages"}
             text, images, failed = self._call("browser_tabs", {"action": "select", "index": index})
             if failed:
-                return self._result(text, images, failed)
+                listed, _, unlisted = self._call("browser_tabs", {"action": "list"})
+                return self._result(text if unlisted else f"{text}\nThe tabs open now:\n{listed}", images, failed)
         return self._result(*self._call("browser_snapshot", {}))
 
     def _act(self, action: str, args: dict[str, Any]) -> dict[str, Any]:
@@ -213,6 +268,15 @@ class ExtensionBrowser:
             return self._result(*self._call("browser_network_requests", {
                 **({"filter": str(args["pattern"])} if args.get("pattern") else {})}))
         try:
+            if ref and action in ("click", "hover") and self._hidden():
+                # Chrome stops drawing a tab nobody is looking at, and a normal click waits for its frames.
+                # The events are sent in the page, so the tab can stay behind whatever the user is doing.
+                if action == "hover":
+                    return self._result(*self._call("browser_evaluate", {"target": ref, "function": pa.HOVER_SCRIPT}))
+                click = pa.click_options(args)
+                script = pa.bound_call(pa.POINTER_SCRIPT, {
+                    "button": click["button"], "count": click["count"], "flags": click["flags"]})
+                return self._result(*self._call("browser_evaluate", {"target": ref, "function": script}))
             call = _action_call({**args, "action": action})
         except pa.ActionError as exc:
             return exc.result()
@@ -252,5 +316,5 @@ def _evaluated(text: str) -> str:
     return (match.group(1) if match else text).strip()
 
 
-__all__ = ["BROWSERS", "ExtensionBrowser", "NAMES", "STORE_URL", "Unavailable", "browser_of", "close_session",
+__all__ = ["BROWSERS", "ExtensionBrowser", "NAMES", "STORE_URL", "Unavailable", "browser_of", "close_session", "connected",
            "token"]

@@ -1,0 +1,304 @@
+<title>Agent collaboration</title>
+<meta name="description" content="How agents create, address, message and archive branches, how results come back, and which limits apply.">
+<h1>Agent collaboration</h1>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 214" role="img" aria-label="A caller uses agent or send_message. The call is admitted as a Job, or queued in the inbox when the target is busy. The target branch runs one turn. The result returns to the caller as a tool result when foreground, otherwise as a completion notice.">
+  <defs><marker id="col-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="40">Caller</text>
+  <text class="t-cmd" x="0" y="66">agent</text>
+  <text class="t-cmd" x="0" y="86">send_message</text>
+  <line class="ln" x1="112" y1="33" x2="188" y2="33" marker-end="url(#col-a)"/>
+  <text class="t-big" x="200" y="40">Admit Job</text>
+  <text class="t-soft" x="200" y="66">limits checked here</text>
+  <text class="t-soft" x="200" y="86">busy target: inbox</text>
+  <line class="ln" x1="326" y1="33" x2="402" y2="33" marker-end="url(#col-a)"/>
+  <text class="t-big" x="414" y="40">Branch turn</text>
+  <text class="t-soft" x="414" y="66">own context</text>
+  <text class="t-soft" x="414" y="86">and tool loop</text>
+  <path class="ln" d="M460 104V150H40V106" marker-end="url(#col-a)"/>
+  <text class="t-soft mid" x="250" y="176">Foreground: the tool result</text>
+  <text class="t-soft mid" x="250" y="198">Background: a completion notice in the caller's conversation</text>
+</svg>
+<ol class="flow fig-narrow">
+<li><strong>Caller</strong><small><code translate="no">agent</code> or <code translate="no">send_message</code></small></li>
+<li><strong>Admit Job</strong><small>Limits checked here; a busy target queues in the inbox</small></li>
+<li><strong>Branch turn</strong><small>Own context and tool loop</small></li>
+<li class="flow-end"><strong>Back to the caller</strong><small>Foreground: the tool result. Background: a completion notice.</small></li>
+</ol>
+</figure>
+
+<p>A saved AgentSpec is reusable configuration (<a href="../agent-configuration/agent-configuration-ui.html">Agent configuration</a>). A runtime branch is conversation state and can run many Jobs; creating one creates no AgentSpec. To isolate code edits: <a href="../execution/agent-worktree.html">worktree tools</a>. How other agents do this: <a href="agent-collab-comparison.html">comparison</a>.</p>
+
+<h2 id="tools">Tools</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">Domain and tool</th><th scope="col">Does</th></tr></thead>
+<tbody>
+<tr><th scope="row">Planning: <code translate="no">todo_create</code>, <code translate="no">todo_update</code>, <code translate="no">todo_list</code></th><td>Record intended work; starts nothing</td></tr>
+<tr><th scope="row">Execution: <code translate="no">list_jobs</code>, <code translate="no">job_output</code></th><td>Observe accepted work, queued to terminal</td></tr>
+<tr><th scope="row">Conversation: <code translate="no">agent</code>, <code translate="no">list_agents</code>, <code translate="no">archive_agent</code></th><td>Create, continue, address and archive branches</td></tr>
+<tr><th scope="row">Communication: <code translate="no">send_message</code>, <code translate="no">read_conversation</code></th><td>Deliver content; read history</td></tr>
+</tbody>
+</table>
+<p class="note">There is no model-side stop tool. The UI and API cancel through the <code translate="no">execution.command</code> envelope: <code translate="no">action="execution.cancel"</code>, <code translate="no">command_id</code>, <code translate="no">execution_id</code>, <code translate="no">expected_version</code>, empty <code translate="no">payload</code> (<a href="../execution/control.html">execution control</a>). A background call returns <code translate="no">execution_id</code>, equal to <code translate="no">Job.id</code> and to <code translate="no">job_output(job_id=...)</code>.</p>
+
+<table class="stack">
+<thead><tr><th scope="col">Call</th><th scope="col">Branch</th><th scope="col">Execution</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent(prompt=...)</code></th><td>New, from <code translate="no">start_from</code></td><td>Admits a Job. Foreground returns the reply; <code translate="no">run_in_background=True</code> returns <code translate="no">execution_id</code>.</td></tr>
+<tr><th scope="row"><code translate="no">agent(prompt=..., start_from="SID:MSG", description="review")</code></th><td>Forks that exact node and names it, in one call</td><td>As above</td></tr>
+<tr><th scope="row"><code translate="no">agent(prompt=..., to="review")</code></th><td>Existing; no new attach pointer</td><td>Admits a Job, runs or queues it, returns <code translate="no">execution_id</code></td></tr>
+<tr><th scope="row"><code translate="no">send_message(message=..., to=...)</code></th><td>Existing</td><td>A direct delivery creates a Job and returns <code translate="no">delivery_id</code>. A busy target gets an inbox receipt first, which is not admission.</td></tr>
+<tr><th scope="row"><code translate="no">send_message(to=..., message="", notify_when_idle=True)</code></th><td>None</td><td>Delivers nothing: answers now with the latest reply if idle, else registers one idle watch</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Parameters and their rules</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent</code> signature</th><td><code translate="no">prompt</code>, <code translate="no">description=""</code>, <code translate="no">agent_id=""</code>, <code translate="no">start_from="inherit"</code>, <code translate="no">run_in_background=False</code>, <code translate="no">to=""</code>, <code translate="no">archive_when_done=False</code></td></tr>
+<tr><th scope="row"><code translate="no">send_message</code> signature</th><td><code translate="no">message</code>, <code translate="no">to</code>, <code translate="no">agent_id=""</code>, <code translate="no">notify_when_idle=False</code></td></tr>
+<tr><th scope="row"><code translate="no">start_from</code></th><td><code translate="no">inherit</code> (default): the caller's history. <code translate="no">clean</code>: new root. <code translate="no">SID:MSG</code>: that predecessor. An archived source is allowed: forking does not deliver to it.</td></tr>
+<tr><th scope="row">With <code translate="no">to</code></th><td><code translate="no">start_from="clean"</code>, <code translate="no">"SID:MSG"</code> and <code translate="no">archive_when_done=True</code> are rejected; the target keeps its own history</td></tr>
+<tr><th scope="row">When to spawn</th><td>The base instructions (<code translate="no">runtime/context/guides/base.md</code>) forbid spawning unless the user, AGENTS.md or a skill explicitly asks for sub-agents, delegation or parallel agent work, as Codex does by default. One task is done by the agent that received it.</td></tr>
+<tr><th scope="row"><code translate="no">description</code></th><td>Names a new branch</td></tr>
+<tr><th scope="row"><code translate="no">agent_id</code></th><td>Selects saved configuration, not a branch. It cannot widen the caller's authority.</td></tr>
+<tr><th scope="row">Context</th><td><code translate="no">clean</code> omits conversation messages; the other modes include only the chosen authorized history. None removes system policy or isolates the filesystem.</td></tr>
+<tr><th scope="row">Address</th><td><code translate="no">"SID:HEAD"</code> or an unambiguous branch name, resolved to the branch's current tip. Ambiguous names fail with candidates; a missing target is an error, never a new branch.</td></tr>
+<tr><th scope="row">Direct self-delivery</th><td>Rejected</td></tr>
+<tr><th scope="row">Referencing other branches</th><td>Write it in <code translate="no">message</code>: quote the conclusion, or name the branch for the target to read with <code translate="no">read_conversation</code></td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="branches">Branches</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Topic</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">list_agents(scope, limit, agent_id, source)</code></th><td><code translate="no">session</code> (default): this session's branches. <code translate="no">all</code>: every session, most recent first, no previews. <code translate="no">archived</code>: this session's archived branches.</td></tr>
+<tr><th scope="row">Each line</th><td>Session: id, title, agent, busy or idle. Branch: name, <code translate="no">to="SID:HEAD"</code>, turns, size (<code translate="no">— 3 turns, ~2k chars</code>, or <code translate="no">&lt;1k chars</code>), tip preview.</td></tr>
+<tr><th scope="row">Names at creation</th><td>From <code translate="no">description</code>, else the prompt truncated to about 24 characters</td></tr>
+<tr><th scope="row">Renaming</th><td>At turns 1, 6, 16 and 40 a background LLM retitles the branch; spawned and hand-forked branches take the same path (<a href="../operations/branch-naming.html">branch naming</a>)</td></tr>
+<tr><th scope="row">Spawn name</th><td>Stays an address for life: <code translate="no">to="scout"</code> reaches the current tip after a rename or finish, and <code translate="no">list_agents</code> marks it <code translate="no">(agent «scout»)</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="archiving">Archiving</h3>
+<p>Writes <code translate="no">archived: true</code> to the branch for every caller of that store. History is kept. There is no unarchive; reuse history with a new <code translate="no">agent(start_from="SID:MSG", ...)</code>.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">On an archived branch</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Normal <code translate="no">list_agents</code></th><td>Hidden</td></tr>
+<tr><th scope="row"><code translate="no">scope="archived"</code></th><td>Shown, including merged heads, which resolve to their own branch</td></tr>
+<tr><th scope="row">New <code translate="no">send_message</code> or <code translate="no">agent(to=...)</code></th><td>Refused</td></tr>
+<tr><th scope="row">Running execution</th><td>Continues</td></tr>
+<tr><th scope="row">Accepted, not yet started delivery</th><td>Rechecked before starting; rejected with an explicit reason</td></tr>
+<tr><th scope="row"><code translate="no">read_conversation</code>, historical fork</th><td>Governed by history visibility; archive grants nothing</td></tr>
+</tbody>
+</table>
+<details>
+<summary>Archive entry points</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Entry</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">archive_agent(to, reason="")</code></th><td>Idempotent. Any local session with the tool may use it, with no creator check: a shared local trust boundary.</td></tr>
+<tr><th scope="row"><code translate="no">agent(archive_when_done=True)</code></th><td>Only on a call that creates the branch. Synchronous: written by the tool. Asynchronous: written by the terminal hook.</td></tr>
+<tr><th scope="row">Manual first</th><td>The Job is not cancelled and terminal handling never reopens the branch; the hook leaves it untouched. The synchronous write can still refresh the timestamp.</td></tr>
+<tr><th scope="row">Persist failure</th><td>Reported separately; a successful result stays successful</td></tr>
+<tr><th scope="row">Merged branches</th><td>Merging and archiving are separate: a merged branch can leave the live-tip list unarchived</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="results">Results</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">Stage</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Queue</th><td>Every terminal path goes through <code translate="no">JobRunner._update_attach_card</code>: patches the card, applies <code translate="no">archive_when_done</code>, queues an entry in the delivery session's <code translate="no">notices.json</code>. Only <code translate="no">wait=False</code> jobs that completed or errored. The last 500 settled ids prevent a double notice.</td></tr>
+<tr><th scope="row">Settle</th><td><code translate="no">job_output</code> on a terminal job settles its entry. An idle watch settles finished jobs ending on that node (<code translate="no">notices.consume_reply</code>).</td></tr>
+<tr><th scope="row">Deliver</th><td><code translate="no">run_job_notices</code> sweeps every 2 s. A session is busy while a non-background execution runs or the dispatching agent still runs; other background agents do not count. All pending entries become one notice turn.</td></tr>
+<tr><th scope="row">Text</th><td>Automated, not from the user. Per job: agent, outcome, job id, task. Spawn: the report is already in context. Delivery to an existing branch: the reply inline, capped at 20,000 characters, plus the address.</td></tr>
+<tr><th scope="row">Failure</th><td>Reported the same way with the reason; the caller's model decides. Nothing is resubmitted automatically.</td></tr>
+<tr><th scope="row">Placement</th><td>A synthetic user turn (<code translate="no">source="job_followup"</code>) with <code translate="no">branch_from</code> unset, so it advances the delivery session's HEAD. <code translate="no">JobRunner._followup_lock</code> serializes per session: <code translate="no">notice₁ → answer₁ → notice₂ → answer₂</code>.</td></tr>
+</tbody>
+</table>
+<p class="note">The recipient answers in its final reply; a <code translate="no">send_message</code> back would deliver it twice, and the receipt says so. Delivery does not guarantee the target model obeys or replies. A message from another conversation is marked as another agent's input, not the recipient's user.</p>
+
+<details>
+<summary>Attach pointers and cross-session spawns</summary>
+<p>A spawn writes an attach pointer with <code translate="no">predecessor = caller_msg_id</code>; the sub-branch never merges into the caller. <code translate="no">send_message</code> and <code translate="no">agent(to=...)</code> write none, so their replies stay inline.</p>
+<p>The caller's context gets a report, not the transcript: task, final reply and <code translate="no">read_conversation(session_id, head_id)</code>. A synchronous spawn (<code translate="no">delivery="tool_result"</code>) adds only the address. Merges (<code translate="no">is_base</code>, <code translate="no">merge_temp</code>) and manual attaches keep the full expansion (<a href="../../context/overview.html">context overview</a>).</p>
+<p>Caller node A in S with <code translate="no">start_from="T:M"</code> runs in T. The Job records <code translate="no">parent_session_id=T</code>, <code translate="no">parent_msg_id=M</code>, <code translate="no">caller_session_id=S</code>, <code translate="no">caller_msg_id=A</code>.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Operation</th><th scope="col">Identity</th></tr></thead>
+<tbody>
+<tr><th scope="row">Locate the card</th><td>The stored message's source <code translate="no">session_id</code> plus pointer id</td></tr>
+<tr><th scope="row">Load the result</th><td><code translate="no">extra.attach.session_id</code> and <code translate="no">extra.attach.head_id</code>; never search the source DAG</td></tr>
+<tr><th scope="row">Same-session edges</th><td>Only when source and target sessions match</td></tr>
+<tr><th scope="row">Cross-session</th><td>External-attachment card, with source placement and target references</td></tr>
+<tr><th scope="row">Markers</th><td>Source node <code translate="no">spawn_out</code>. Target's first <code translate="no">agent_spawn</code> node: <code translate="no">caller=&lt;source node&gt;</code>, <code translate="no">metadata.spawned_from_session</code>, projected as <code translate="no">spawn_remote</code>.</td></tr>
+</tbody>
+</table>
+<p>Neither creating nor finishing an attach moves the selected HEAD of S or T. Mismatched identities are rejected. See <a href="../dag/rendering.html">DAG attach rendering</a>.</p>
+</details>
+
+<h2 id="busy-targets">Busy targets</h2>
+<p>A message to a running branch is never interrupted in or dropped. It queues.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Cross-session</th><td>Busy if <code translate="no">run_control.is_turn_running(target)</code>. <code translate="no">scope="session"</code>.</td></tr>
+<tr><th scope="row">Same session</th><td>Busy if an unfinished job's <code translate="no">target_branch_head_id</code>, <code translate="no">head_id</code> or <code translate="no">parent_msg_id</code> is the tip (<code translate="no">inbox.branch_busy</code>). <code translate="no">scope="branch"</code>; later continues that branch's tip.</td></tr>
+<tr><th scope="row">Queued in</th><td><code translate="no">&lt;session-repo&gt;/inbox.json</code>: body, sender <code translate="no">SID:HEAD</code>, sender agent, chain message count, enqueue time</td></tr>
+<tr><th scope="row">Drained</th><td>At turn end, success or error (<code translate="no">_drain_send_message_inbox</code>), and by the 2 s sweep, which catches cancelled or crashed turns</td></tr>
+<tr><th scope="row">Order</th><td>Deleted only after submission: a crash may re-deliver, never lose</td></tr>
+<tr><th scope="row">Budget</th><td>A queued hop spends messages like a direct one</td></tr>
+<tr><th scope="row">Full</th><td>50 entries; the oldest is dropped and its sender gets a system notice</td></tr>
+<tr><th scope="row">Duplicate</th><td>Same text from the same sender within 60 s of a still-queued copy is rejected, and the sender told</td></tr>
+</tbody>
+</table>
+
+<h2 id="limits">Limits</h2>
+<table class="stack">
+<thead><tr><th scope="col">Setting</th><th scope="col">Default</th><th scope="col">Counts</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>0 (off)</td><td>Generations along a chain; only a new branch adds one</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>0 (off)</td><td>Messages along a chain: spawn, delivery, dispatch and returning result. A delivery passes sender count + 1.</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>0 (off)</td><td>New branches per caller <code translate="no">(session, turn)</code></td></tr>
+</tbody>
+</table>
+<p class="note">These shape topology; they are not tokens, permissions or admission. A topology <code translate="no">0</code> means no limit, unlike resource limits, where <code translate="no">null</code> means inherit and numbers must be positive. Why these numbers suit when set: <a href="agent-collab-comparison.html#plan">comparison</a>. Tokens, cost and runtime: <a href="../reliability/agent-resource-governance.html">resource governance</a>.</p>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">When exhausted</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">New branch, any of the three</th><td>Rejected with its reason; no branch or Job</td></tr>
+<tr><th scope="row"><code translate="no">agent(to=B)</code> or <code translate="no">send_message(to=B)</code>, messages exhausted</th><td>Rejected; depth and fan-out alone do not block it</td></tr>
+<tr><th scope="row">Messages exhausted, tool list</th><td><code translate="no">agent</code> is removed; <code translate="no">send_message</code> stays and refuses</td></tr>
+<tr><th scope="row">Accepted Jobs, the current turn, local tools</th><td>Not cancelled</td></tr>
+<tr><th scope="row"><code translate="no">job_output</code>, snapshots, <code translate="no">execution.cancel</code></th><td>Available under normal authorization; spend nothing</td></tr>
+</tbody>
+</table>
+<details>
+<summary>How counts move</summary>
+<ul>
+<li>A spawn spends a message, a generation and a fan-out slot. Existing-branch dispatch spends a message only, but still admits a Job.</li>
+<li>The notice turn binds the finished Job's <code translate="no">chain_messages</code> unchanged (the largest when several share a notice) and restores <code translate="no">caller_chain_generations</code>. Reading a result spends nothing.</li>
+<li>A later independent user turn starts a new topology context.</li>
+</ul>
+</details>
+
+<h3 id="resources">Execution resources</h3>
+<table class="stack fixed">
+<thead><tr><th scope="col">Limit</th><th scope="col">At the boundary</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">max_live_per_session</code>, <code translate="no">OPENPROGRAM_JOB_WORKERS</code> (default 4)</th><td>The admitted Job waits queued</td></tr>
+<tr><th scope="row"><code translate="no">max_queued_per_session</code></th><td><code translate="no">quota.queue_full</code>, normally retryable; no Job created</td></tr>
+<tr><th scope="row"><code translate="no">max_jobs_per_session</code></th><td><code translate="no">quota.jobs_exhausted</code>; terminal Jobs are not refunded</td></tr>
+<tr><th scope="row">Token, cost, runtime, idle</th><td>Resource-governance reservation and cancellation</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead><tr><th scope="col">Admission</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Charged to</th><td><code translate="no">Job.parent_session_id</code>, the session that runs the work: for S→T, T</td></tr>
+<tr><th scope="row">Reaches admission</th><td>All of <code translate="no">agent</code>, including foreground (<code translate="no">spawn_job(wait=True)</code>), and turns triggered by <code translate="no">send_message</code></td></tr>
+<tr><th scope="row">Busy target</th><td><code translate="no">agent(to=...)</code> holds a Job before its inbox wait; a message may hold only a receipt</td></tr>
+<tr><th scope="row">Queued Job</th><td>Not counted again when it starts</td></tr>
+<tr><th scope="row">Topology limits at zero</th><td>Disable none of this</td></tr>
+</tbody>
+</table>
+
+<h2 id="cancellation">Cancellation</h2>
+<ul>
+<li>Follows <code translate="no">parent_job_id</code>: prevents unstarted descendants, requests cancellation of active ones, stays stopping until exit is acknowledged.</li>
+<li>Withdrawing queued work never stops another execution on the target and leaves an explicit delivery outcome. Session-wide Stop is broader.</li>
+<li>A terminal Job stays queryable; cancellation is idempotent. A cancel request is not proof of exit (<a href="../reliability/agent-resource-governance.html">resource governance</a>).</li>
+</ul>
+
+<h2 id="visibility">Live view and authority</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Topic</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Live updates</th><td>Both sides update as deliveries and replies land, without reload (<a href="../../proactive/event-layer.html">event layer</a>)</td></tr>
+<tr><th scope="row">Agent traffic</th><td>Rows, never user bubbles. Sender: the tool's row (“Sent to …”). Notice: one line per finished agent, from <code translate="no">notice_items</code>; opening shows the reply or task. Receiver: one line named after the sender, from the header <code translate="no">[message|task from SID:HEAD (sender)]</code>.</td></tr>
+<tr><th scope="row">Sender name</th><td>A background agent's name when its job sends, else the main conversation, by title across conversations</td></tr>
+<tr><th scope="row">Record</th><td><code translate="no">~/.openprogram/projects/&lt;project-id&gt;/chats/&lt;sid&gt;/events.jsonl</code></td></tr>
+<tr><th scope="row">Unattended</th><td>A policy denying side effects holds <code translate="no">send_message</code> and sub-agents before they act; <code translate="no">permission_mode=bypass</code> does not lift it</td></tr>
+<tr><th scope="row"><code translate="no">job_output</code> access</th><td>Execution session, caller session or an ancestor (walks at most 64 with cycle protection). With no session context it denies nothing and authenticates no one.</td></tr>
+<tr><th scope="row">Execution control</th><td>Separate check: owner, project and session membership, action grant, <code translate="no">runtime.control</code>. Knowing an id grants nothing.</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Result size</summary>
+<p>The generic normalizer caps strings at 30,000 characters (less under context pressure), keeps head and tail, and can write full UTF-8 text to <code translate="no">&lt;state_dir&gt;/tool_results/</code> with an opaque, exclusive <code translate="no">.txt</code> name. The path is reported only after a successful write.</p>
+<p>The target contract: one bounded excerpt for <code translate="no">job_output</code> and notices, the canonical result kept in the store, and a full-text artifact recording execution id, owning session and project, media type, byte length and hash, read under the result's visibility and retained with its execution.</p>
+</details>
+
+<details>
+<summary>Deliberately absent</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Absent</th><th scope="col">Because</th></tr></thead>
+<tbody>
+<tr><th scope="row">Extra parent id field</th><td><code translate="no">(session_id, head_id)</code> plus caller and predecessor already form the tree</td></tr>
+<tr><th scope="row">Id prefix classes</th><td>Id and name suffice</td></tr>
+<tr><th scope="row">Retry or circuit-breaker policy</th><td>The caller's model decides</td></tr>
+<tr><th scope="row">Aggregation operators</th><td>The target model reads and synthesizes</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>Public-entry acceptance</summary>
+<p>Observations each case must show through the public tools.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Observable</th></tr></thead>
+<tbody>
+<tr><th scope="row">Names and identity</th><td>Registered <code translate="no">list_jobs</code>, <code translate="no">job_output</code>; foreground and background admit a Job; cancellation is versioned</td></tr>
+<tr><th scope="row">Fork and run</th><td>One call creates a branch at M and runs; <code translate="no">to</code> creates nothing</td></tr>
+<tr><th scope="row">Global archive</th><td>C's list omits B after A archives it; archive view keeps it; deliveries fail</td></tr>
+<tr><th scope="row">Completion archive</th><td>First timestamp and manual reason survive any order; archive cancels nothing</td></tr>
+<tr><th scope="row">Topology exhaustion</th><td>As in the limits table</td></tr>
+<tr><th scope="row">Resource interaction</th><td>Target charged; distinct errors; no double count; synchronous runs obey admission</td></tr>
+<tr><th scope="row">Attach location</th><td>Card in S, lookup by (T, H); both AttachCard and the execution strip select the exact head</td></tr>
+<tr><th scope="row">History privacy</th><td>Denied reads expose no content or metadata; permitted ones work</td></tr>
+<tr><th scope="row">Full result</th><td>Capped structured results; authorized reread; no false path; retention removes only eligible artifacts</td></tr>
+<tr><th scope="row">Completion notices</th><td>The public entry emits one notice; empty results, retry, error and cancel cause no endless turns</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>Code</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Area</th><th scope="col">Location</th></tr></thead>
+<tbody>
+<tr><th scope="row">Agent tool</th><td><code translate="no">openprogram/programs/tools/agents/agent/agent/agent.py</code></td></tr>
+<tr><th scope="row">Admission</th><td><code translate="no">openprogram/runtime/conversation/sub_agent_run.py</code></td></tr>
+<tr><th scope="row">Messages, archive</th><td><code translate="no">openprogram/programs/tools/agents/send_message/</code></td></tr>
+<tr><th scope="row">Job output</th><td><code translate="no">openprogram/programs/tools/agents/agent/job_output/job_output.py</code></td></tr>
+<tr><th scope="row">History read</th><td><code translate="no">openprogram/programs/tools/knowledge/read_conversation.py</code></td></tr>
+<tr><th scope="row">Execution authorization</th><td><code translate="no">openprogram/runtime/execution/authorization.py</code></td></tr>
+<tr><th scope="row">Completion</th><td><code translate="no">openprogram/runtime/jobs/runner/progress.py</code>, <code translate="no">dispatch.py</code>, <code translate="no">borrowed.py</code>, <code translate="no">openprogram/runtime/jobs/notices.py</code></td></tr>
+<tr><th scope="row">Inbox</th><td><code translate="no">openprogram/runtime/conversation/inbox.py</code></td></tr>
+<tr><th scope="row">Result persistence</th><td><code translate="no">openprogram/programs/_host/execution.py</code></td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">Area</th><th scope="col">Remaining</th></tr></thead>
+<tbody>
+<tr><th scope="row">Completion notices</th><td>Implemented with unit coverage; end-to-end acceptance through public tools in a running worker</td></tr>
+<tr><th scope="row">Mid-turn delivery</th><td>A message waits for the turn to end. Steering into a running execution needs a non-user actor on the execution command path.</td></tr>
+<tr><th scope="row">History visibility</th><td><code translate="no">read_conversation</code> reads the local store with no target-level owner or project check: tool gating is a broad local boundary, not per-Agent privacy. Shared authorization must cover <code translate="no">read_conversation</code>, <code translate="no">start_from</code>, selected context, attach expansion and artifacts, without leaking existence.</td></tr>
+<tr><th scope="row">Internal branches</th><td>No presentation flag hides internal branches from session pickers. It would be UI only, not authorization.</td></tr>
+<tr><th scope="row">Cross-session attach</th><td>Same-session AttachCard selects the head; cross-session opens T without selecting H, while the execution strip can</td></tr>
+<tr><th scope="row">Result truncation</th><td><code translate="no">job_output</code> returns <code translate="no">AgentToolResult</code>, which the normalizer passes uncapped. Notices cap at 20,000. No artifact record, retention or target ACL exists for saved files.</td></tr>
+<tr><th scope="row">Inbox on stop</th><td>Cleared by the web stop path (<code translate="no">stop_session_work</code>) only, not CLI stop</td></tr>
+</tbody>
+</table>

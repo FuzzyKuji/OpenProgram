@@ -149,20 +149,59 @@ def selection_request(arguments: dict[str, Any]) -> dict[str, str]:
 
 _FUNCTION_START = None
 
+# How long a script's promise may take to settle; one that never settles would hold the tab.
+SCRIPT_SECONDS = 30
+
+# What the page runs for ``evaluate``: a function script is called, any other script runs
+# as a console runs it (``_CONSOLE_RUN``), and a promise it returns is given SCRIPT_SECONDS.
+_SCRIPT_RUNNER = r"""() => {
+  const run = __RUN__;
+  const value = run();
+  if (!value || typeof value.then !== "function") return value;
+  let timer;
+  const limit = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error("the script did not finish within __SECONDS__ s")), __SECONDS__ * 1000);
+  });
+  return Promise.race([Promise.resolve(value), limit]).finally(() => clearTimeout(timer));
+}"""
+
+# A script that is not a function, run once, the way a console does: as an expression; else as
+# statements, whose last value is the result; else, when it awaits, as the body of an async
+# function, whose return is the result. Each form is parsed before anything runs, so the script
+# runs once, and the error of a script that fits no form is the one for the form it is closest to.
+_CONSOLE_RUN = r"""() => {
+    const s = __SCRIPT__;
+    const Async = Object.getPrototypeOf(async function () {}).constructor;
+    const parses = (make, body) => { try { make(body); return null; } catch (e) { if (e instanceof SyntaxError) return e; throw e; } };
+    const expression = "return (" + s + "\n)";
+    if (!parses(Function, expression)) return (0, eval)("(" + s + "\n)");
+    const statements = parses(Function, s);
+    if (!statements) {
+      try { return (0, eval)(s); } catch (e) { if (!(e instanceof SyntaxError) || !/^Illegal return/.test(e.message)) throw e; }
+      return new Function(s)();
+    }
+    if (!parses(Async, expression)) return new Async(expression)();
+    const asyncStatements = parses(Async, s);
+    if (!asyncStatements) return new Async(s)();
+    throw /\bawait\b/.test(s) ? asyncStatements : statements;
+  }"""
+
 
 def evaluate_source(arguments: dict[str, Any]) -> str:
-    """``script`` as a function the page can call: a function stays one, an expression is wrapped."""
+    """``script`` as a function the page can call: a function is called, anything else runs as in a console."""
     import re
     global _FUNCTION_START
     script = arguments.get("script")
     if not isinstance(script, str) or not script.strip():
-        raise ActionError("script_required", "evaluate needs script: an expression or a function such as () => document.title")
+        raise ActionError("script_required", "evaluate needs script: an expression, statements or a function such as "
+                          "() => document.title")
     script = script.strip()
     if len(script) > MAX_SCRIPT_CHARS:
         raise ActionError("script_too_long", f"script is limited to {MAX_SCRIPT_CHARS} characters")
     if _FUNCTION_START is None:
         _FUNCTION_START = re.compile(r"^(async\s+)?(function\b|\([^()]*\)\s*=>|[A-Za-z_$][\w$]*\s*=>)")
-    return script if _FUNCTION_START.match(script) else f"() => ({script})"
+    run = f"({script}\n)" if _FUNCTION_START.match(script) else _CONSOLE_RUN.replace("__SCRIPT__", json.dumps(script))
+    return _SCRIPT_RUNNER.replace("__RUN__", run).replace("__SECONDS__", str(SCRIPT_SECONDS))
 
 
 def evaluation_text(result: Any) -> str:
@@ -214,6 +253,19 @@ POINTER_SCRIPT = r"""
   }
   if (button === 0 && o.count === 2) fire("dblclick", 2, 0);
   if (button === 2) fire("contextmenu", 1, 0);
+  return true;
+}
+"""
+
+HOVER_SCRIPT = r"""
+(element) => {
+  const rect = element.getBoundingClientRect();
+  const at = {bubbles: true, composed: true, view: window,
+    clientX: rect.left + rect.width / 2, clientY: rect.top + rect.height / 2};
+  element.dispatchEvent(new PointerEvent("pointerover", {...at, pointerType: "mouse", isPrimary: true}));
+  element.dispatchEvent(new MouseEvent("mouseover", at));
+  element.dispatchEvent(new MouseEvent("mouseenter", {...at, bubbles: false}));
+  element.dispatchEvent(new MouseEvent("mousemove", at));
   return true;
 }
 """
@@ -332,7 +384,7 @@ def bound_call(script: str, options: dict[str, Any], *, with_element: bool = Tru
 
 
 __all__ = [
-    "ActionError", "EVALUATE_ACTION", "INSERT_TEXT_SCRIPT", "MAX_RESULT_CHARS", "MAX_SCRIPT_CHARS", "PARITY_ACTIONS", "PASTE_SCRIPT", "POINTER_SCRIPT",
+    "ActionError", "EVALUATE_ACTION", "HOVER_SCRIPT", "INSERT_TEXT_SCRIPT", "MAX_RESULT_CHARS", "MAX_SCRIPT_CHARS", "PARITY_ACTIONS", "PASTE_SCRIPT", "POINTER_SCRIPT",
     "SCROLL_SCRIPT", "SELECT_TEXT_SCRIPT", "bound_call", "click_options", "evaluate_source", "mouse_options", "evaluation_text",
     "hold_seconds",
     "CHOICE_ROLES", "is_choice_control", "is_plain_click", "modifiers", "paste_payload", "scroll_delta", "selection_request",

@@ -18,9 +18,15 @@ import pytest
 from mcp import ClientSession
 
 from openprogram.runtime.permissions.authority import mcp_client_authority
+from openprogram.runtime.permissions.refusal import MCP_GATE_REFUSALS
 from openprogram.extensions.mcp.server.contracts import get_mcp_tools
 from openprogram.extensions.mcp.server.service import MCPClientContext
 from openprogram.extensions.mcp.server.tools import json_result
+
+# Starting Python and importing the CLI can take tens of seconds when every
+# xdist worker does it at once. The limit only bounds a real hang, below the
+# suite's per-test timeout.
+SUBPROCESS_TIMEOUT = 100
 
 
 def _stdio_subprocess_environment(tmp_path, *, client: str = "a"):
@@ -275,7 +281,7 @@ def test_real_stdio_subprocess_calls_all_wrappers(tmp_path, client_name):
             )
         return listed, sessions, session_get, prompt, completed_cancel, tools, runtime, computer
 
-    results = asyncio.run(asyncio.wait_for(scenario(), 10))
+    results = asyncio.run(asyncio.wait_for(scenario(), SUBPROCESS_TIMEOUT))
     listed, sessions, session_get, prompt, completed_cancel, tools, runtime, computer = results
     assert listed.tools == list(get_mcp_tools())
     session_rows = json.loads(sessions.content[0].text)
@@ -380,7 +386,7 @@ def test_real_stdio_subprocess_error_progress_and_concurrency_contract(tmp_path)
             progress,
         )
 
-    result = asyncio.run(asyncio.wait_for(scenario(), 10))
+    result = asyncio.run(asyncio.wait_for(scenario(), SUBPROCESS_TIMEOUT))
     (
         unknown_wrapper,
         invalid_wrapper,
@@ -397,10 +403,12 @@ def test_real_stdio_subprocess_error_progress_and_concurrency_contract(tmp_path)
     assert "underlying Runtime tool not found" in underlying[0]
     assert [item.isError for item in typed] == [True] * 5
     assert [item.content[0].text for item in typed] == [
-        "[denied] authority tier does not allow fs.read",
-        "[denied] hard constraint",
-        "[denied] blocked by permission rule",
-        "[denied] approval unavailable for non-interactive MCP",
+        "[blocked by identity] read did not run: MCP client is not the owner and may not fs.read. "
+        "To change this: Channels > account access, or MCP server exposed tools.",
+        "[blocked by identity] bash did not run: MCP client is not the owner and may not process.exec. "
+        "To change this: Channels > account access, or MCP server exposed tools.",
+        MCP_GATE_REFUSALS["RULE_DENY"].text,
+        MCP_GATE_REFUSALS["NO_ONE_TO_APPROVE"].text,
         "Runtime tool execution failed",
     ]
     assert no_progress.content[0].text == "runtime-ok"
@@ -429,7 +437,7 @@ def test_real_stdio_subprocess_prompt_cancel_cleanup_and_foreign_ownership(tmp_p
         # Starting two isolated Python/MCP processes can exceed three seconds
         # on a saturated CI host. The evidence condition, not startup speed,
         # is the contract under test.
-        deadline = asyncio.get_running_loop().time() + 10
+        deadline = asyncio.get_running_loop().time() + SUBPROCESS_TIMEOUT
         while asyncio.get_running_loop().time() < deadline:
             if path.exists() and any(
                 json.loads(line)["kind"] == kind
@@ -466,7 +474,7 @@ def test_real_stdio_subprocess_prompt_cancel_cleanup_and_foreign_ownership(tmp_p
         return foreign, same, cancellation.value, completed
 
     foreign, same, cancellation, completed = asyncio.run(
-        asyncio.wait_for(scenario(), 30)
+        asyncio.wait_for(scenario(), SUBPROCESS_TIMEOUT)
     )
     assert foreign.content[0].text == (
         '{"cancelled":false,"session_id":"fixture-session"}'
@@ -553,7 +561,7 @@ def test_authenticated_stdio_subprocess_initializes_and_lists_frozen_tools(
                 listed = await session.list_tools()
         return initialized, listed
 
-    initialized, listed = asyncio.run(asyncio.wait_for(scenario(), timeout=10))
+    initialized, listed = asyncio.run(asyncio.wait_for(scenario(), timeout=SUBPROCESS_TIMEOUT))
     assert initialized.protocolVersion == "2025-11-25"
     assert listed.tools == list(get_mcp_tools())
 
@@ -596,7 +604,7 @@ def test_real_cli_auth_failure_matrix_never_enters_stdio(tmp_path, case):
         capture_output=True,
         cwd=os.getcwd(),
         env=environment,
-        timeout=5,
+        timeout=SUBPROCESS_TIMEOUT,
     )
     assert completed.returncode == 1
     assert completed.stdout == ""
@@ -666,7 +674,7 @@ def test_successful_stdio_stdout_contains_only_jsonrpc_frames(tmp_path):
     try:
         process.stdin.write(requests + "\n")
         process.stdin.flush()
-        lines = [stdout_lines.get(timeout=30) for _ in range(2)]
+        lines = [stdout_lines.get(timeout=SUBPROCESS_TIMEOUT) for _ in range(2)]
     finally:
         process.stdin.close()
         process.wait(timeout=10)
@@ -1245,7 +1253,7 @@ def test_protocol_tool_error_matrix_and_concurrent_progress_are_isolated():
 
     try:
         typed, errors, left, right, observed = asyncio.run(
-            asyncio.wait_for(scenario(), 30)
+            asyncio.wait_for(scenario(), SUBPROCESS_TIMEOUT)
         )
     finally:
         service.close()

@@ -1,4 +1,4 @@
-// General settings → Theme: the Code rain tile turns the rain on, which
+// Appearance settings → Theme: the Code rain tile turns the rain on, which
 // reveals the density slider (10–100, 40 to start) whose moves apply at once
 // and clamp; Standard hides the slider again and Gradient is its own theme.
 import assert from "node:assert/strict";
@@ -32,7 +32,7 @@ installDom();
 document.cookie = ""; // font-pref reads document.cookie, which linkedom leaves undefined.
 
 const { createElement: h } = await import("react");
-const { GeneralSection } = await import("../../components/settings/sections/general-section.tsx");
+const { AppearanceSection } = await import("../../components/settings/sections/appearance-section.tsx");
 const { WELCOME_BACKDROP_DENSITY_KEY } = await import("../../lib/prefs/appearance/welcome-backdrop-pref.ts");
 
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
@@ -48,7 +48,7 @@ const setSlider = (view, value) => view.act(async () => {
 });
 
 test("the Theme tiles switch the code rain on and off and expose its density only while it is on", async () => {
-  const view = await render(h(GeneralSection));
+  const view = await render(h(AppearanceSection));
   await view.act(settle);
   const { container } = view;
 

@@ -231,77 +231,6 @@ def _workspace_identity(path: Path) -> dict:
         return {"kind": "unavailable"}
 
 
-def _git_blob_state(
-    root: Path, tree: str, rel: str, budget: _ReviewContentBudget | None = None,
-) -> tuple[dict, bytes | None]:
-    try:
-        raw = _git_output(root, "ls-tree", "-z", tree, "--", rel)
-        entry = raw.split(b"\0", 1)[0]
-        if not entry:
-            return {"kind": "absent"}, None
-        header, _path = entry.split(b"\t", 1)
-        mode, _kind, object_id = header.split()
-        size = int(_git_output(root, "cat-file", "-s", object_id.decode()).strip())
-        content = None
-        if size <= _MAX_DIFF_BYTES:
-            if budget is not None:
-                budget.reserve(size)
-            try:
-                content = _git_output(
-                    root, "cat-file", "blob", object_id.decode(), max_bytes=size,
-                )
-            except Exception:
-                if budget is not None:
-                    budget.release(size)
-                raise
-        digest = (
-            "sha256:" + hashlib.sha256(content).hexdigest()
-            if content is not None
-            else "git:" + object_id.decode()
-        )
-        return {
-            "kind": "blob", "digest": digest, "mode": mode.decode(), "size": size,
-        }, content
-    except _OutputLimitError:
-        raise
-    except (OSError, ValueError):
-        return {"kind": "unavailable"}, None
-
-
-def _index_blob_state(
-    root: Path, rel: str, budget: _ReviewContentBudget | None = None,
-) -> tuple[dict, bytes | None]:
-    try:
-        raw = _git_output(root, "ls-files", "--stage", "-z", "--", rel)
-        entry = raw.split(b"\0", 1)[0]
-        if not entry:
-            return {"kind": "absent"}, None
-        header, _path = entry.split(b"\t", 1)
-        mode, object_id, _stage = header.split()
-        size = int(_git_output(root, "cat-file", "-s", object_id.decode()).strip())
-        state = {
-            "kind": "blob", "digest": "git:" + object_id.decode(),
-            "mode": mode.decode(), "size": size,
-        }
-        content = None
-        if size <= _MAX_DIFF_BYTES:
-            if budget is not None:
-                budget.reserve(size)
-            try:
-                content = _git_output(
-                    root, "cat-file", "blob", object_id.decode(), max_bytes=size,
-                )
-            except Exception:
-                if budget is not None:
-                    budget.release(size)
-                raise
-        return state, content
-    except _OutputLimitError:
-        raise
-    except (OSError, ValueError):
-        return {"kind": "unavailable"}, None
-
-
 def _workspace_content_state(
     root: Path, rel: str, budget: _ReviewContentBudget | None = None,
 ) -> tuple[dict, bytes | None]:
@@ -699,23 +628,6 @@ def _branch_file_diff(session_id: str, path: str, cursor: int = 0) -> dict:
     )
 
 
-def _render_content_diff(
-    before: bytes | None, after: bytes | None, path: str, cursor: int = 0,
-) -> dict:
-    if before is None or after is None:
-        return {"diff": "", "diff_state": "large"}
-    if b"\0" in before or b"\0" in after:
-        return {"diff": "", "diff_state": "binary"}
-    lines = difflib.unified_diff(
-        before.decode("utf-8", errors="replace").splitlines(keepends=True),
-        after.decode("utf-8", errors="replace").splitlines(keepends=True),
-        fromfile=f"a/{os.path.basename(path)}",
-        tofile=f"b/{os.path.basename(path)}",
-        n=3,
-    )
-    return _page_diff_lines(lines, cursor)
-
-
 def _render_workspace_content_diff(
     content: dict, path: str, cursor: int = 0,
 ) -> dict:
@@ -833,83 +745,6 @@ def _workspace_file_diff(
     if content is None:
         return {"diff": "", "diff_state": "unavailable", "error": "STALE_SNAPSHOT"}
     return _render_workspace_content_diff(content, rel, cursor)
-
-
-def _read_workspace_file(root: Path, rel: str, identity: dict) -> bytes:
-    from .diff_shared import _DIR_FD_CAPABLE
-    from .diff_shared import _is_reparse_point
-    from .diff_shared import _validate_directory_path
-
-    relative = Path(rel)
-    if relative.is_absolute() or ".." in relative.parts or not relative.name:
-        raise OSError("unsafe workspace path")
-    if identity.get("kind") != "regular":
-        raise OSError("workspace path is not a regular file")
-    if not _DIR_FD_CAPABLE:
-        target = root / relative
-        _validate_directory_path(target.parent)
-        info = os.lstat(target)
-        if (
-            not stat.S_ISREG(info.st_mode)
-            or stat.S_ISLNK(info.st_mode)
-            or _is_reparse_point(info)
-            or (
-                info.st_dev,
-                info.st_ino,
-                info.st_size,
-                info.st_mtime_ns,
-            )
-            != (
-                identity.get("dev"),
-                identity.get("ino"),
-                identity.get("size"),
-                identity.get("mtime_ns"),
-            )
-        ):
-            raise OSError("stale workspace snapshot")
-        if info.st_size > _MAX_DIFF_BYTES:
-            raise _OutputLimitError("workspace file exceeds review limit")
-        return target.read_bytes()
-    descriptor = os.open(
-        root,
-        os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0),
-    )
-    try:
-        for component in relative.parts[:-1]:
-            child = os.open(
-                component,
-                os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-                | getattr(os, "O_NOFOLLOW", 0),
-                dir_fd=descriptor,
-            )
-            os.close(descriptor)
-            descriptor = child
-        file_descriptor = os.open(
-            relative.name,
-            os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0),
-            dir_fd=descriptor,
-        )
-        try:
-            info = os.fstat(file_descriptor)
-            if not stat.S_ISREG(info.st_mode) or (
-                info.st_dev,
-                info.st_ino,
-                info.st_size,
-                info.st_mtime_ns,
-            ) != (
-                identity.get("dev"),
-                identity.get("ino"),
-                identity.get("size"),
-                identity.get("mtime_ns"),
-            ):
-                raise OSError("stale workspace snapshot")
-            if info.st_size > _MAX_DIFF_BYTES:
-                raise _OutputLimitError("workspace file exceeds review limit")
-            return os.read(file_descriptor, _MAX_DIFF_BYTES + 1)
-        finally:
-            os.close(file_descriptor)
-    finally:
-        os.close(descriptor)
 
 
 __all__ = [

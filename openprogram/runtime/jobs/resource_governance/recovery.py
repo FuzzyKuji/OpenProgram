@@ -8,6 +8,7 @@ from openprogram.runtime.jobs.resource_governance.contracts import (
 )
 from openprogram.runtime.jobs.resource_governance.limits import (
     _CANONICAL_PROJECTION_OWNER,
+    _NO_TERMINAL_BLOCK,
 )
 
 
@@ -23,13 +24,7 @@ class RecoveryOperations:
     ) -> ReconcileResult:
         """Reconcile durable admissions without spanning job-store I/O."""
         current_time = time.time() if now is None else now
-        with self.ledger.read() as conn:
-            pending = conn.execute(
-                """SELECT job_id, session_id, owner_instance_id, lease_generation,
-                          fields_json
-                   FROM job_finalizations WHERE state = 'pending'
-                   ORDER BY created_at"""
-            ).fetchall()
+        pending = self._read().rows("job_finalizations", state="pending", order="created_at")
         pending_job_ids = {str(row["job_id"]) for row in pending}
         finalization_conflicts = 0
         completed_pending: list[tuple[str, str]] = []
@@ -81,13 +76,9 @@ class RecoveryOperations:
             )
             if completed:
                 completed_pending.append((intent["job_id"], intent["session_id"]))
-        with self.ledger.read() as conn:
-            rows = conn.execute(
-                """SELECT admission_id, job_id, session_id, budget_scope_id,
-                          state, owner_instance_id, lease_generation, lease_expires_at
-                   FROM job_admissions WHERE state != 'released'
-                   ORDER BY admitted_seq"""
-            ).fetchall()
+        rows = self._read().rows(
+            "job_admissions", where=lambda row: row["state"] != "released", order="admitted_seq",
+        )
         finalized = rolled_back = released_missing = released_lost = 0
         worker_lost: list[tuple[str, str]] = []
         for row in rows:
@@ -97,111 +88,85 @@ class RecoveryOperations:
             job = job_lookup(row["session_id"], row["job_id"])
             if state == "preparing":
                 if job is not None and job.admission_id == row["admission_id"]:
-                    with self.ledger.immediate() as conn:
-                        changed = conn.execute(
-                            """UPDATE job_admissions SET state = 'queued'
-                               WHERE admission_id = ? AND state = 'preparing'""",
-                            (row["admission_id"],),
-                        ).rowcount
+                    with self._write() as tables:
+                        changed = tables.update(
+                            "job_admissions", {"state": "queued"},
+                            admission_id=row["admission_id"], state="preparing",
+                        )
                     finalized += int(changed == 1)
                 else:
-                    with self.ledger.immediate() as conn:
-                        deleted = conn.execute(
-                            """DELETE FROM job_admissions
-                               WHERE admission_id = ? AND state = 'preparing'""",
-                            (row["admission_id"],),
-                        ).rowcount
+                    with self._write() as tables:
+                        deleted = tables.delete(
+                            "job_admissions", admission_id=row["admission_id"], state="preparing",
+                        )
                         if deleted:
-                            conn.execute(
-                                "DELETE FROM budget_scopes WHERE budget_scope_id = ?",
-                                (row["budget_scope_id"],),
-                            )
+                            tables.delete("budget_scopes", budget_scope_id=row["budget_scope_id"])
                     rolled_back += int(deleted == 1)
                 continue
             if state == "queued":
                 if job is None:
-                    with self.ledger.immediate() as conn:
-                        changed = conn.execute(
-                            """UPDATE job_admissions
-                               SET state = 'released', terminal_blocked = 0,
-                                   terminal_block_command_id = NULL,
-                                   terminal_block_phase = NULL,
-                                   terminal_block_expires_at = NULL,
-                                   terminal_block_prior_dispatch_ready = NULL,
-                                   reason_code = 'error.job_missing',
-                                   resume_parent_msg_id = NULL,
-                                   released_at = ?
-                               WHERE admission_id = ? AND state = 'queued'""",
-                            (current_time, row["admission_id"]),
-                        ).rowcount
+                    with self._write() as tables:
+                        changed = tables.update(
+                            "job_admissions",
+                            {
+                                "state": "released", **_NO_TERMINAL_BLOCK,
+                                "reason_code": "error.job_missing",
+                                "resume_parent_msg_id": None,
+                                "released_at": current_time,
+                            },
+                            admission_id=row["admission_id"], state="queued",
+                        )
                     released_missing += int(changed == 1)
                 elif is_terminal(job.status):
-                    with self.ledger.immediate() as conn:
-                        changed = conn.execute(
-                            """UPDATE job_admissions
-                               SET state = 'released', terminal_blocked = 0,
-                                   terminal_block_command_id = NULL,
-                                   terminal_block_phase = NULL,
-                                   terminal_block_expires_at = NULL,
-                                   terminal_block_prior_dispatch_ready = NULL,
-                                   released_at = ?,
-                                   resume_parent_msg_id = NULL,
-                                   reason_code = COALESCE(?, reason_code)
-                               WHERE admission_id = ? AND state = 'queued'""",
-                            (
-                                current_time, job.reason_code,
-                                row["admission_id"],
-                            ),
-                        ).rowcount
+                    with self._write() as tables:
+                        changed = tables.update(
+                            "job_admissions",
+                            {
+                                "state": "released", **_NO_TERMINAL_BLOCK,
+                                "released_at": current_time,
+                                "resume_parent_msg_id": None,
+                                "reason_code": lambda item: (
+                                    job.reason_code
+                                    if job.reason_code is not None
+                                    else item["reason_code"]
+                                ),
+                            },
+                            admission_id=row["admission_id"], state="queued",
+                        )
                     released_missing += int(changed == 1)
-                continue
-            lease = row["lease_expires_at"]
-            if lease is not None and float(lease) > current_time:
                 continue
             owner = row["owner_instance_id"]
             if owner and owner_is_alive(owner):
                 continue
-            with self.ledger.immediate() as conn:
-                fenced = conn.execute(
-                    """UPDATE job_admissions
-                       SET state = 'stopping', reason_code = 'error.worker_lost',
-                           owner_instance_id = NULL,
-                           lease_generation = lease_generation + 1,
-                           lease_expires_at = NULL
-                       WHERE admission_id = ? AND state IN ('live','stopping')
-                         AND owner_instance_id IS ?
-                         AND lease_generation = ?
-                         AND (lease_expires_at IS NULL OR lease_expires_at <= ?)""",
-                    (
-                        row["admission_id"], owner,
-                        row["lease_generation"], current_time,
-                    ),
-                ).rowcount
+            with self._write() as tables:
+                fenced = tables.update(
+                    "job_admissions",
+                    {
+                        "state": "stopping", "reason_code": "error.worker_lost",
+                        "owner_instance_id": None,
+                        "lease_generation": lambda item: item["lease_generation"] + 1,
+                    },
+                    admission_id=row["admission_id"], state=("live", "stopping"),
+                    owner_instance_id=owner, lease_generation=row["lease_generation"],
+                )
             if fenced != 1:
                 continue
             try:
                 mark_worker_lost(row["session_id"], row["job_id"])
             except Exception:
                 continue
-            with self.ledger.immediate() as conn:
-                changed = conn.execute(
-                    """UPDATE job_admissions
-                       SET state = 'released', terminal_blocked = 0,
-                       terminal_block_command_id = NULL,
-                       terminal_block_phase = NULL,
-                       terminal_block_expires_at = NULL,
-                       terminal_block_prior_dispatch_ready = NULL,
-                           released_at = ?, lease_expires_at = NULL,
-                           resume_parent_msg_id = NULL
-                       WHERE admission_id = ? AND state = 'stopping'
-                         AND owner_instance_id IS NULL
-                         AND lease_generation = ?
-                         AND reason_code = 'error.worker_lost'""",
-                    (
-                        current_time, row["admission_id"],
-                        row["lease_generation"] + 1,
-                    ),
-                ).rowcount
+            with self._write() as tables:
+                changed = tables.update(
+                    "job_admissions",
+                    {
+                        "state": "released", **_NO_TERMINAL_BLOCK,
+                        "released_at": current_time,
+                        "resume_parent_msg_id": None,
+                    },
+                    admission_id=row["admission_id"], state="stopping",
+                    owner_instance_id=None, lease_generation=row["lease_generation"] + 1,
+                    reason_code="error.worker_lost",
+                )
             released_lost += int(changed == 1)
             if changed == 1:
                 worker_lost.append((str(row["job_id"]), str(row["session_id"])))

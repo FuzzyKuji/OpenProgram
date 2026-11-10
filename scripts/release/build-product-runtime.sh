@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Pinned inputs (Python, uv, the office runtime) are declared beside this
-# script in product-runtime.json. The runtime bundles no Programs.
+# Pinned inputs (Python, uv, Git, the office runtime) are declared beside this
+# script in product-runtime.json. build-base.sh unpacks the pinned Git into the
+# runtime, and verification below fails without it. The runtime bundles no
+# Programs.
 
 repo_root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 product_config="$repo_root/scripts/release/product-runtime.json"
@@ -92,25 +94,10 @@ test -n "$wheel" || {
   exit 1
 }
 
-"$uv_bin" export --project "$repo_root" --frozen --no-dev \
-  --extra all --extra search --no-emit-project \
-  --output-file "$runtime_root/product-requirements.txt" >/dev/null
-"$uv_bin" pip install --python "$python_bin" --strict --break-system-packages \
-  --require-hashes --requirements "$runtime_root/product-requirements.txt"
+OPENPROGRAM_UV_BIN="$uv_bin" "$repo_root/scripts/release/build-base.sh" \
+  --embedded-runtime "$runtime_root" --python "$python_bin"
 "$uv_bin" pip install --python "$python_bin" --strict --break-system-packages \
   --no-deps "$wheel"
-
-PLAYWRIGHT_BROWSERS_PATH="$runtime_root/assets/playwright" \
-  "$python_bin" -m playwright install chromium
-# Seal each browser bundle once here. Packaging leaves this tree untouched
-# (signIgnore), so every later build ships these exact bytes.
-if test "$(uname -s)" = Darwin; then
-  find "$runtime_root/assets/playwright" -type d -name '*.app' -prune -print0 |
-    while IFS= read -r -d '' browser_app; do
-      codesign --force --deep --sign - --timestamp=none "$browser_app"
-      codesign --verify --deep --strict "$browser_app"
-    done
-fi
 
 # uv creates a convenience alias whose target is the absolute staging path.
 # Remove only aliases that would escape after the runtime is relocated.
@@ -153,6 +140,7 @@ package_version="$("$python_bin" -I -c \
 "$python_bin" -I "$runtime_root/bin/verify-product-runtime.py" \
   "$runtime_root" \
   --write \
+  --require-git \
   --python-relative "$python_relative" \
   --openprogram-version "$package_version" \
   --uv-version "$UV_VERSION"

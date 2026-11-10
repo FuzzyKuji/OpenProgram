@@ -14,6 +14,8 @@ import styles from "../sidebar.module.css";
 import type { ChatRowProps } from "./use-chat-drag";
 import { type LegacyConv } from "./helpers";
 import { StatusMarker } from "./status-marker";
+import { ChannelLogo } from "@/components/channels/channel-logo";
+import { channelBrand } from "@/lib/channels/channel-brands";
 
 export function ConvItem({
   conv,
@@ -64,6 +66,9 @@ export function ConvItem({
   onDelete: () => void;
 }) {
   const { t, text } = useTranslation();
+  // What a screen reader hears for the row: the logo is decorative, so a
+  // channel chat names its app in words ("WeChat: title").
+  const spoken = conv.channel ? `${channelBrand(conv.channel)}: ${label}` : label;
   const menu = useSidebarMenu();
   const menuOpen = menu.open;
   const [renaming, setRenaming] = useState(false);
@@ -267,24 +272,31 @@ export function ConvItem({
               text-text-bright outline-none"
           />
         ) : (
-          <span
-            ref={labelOuterRef}
-            className={`flex-1 overflow-hidden whitespace-nowrap text-fs-base leading-[20px] ${marqueeShift > 0 ? maskScrolling : maskHover}`}
-          >
+          // A channel chat's brand logo stands where the title starts and
+          // the title follows 6px later; the logo stays put while a long
+          // title scrolls.
+          <span className="flex min-w-0 flex-1 items-center gap-[6px]">
+            {conv.channel ? <span className="sr-only">{channelBrand(conv.channel)}: </span> : null}
+            {conv.channel ? <ChannelLogo channel={conv.channel} size={14} /> : null}
             <span
-              ref={labelInnerRef}
-              className="inline-block whitespace-nowrap"
-              style={
-                marqueeShift > 0
-                  ? {
-                      transform: `translateX(-${marqueeShift}px)`,
-                      // 速度约 40px/s（延迟已在定时器里）。
-                      transition: `transform ${Math.max(600, marqueeShift * 25)}ms linear`,
-                    }
-                  : { transform: "translateX(0)", transition: "transform 200ms ease" }
-              }
+              ref={labelOuterRef}
+              className={`min-w-0 flex-1 overflow-hidden whitespace-nowrap text-fs-base leading-[20px] ${marqueeShift > 0 ? maskScrolling : maskHover}`}
             >
-              {label}
+              <span
+                ref={labelInnerRef}
+                className="inline-block whitespace-nowrap"
+                style={
+                  marqueeShift > 0
+                    ? {
+                        transform: `translateX(-${marqueeShift}px)`,
+                        // 速度约 40px/s（延迟已在定时器里）。
+                        transition: `transform ${Math.max(600, marqueeShift * 25)}ms linear`,
+                      }
+                    : { transform: "translateX(0)", transition: "transform 200ms ease" }
+                }
+              >
+                {label}
+              </span>
             </span>
           </span>
         )}
@@ -310,7 +322,7 @@ export function ConvItem({
             }}
             /* Was "Filter & sort" — that's the Recents header's button,
                not this row's. This one opens the conversation menu. */
-            aria-label={text(`Options for ${label}`, `${label} 的操作`)}
+            aria-label={text(`Options for ${spoken}`, `${spoken} 的操作`)}
             aria-haspopup="menu"
             aria-expanded={menuOpen}
             className="absolute right-[4px] top-1/2 flex size-(--ui-button-h-xs) -translate-y-1/2

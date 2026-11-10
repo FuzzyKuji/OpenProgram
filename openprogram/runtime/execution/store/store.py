@@ -5,9 +5,6 @@ import hashlib
 
 import json
 
-
-import sqlite3
-
 import time
 
 import uuid
@@ -21,109 +18,75 @@ from pathlib import Path
 from typing import Any, Iterator, Mapping
 
 
-from .._schema import SCHEMA_VERSION, SchemaMigrationRefused, UnsupportedSchema, initialize_schema
-
 from ..model import CapabilitySet, ExecutionInputRecord, ExecutionRecord, ExecutionStatus, RevisionRecord, RunRecord, TERMINAL_EXECUTION_STATUSES, _json, _snapshot_json
 
 
 from .shared import (
     ExecutionConflict,
     ExecutionStoreError,
-    _FINISH_REPAIR_HIGH_WATERMARK,
     _fingerprint,
     _log,
-    _projection_event_written,
+    _event_written,
     _validate_agent_turn_payload,
     _validate_job_agent_payload,
 )
+from .run_tables import RowConflict, RunLogFiles, RunTables, TableHandle, log_for_path, tables_for
 from .state_blobs import StateBlobsOperations
-from .finish_repair import FinishRepairOperations
 from .projections import ProjectionsOperations
 from .commands import CommandsOperations
 from .events import EventsOperations
 from .records import RecordsOperations
 
-class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOperations, CommandsOperations, EventsOperations, RecordsOperations):
+class ExecutionStore(StateBlobsOperations, ProjectionsOperations, CommandsOperations, EventsOperations, RecordsOperations):
     """Transactional store with append-only events and materialized records."""
 
-    def __init__(self, path: str | Path):
+    def __init__(self, path: str | Path, *, log: RunLogFiles | None = None):
         self.path = Path(path)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._initialize()
+        self.tables = tables_for(log if log is not None else log_for_path(self.path))
 
 
-    def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(str(self.path), timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
-        connection.execute("PRAGMA journal_mode = WAL")
-        return connection
+    def fresh_view(self) -> "ExecutionStore":
+        """A new reading of the logs, for a process another process's changes do not reach."""
+        view = type(self).__new__(type(self))
+        view.path = self.path
+        view.tables = RunTables(self.tables.log)
+        return view
 
 
-    def _initialize(self) -> None:
-        from .ownership import code_identity, code_revision, owns_store_schema
-
-        owner = owns_store_schema(self.path)
-        with closing(self._connect()) as connection, connection:
-            try:
-                before = initialize_schema(
-                    connection, may_migrate=owner,
-                    code_revision=code_revision() if owner else None,
-                )
-            except SchemaMigrationRefused as exc:
-                message = (
-                    f"{code_identity()} will not migrate {self.path} from schema "
-                    f"{exc.version} to {SCHEMA_VERSION}: only the profile's worker "
-                    "migrates its store, and an older worker may still be writing it. "
-                    "Upgrade the worker (`openprogram worker restart` on the new code, "
-                    "or `openprogram dev promote`), or run this command with the "
-                    "worker's own installation."
-                )
-                _log.warning(message)
-                raise ExecutionStoreError("schema_migration_refused", message) from exc
-            except UnsupportedSchema as exc:
-                raise ExecutionStoreError(
-                    "unsupported_schema",
-                    f"execution store schema {exc.version} is not supported",
-                ) from exc
-        if 0 < before < SCHEMA_VERSION:
-            _log.warning(
-                "%s migrated %s from schema %s to %s",
-                code_identity(), self.path, before, SCHEMA_VERSION,
-            )
+    def _connect(self) -> TableHandle:
+        return self.tables.handle
 
 
-    def maintain_file(self) -> dict[str, Any] | None:
-        """Switch the file to incremental auto-vacuum, rebuilding it once.
+    def _first_unresolved_effect(self, connection, execution_id: str) -> str | None:
+        """An effect of this execution whose outcome is still unknown."""
+        row = connection.first("effects", execution_id=execution_id, status=("dispatched", "uncertain"))
+        if row is not None:
+            return row["effect_id"]
+        log = self.function_log(execution_id)
+        steps = log.unresolved() if log is not None else ()
+        return f"function-step:{execution_id}:{steps[0].action_id}" if steps else None
 
-        A store made without auto-vacuum keeps every page it ever used:
-        compaction and purges leave free pages inside the file and it never
-        shrinks. The switch needs one full VACUUM, which rewrites the file
-        and holds the write lock for the duration (minutes on a multi-GB
-        store), so only the profile's worker calls this, at startup, before
-        it serves anything. After the switch the retention sweep returns
-        free pages in short steps. Returns the rebuild's figures, or None
-        when the file already was incremental.
-        """
-        with closing(self._connect()) as connection:
-            if int(connection.execute("PRAGMA auto_vacuum").fetchone()[0]) == 2:
-                return None
-            started = time.monotonic()
-            before = self.path.stat().st_size
-            connection.execute("PRAGMA auto_vacuum = INCREMENTAL")
-            connection.execute("VACUUM")
-            connection.execute("PRAGMA wal_checkpoint(TRUNCATE)").fetchall()
-            return {
-                "before_bytes": before,
-                "after_bytes": self.path.stat().st_size,
-                "seconds": time.monotonic() - started,
-            }
+
+    def function_log_path(self, session_id: str, execution_id: str) -> Path:
+        from ..function_log import function_log_name
+
+        return self.tables.log.function_log_directory(session_id) / function_log_name(execution_id)
+
+
+    def function_log(self, execution_id: str):
+        """The execution's durable function record, or None when it is unknown."""
+        from ..function_log import function_log_at
+
+        record = self.get_execution(execution_id)
+        return None if record is None else function_log_at(
+            self.function_log_path(record.session_id, execution_id)
+        )
 
 
     @contextmanager
-    def _admission_transaction(self, session_id: str) -> Iterator[sqlite3.Connection]:
+    def _admission_transaction(self, session_id: str) -> Iterator[TableHandle]:
         """Serialize new execution admission with session migration holds."""
+        self.tables.ensure_session(session_id)
         from openprogram.state.paths import get_state_dir
         from openprogram.state.store.session.migration import session_hold_active
         from openprogram.state.store.session.session_lock import session_interprocess_lock
@@ -139,28 +102,17 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
 
     @contextmanager
-    def _transaction(self) -> Iterator[sqlite3.Connection]:
-        connection = self._connect()
-        event_token = _projection_event_written.set(False)
+    def _transaction(self) -> Iterator[TableHandle]:
+        event_token = _event_written.set(False)
         try:
-            connection.execute("BEGIN IMMEDIATE")
-            yield connection
-            connection.commit()
-            if _projection_event_written.get():
-                try:
-                    from ..projections import wake_projection_worker
+            with self.tables.transaction() as connection:
+                yield connection
+            if _event_written.get():
+                from ..event_effects import wake_event_effects
 
-                    wake_projection_worker(self.path)
-                except Exception:
-                    # The outbox is durable; a missed in-process wake is
-                    # recovered by the startup scan or worker idle poll.
-                    _log.debug("projection worker wake failed", exc_info=True)
-        except BaseException:
-            connection.rollback()
-            raise
+                wake_event_effects(self.path)
         finally:
-            _projection_event_written.reset(event_token)
-            connection.close()
+            _event_written.reset(event_token)
 
 
     def create_execution(
@@ -190,7 +142,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
     def _create_execution_in_transaction(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         session_id: str,
         revision_id: str,
@@ -229,10 +181,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
                     "child execution must share its parent's run and session",
                 )
             if source_checkpoint_id is not None:
-                checkpoint = connection.execute(
-                    "SELECT execution_id FROM checkpoints WHERE checkpoint_id = ?",
-                    (source_checkpoint_id,),
-                ).fetchone()
+                checkpoint = connection.get("checkpoints", source_checkpoint_id)
                 if checkpoint is None or checkpoint["execution_id"] != parent_execution_id:
                     raise ExecutionConflict(
                         "invalid_checkpoint",
@@ -242,10 +191,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
         now = time.time()
         run = self._get_run(connection, run_id)
         if run is None:
-            connection.execute(
-                "INSERT INTO runs (run_id, session_id, created_at) VALUES (?, ?, ?)",
-                (run_id, session_id, now),
-            )
+            connection.insert("runs", {"run_id": run_id, "session_id": session_id, "created_at": now})
         elif run.session_id != session_id:
             raise ExecutionConflict(
                 "run_identity_mismatch",
@@ -266,7 +212,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
         )
         try:
             self._insert_execution(connection, record)
-        except sqlite3.IntegrityError as exc:
+        except RowConflict as exc:
             raise ExecutionConflict(
                 "execution_exists", f"execution already exists: {execution_id}"
             ) from exc
@@ -343,10 +289,8 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
                 execution_id = self.admission_execution_id(session_id, admission_key)
                 existing = self._get_execution(connection, execution_id)
                 if existing is not None:
-                    saved = connection.execute("SELECT * FROM execution_inputs WHERE execution_id = ?",
-                                               (execution_id,)).fetchone()
-                    durable = connection.execute("SELECT payload_json FROM execution_agent_turn_inputs WHERE execution_id = ?",
-                                                 (execution_id,)).fetchone()
+                    saved = connection.get("execution_inputs", execution_id)
+                    durable = connection.get("execution_agent_turn_inputs", execution_id)
                     if (saved is None or existing.session_id != session_id
                             or existing.parent_execution_id != parent_execution_id
                             or existing.source_checkpoint_id != source_checkpoint_id
@@ -371,25 +315,6 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
                     self._transition_execution(connection, previous.execution_id,
                         expected_version=previous.status_version, target=ExecutionStatus.INTERRUPTED,
                         reason_code="restart_new_turn", clear_owner=True)
-            if durable_payload_json is not None:
-                connection.execute(
-                    "DELETE FROM execution_finish_repair_slots "
-                    "WHERE execution_id NOT IN (SELECT execution_id FROM executions) "
-                    "OR execution_id IN ("
-                    "SELECT execution_id FROM executions WHERE status IN (?, ?, ?, ?)"
-                    ")",
-                    tuple(status.value for status in TERMINAL_EXECUTION_STATUSES),
-                )
-                reserved_slots = int(
-                    connection.execute(
-                        "SELECT COUNT(*) FROM execution_finish_repair_slots"
-                    ).fetchone()[0]
-                )
-                if reserved_slots >= _FINISH_REPAIR_HIGH_WATERMARK:
-                    raise ExecutionConflict(
-                        "finish_repair_capacity",
-                        "Agent admission is paused while finish-repair slots drain",
-                    )
             record = self._create_execution_in_transaction(
                 connection,
                 session_id=session_id,
@@ -403,9 +328,10 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
             )
             if track_process_owner:
                 from ..process_owner import current_process_owner
-                connection.execute(
-                    "UPDATE executions SET owner_lease_json = ? WHERE execution_id = ?",
-                    (_json({"process_owner": current_process_owner()}), record.execution_id),
+                connection.update(
+                    "executions",
+                    {"owner_lease_json": _json({"process_owner": current_process_owner()})},
+                    execution_id=record.execution_id,
                 )
                 record = self._require_execution(connection, record.execution_id)
             try:
@@ -425,24 +351,13 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
                     ),
                 )
                 if durable_payload_json is not None:
-                    connection.execute(
-                        "INSERT INTO execution_agent_turn_inputs "
-                        "(execution_id, payload_json, content_hash, created_at) "
-                        "VALUES (?, ?, ?, ?)",
-                        (
-                            record.execution_id,
-                            durable_payload_json,
-                            hashlib.sha256(durable_payload_json.encode("utf-8")).hexdigest(),
-                            record.created_at,
-                        ),
-                    )
-                    connection.execute(
-                        "INSERT INTO execution_finish_repair_slots "
-                        "(execution_id, reserved_at, updated_at, state) "
-                        "VALUES (?, ?, ?, 'reserved')",
-                        (record.execution_id, record.created_at, record.created_at),
-                    )
-            except sqlite3.IntegrityError as exc:
+                    connection.insert("execution_agent_turn_inputs", {
+                        "execution_id": record.execution_id,
+                        "payload_json": durable_payload_json,
+                        "content_hash": hashlib.sha256(durable_payload_json.encode("utf-8")).hexdigest(),
+                        "created_at": record.created_at,
+                    })
+            except RowConflict as exc:
                 raise ExecutionConflict(
                     "execution_input_exists", f"input already exists: {record.execution_id}"
                 ) from exc
@@ -458,11 +373,17 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
 
     def get_execution_input(self, execution_id: str) -> ExecutionInputRecord | None:
+        self.tables.ensure_execution(execution_id)
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM execution_inputs WHERE execution_id = ?", (execution_id,)
-            ).fetchone()
+            row = connection.get("execution_inputs", execution_id)
             return self._execution_input(row) if row is not None else None
+
+
+    def list_inputs_for_session(self, session_id: str) -> list[ExecutionInputRecord]:
+        """The message anchors of every execution a session admitted."""
+        self.tables.ensure_session(session_id)
+        with closing(self._connect()) as connection:
+            return [self._execution_input(row) for row in connection.rows("execution_inputs", session_id=session_id)]
 
 
     def get_agent_turn_input(self, execution_id: str) -> Mapping[str, Any] | None:
@@ -482,11 +403,9 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
 
     def _get_durable_agent_input(self, execution_id: str) -> dict[str, Any] | None:
+        self.tables.ensure_execution(execution_id)
         with closing(self._connect()) as connection:
-            row = connection.execute(
-                "SELECT payload_json, content_hash FROM execution_agent_turn_inputs WHERE execution_id = ?",
-                (execution_id,),
-            ).fetchone()
+            row = connection.get("execution_agent_turn_inputs", execution_id)
         if row is None:
             return None
         payload_raw = str(row["payload_json"])
@@ -500,17 +419,14 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
     def _copy_execution_input_in_transaction(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         source_execution_id: str,
         child_execution_id: str,
         created_at: float,
         assistant_message_id: str | None = None,
     ) -> ExecutionInputRecord:
-        row = connection.execute(
-            "SELECT * FROM execution_inputs WHERE execution_id = ?",
-            (source_execution_id,),
-        ).fetchone()
+        row = connection.get("execution_inputs", source_execution_id)
         if row is None:
             raise ExecutionConflict(
                 "execution_input_missing",
@@ -530,43 +446,35 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
             created_at=created_at,
         )
         self._insert_execution_input(connection, child)
-        payload = connection.execute(
-            "SELECT payload_json, content_hash FROM execution_agent_turn_inputs WHERE execution_id = ?",
-            (source_execution_id,),
-        ).fetchone()
+        payload = connection.get("execution_agent_turn_inputs", source_execution_id)
         if payload is not None:
             if hashlib.sha256(payload["payload_json"].encode("utf-8")).hexdigest() != payload["content_hash"]:
                 raise ExecutionConflict("agent_input_hash_mismatch", "branch source Agent input failed integrity validation")
-            connection.execute(
-                "INSERT INTO execution_agent_turn_inputs (execution_id, payload_json, content_hash, created_at) "
-                "VALUES (?, ?, ?, ?)",
-                (child_execution_id, payload["payload_json"], payload["content_hash"], created_at),
-            )
+            connection.insert("execution_agent_turn_inputs", {
+                "execution_id": child_execution_id,
+                "payload_json": payload["payload_json"],
+                "content_hash": payload["content_hash"],
+                "created_at": created_at,
+            })
         return child
 
 
     @staticmethod
     def _insert_execution_input(
-        connection: sqlite3.Connection, record: ExecutionInputRecord
+        connection: TableHandle, record: ExecutionInputRecord
     ) -> None:
-        connection.execute(
-            "INSERT INTO execution_inputs ("
-            "execution_id, input_ref, input_hash, entrypoint, session_id, "
-            "user_message_id, assistant_message_id, trusted_actor_json, "
-            "config_snapshot_ref, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                record.execution_id,
-                record.input_ref,
-                record.input_hash,
-                record.entrypoint,
-                record.session_id,
-                record.user_message_id,
-                record.assistant_message_id,
-                _json(record.trusted_actor),
-                record.config_snapshot_ref,
-                record.created_at,
-            ),
-        )
+        connection.insert("execution_inputs", {
+            "execution_id": record.execution_id,
+            "input_ref": record.input_ref,
+            "input_hash": record.input_hash,
+            "entrypoint": record.entrypoint,
+            "session_id": record.session_id,
+            "user_message_id": record.user_message_id,
+            "assistant_message_id": record.assistant_message_id,
+            "trusted_actor_json": _json(record.trusted_actor),
+            "config_snapshot_ref": record.config_snapshot_ref,
+            "created_at": record.created_at,
+        })
 
 
     def create_revision(
@@ -595,7 +503,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
     def _create_revision_in_transaction(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         manifest: Mapping[str, Any],
         revision_id: str | None,
@@ -621,10 +529,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
             return existing
         # Preserve and reuse pre-v3 rows whose identity was hashed from only
         # the manifest.  Their stored hash remains untouched.
-        for row in connection.execute(
-            "SELECT * FROM revisions WHERE parent_revision_id IS ?",
-            (parent_revision_id,),
-        ):
+        for row in connection.rows("revisions", parent_revision_id=parent_revision_id):
             legacy = self._revision(row)
             if legacy.manifest == manifest_value:
                 if requested_id is not None and legacy.revision_id != requested_id:
@@ -634,9 +539,7 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
                         f"{requested_id}",
                     )
                 return legacy
-        by_content_row = connection.execute(
-            "SELECT * FROM revisions WHERE content_hash = ?", (content_hash,)
-        ).fetchone()
+        by_content_row = connection.first("revisions", content_hash=content_hash)
         if by_content_row is not None:
             by_content = self._revision(by_content_row)
             if by_content.parent_revision_id == parent_revision_id:
@@ -660,12 +563,13 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
                 f"parent revision not found: {parent_revision_id}",
             )
         now = time.time()
-        connection.execute(
-            "INSERT INTO revisions "
-            "(revision_id, parent_revision_id, content_hash, manifest_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?)",
-            (revision_id, parent_revision_id, content_hash, _json(manifest_value), now),
-        )
+        connection.insert("revisions", {
+            "revision_id": revision_id,
+            "parent_revision_id": parent_revision_id,
+            "content_hash": content_hash,
+            "manifest_json": _json(manifest_value),
+            "created_at": now,
+        })
         return RevisionRecord(
             revision_id=revision_id,
             parent_revision_id=parent_revision_id,
@@ -692,27 +596,25 @@ class ExecutionStore(StateBlobsOperations, FinishRepairOperations, ProjectionsOp
 
     def list_for_session(self, session_id: str) -> list[ExecutionRecord]:
         """Read a session's complete execution history, including terminal work."""
+        self.tables.ensure_session(session_id)
         with closing(self._connect()) as connection:
-            return [self._record(row) for row in connection.execute(
-                "SELECT * FROM executions WHERE session_id = ? "
-                "ORDER BY created_at DESC, execution_id",
-                (session_id,),
+            return [self._record(row) for row in connection.rows(
+                "executions", session_id=session_id, order=("-created_at", "execution_id"),
             )]
 
 
     def list_nonterminal(
         self, *, session_id: str | None = None
     ) -> list[ExecutionRecord]:
-        terminal = tuple(status.value for status in TERMINAL_EXECUTION_STATUSES)
-        placeholders = ",".join("?" for _ in terminal)
-        query = f"SELECT * FROM executions WHERE status NOT IN ({placeholders})"
-        values: list[Any] = list(terminal)
-        if session_id is not None:
-            query += " AND session_id = ?"
-            values.append(session_id)
-        query += " ORDER BY created_at, execution_id"
+        terminal = {status.value for status in TERMINAL_EXECUTION_STATUSES}
+        filters = {} if session_id is None else {"session_id": session_id}
         with closing(self._connect()) as connection:
-            return [self._record(row) for row in connection.execute(query, values)]
+            return [self._record(row) for row in connection.rows(
+                "executions",
+                where=lambda row: row["status"] not in terminal,
+                order=("created_at", "execution_id"),
+                **filters,
+            )]
 
 
     def transition_execution(

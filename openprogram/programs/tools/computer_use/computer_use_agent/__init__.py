@@ -3,7 +3,6 @@
 - ``tool.py`` — the tool: catalogue description, routing, guides on first use, approval
 - ``targets/`` — ``app``, ``browser``, ``vm``: each target's actions, guide and approval
 - ``code.py`` — Python in the isolated GUI interpreter, with ``cu.<target>`` objects
-- ``fresh.py`` — ``context="fresh"``: a new agent works from a brief and returns its reply
 - ``desktop/`` — the platform backends that read and operate application windows
 - ``sandbox/`` — the isolated interpreter ``code`` runs in, and the broker it calls through
 """

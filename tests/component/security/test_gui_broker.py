@@ -23,7 +23,7 @@ def environment(tmp_path):
                                             revision_id=revision.revision_id, capabilities=CapabilitySet())
     attempts = AttemptStore(executions)
     leased, reserved = attempts.lease("exec", expected_version=execution.status_version,
-                                      owner_id="worker", ttl_seconds=30, attempt_id="attempt")
+                                      owner_id="worker", attempt_id="attempt")
     active, running = attempts.activate("attempt", generation=leased.generation,
                                         expected_execution_version=reserved.status_version)
     effects = EffectStore(executions)

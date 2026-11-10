@@ -250,11 +250,7 @@ class JobRunner(AdmissionOperations, ProjectionOperations, BorrowedOperations, C
         execution = self._execution_store.get_execution(job_id)
         if execution is None:
             return None
-        row = self._governor.ledger.connection().execute(
-            "SELECT admission_id, state, queue_state, resume_command_id, "
-            "lease_generation, owner_instance_id FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
+        row = self._governor.ledger.run_tables().handle.first("job_admissions", job_id=job_id)
         pending_claim = any(
             intent["kind"] == "resource.claim.intent"
             for intent in self._execution_store.list_resource_intents(

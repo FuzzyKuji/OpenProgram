@@ -15,7 +15,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { useSessionStore } from "@/lib/session-store";
+import { selectViewRows, useSessionStore } from "@/lib/session-store";
 import { extractAttachmentMentions } from "../../../../lib/chat/send/attachment-marker.ts";
 
 /** Don't recall a user message longer than this through ↑/↓ history
@@ -39,9 +39,9 @@ export function useHistoryRecall(
   // ``messageOrder[currentSessionId]`` filtered to user role. Resets
   // automatically whenever the session changes via the useEffect below.
   // Derived INSIDE the selector, compared shallowly: subscribing to the
-  // whole ``messagesById`` map re-rendered the composer on every single
-  // streaming token, because ``updateMessage`` hands back a fresh map
-  // object each delta. User turns don't change while the assistant
+  // whole row map re-rendered the composer on every single
+  // streaming token, because each delta writes a fresh map
+  // object. User turns don't change while the assistant
   // streams, so the shallow compare makes those deltas free here.
   const history = useSessionStore(
     useShallow((s): string[] => {
@@ -49,8 +49,9 @@ export function useHistoryRecall(
       const order = sid ? s.messageOrder[sid] : undefined;
       if (!order) return EMPTY_HISTORY;
       const out: string[] = [];
+      const rows = selectViewRows(sid)(s);
       for (const id of order) {
-        const m = s.messagesById[id];
+        const m = rows[id];
         if (!m || m.role !== "user" || typeof m.content !== "string") continue;
         const typed = recallText(m.content);
         // Skip giant messages — recalling them into the textarea

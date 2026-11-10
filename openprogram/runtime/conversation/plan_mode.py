@@ -1,12 +1,9 @@
 """Plan-mode session flag — process-wide, in-memory.
 
-A session is "in plan mode" when the LLM has called ``enter_plan_mode``
-and has not yet successfully called ``exit_plan_mode``. While the flag
-is set:
-
-  * The dispatcher hides write/mutate tools from the LLM (see
-    ``apply_tool_policy(source="plan", ...)``).
-  * The system prompt gets a plan-mode reminder appended.
+The flag only adds the plan-mode reminder to the system prompt. Whether a
+turn is in Plan, for hiding and refusing tools, is read from the turn's
+permission mode alone, so nothing a model does can restrict a conversation
+whose selector says otherwise.
 
 The flag is held in a module-level dict keyed by ``session_id``, not
 persisted to SessionDB. Rationale: plan mode is a within-conversation

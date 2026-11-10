@@ -287,7 +287,7 @@ def create_pending_call_node(
             elif store is not None:
                 pair = store.store._open(store.session_id)
                 if pair is not None:
-                    _git, _idx = pair
+                    _session_log, _idx = pair
                     head = _idx.head_id
                     # Fresh session (no head yet) → anchor at ROOT
                     # explicitly, matching the chat convention, so the

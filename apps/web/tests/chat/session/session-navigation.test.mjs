@@ -78,7 +78,7 @@ setSocket({ readyState: WebSocket.OPEN, send(payload) { sent.push(JSON.parse(pay
 const { disposeSessionLoads } = await import("../../../lib/runtime-bridge/session/session-load.ts");
 after(() => disposeSessionLoads(runtimeState.ws));
 
-const { useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { selectRow, useSessionStore } = await import("../../../lib/session-store/index.ts");
 const { useCenterTabs, chatAckIsActive, sessionWasSent } = await import("../../../lib/tabs/center-tabs-store.ts");
 const handlers = await import("../../../lib/runtime-bridge/session/chat-handlers.ts");
 const { applyChatWsMessage, appendLocalUserTurn } = await import("../../../lib/net/ws/chat-stream.ts");
@@ -161,7 +161,7 @@ test("/goal status during a run leaves the run going", () => {
   send(idle, "/goal");
   respond({ type: "local_command", session_id: idle, command: "goal", content: "No goal" });
   assert.equal(useSessionStore.getState().runningTasks[idle], undefined);
-  assert.equal(useSessionStore.getState().messagesById[`pending_${idle}`].status, "done");
+  assert.equal(selectRow(idle, `pending_${idle}`)(useSessionStore.getState()).status, "done");
 });
 
 test("an error without msg_id shows a toast and settles the rejected first send", () => {
@@ -176,8 +176,26 @@ test("an error without msg_id shows a toast and settles the rejected first send"
   assert.deepEqual(toasts, ["The submitted Page context is stale."]);
   assert.equal(pending.hasPendingFirstAck(draft), false);
   assert.equal(useSessionStore.getState().runningTasks[draft], undefined);
-  assert.equal(useSessionStore.getState().messagesById[`pending_${draft}`].status, "error");
+  assert.equal(selectRow(draft, `pending_${draft}`)(useSessionStore.getState()).status, "error");
   assert.equal(sessionWasSent(draft), false);
+});
+
+test("a reply not delivered to the bound channel shows a toast and leaves the run alone", () => {
+  resetTabs();
+  const toasts = [];
+  const onToast = (event) => toasts.push(event.detail);
+  window.addEventListener("op:toast", onToast);
+  useSessionStore.getState().setRunningTaskFor("bound", { session_id: "bound", msg_id: "t2", execution_id: "e2", started_at: 1 });
+  respond({
+    type: "channel_delivery_failed", session_id: "bound", assistant_msg_id: "t1_reply",
+    channel: "wechat", channel_label: "WeChat", error_kind: "auth", content: "x",
+  });
+  window.removeEventListener("op:toast", onToast);
+  assert.equal(toasts.length, 1);
+  assert.match(toasts[0].message, /WeChat/);
+  assert.match(toasts[0].message, /auth/);
+  assert.equal(toasts[0].tone, "error");
+  assert.equal(useSessionStore.getState().runningTasks.bound?.execution_id, "e2");
 });
 
 test("an early turn error with a fresh msg_id releases the send's running slot", () => {
@@ -240,6 +258,46 @@ test("a finished turn marks a background chat unread, never the one on screen", 
   // Opening it clears the dot at once.
   handlers.markSessionReadLocally("background");
   assert.equal(useSessionStore.getState().conversations.background.unread, false);
+});
+
+test("a chat in a hidden window keeps its dot until the window comes back", (t) => {
+  let visibility = "hidden";
+  Object.defineProperty(document, "visibilityState", { get: () => visibility, configurable: true });
+  t.after(() => { delete document.visibilityState; });
+  resetTabs();
+  runtimeState.conversations.open = { id: "open", title: "open", messages: [] };
+  useSessionStore.getState().upsertConversation({ id: "open", title: "open" });
+  tabs().openSessionTab("open", "open");
+  runtimeState.currentSessionId = "open";
+  window.location.pathname = "/s/open";
+
+  handlers.windowVisibilityChanged();
+  handlers.handleSessionUpdated({ id: "open", status: "done", unread: true });
+
+  assert.deepEqual(sent, [{ action: "set_window_hidden", hidden: true }]);
+  assert.equal(useSessionStore.getState().conversations.open.unread, true);
+
+  sent.length = 0;
+  visibility = "visible";
+  handlers.windowVisibilityChanged();
+
+  assert.deepEqual(sent, [
+    { action: "set_window_hidden", hidden: false },
+    { action: "mark_session_read", session_id: "open" },
+  ]);
+  assert.equal(useSessionStore.getState().conversations.open.unread, false);
+
+  // Nothing new while it was away: only the flag goes out.
+  sent.length = 0;
+  handlers.windowVisibilityChanged();
+  assert.deepEqual(sent, [{ action: "set_window_hidden", hidden: false }]);
+});
+
+test("a reconnect tells the server the window is hidden before it restores focus", () => {
+  const source = readFileSync(new URL("lib/net/ws/use-ws.ts", webRoot), "utf8");
+  const hidden = source.indexOf('action: "set_window_hidden"');
+  const focus = source.indexOf('action: "mark_session_read"');
+  assert.ok(hidden !== -1 && hidden < focus);
 });
 
 test("Cmd+1…9 and Cmd+Shift+[ ] pick strip entries", () => {

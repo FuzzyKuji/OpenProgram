@@ -1,5 +1,6 @@
 "use client";
 
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useEffect, useState } from "react";
 
 import styles from "./channels.module.css";
@@ -68,20 +69,10 @@ export function AddBindingDialog({ accounts, onClose, onAdded }: Props) {
         body.peer = peer.trim();
         body.peer_kind = peerKind;
       }
-      const r = await fetch("/api/channels/bindings", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(body),
-      });
-      if (!r.ok) {
-        const d = await r.json().catch(() => null);
-        setError(d?.detail || `HTTP ${r.status}`);
-        setSubmitting(false);
-        return;
-      }
+      await jsonFetch("/api/channels/bindings", { method: "POST", body: JSON.stringify(body) });
       await onAdded();
     } catch (e) {
-      setError(String(e));
+      setError((e as Error).message);
       setSubmitting(false);
     }
   };

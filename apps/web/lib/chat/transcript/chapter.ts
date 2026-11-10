@@ -9,14 +9,7 @@
  * ./chapter-pin.ts.
  */
 
-/** The wire ``chapter`` pin as its pin time; undefined when unpinned. */
-export function chapterPinnedAt(chapter: unknown): number | undefined {
-  if (!chapter || typeof chapter !== "object") return undefined;
-  const at = (chapter as { pinned_at?: unknown }).pinned_at;
-  return typeof at === "number" && Number.isFinite(at) && at > 0 ? at : undefined;
-}
-
-type RoleRow = { role?: string; display?: string } | undefined;
+type RoleRow = { role?: string; rowKind?: string } | undefined;
 
 // One pass per order array: every row maps to the user message that opened
 // its turn. The order array is replaced whenever rows are added, removed or
@@ -25,11 +18,11 @@ type RoleRow = { role?: string; display?: string } | undefined;
 const turnStarts = new WeakMap<readonly string[], Map<string, string>>();
 
 /** The user message that starts the turn `msgId` belongs to: the nearest
- *  user message above it in the session's order, skipping runtime rows
+ *  user message above it in the session's order, skipping silent rows
  *  (the same rows the message rail draws ticks for). */
 export function turnUserMessageId(
   order: readonly string[] | undefined,
-  messagesById: Record<string, RoleRow>,
+  rows: Record<string, RoleRow>,
   msgId: string,
 ): string | undefined {
   if (!order || !order.length) return undefined;
@@ -38,8 +31,8 @@ export function turnUserMessageId(
     starts = new Map();
     let current: string | undefined;
     for (const id of order) {
-      const m = messagesById[id];
-      if (m && m.role === "user" && m.display !== "runtime") current = id;
+      const m = rows[id];
+      if (m && m.role === "user" && m.rowKind !== "silent") current = id;
       if (current) starts.set(id, current);
     }
     turnStarts.set(order, starts);

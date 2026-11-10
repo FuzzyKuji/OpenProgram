@@ -15,7 +15,7 @@ the top-level package: the registry puts each clone's directory on
 ``sys.path`` and imports ``<package>.agentics``, whose PROGRAM_ENTRIES
 exports register explicit callables (see
 ``registry._import_external_harness`` and
-``docs/capabilities/installing-programs.md``).
+``docs/capabilities/installing-programs.html``).
 
 Install / remove with::
 
@@ -25,21 +25,46 @@ Install / remove with::
 
 from __future__ import annotations
 
+import importlib
 import json
 import os
+import sys
 import threading
 import time
 import uuid
 from pathlib import Path
 
 
-_PROGRAM_SOURCES_FILE = "program-sources.json"
 _sources_lock = threading.Lock()  # ponytail: one lock for the sources RMW; split if writers contend
 
 
+def dependency_directory() -> Path:
+    """Where a harness's Python dependencies go on an install that cannot hold them.
+
+    A packaged App and a sealed version must not change after they are built:
+    pip writing into one breaks its signature or its seal. There is one
+    directory per Python minor because compiled modules are tied to it.
+    """
+    from openprogram.state.paths import get_state_dir
+
+    return Path(get_state_dir()) / "program-dependencies" / f"python{sys.version_info.major}.{sys.version_info.minor}"
+
+
+def use_dependency_directory() -> None:
+    """Make installed harness dependencies importable, when any exist.
+
+    The directory comes after the product's own packages on ``sys.path``, so a
+    harness cannot replace what OpenProgram itself runs on.
+    """
+    directory = str(dependency_directory())
+    if directory not in sys.path and Path(directory).is_dir():
+        sys.path.append(directory)
+        importlib.invalidate_caches()
+
+
 def _program_sources_path() -> Path:
-    from openprogram.host.sandbox.protected_paths import program_sources_path
-    return Path(program_sources_path())
+    from openprogram.state.paths import program_sources_path
+    return program_sources_path()
 
 
 def _read_program_sources_document() -> dict:

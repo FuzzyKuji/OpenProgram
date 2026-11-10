@@ -1,14 +1,16 @@
 "use strict";
 
 const assert = require("node:assert/strict");
+const { execFileSync } = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 const {
   killWindowsProcessTree,
   resolveTerminalCommand,
   waitForTerminalPid,
 } = require("../main/terminal/terminal-command");
-const { verifyWindowsAuthenticode } = require("../main/self-update/windows-signature");
+const { readWindowsUpdateLine, verifyWindowsAuthenticode } = require("../main/self-update/windows-signature");
 const {
   browserWindowChromeOptions,
   applyNativeTitleBarChrome,
@@ -28,7 +30,7 @@ assert.deepEqual(browserWindowChromeOptions("darwin", chrome), {
   titleBarStyle: "hiddenInset",
   trafficLightPosition: { x: 13, y: 12 },
 });
-assert.deepEqual(browserWindowChromeOptions("linux", chrome), {});
+assert.deepEqual(browserWindowChromeOptions("linux", chrome), { autoHideMenuBar: true });
 
 const chromeCalls = [];
 applyNativeTitleBarChrome({
@@ -160,7 +162,11 @@ const signature = verifyWindowsAuthenticode("C:\\Downloads\\OpenProgram.exe", {
   platform: "win32",
   existsSync: () => true,
   execFileSyncImpl: (_command, args, options) => {
-    assert.equal(args.at(-1), "C:\\Downloads\\OpenProgram.exe");
+    // powershell.exe would fold anything after -Command into the command text.
+    assert.equal(args.at(-2), "-Command");
+    assert.match(args.at(-1), /\$env:OPENPROGRAM_SIGNATURE_PATH/);
+    assert.doesNotMatch(args.at(-1), /\$args/);
+    assert.equal(options.env.OPENPROGRAM_SIGNATURE_PATH, "C:\\Downloads\\OpenProgram.exe");
     assert.equal(options.windowsHide, true);
     return JSON.stringify({
       status: "Valid",
@@ -186,7 +192,79 @@ assert.equal(
   null,
 );
 
+function verifyOn(line, result) {
+  return verifyWindowsAuthenticode("C:\\Downloads\\OpenProgram.exe", {
+    platform: "win32",
+    existsSync: () => true,
+    execFileSyncImpl: () => JSON.stringify(result),
+    line,
+  });
+}
+const unsignedLine = { signed: false, subject: "", thumbprint: "" };
+const signedLine = { signed: true, subject: "CN=OpenProgram", thumbprint: "A".repeat(40) };
+
+assert.equal(verifyOn(unsignedLine, { status: "NotSigned" }).unsigned, true,
+  "an App built unsigned takes an unsigned installer");
+assert.equal(verifyOn(unsignedLine, { status: "Valid", subject: "CN=OpenProgram", thumbprint: "B".repeat(40) }).thumbprint,
+  "B".repeat(40), "and may move up to a signed one");
+for (const status of ["HashMismatch", "NotTrusted", "UnknownError"]) {
+  assert.throws(() => verifyOn(unsignedLine, { status }), /not valid/, `the unsigned line still refuses ${status}`);
+}
+assert.throws(() => verifyOn(signedLine, { status: "NotSigned" }), /not valid/, "a signed App never moves to unsigned");
+assert.equal(verifyOn(signedLine, { status: "Valid", subject: "CN=OpenProgram", thumbprint: "a".repeat(40) }).thumbprint,
+  "A".repeat(40), "the same certificate passes");
+assert.equal(verifyOn(signedLine, { status: "Valid", subject: "CN=OpenProgram", thumbprint: "C".repeat(40) }).thumbprint,
+  "C".repeat(40), "a renewed certificate of the same publisher passes");
+assert.throws(() => verifyOn(signedLine, { status: "Valid", subject: "CN=Someone Else", thumbprint: "C".repeat(40) }),
+  /different publisher/);
+
+async function checkUpdateLine() {
+  const line = (status, extra = {}) => readWindowsUpdateLine("C:\\App\\OpenProgram.exe", {
+    platform: "win32",
+    execFileImpl: async () => ({ stdout: JSON.stringify({ status, ...extra }) }),
+  });
+  assert.equal((await line("NotSigned")).signed, false);
+  assert.deepEqual(await line("Valid", { subject: "CN=OpenProgram", thumbprint: "d".repeat(40) }), {
+    signed: true, subject: "CN=OpenProgram", thumbprint: "D".repeat(40),
+  });
+  assert.equal((await line("HashMismatch")).signed, true, "a damaged signature takes the stricter line");
+  assert.equal((await readWindowsUpdateLine("C:\\App\\OpenProgram.exe", {
+    platform: "win32",
+    execFileImpl: async () => { throw new Error("PowerShell is blocked"); },
+  })).signed, true, "an unreadable signature takes the stricter line");
+  assert.equal(await readWindowsUpdateLine("/tmp/OpenProgram", { platform: "linux" }), null);
+}
+
+// The real powershell.exe, which the checks above stand in for.
+async function checkLiveSignatures() {
+  if (process.platform !== "win32") return;
+  const directory = fs.mkdtempSync(path.join(os.tmpdir(), "openprogram-signature-"));
+  try {
+    const compiled = path.join(directory, "compiled.exe");
+    execFileSync("powershell.exe", [
+      "-NoProfile", "-NonInteractive", "-Command",
+      "Add-Type -TypeDefinition 'public class P { public static void Main() {} }' " +
+        "-OutputType ConsoleApplication -OutputAssembly $env:UNSIGNED_OUTPUT",
+    ], { env: { ...process.env, UNSIGNED_OUTPUT: compiled }, stdio: "pipe" });
+    // A name with the characters a wildcard or a quoted command would trip on.
+    const unsigned = path.join(directory, "open[program] it's.exe");
+    fs.copyFileSync(compiled, unsigned);
+    assert.equal((await readWindowsUpdateLine(unsigned)).signed, false);
+    assert.equal(verifyWindowsAuthenticode(unsigned, { line: { signed: false } }).unsigned, true);
+    assert.throws(() => verifyWindowsAuthenticode(unsigned, { line: { signed: true } }), /not valid/);
+
+    const signed = path.join(process.env.SystemRoot, "System32", "WindowsPowerShell", "v1.0", "powershell.exe");
+    const line = await readWindowsUpdateLine(signed);
+    assert.equal(line.signed, true);
+    assert.match(line.subject, /Microsoft/);
+    assert.match(verifyWindowsAuthenticode(signed).subject, /Microsoft/);
+  } finally {
+    fs.rmSync(directory, { recursive: true, force: true });
+  }
+}
+
 async function checkLiveConpty() {
+  await checkUpdateLine();
   let reads = 0;
   const delayedTerminal = {
     get pid() {
@@ -253,7 +331,7 @@ async function checkLiveConpty() {
   assert.match(output, new RegExp(marker));
 }
 
-checkLiveConpty().then(() => {
+checkLiveSignatures().then(checkLiveConpty).then(() => {
   console.log("Windows Desktop checks passed");
   process.exit(0);
 }).catch((error) => {

@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-En Windows: `irm https://openprogram.io/install.ps1 | iex`. La App de escritorio para macOS es un DMG firmado en la [página de versiones](https://github.com/FuzzyKuji/OpenProgram/releases). Más opciones en la [guía de instalación](docs/install/install.md) (en inglés).
+En Windows (desde v1.1.0): `irm https://openprogram.io/install.ps1 | iex`. La App de escritorio para macOS es un DMG en la [página de versiones](https://github.com/FuzzyKuji/OpenProgram/releases); las Apps para Linux y Windows llegan con v1.1.0. Si openprogram.io no responde: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. Más opciones en la [guía de instalación](https://openprogram.io/docs/install/install.html) (en inglés).
 
 ## Inicio rápido
 
@@ -59,7 +59,7 @@ openprogram        # asistente de configuración y luego chat en la terminal
 openprogram web    # espacio de trabajo en http://localhost:18100
 ```
 
-Siguiente: [primeros pasos](docs/start/GETTING_STARTED.md) · [modelos](docs/models/README.md) · [toda la documentación](docs/README.md) (en inglés)
+Siguiente: [primeros pasos](docs/start/GETTING_STARTED.html) · [modelos](docs/models/README.html) · [toda la documentación](docs/README.html) (en inglés)
 
 ## Un vistazo rápido
 
@@ -76,7 +76,7 @@ class SupportAgent(Agent):
         return self("Draft a short reply.")
 ```
 
-El modelo decide; Python garantiza que se ejecuten los pasos necesarios. Consulta [cómo escribir agentes](docs/capabilities/agentic-programming/writing-functions/agent.md) (en inglés).
+El modelo decide; Python garantiza que se ejecuten los pasos necesarios. Consulta [cómo escribir agentes](docs/capabilities/agentic-programming/writing-functions/agent.html) (en inglés).
 
 ## Funciones
 
@@ -101,7 +101,7 @@ Cada entrada enlaza con su documento de diseño (en inglés).
 
 | | |
 |---|---|
-| **[Escritorio e interfaz web](https://openprogram.io/docs/reference/design/ui/README.html)** | Un espacio de trabajo en macOS, Windows, Linux o un servidor. |
+| **[Escritorio e interfaz web](https://openprogram.io/docs/reference/design/ui/README.html)** | La App en macOS, y desde v1.1.0 también en Linux y Windows; la interfaz web en cualquiera de ellos o en un servidor. |
 | **[Paneles divididos](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | Chats, archivos, terminales y páginas web uno al lado del otro. |
 | **[Navegador integrado](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | Un navegador que el agente lee y maneja mientras tú miras. |
 | **[Terminal integrada](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | Terminales en el espacio de trabajo, compartidas con el agente. |

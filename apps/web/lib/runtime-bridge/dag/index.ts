@@ -111,7 +111,16 @@ export function setHistoryContextRange(
   }
 }
 
-export function refreshHistoryContextRange(sessionId: string | null): void {
+// Opening a conversation asks for its range from several places at once.
+const RANGE_READ_WINDOW_MS = 1500;
+let lastRangeRead: { url: string; at: number } | null = null;
+
+/** `changed`: the context just changed (a turn ended, a compaction), so a
+ *  range read a moment ago no longer holds. */
+export function refreshHistoryContextRange(
+  sessionId: string | null,
+  { changed = false }: { changed?: boolean } = {},
+): void {
   if (!sessionId) {
     setHistoryContextRange(null);
     return;
@@ -121,8 +130,12 @@ export function refreshHistoryContextRange(sessionId: string | null): void {
   // a race between checkout and repaint paints "out of the next
   // request" dashes under an in-context white fill.
   const head = _lastHeadId;
-  fetch("/api/sessions/" + encodeURIComponent(sessionId) + "/context-range"
-    + (head ? "?head_id=" + encodeURIComponent(head) : ""))
+  const url = "/api/sessions/" + encodeURIComponent(sessionId) + "/context-range"
+    + (head ? "?head_id=" + encodeURIComponent(head) : "");
+  const now = Date.now();
+  if (!changed && lastRangeRead?.url === url && now - lastRangeRead.at < RANGE_READ_WINDOW_MS) return;
+  lastRangeRead = { url, at: now };
+  fetch(url)
     .then((r) => (r.ok ? r.json() : null))
     .then((j) => {
       if (j) setHistoryContextRange(j.node_ids || [], j.nodes || null);

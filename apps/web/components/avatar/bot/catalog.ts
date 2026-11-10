@@ -4,6 +4,7 @@
  * Kept apart from the renderer (./runtime.ts) so the picker, the identity
  * rule and the tests can list both without loading it.
  */
+import { fitInk } from "../../brand-mark/fit";
 
 /** Shape ids. The first seven ship with the open-bot-avatar package, the
  *  rest are in ./gallery.ts. The order is the picker's order and the order
@@ -102,4 +103,15 @@ export function botFit(shape: string): BotFit {
     left: 0.5 - (scale * (x0 + x1)) / 200,
     top: 0.5 - (scale * (y0 + y1)) / 200,
   };
+}
+
+/** Scale and place a character's drawing box by the composer's fill rule
+ *  (fitInk in @/components/brand-mark/fit), with the body as the ink: its
+ *  longer side is the slot's side, centred. Used only for the composer's
+ *  Agent chip and the Agent menu; every other character uses botFit. */
+export function botMarkFit(shape: string): BotFit {
+  const [x0, y0, x1, y1] = BOT_EXTENTS[isBotShape(shape) ? shape : DEFAULT_BOT_SHAPE];
+  const slot = 100;
+  const fit = fitInk({ x: x0, y: y0, width: x1 - x0, height: y1 - y0, viewBox: [0, 0, 100, 100] }, slot);
+  return { scale: fit.width / slot, left: fit.left / slot, top: fit.top / slot };
 }

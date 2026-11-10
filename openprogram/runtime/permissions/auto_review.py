@@ -32,12 +32,13 @@ async def prepare_review(agent_tool, req, call_id, args, *, operation_id=None):
     from openprogram.runtime.permissions.auto_history import for_operation
     working_dir = current_worktree_path() or os.getcwd()
     reviewed_args = copy.deepcopy(args)
-    decision = permission_decision(agent_tool, req, reviewed_args)[0]
+    decision = permission_decision(agent_tool, req, reviewed_args).outcome
     if req.permission_mode != "auto" or decision not in {"auto", "allow"}:
         return None
     history = None
     record = None
     files = {}
+    reviewed_screen = False
     try:
         files = capture(name, reviewed_args)
         history = for_operation(req, name, call_id, reviewed_args, operation_id, files=files)
@@ -58,10 +59,10 @@ async def prepare_review(agent_tool, req, call_id, args, *, operation_id=None):
             blocked, reason = verdict
             verdict = ReviewResult(blocked, reason, getattr(verdict, "code",
                 "AUTO_CLASSIFIER_DENY" if blocked else "AUTO_CLASSIFIER_ALLOW"))
-        from openprogram.runtime.permissions.lifecycle import current_permission_request
+            reviewed_screen = verdict.code == "AUTO_CLASSIFIER_ALLOW"
+        from openprogram.runtime.permissions.lifecycle import current_permission_request, policy_changed
         current = current_permission_request(req)
-        if working_dir != (current_worktree_path() or os.getcwd()) or any(getattr(current, key, None) != getattr(req, key, None)
-               for key in ("permission_mode", "permission_rules", "_permission_version")):
+        if working_dir != (current_worktree_path() or os.getcwd()) or policy_changed(req, current, name):
             verdict = ReviewResult(True, "permission changed during review", "PERMISSION_REVIEW_STALE")
         try:
             validate(files)
@@ -70,6 +71,11 @@ async def prepare_review(agent_tool, req, call_id, args, *, operation_id=None):
         if record is None and history and verdict.code in {"AUTO_CLASSIFIER_ALLOW", "AUTO_CLASSIFIER_DENY"}:
             record = history.record(blocked=verdict.blocked, reason=verdict.reason, code=verdict.code)
             verdict = ReviewResult(record["blocked"], record["reason"], record["code"])
+        if reviewed_screen and not verdict.blocked:
+            from openprogram.runtime.permissions.policy import keeps_screen_review
+            if keeps_screen_review(name):
+                from openprogram.runtime.permissions import app_grants
+                app_grants.grant(req, name, reviewed_args)
     except Exception:
         verdict = ReviewResult(True, "automatic permission history is unavailable", "AUTO_HISTORY_UNAVAILABLE")
     return PreparedReview(str(call_id), reviewed_args, verdict, record, history, files, working_dir)

@@ -1,5 +1,6 @@
 "use client";
 
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useState } from "react";
 
 import styles from "./channels.module.css";
@@ -23,23 +24,17 @@ export function AccessList({ access, onChange }: Props) {
     setBusyKey(key);
     setError(null);
     try {
-      const response = await fetch("/api/channels/access/approve", {
+      await jsonFetch("/api/channels/access/approve", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channel: account.channel,
           account_id: account.account_id,
           code,
         }),
       });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setError(body?.detail || text("Approval failed", "批准失败"));
-        return;
-      }
       await onChange();
-    } catch {
-      setError(text("Approval failed", "批准失败"));
+    } catch (e) {
+      setError((e as Error).message || text("Approval failed", "批准失败"));
     } finally {
       setBusyKey(null);
     }
@@ -53,17 +48,10 @@ export function AccessList({ access, onChange }: Props) {
       const path = [account.channel, account.account_id, userId]
         .map(encodeURIComponent)
         .join("/");
-      const response = await fetch(`/api/channels/access/${path}`, {
-        method: "DELETE",
-      });
-      if (!response.ok) {
-        const body = await response.json().catch(() => null);
-        setError(body?.detail || text("Revoke failed", "撤销失败"));
-        return;
-      }
+      await jsonFetch(`/api/channels/access/${path}`, { method: "DELETE" });
       await onChange();
-    } catch {
-      setError(text("Revoke failed", "撤销失败"));
+    } catch (e) {
+      setError((e as Error).message || text("Revoke failed", "撤销失败"));
     } finally {
       setBusyKey(null);
     }
@@ -81,8 +69,8 @@ export function AccessList({ access, onChange }: Props) {
           </div>
           <div className={styles.sectionSub}>
             {text(
-              "Unknown senders receive an eight-character code and cannot reach the agent. Approve codes only here or in the local terminal.",
-              "陌生发送者只会收到八位配对码，消息不会进入 Agent。配对码只能在此处或本机终端批准。",
+              "In direct messages, unknown senders receive an eight-character code and cannot reach the agent. Approve codes only here or in the local terminal. A paired sender acts as you, in direct messages and in groups.",
+              "在私聊里，陌生发送者只会收到八位配对码，消息不会进入 Agent。配对码只能在此处或本机终端批准。已配对的发送者就是你本人，私聊和群聊都一样。",
             )}
           </div>
         </div>

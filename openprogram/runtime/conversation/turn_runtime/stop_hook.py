@@ -76,6 +76,7 @@ def continue_stop_hook_turns(
 
         reason = "; ".join(outcome.reasons) or "hook denied the stop"
         from openprogram.runtime.permissions.authority import runtime_authority
+        from openprogram.runtime.permissions.identity import detached_from_window
         next_req = replace(
             prev_req,
             user_text=f"[hook] {reason}。继续。",
@@ -86,6 +87,7 @@ def continue_stop_hook_turns(
             history_override=None,
             attachments=None,
             spawn_caller=None,
+            detached=detached_from_window(prev_req),
             **runtime_authority(prev_req, "hook_continue"),
         )
         result = run_turn(next_req, on_event=on_event,

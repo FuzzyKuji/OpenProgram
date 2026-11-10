@@ -31,6 +31,12 @@
   height: 6px;
   transition: opacity var(--motion-slow), background var(--motion-medium), height var(--motion-fast);
 }
+/* The thumb of a box marked data-scrollbar-layer="content" stays in the
+   content layer: above the box's rows, under a control floating on the
+   box's edge (the width handle on the Agents page's divider is z 2). */
+.overlay-thumb-content {
+  z-index: 1;
+}
 .overlay-thumb.visible { opacity: 0.85; pointer-events: auto; }
 .overlay-thumb:hover,
 .overlay-thumb.dragging {

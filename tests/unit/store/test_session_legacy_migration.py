@@ -1,7 +1,6 @@
 """Recoverable legacy migration: journal, external recovery, restart, delete."""
 from __future__ import annotations
 
-import json
 import os
 from pathlib import Path
 
@@ -24,6 +23,7 @@ from openprogram.state.store.session.placement import (
     nested_session_dir,
     record_delete_intent,
 )
+from openprogram.state.store.session.session_log import SessionLog
 from openprogram.state.store.session.session_store import SessionStore
 from openprogram.state.store.session.session_store import SessionPlacementError
 
@@ -45,13 +45,9 @@ def _legacy_session(tmp_path: Path, store: SessionStore, name: str = "paper"):
     sid = "legacy1"
     source = workdir / ".openprogram" / "sessions" / sid
     source.mkdir(parents=True)
-    (source / "history").mkdir()
-    (source / "meta.json").write_text(
-        json.dumps({"id": sid, "title": "kept", "project_id": proj.id}),
-        encoding="utf-8")
-    (source / "history" / "0001-u-u1.json").write_text(
-        json.dumps({"id": "u1", "role": "user", "content": "hello"}),
-        encoding="utf-8")
+    log = SessionLog(source)
+    log.write_meta({"id": sid, "title": "kept", "project_id": proj.id})
+    log.write_history(1, "user", "u1", {"id": "u1", "role": "user", "content": "hello"})
     recovery = source.parent / ".file-recovery" / sid
     recovery.mkdir(parents=True)
     (recovery / "turn1").mkdir()
@@ -118,13 +114,12 @@ def test_migration_publishes_session_and_external_recovery(tmp_path, monkeypatch
     result = run_startup_migration(store)
     assert result[sid] == "done"
     dest = nested_session_dir(store.root_path, proj.id, sid)
-    assert (dest / "meta.json").is_file()
-    assert (dest / "history" / "0001-u-u1.json").read_text(encoding="utf-8")
+    assert (dest / "main.jsonl").read_text(encoding="utf-8")
     external = dest.parent / ".file-recovery" / sid
     assert (external / "turn1" / "blob").read_text(encoding="utf-8") == "before"
     assert not source.exists()
     assert not recovery.exists()
-    assert json.loads((dest / "meta.json").read_text())["title"] == "kept"
+    assert SessionLog(dest).read_meta()["title"] == "kept"
 
 
 def test_migration_keeps_source_when_staged_file_fsync_fails(tmp_path, monkeypatch):
@@ -167,7 +162,7 @@ def test_migration_flushes_nested_files_without_following_symlinks(
     project, sid, source, _recovery = _legacy_session(tmp_path, store)
     outside = tmp_path / "outside.txt"
     outside.write_text("do not open", encoding="utf-8")
-    link = source / "history" / "outside-link"
+    link = source / "file_backups" / "outside-link"
     try:
         link.symlink_to(outside)
     except OSError as exc:
@@ -201,15 +196,14 @@ def test_migration_flushes_nested_files_without_following_symlinks(
     assert migrate_session(store, collect_legacy_candidates(store)[0]) == "done"
     flushed_paths = [Path(path).as_posix() for path in flushed_paths]
     staged = staging_dir(store.root_path, sid).as_posix()
-    assert any(path.endswith("/session/history/0001-u-u1.json") for path in flushed_paths)
+    assert any(path.endswith("/session/main.jsonl") for path in flushed_paths)
     assert any(path.endswith("/session/file_backups/old/x") for path in flushed_paths)
     assert any(path.endswith(f"/{sid}.recovery/turn1/blob") for path in flushed_paths)
     if os.name != "nt":
-        assert any(path.endswith("/session/history") for path in flushed_paths)
         assert any(path.endswith("/session/file_backups/old") for path in flushed_paths)
         assert any(path.endswith("/session/file_backups") for path in flushed_paths)
         assert any(path.endswith(f"/{sid}.recovery/turn1") for path in flushed_paths)
-    assert not any(path.endswith("/session/history/outside-link") for path in flushed_paths)
+    assert not any(path.endswith("/session/file_backups/outside-link") for path in flushed_paths)
     assert staged not in flushed_paths
     assert outside.read_text(encoding="utf-8") == "do not open"
 
@@ -230,7 +224,7 @@ def test_migration_keeps_source_when_nested_directory_fsync_fails(tmp_path, monk
         return fd
 
     def fail_nested_directory_fsync(fd):
-        if staged_fds.get(fd, "").endswith("/session/history"):
+        if staged_fds.get(fd, "").endswith("/session/file_backups"):
             raise OSError("injected nested directory fsync failure")
         return real_fsync(fd)
 
@@ -296,13 +290,12 @@ def test_interrupted_copy_resumes_without_clobber(tmp_path, monkeypatch):
     proj, sid, source, _recovery = _legacy_session(tmp_path, store)
     dest = nested_session_dir(store.root_path, proj.id, sid)
     dest.mkdir(parents=True)
-    (dest / "meta.json").write_text(json.dumps({"id": sid, "title": "other"}), encoding="utf-8")
-    (dest / "history").mkdir()
+    SessionLog(dest).write_meta({"id": sid, "title": "other"})
     result = migrate_session(store, {
         "session_id": sid, "project_id": proj.id, "source": str(source),
     })
     assert result == "failed"
-    assert json.loads((dest / "meta.json").read_text())["title"] == "other"
+    assert SessionLog(dest).read_meta()["title"] == "other"
     assert source.exists()
 
 
@@ -360,6 +353,6 @@ def test_migration_flush_uses_writable_handles_on_windows(tmp_path, monkeypatch)
     })
     assert result == "done", load_journal(store.root_path)
     destination = nested_session_dir(store.root_path, project.id, sid)
-    assert json.loads((destination / "meta.json").read_text())["title"] == "kept"
+    assert SessionLog(destination).read_meta()["title"] == "kept"
     assert not source.exists()
     assert not descriptors

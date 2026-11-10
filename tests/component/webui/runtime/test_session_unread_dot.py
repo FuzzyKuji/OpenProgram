@@ -82,6 +82,77 @@ def test_turn_end_on_screen_is_not_unread(connections):
     assert frames[-1]["data"] == {"id": "s1", "status": "done", "unread": False}
 
 
+def _read(ws, session_id, db_updates, monkeypatch):
+    from openprogram.interfaces.server.ws_actions.session import handle_mark_session_read
+    from openprogram.runtime.conversation.always_on import pending
+    import openprogram.runtime.context.session_db as session_db
+
+    monkeypatch.setattr(session_db, "default_db", lambda: types.SimpleNamespace(
+        update_session=lambda sid, **fields: db_updates.append((sid, fields))))
+    seen: list[str] = []
+    monkeypatch.setattr(pending, "mark_seen", lambda sid: seen.append(sid) or False)
+    asyncio.run(handle_mark_session_read(ws, {"session_id": session_id}))
+    return seen
+
+
+def test_turn_end_in_a_hidden_window_is_unread(connections):
+    from openprogram.interfaces.server.ws_actions.session import handle_set_window_hidden
+    from openprogram.runtime.conversation.turn_runtime.turn_writer import mark_session_finished
+
+    sockets, _ = connections
+    ws = _WS(focused="s1")
+    sockets.append(ws)
+    asyncio.run(handle_set_window_hidden(ws, {"hidden": True}))
+    db = _DB()
+
+    mark_session_finished(db, "s1")
+
+    assert ws._focused_session_id == "s1"
+    assert db.updates == [("s1", {"status": "done", "unread": True})]
+
+    asyncio.run(handle_set_window_hidden(ws, {"hidden": False}))
+    mark_session_finished(db, "s1")
+
+    assert db.updates[-1] == ("s1", {"status": "done", "unread": False})
+
+
+def test_a_second_visible_window_keeps_it_on_screen(connections):
+    from openprogram.runtime.conversation.turn_runtime.turn_writer import mark_session_finished
+
+    sockets, _ = connections
+    hidden = _WS(focused="s1")
+    hidden._window_hidden = True
+    sockets.extend([hidden, _WS(focused="s1")])
+    db = _DB()
+
+    mark_session_finished(db, "s1")
+
+    assert db.updates == [("s1", {"status": "done", "unread": False})]
+
+
+def test_a_hidden_window_keeps_focus_but_clears_nothing(connections, monkeypatch):
+    _, frames = connections
+    ws = _WS(focused="other")
+    ws._window_hidden = True
+    updates: list = []
+
+    seen = _read(ws, "s1", updates, monkeypatch)
+
+    assert ws._focused_session_id == "s1"
+    assert (updates, seen, frames) == ([], [], [])
+
+
+def test_a_visible_window_still_clears_dot_and_news(connections, monkeypatch):
+    _, frames = connections
+    updates: list = []
+
+    seen = _read(_WS(), "s1", updates, monkeypatch)
+
+    assert updates == [("s1", {"unread": False})]
+    assert seen == ["s1"]
+    assert frames == [{"type": "session_updated", "data": {"id": "s1", "unread": False}}]
+
+
 def test_failed_turn_records_failure_with_unread(connections):
     from openprogram.runtime.conversation.turn_runtime.turn_writer import TurnWriter
 

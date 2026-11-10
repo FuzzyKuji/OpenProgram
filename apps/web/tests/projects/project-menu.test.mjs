@@ -69,6 +69,19 @@ test("a draft chat lists every project, including one whose folder is missing, a
   await view.unmount();
 });
 
+test("only the project list scrolls; Open folder… stays pinned under it", async () => {
+  setup();
+  const view = await render(h(ProjectMenu, { onClose() {}, pickFolder: async () => null }));
+  const panel = view.container.firstElementChild;
+  assert.match(panel.className, /overflow-hidden/);
+  assert.doesNotMatch(panel.className, /overflow-y-auto/, "the panel itself never scrolls");
+  const list = view.container.querySelector(".project-menu-list");
+  assert.match(list.className, /overflow-y-auto/);
+  assert.ok(list.contains(item(view.container, "Alpha")), "projects live in the scrolling list");
+  assert.ok(!list.contains(item(view.container, "Open folder…")), "Open folder… sits outside it");
+  await view.unmount();
+});
+
 test("picking a project in a draft stores it as the chat's pending project, sent with the first message", async () => {
   const { pending } = setup();
   let closed = 0;

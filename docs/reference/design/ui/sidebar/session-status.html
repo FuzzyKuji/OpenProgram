@@ -1,1 +1,29 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><title>Sidebar session status</title><style>body{max-width:850px;margin:48px auto;font:16px/1.65 system-ui;color:#243044}h1,h2{line-height:1.25}code{background:#eef1f5;padding:2px 5px}</style><h1>Sidebar session status</h1><p>A running conversation that is not waiting for user input displays three pulsing dots, including when pinned. Only the selected running row displays the background sweep. Selection is represented by <code>aria-current="true"</code>.</p><h2>Rendering</h2><p>ConvItem prioritizes needs-input, then running, then unread. StatusMarker displays the resulting state before considering the pinned and idle markers. Waiting for input retains its amber marker. CSS suppresses running and finishing pseudo-elements on unselected rows. Backend status, task execution, navigation, and conversation persistence are unchanged.</p><h2>Installation and recovery</h2><p>Source TSX and CSS are built through the normal release asset pipeline. The committed checkout is installed with <code>scripts/refresh-local-app.sh</code>, which replaces the default App runtime and frontend together. Installed minified JavaScript and generated asset names are never manually patched. The workspace root package manifest retains workspace definitions and is separate from the desktop package manifest.</p><h2>Acceptance</h2><ul><li>Web tests, Web checks, production build, Desktop checks, repository contracts and documentation links pass.</li><li>Every installed frontend JavaScript chunk parses successfully.</li><li>The default App renders both the affected conversation and another conversation without a client exception.</li><li>The default worker health endpoint and installed source revision match the validated checkout.</li></ul><h2>Implementation status</h2><p>The source behavior is implemented and independently reviewed. Web tests, Web and Desktop checks, repository contracts, and documentation links pass. Installation uses the production build and the acceptance checks above; a successful source check alone does not establish installed-App health.</p></html>
+<title>Sidebar session status</title>
+<meta name="description" content="Which marker a sidebar conversation row shows, and when the running sweep appears.">
+<meta name="covers" content="apps/web/components/sidebar/">
+<h1>Sidebar session status</h1>
+
+<table class="stack">
+<thead><tr><th scope="col">Priority</th><th scope="col">State</th><th scope="col">Marker</th><th scope="col">Background</th></tr></thead>
+<tbody>
+<tr><th scope="row">1</th><td>Needs input</td><td>Amber</td><td>None</td></tr>
+<tr><th scope="row">2</th><td>Running</td><td>Three pulsing dots, including when pinned</td><td>Sweep on the selected row only</td></tr>
+<tr><th scope="row">3</th><td>Unread</td><td>Unread dot</td><td>None</td></tr>
+<tr><th scope="row">4</th><td>Pinned, idle</td><td>Pinned or idle marker</td><td>None</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">ConvItem</code> resolves the state; <code translate="no">StatusMarker</code> draws it. Selection is <code translate="no">aria-current="true"</code>. CSS suppresses running and finishing pseudo-elements on unselected rows. Backend status, task execution, navigation and conversation persistence are not involved.</p>
+
+<details>
+<summary>Installation and acceptance</summary>
+<p>Source TSX and CSS go through the normal release asset pipeline; installed minified JavaScript and generated asset names are never patched by hand. The workspace root package manifest holds the workspace definitions and is separate from the desktop manifest.</p>
+<ul>
+<li>Web tests and checks, production build, Desktop checks, repository contracts and documentation links pass.</li>
+<li>Every installed frontend JavaScript chunk parses.</li>
+<li>The App renders the affected conversation and another one without a client exception.</li>
+<li>Worker health and the installed source revision match the validated checkout. A source check alone does not establish installed-App health.</li>
+</ul>
+</details>
+
+<h2 id="implementation-status">Implementation status</h2>
+<p>Implemented.</p>

@@ -423,15 +423,11 @@ def test_oversized_critical_frame_closes_with_recovery_required() -> None:
     asyncio.run(scenario())
 
 
-def test_bounded_chat_delivery_defers_graph_and_releases_history_snapshot():
-    from pathlib import Path
-    from openprogram.interfaces.server.session_history import HistorySnapshot, install_snapshot
+def test_web_delivery_sends_the_graph_only_to_the_open_dag_panel():
     async def scenario():
         raw=_SlowWebSocket();raw.release.set()
-        ws=QueuedWebSocket(raw,asyncio.get_running_loop());ws._bounded_history=True
-        snapshot=HistorySnapshot('s','m',[{'id':'m','role':'user','content':'hello'}],{'m'})
-        directory=Path(snapshot._directory.name)
-        install_snapshot(ws,snapshot);ws.start()
+        ws=QueuedWebSocket(raw,asyncio.get_running_loop());ws._history_protocol=3
+        ws.start()
         payload=json.dumps({'type':'branches_list','data':{'session_id':'s','graph':[{'id':'m'}]}})
         try:
             await ws.send_text(payload)
@@ -441,5 +437,4 @@ def test_bounded_chat_delivery_defers_graph_and_releases_history_snapshot():
             assert raw.sent[-1]['data']['graph']==[{'id':'m'}]
         finally:
             await ws.stop()
-        assert not directory.exists()
     asyncio.run(scenario())

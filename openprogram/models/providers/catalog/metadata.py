@@ -297,13 +297,6 @@ def default_base_url_for(provider_id: str) -> str | None:
     return md.get("base_url")
 
 
-def doc_url_for(provider_id: str) -> str | None:
-    """Provider docs URL (for the "Get an API key →" link in the
-    setup hint). models.dev only — there's no manual table for this."""
-    md = _models_dev_info(provider_id)
-    return md.get("doc_url")
-
-
 _credential_status: ContextVar[frozenset[str] | None] = ContextVar("provider_credential_status", default=None)
 
 

@@ -207,7 +207,6 @@ def test_registered_function_resumes_selected_code_without_repeating_effect(
         "execution",
         expected_version=execution.status_version,
         owner_id="worker",
-        ttl_seconds=30,
     )
     active, execution = attempts.activate(
         leased.attempt_id,
@@ -377,7 +376,6 @@ def _active_execution(tmp_path):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="owner",
-        ttl_seconds=30,
     )
     active, execution = attempts.activate(
         leased.attempt_id,

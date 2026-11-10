@@ -171,7 +171,8 @@ export interface CenterTabsState {
   openWebTab: (url: string, agentRequest?: boolean) => void;
   /** Always append a distinct web tab for a native page popup. */
   /** ``id`` is the desktop's, when it already made the popup's native Page. */
-  openPopupWebTab: (url: string, openerTabId: string, id?: string) => string;
+  /** `behind` keeps the tab the user is on: the popup came from an Agent's step. */
+  openPopupWebTab: (url: string, openerTabId: string, id?: string, behind?: boolean) => string;
   /** Create or reuse a web tab without focusing it or opening a split. */
   markAgentWebTab: (id: string, sessionId?: string, attribution?: {
     branchId?: string; executionId?: string;

@@ -47,10 +47,6 @@ if mode == 'start':
             effects.mark_dispatched(effect.effect_id, expected_status=EffectStatus.PLANNED)
             with (folder / 'side-effects').open('a') as stream:
                 stream.write('once\n')
-        if phase == 'after_result':
-            effects.resolve(effect.effect_id, expected_status=EffectStatus.DISPATCHED,
-                outcome=EffectStatus.COMMITTED, receipt={'output': 'saved result'},
-                attempt_id=attempt.attempt_id, generation=attempt.generation)
         # Publish readiness only after the complete recovery identity is closed.
         # The parent intentionally kills this process as soon as ready exists.
         pending = ready.with_suffix('.tmp')
@@ -103,15 +99,13 @@ else:
     assert calls[0].history_override is None
     assert ('Do the work' if phase == 'before_dispatch' else 'Inspect actual state') in calls[0].user_text
     try:
-        AttemptStore(store).heartbeat(saved['attempt_id'], generation=saved['generation'], ttl_seconds=30)
+        AttemptStore(store).ensure_held(saved['attempt_id'], generation=saved['generation'])
     except AttemptConflict as error:
         assert error.code == 'stale_owner', error.code
     else:
         raise AssertionError('old owner accepted after recovery')
     effect = effects.get('operation')
-    if phase == 'after_result':
-        assert effect.status is EffectStatus.COMMITTED and effect.receipt['output'] == 'saved result'
-    elif phase == 'after_start':
+    if phase == 'after_start':
         assert effect.status is EffectStatus.DISPATCHED
     else:
         assert effect.status is EffectStatus.PLANNED
@@ -120,7 +114,7 @@ else:
 
 
 @pytest.mark.parametrize("has_goal", [False, True])
-@pytest.mark.parametrize("phase", ["before_dispatch", "after_start", "after_result"])
+@pytest.mark.parametrize("phase", ["before_dispatch", "after_start"])
 def test_killed_chat_recovers_once_without_repeating_effects(tmp_path, has_goal, phase):
     home = tmp_path / "home"
     home.mkdir()

@@ -429,3 +429,21 @@ def test_settings_models_route_uses_snapshot(monkeypatch, mem_cfg):
         assert not inspect.iscoroutinefunction(endpoints[path])
     response = endpoints["/api/providers/{name}/models"]("acme")
     assert json.loads(response.body)["models"][0]["id"] == "local"
+
+
+def test_provider_list_route_says_why_it_failed(monkeypatch):
+    # The settings page shows this instead of an empty provider list.
+    import json
+    from fastapi import FastAPI
+    from openprogram.interfaces.server.routes.identity.providers import register
+
+    def broken():
+        raise OSError("catalogue unreadable")
+
+    monkeypatch.setattr("openprogram.models.listing.list_providers", broken)
+    app = FastAPI()
+    register(app)
+    endpoint = {route.path: route.endpoint for route in app.routes}["/api/providers/list"]
+    response = endpoint()
+    assert response.status_code == 500
+    assert json.loads(response.body) == {"error": "OSError: catalogue unreadable"}

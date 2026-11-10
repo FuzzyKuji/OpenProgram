@@ -271,16 +271,14 @@ class HistoryOperations:
             if model_node_id and model_node_id in graph.nodes:
                 read_ids = [node_id for node_id in read_ids if node_id != model_node_id]
                 store.update(model_node_id, reads=read_ids)
-            # Resolve the session's history/ dir so an over-cap node's
-            # truncation marker can cite the exact node file the agent can
-            # ``read`` back. Best-effort: any failure → generic marker.
-            history_dir = None
+            # The session's directory identifies it on disk for the
+            # renderer. Best-effort: any failure passes None.
+            session_directory = None
             try:
-                _sess_dir = store.store._session_dir(store.session_id)
-                history_dir = str(_sess_dir / "history")
+                session_directory = str(store.store._session_dir(store.session_id))
             except Exception:
-                history_dir = None
-            history = render_dag_messages(graph, read_ids, history_dir)
+                session_directory = None
+            history = render_dag_messages(graph, read_ids, session_directory)
 
             # Synthesize the current turn from ``content`` blocks via
             # the same helper the no-store fallback uses, so image /

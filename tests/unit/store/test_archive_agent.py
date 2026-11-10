@@ -24,7 +24,7 @@ same technique as test_send_message.py / test_agent_dispatch.py):
     shared guard; read_conversation and agent(start_from="SID:MSG_ID")
     forks are unaffected
 
-See docs/reference/design/runtime/collaboration/agent-collaboration.md.
+See docs/reference/design/runtime/collaboration/agent-collaboration.html.
 """
 from __future__ import annotations
 
@@ -255,7 +255,7 @@ def test_auto_rename_writeback_keeps_archived(parent_turn, monkeypatch):
 
     monkeypatch.setattr(
         "openprogram.models.providers.streaming.background_llm.build_background_llm",
-        lambda: _llm_that_archives)
+        lambda call_kind=None: _llm_that_archives)
 
     titles.maybe_auto_name_branch(parent_turn, "p1", "a0")
 
@@ -280,7 +280,7 @@ def test_auto_rename_skips_archived_branch(parent_turn, monkeypatch):
         return "should not be used"
 
     monkeypatch.setattr(
-        "openprogram.models.providers.streaming.background_llm.build_background_llm", lambda: _llm)
+        "openprogram.models.providers.streaming.background_llm.build_background_llm", lambda call_kind=None: _llm)
 
     titles.maybe_auto_name_branch(parent_turn, "p1", "a0")
 

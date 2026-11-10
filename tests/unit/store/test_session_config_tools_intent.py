@@ -2,7 +2,7 @@
 set; a session only overlays web search or a /skill's allowed-tools, and the
 dispatcher expander honours both live.
 
-Design: docs/reference/design/runtime/agent-configuration/tool-toggle-management.md.
+Design: docs/reference/design/runtime/agent-configuration/tool-toggle-management.html.
 """
 from __future__ import annotations
 

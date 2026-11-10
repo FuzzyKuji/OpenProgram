@@ -3,13 +3,15 @@ from pathlib import Path
 import subprocess
 import pytest
 
+from tests.support.transcript.history_wire import history_wire_script
+
 ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.browser
 
 
 def test_send_jump_peer_and_loader_follow(tmp_path):
     from playwright.sync_api import sync_playwright, expect
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React,{useRef} from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {useHistoryWindow} from './components/chat/messages/list/use-history-window';
@@ -23,8 +25,8 @@ import {sendChatMessage} from './components/chat/composer/submit/send-chat-messa
 function page(id,start=200){let end=start+50;return {messages:Array.from({length:50},(_,i)=>({id:`${id}-${start+i}`,role:'user',content:`Message ${start+i}`,status:'completed'})),history:{snapshot:id,head_id:`${id}-499`,before:`${id}-${start}`,after:end<500?`${id}-${end-1}`:null,start,end,total:500}};}
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(wire){let req=JSON.parse(wire);if(req.action==='load_session')window.requests.push(req);}}
 window.requests=[];window.WebSocket=Socket;const socket=new Socket();setSocket(socket);
-window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedHistoryWindow(id,r.messages,r.history);registerSessionHistory(id,r.history);useSessionStore.getState().setMessages(id,r.messages);};
-window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_around?Number(req.history_around.split('-').at(-1))-25:req.history_before?Number(req.history_before.split('-').at(-1))-50:Number(req.history_after.split('-').at(-1))+1;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...page(req.session_id,start)}})}));};
+window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedWire(id,r);useSessionStore.getState().applyRead(id,r.messages);};
+window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_around?Number(req.history_around.split('-').at(-1))-25:req.history_before?Number(req.history_before.split('-').at(-1))-50:Number(req.history_after.split('-').at(-1))+1;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...asWire(page(req.session_id,start))}})}));};
 window.pageState=id=>useSessionHistory.getState().pages[id];
 runtimeState.currentSessionId='main';useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});window.seed('main',200);
 // Test an explicit send from a restored older reading position, rather than
@@ -97,7 +99,7 @@ window.sendLeft=()=>{const a=document.querySelectorAll('.area')[0];const before=
 
 def test_public_send_on_latest_window(tmp_path):
     from playwright.sync_api import sync_playwright, expect
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {useSessionStore} from './lib/session-store';
@@ -109,7 +111,7 @@ import {sendChatMessage} from './components/chat/composer/submit/send-chat-messa
 function page(id){return {messages:Array.from({length:40},(_,i)=>({id:`${id}-${450+i}`,role:'user',content:`Message ${450+i}`,status:'completed'})),history:{snapshot:id,head_id:`${id}-489`,before:`${id}-450`,after:null,start:450,end:490,total:500}};}
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(){}}
 window.WebSocket=Socket;const socket=new Socket();setSocket(socket);
-const r=page('main');runtimeState.conversations.main={id:'main',messages:r.messages};seedHistoryWindow('main',r.messages,r.history);registerSessionHistory('main',r.history);useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});useSessionStore.getState().setMessages('main',r.messages);runtimeState.currentSessionId='main';
+const r=page('main');runtimeState.conversations.main={id:'main',messages:r.messages};seedWire('main',r);useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});useSessionStore.getState().applyRead('main',r.messages);runtimeState.currentSessionId='main';
 function Main(){const ids=useSessionStore(s=>s.messageOrder.main??[]);const {detached,jumpToLatest}=useChatAreaStick('main',ids.at(-1)??null,true);return <><div id="chatArea" tabIndex={0}><div id="chatMessages">{ids.map(id=><div data-msg-id={id} className="row" key={id}>{id}</div>)}</div></div>{detached&&<button onClick={jumpToLatest}>Jump</button>}</>;}
 createRoot(document.getElementById('mount')).render(<React.StrictMode><Main/></React.StrictMode>);
 window.sendPublic=()=>sendChatMessage({text:'hello from send',sessionId:'main',thinking:'medium',webSearchEnabled:false});
@@ -194,7 +196,7 @@ import {runtimeState,setSocket} from './lib/runtime-bridge/state';
 import {sendChatMessage} from './components/chat/composer/submit/send-chat-message';
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(){}}
 window.WebSocket=Socket;setSocket(new Socket());
-useSessionStore.setState({currentSessionId:null,activeChatKey:'local_welcome',welcomeVisible:true,messageOrder:{},messagesById:{}});
+useSessionStore.setState({currentSessionId:null,activeChatKey:'local_welcome',welcomeVisible:true,messageOrder:{},rowsByView:{}});
 runtimeState.currentSessionId=null;
 function Main(){const ids=useSessionStore(s=>s.messageOrder.local_welcome??[]);useChatAreaStick('local_welcome',ids.at(-1)??null,true);return <div className="chat-area" id="chatArea"><div id="welcome-mount"><div className="welcome">hi</div></div><div id="chatMessages">{ids.map(id=><div data-msg-id={id} className="row" key={id}>{id}</div>)}</div></div>;}
 createRoot(document.getElementById('mount')).render(<Main/>);
@@ -236,7 +238,7 @@ window.unlock=()=>{document.getElementById('welcome-mount').innerHTML='';useSess
 
 def test_send_during_older_load_then_fetches_latest(tmp_path):
     from playwright.sync_api import sync_playwright
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {useSessionStore} from './lib/session-store';
@@ -248,8 +250,8 @@ import {isFollowLocked} from './lib/chat/history/history-viewport';
 function page(id,start){let end=start+50;return {messages:Array.from({length:50},(_,i)=>({id:`${id}-${start+i}`,role:'user',content:`m${start+i}`,status:'completed'})),history:{snapshot:id,head_id:`${id}-499`,before:start>0?`${id}-${start}`:null,after:end<500?`${id}-${end-1}`:null,start,end,total:500}};}
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(wire){let req=JSON.parse(wire);if(req.action==='load_session')window.requests.push(req);}}
 window.requests=[];window.WebSocket=Socket;const socket=new Socket();setSocket(socket);
-window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedHistoryWindow(id,r.messages,r.history);registerSessionHistory(id,r.history);useSessionStore.getState().setMessages(id,r.messages);};
-window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_before?Number(String(req.history_before).split('-').at(-1))-50:400;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...page(req.session_id,start)}})}));};
+window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedWire(id,r);useSessionStore.getState().applyRead(id,r.messages);};
+window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_before?Number(String(req.history_before).split('-').at(-1))-50:400;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...asWire(page(req.session_id,start))}})}));};
 window.pageState=id=>useSessionHistory.getState().pages[id];
 runtimeState.currentSessionId='main';useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});window.seed('main',450);
 function Main(){const ids=useSessionStore(s=>s.messageOrder.main??[]);useChatAreaStick('main',ids.at(-1)??null,true);return <div id="chatArea" tabIndex={0}><div id="chatMessages">{ids.map(id=><div data-msg-id={id} className="row" key={id}>{id}</div>)}</div></div>;}
@@ -299,7 +301,7 @@ window.locked=()=>isFollowLocked('main');
 
 def test_jump_during_older_send_wait_still_fetches_latest(tmp_path):
     from playwright.sync_api import sync_playwright
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {useSessionStore} from './lib/session-store';
@@ -312,8 +314,8 @@ import {lastSettledTakeLatest,peekTakeLatest} from './lib/chat/history/chat-scro
 function page(id,start){let end=start+50;return {messages:Array.from({length:50},(_,i)=>({id:`${id}-${start+i}`,role:'user',content:`m${start+i}`,status:'completed'})),history:{snapshot:id,head_id:`${id}-499`,before:start>0?`${id}-${start}`:null,after:end<500?`${id}-${end-1}`:null,start,end,total:500}};}
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(wire){let req=JSON.parse(wire);if(req.action==='load_session')window.requests.push(req);}}
 window.requests=[];window.WebSocket=Socket;const socket=new Socket();setSocket(socket);
-window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedHistoryWindow(id,r.messages,r.history);registerSessionHistory(id,r.history);useSessionStore.getState().setMessages(id,r.messages);};
-window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_before?Number(String(req.history_before).split('-').at(-1))-50:400;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...page(req.session_id,start)}})}));};
+window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedWire(id,r);useSessionStore.getState().applyRead(id,r.messages);};
+window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_before?Number(String(req.history_before).split('-').at(-1))-50:400;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...asWire(page(req.session_id,start))}})}));};
 window.pageState=id=>useSessionHistory.getState().pages[id];
 runtimeState.currentSessionId='main';useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});window.seed('main',450);
 function Main(){const ids=useSessionStore(s=>s.messageOrder.main??[]);const {detached,jumpToLatest}=useChatAreaStick('main',ids.at(-1)??null,true);window.jump=jumpToLatest;return <><div id="chatArea" tabIndex={0}><div id="chatMessages">{ids.map(id=><div data-msg-id={id} className="row" key={id}>{id}</div>)}</div></div>{detached&&<button onClick={jumpToLatest}>Jump</button>}</>;}
@@ -375,7 +377,7 @@ window.settled=()=>lastSettledTakeLatest('main','main');
 
 def test_cancelled_or_failed_jump_releases_lock_and_does_not_retry(tmp_path):
     from playwright.sync_api import sync_playwright
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {useSessionStore} from './lib/session-store';
@@ -388,8 +390,8 @@ import {lastSettledTakeLatest,peekTakeLatest} from './lib/chat/history/chat-scro
 function page(id,start){let end=start+50;return {messages:Array.from({length:50},(_,i)=>({id:`${id}-${start+i}`,role:'user',content:`m${start+i}`,status:'completed'})),history:{snapshot:id,head_id:`${id}-499`,before:start>0?`${id}-${start}`:null,after:end<500?`${id}-${end-1}`:null,start,end,total:500}};}
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(wire){let req=JSON.parse(wire);if(req.action==='load_session')window.requests.push(req);}}
 window.requests=[];window.WebSocket=Socket;const socket=new Socket();setSocket(socket);
-window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedHistoryWindow(id,r.messages,r.history);registerSessionHistory(id,r.history);useSessionStore.getState().setMessages(id,r.messages);};
-window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_before?Number(String(req.history_before).split('-').at(-1))-50:400;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...page(req.session_id,start)}})}));};
+window.seed=(id,start)=>{const r=page(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedWire(id,r);useSessionStore.getState().applyRead(id,r.messages);};
+window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_before?Number(String(req.history_before).split('-').at(-1))-50:400;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...asWire(page(req.session_id,start))}})}));};
 window.pageState=id=>useSessionHistory.getState().pages[id];
 runtimeState.currentSessionId='main';useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});window.seed('main',200);
 function Main(){const ids=useSessionStore(s=>s.messageOrder.main??[]);const {detached,jumpToLatest}=useChatAreaStick('main',ids.at(-1)??null,true);window.jump=jumpToLatest;return <><div id="chatArea" tabIndex={0}><div id="chatMessages">{ids.map(id=><div data-msg-id={id} className="row" key={id}>{id}</div>)}</div></div>{detached&&<button onClick={jumpToLatest}>Jump</button>}</>;}
@@ -492,7 +494,7 @@ import {useSessionStore} from './lib/session-store';
 useSessionStore.setState({currentSessionId:'cold',activeChatKey:'cold'});
 function Main(){const ids=useSessionStore(s=>s.messageOrder.cold??[]);const {detached,jumpToLatest}=useChatAreaStick('cold',ids.at(-1)??null,true);return <><div id="chatArea"><div id="chatMessages">{ids.map(id=><div className="row" key={id}>{id}</div>)}</div></div>{detached&&<button onClick={jumpToLatest}>Jump</button>}</>;}
 createRoot(document.getElementById('mount')).render(<Main/>);
-window.loadTranscript=()=>useSessionStore.getState().setMessages('cold',Array.from({length:60},(_,i)=>({id:`row-${i}`,role:'user',content:'Message',status:'completed'})));
+window.loadTranscript=()=>useSessionStore.getState().applyRead('cold',Array.from({length:60},(_,i)=>({id:`row-${i}`,role:'user',content:'Message',status:'completed'})));
 '''
     bundle = tmp_path / "cold.js"
     subprocess.run([
@@ -526,9 +528,9 @@ window.loadTranscript=()=>useSessionStore.getState().setMessages('cold',Array.fr
             browser.close()
 
 
-def test_session_reload_preserves_reading_anchor_when_latest_page_is_shorter(tmp_path):
+def test_a_fresh_read_preserves_reading_anchor_when_latest_page_is_shorter(tmp_path):
     from playwright.sync_api import sync_playwright, expect
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {useHistoryWindow} from './components/chat/messages/list/use-history-window';
@@ -540,10 +542,10 @@ import {runtimeState} from './lib/runtime-bridge/state';
 window.fetch=async()=>new Response('{}',{headers:{'Content-Type':'application/json'}});
 function capture(start){return {id:'reload',messages:Array.from({length:500-start},(_,i)=>({id:`m-${start+i}`,role:'user',content:'Message',status:'completed'})),history:{snapshot:'capture',head_id:'m-499',before:start>0?`m-${start}`:null,after:null,start,end:500,total:500}};}
 const initial=capture(400);runtimeState.currentSessionId='reload';runtimeState.conversations.reload=initial;
-useSessionStore.setState({currentSessionId:'reload',activeChatKey:'reload'});seedHistoryWindow('reload',initial.messages,initial.history);registerSessionHistory('reload',initial.history);useSessionStore.getState().setMessages('reload',initial.messages);
+useSessionStore.setState({currentSessionId:'reload',activeChatKey:'reload'});seedWire('reload',initial);useSessionStore.getState().applyRead('reload',initial.messages);
 function Main(){const ids=useSessionStore(s=>s.messageOrder.reload??[]);useHistoryWindow('reload',true);const {detached,jumpToLatest}=useChatAreaStick('reload',ids.at(-1)??null,true);return <><div id="chatArea"><div id="chatMessages"><div id="messages-mount">{ids.map(id=><div data-msg-id={id} className="row" key={id}>{id}</div>)}</div></div></div>{detached&&<button onClick={jumpToLatest}>Jump</button>}</>;}
 createRoot(document.getElementById('mount')).render(<Main/>);
-window.reloadSession=()=>loadSessionData(capture(450));
+window.reloadSession=()=>loadSessionData(asWire(capture(450)));
 '''
     bundle = tmp_path / 'reload.js'
     subprocess.run(['node', '-e', "require('esbuild').buildSync({stdin:{contents:process.argv[3],resolveDir:process.argv[1],loader:'tsx'},bundle:true,format:'iife',platform:'browser',jsx:'automatic',loader:{'.css':'empty'},outfile:process.argv[2],tsconfig:process.argv[1]+'/tsconfig.json'});", str(ROOT/'apps/web'),str(bundle),entry],cwd=ROOT,check=True,capture_output=True)

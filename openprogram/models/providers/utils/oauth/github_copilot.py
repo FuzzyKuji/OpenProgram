@@ -28,14 +28,6 @@ def normalize_domain(domain: str) -> str:
     return parsed.netloc or parsed.path
 
 
-def get_github_copilot_base_url(domain: str | None = None) -> str:
-    """Get the GitHub Copilot API base URL for a domain."""
-    if not domain:
-        return _DEFAULT_BASE_URL
-    norm = normalize_domain(domain)
-    return f"https://{norm}/api/v3"
-
-
 async def login_github_copilot(callbacks: OAuthLoginCallbacks) -> OAuthCredentials:
     """Login with GitHub Copilot device code flow."""
     async with safe_async_client("provider.oauth.fixed") as client:

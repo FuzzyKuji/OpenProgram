@@ -20,7 +20,7 @@ import sys
 import threading
 import time
 from datetime import datetime
-from typing import Any
+from typing import Any, Callable
 
 _log = logging.getLogger(__name__)
 
@@ -76,10 +76,10 @@ def fire(entry: dict[str, Any], spec: dict[str, Any], event: dict[str, Any] | No
     return payload
 
 
-def shown(reminder_id: str) -> None:
-    """A desktop App showed this reminder; the worker need not."""
+def shown(notice_id: str) -> None:
+    """A desktop App showed this reminder or report; the worker need not."""
     with _shown_lock:
-        answered = _shown.get(reminder_id)
+        answered = _shown.get(notice_id)
     if answered is not None:
         answered.set()
 
@@ -104,7 +104,11 @@ def _bundle_notify(title: str, message: str) -> bool:
 
 
 def system_notify(title: str, message: str) -> bool:
-    """Post an operating-system notification from the worker itself."""
+    """Post an operating-system notification from the worker itself.
+
+    The texts can be anything an Agent wrote; ``--`` keeps one that starts
+    with a dash from being read as a command option.
+    """
     try:
         if sys.platform == "darwin":
             if _bundle_notify(title, message):
@@ -113,9 +117,9 @@ def system_notify(title: str, message: str) -> bool:
             script = ('on run argv\n'
                       'display notification (item 2 of argv) with title (item 1 of argv) '
                       'sound name "Glass"\nend run')
-            command = ["osascript", "-e", script, title, message]
+            command = ["osascript", "-e", script, "--", title, message]
         elif sys.platform.startswith("linux") and shutil.which("notify-send"):
-            command = ["notify-send", "--urgency=critical", "--app-name=OpenProgram", title, message]
+            command = ["notify-send", "--urgency=critical", "--app-name=OpenProgram", "--", title, message]
         else:
             return False
         return subprocess.run(command, capture_output=True, timeout=10).returncode == 0
@@ -124,13 +128,29 @@ def system_notify(title: str, message: str) -> bool:
         return False
 
 
-def _notify_unless_shown(reminder_id: str, answered: threading.Event, title: str, message: str) -> None:
+def _wait_then_notify(notice_id: str, answered: threading.Event, title: str, message: str,
+                      unless: Callable[[], bool] | None) -> None:
     try:
-        if not answered.wait(SHOWN_WAIT_S):
+        if not answered.wait(SHOWN_WAIT_S) and not (unless is not None and unless()):
             system_notify(title, message)
     finally:
         with _shown_lock:
-            _shown.pop(reminder_id, None)
+            _shown.pop(notice_id, None)
+
+
+def notify_unless_shown(notice_id: str, title: str, message: str,
+                        unless: Callable[[], bool] | None = None) -> None:
+    """Post a system notification unless a desktop App answers :func:`shown`.
+
+    Call it before the frame goes out, so an answer cannot come first.
+    ``unless`` is asked when the wait ends; True means the user no longer
+    needs telling.
+    """
+    answered = threading.Event()
+    with _shown_lock:
+        _shown[notice_id] = answered
+    threading.Thread(target=_wait_then_notify, name="system-notify-fallback", daemon=True,
+                     args=(notice_id, answered, title, message, unless)).start()
 
 
 def _session(session_id: str) -> dict[str, Any] | None:
@@ -185,8 +205,7 @@ def _wake(payload: dict[str, Any], session: dict[str, Any]) -> None:
     started = start_owner_turn_when_free(
         session_id, str(session.get("agent_id") or payload["agent_id"]), wake_text(payload),
         wait_s=WAKE_WAIT_S, poll_s=_POLL_S, name=f"reminder-{payload['task_id']}",
-        reason_code="reminder_activation_failed", on_done=done,
-        untrusted=bool(payload.get("event")))
+        reason_code="reminder_activation_failed", on_done=done, automation="reminder")
     if started is None:
         _log.info("%s stayed busy; delivered without waking the agent", session_id)
         _send_to_channel(session, f"⏰ {payload['message']}")
@@ -198,13 +217,9 @@ def deliver(event: Any) -> None:
 
     payload = dict(event.payload)
     session = _session(payload.get("session_id") or "")
-    wake = bool(payload.get("wake") and session)
-    # Registered before the frame goes out, so an answer cannot come first.
-    answered = threading.Event()
-    with _shown_lock:
-        _shown[event.id] = answered
-    threading.Thread(target=_notify_unless_shown, name="reminder-notify", daemon=True,
-                     args=(event.id, answered, "OpenProgram ⏰", payload["message"])).start()
+    # Nobody reads an archived conversation; the reminder itself still arrives.
+    wake = bool(payload.get("wake") and session and not session.get("archived"))
+    notify_unless_shown(event.id, "OpenProgram ⏰", payload["message"])
     emit_ws_frame({"type": "reminder", "data": {
         **payload, "id": event.id, "wake": wake,
         "session_id": payload.get("session_id") if session else "",
@@ -216,4 +231,4 @@ def deliver(event: Any) -> None:
     threading.Thread(target=target, name=name, daemon=True).start()
 
 
-__all__ = ["EVENT", "deliver", "fire", "install", "shown", "system_notify", "wake_text"]
+__all__ = ["EVENT", "deliver", "fire", "install", "notify_unless_shown", "shown", "system_notify", "wake_text"]

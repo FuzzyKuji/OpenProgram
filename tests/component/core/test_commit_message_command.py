@@ -69,7 +69,7 @@ def test_commit_message_reads_diff_without_changing_repository(
 
     monkeypatch.setattr(
         "openprogram.models.providers.streaming.background_llm.build_background_llm",
-        lambda: fake_llm,
+        lambda call_kind=None: fake_llm,
     )
     import openprogram.runtime.commands.commit_message as commit_message
 
@@ -139,7 +139,7 @@ def test_commit_message_bounds_combined_status_and_diff_context(
     monkeypatch.setattr(commit_message, "_git", fake_git)
     monkeypatch.setattr(
         "openprogram.models.providers.streaming.background_llm.build_background_llm",
-        lambda: fake_llm,
+        lambda call_kind=None: fake_llm,
     )
 
     result = commit_message.commit_message_builtin_handler(

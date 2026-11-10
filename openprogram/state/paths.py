@@ -167,6 +167,11 @@ def get_config_path() -> Path:
     return get_state_dir() / "config.json"
 
 
+def program_sources_path() -> Path:
+    """The owner's record of installed Program directories."""
+    return get_state_dir() / "program-sources.json"
+
+
 def get_sessions_dir() -> Path:
     """Root of the conversation store, ``<state>/projects``.
 
@@ -211,14 +216,14 @@ def get_usage_db_path() -> Path:
     return get_state_dir() / "usage.db"
 
 
-def get_execution_db_path() -> Path:
-    """Canonical execution lifecycle and control-command database."""
-    return get_state_dir() / "executions.db"
+def get_run_state_path() -> Path:
+    """Where a profile's run state is rooted; its rows live in session logs."""
+    return get_state_dir() / "run-state"
 
 
-def get_user_errors_db_path() -> Path:
+def get_user_errors_path() -> Path:
     """Bounded operational error records for the active profile."""
-    return get_state_dir() / "user_errors.db"
+    return get_state_dir() / "user_errors.jsonl"
 
 
 def ensure_state_dir() -> Path:

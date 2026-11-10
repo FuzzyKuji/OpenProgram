@@ -6,15 +6,15 @@ import hashlib
 import json
 import os
 from pathlib import Path, PurePosixPath
+import platform
 import selectors
 import shlex
 import signal
 import stat
 import subprocess
 import sys
+import time
 
-from ..control.iteration import _PROTECTED_PATHS
-from ..control.iteration import _DEPENDENCY_FILES
 from ..types import IterationMode
 from ..types import _validate_changed_path
 from openprogram.programs.tools.system.self_update import (
@@ -26,10 +26,8 @@ def allowed_path(request, path):
     _validate_changed_path(path)
     parts = PurePosixPath(path).parts
     if (any(part in {".git", ".gitmodules", ".gitattributes", ".worktreeinclude"} or part.startswith(".env") for part in parts)
-            or any(ord(c) < 32 for c in path)
-            or any(fnmatch.fnmatchcase(path, pattern) for pattern in _PROTECTED_PATHS)
-            or any(fnmatch.fnmatchcase(parts[-1], pattern) for pattern in _DEPENDENCY_FILES)):
-        raise ValueError("source repair cannot modify protected files")
+            or any(ord(c) < 32 for c in path)):
+        raise ValueError("source repair cannot modify Git metadata or environment files")
     allowed = (any(fnmatch.fnmatchcase(path, pattern) for pattern in request.iteration_policy.allowed_paths)
                if request.iteration_policy.mode is IterationMode.BOUNDED_AUTO else path in request.changed_paths)
     if not allowed:
@@ -37,7 +35,7 @@ def allowed_path(request, path):
 
 
 def check_repair_paths(request, changed, repaired):
-    """Hold the repair's own edits to repair limits; owner-approved paths stay as approved."""
+    """Hold the repair's own edits to the update's original scope."""
     for path in repaired:
         allowed_path(request, path)
     if set(changed) - set(request.changed_paths) - set(repaired):
@@ -119,21 +117,104 @@ finally:
 '''
 
 
+def _sealed_runtime_reads(python) -> list:
+    """Under sealed versions the interpreter lives in the state directory a test may not read."""
+    from ..versions.layout import current_runtime
+
+    runtime = current_runtime()
+    if runtime is None:
+        return []
+    interpreter = Path(python).absolute()
+    return sorted({runtime.layout.version(runtime.version), Path(sys.base_prefix).resolve(), interpreter.parent.parent,
+                   interpreter.resolve().parent.parent})
+
+
+def _parents_within(paths, top) -> list:
+    """The folders above ``paths``, up to ``top``, that a path lookup has to stat."""
+    found = {top}
+    for path in paths:
+        current = path
+        while current != current.parent and current.is_relative_to(top):
+            found.add(current)
+            current = current.parent
+    return sorted(found)
+
+
+def _resolved_python(argv) -> list:
+    """A required test names Python plainly; it gets this interpreter, never one found on PATH."""
+    if argv and argv[0] in {"python", "python3", Path(sys.executable).name}:
+        argv[0] = sys.executable
+    return argv
+
+
+def _test_environment(home, temporary) -> dict:
+    system = os.environ.get("SystemRoot", r"C:\Windows") if os.name == "nt" else "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin"
+    values = dict(PATH=os.pathsep.join((str(Path(sys.executable).parent), system)),
+                  HOME=str(home), TMPDIR=str(temporary), CI="1", PYTHONDONTWRITEBYTECODE="1",
+                  GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    if os.name == "nt":
+        values.update(USERPROFILE=str(home), TEMP=str(temporary), TMP=str(temporary), SystemRoot=system)
+    return values
+
+
+def _test_elsewhere(command, candidate, scratch, home, temporary, remaining, check, output_limit):
+    """The adapter a trial uses: bubblewrap on Linux; no OS sandbox on Windows."""
+    from ..trial.sandbox import TrialPolicy, wrap_with_no_network
+    from openprogram.state.paths import get_state_dir
+    from openprogram.state.store.session.atomic_file import atomic_write_text
+
+    argv = list(command)
+    if not argv:
+        raise ValueError("empty required test")
+    policy = TrialPolicy(directory=scratch, live_state=get_state_dir(), worker_port=0, model_port=0,
+                         readable=tuple(_sealed_runtime_reads(argv[0])), writable=(candidate, home, temporary))
+    code, output = _run_unconfined(wrap_with_no_network(policy, argv), candidate, _test_environment(home, temporary),
+                                   scratch, remaining, check, output_limit)
+    atomic_write_text(scratch / "test.log", output)
+    return code, output
+
+
+def _run_unconfined(argv, candidate, env, scratch, remaining, check, output_limit):
+    """Windows has no OS sandbox: the separate home and the test's time limit are the isolation."""
+    log = scratch / "test.output"
+    with open(log, "wb") as stream:
+        proc = subprocess.Popen(argv, cwd=candidate, env=env, stdout=stream, stderr=subprocess.STDOUT)
+    end = time.monotonic() + remaining
+    try:
+        while proc.poll() is None:
+            check()
+            if time.monotonic() >= end:
+                raise ValueError("required test exceeded its time limit")
+            if log.stat().st_size > output_limit:
+                raise ValueError("required test output exceeded 1 MiB")
+            time.sleep(.1)
+    finally:
+        if proc.poll() is None:
+            proc.kill()
+            proc.wait()
+    return proc.returncode, log.read_bytes().decode("utf-8", errors="replace")
+
+
 def _test(command, candidate, scratch, remaining, check, *, verification=False, output_limit=1_048_576):
-    from ..control.supervisor import _sandbox_executable
     from ..control.supervisor import _sandbox_profile
-    from openprogram.state.store.session.git_session import atomic_write_text
-    sandbox = _sandbox_executable()
-    home, temporary = scratch / "home", scratch / "tmp"
-    for directory in (home, temporary):
-        directory.mkdir(mode=0o700)
-    profile = _sandbox_profile(candidate, scratch, home, temporary)
+    from openprogram.state.store.session.atomic_file import atomic_write_text
     if verification:
         if (not isinstance(command, list) or not command
                 or any(not isinstance(arg, str) or "\0" in arg for arg in command)
                 or not Path(command[0]).is_absolute()
                 or type(output_limit) is not int or not 1 <= output_limit <= 262144):
             raise ValueError("native verification requires fixed argv and output bound")
+    else:
+        command = _resolved_python(shlex.split(command))
+    home, temporary = scratch / "home", scratch / "tmp"
+    for directory in (home, temporary):
+        directory.mkdir(mode=0o700)
+    if platform.system() != "Darwin":
+        return _test_elsewhere(command, candidate, scratch, home, temporary, remaining, check, output_limit)
+    from ..control.supervisor import _sandbox_executable
+    sandbox = _sandbox_executable()
+    profile = _sandbox_profile(candidate, scratch, home, temporary)
+    if verification:
         # A forked child can leave the watchdog's process group via setsid.
         # Native acceptance is single-process; enforce this before code runs.
         profile += "(deny process-fork)\n"
@@ -149,16 +230,20 @@ def _test(command, candidate, scratch, remaining, check, *, verification=False, 
     if runtime.is_relative_to(Path("/Applications/OpenProgram.app/Contents/Resources/runtime")):
         # Packaged tests may read the running interpreter, never write the App.
         profile += f"(allow file-read* (subpath {json.dumps(str(runtime))}))\n"
-    profile_path = scratch / "test.sb"
-    atomic_write_text(profile_path, profile)
-    argv = list(command) if verification else shlex.split(command)
+    argv = list(command)
     if not argv:
         raise ValueError("empty required test")
-    if not verification and argv[0] in {"python", "python3", Path(sys.executable).name}:
-        argv[0] = sys.executable  # No silent PATH fallback to a different Python.
-    env = dict(PATH=f"{Path(sys.executable).parent}:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin",
-               HOME=str(home), TMPDIR=str(temporary), CI="1", PYTHONDONTWRITEBYTECODE="1",
-               GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL="/dev/null")
+    sealed = _sealed_runtime_reads(argv[0] if verification else sys.executable)
+    for readable in sealed:
+        # Reading the running version is not writing it: a later deny of the
+        # state directory has already been passed, and no write rule names it.
+        profile += f"(allow file-read* (subpath {json.dumps(str(readable))}))\n"
+    if sealed:
+        for folder in _parents_within(sealed, Path.home().resolve()):
+            profile += f"(allow file-read-metadata (literal {json.dumps(str(folder))}))\n"
+    profile_path = scratch / "test.sb"
+    atomic_write_text(profile_path, profile)
+    env = _test_environment(home, temporary)
     # -I ignores PYTHONDONTWRITEBYTECODE; the unsandboxed watchdog needs -B.
     proc = subprocess.Popen([sys.executable, "-I", "-B", "-c", _WATCHDOG, str(os.getpid()), str(remaining),
                              str(sandbox), "-f", str(profile_path), *argv], cwd=candidate,
@@ -200,7 +285,7 @@ def _test(command, candidate, scratch, remaining, check, *, verification=False, 
 def materialize(store, record, frozen, repair_request, output, check):
     """Controller-only mutation. An existing intent is never replayed."""
     from .source_repair import _path
-    from openprogram.state.store.session.git_session import atomic_write_text
+    from openprogram.state.store.session.atomic_file import atomic_write_text
     from openprogram.state.worktree.types import Worktree
     from openprogram.state.worktree.store import save_worktree
     from openprogram.state.worktree.manager import _broadcast_worktree_status

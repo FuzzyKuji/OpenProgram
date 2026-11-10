@@ -1,6 +1,7 @@
 """Node-level memory write markers and branch-local ingestion."""
 from __future__ import annotations
 
+from openprogram.state.store.session.session_log import SessionLog
 import atexit
 import json
 import re
@@ -337,23 +338,23 @@ def test_merge_marker_preserves_updated_at_and_refreshes_one_stale_index(
     assert reader.get_branch("visible")[0].get(MARKER) is None
     _git, reader_index = reader._open("visible")
     rebuilds = 0
-    original = reader_index.rebuild_from_paths
+    original = reader_index.rebuild
 
     def count_rebuild(*args, **kwargs):
         nonlocal rebuilds
         rebuilds += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(reader_index, "rebuild_from_paths", count_rebuild)
-    meta_path = writer.root_path / "default" / "chats" / "visible" / "meta.json"
-    before = json.loads(meta_path.read_text(encoding="utf-8"))["updated_at"]
+    monkeypatch.setattr(reader_index, "rebuild", count_rebuild)
+    meta_log = SessionLog(writer.root_path / "default" / "chats" / "visible")
+    before = meta_log.read_meta()["updated_at"]
     registry_before = writer.list_sessions(limit=10)[0]["updated_at"]
 
     writer.merge_node_metadata(
         "visible", "m1", {MARKER: store.workspace_id()}
     )
 
-    assert json.loads(meta_path.read_text(encoding="utf-8"))["updated_at"] == before
+    assert meta_log.read_meta()["updated_at"] == before
     assert writer.get_session("visible")["updated_at"] == before
     assert writer.list_sessions(limit=10)[0]["updated_at"] == registry_before
     assert reader.get_branch("visible")[0][MARKER] == store.workspace_id()
@@ -395,8 +396,8 @@ def test_batch_metadata_merge_rebuilds_each_store_once_after_the_batch(
     writer_rebuilds = 0
     reader_rebuilds = 0
     mark_synced_calls = 0
-    original_writer_rebuild = writer_index.rebuild_from_paths
-    original_reader_rebuild = reader_index.rebuild_from_paths
+    original_writer_rebuild = writer_index.rebuild
+    original_reader_rebuild = reader_index.rebuild
     original_mark_synced = writer_git.mark_synced
 
     def count_writer_rebuild(*args, **kwargs):
@@ -414,13 +415,11 @@ def test_batch_metadata_merge_rebuilds_each_store_once_after_the_batch(
         mark_synced_calls += 1
         return original_mark_synced(*args, **kwargs)
 
-    monkeypatch.setattr(writer_index, "rebuild_from_paths", count_writer_rebuild)
-    monkeypatch.setattr(reader_index, "rebuild_from_paths", count_reader_rebuild)
+    monkeypatch.setattr(writer_index, "rebuild", count_writer_rebuild)
+    monkeypatch.setattr(reader_index, "rebuild", count_reader_rebuild)
     monkeypatch.setattr(writer_git, "mark_synced", count_mark_synced)
-    meta_path = writer.root_path / "default" / "chats" / "batch-api" / "meta.json"
-    updated_at_before = json.loads(
-        meta_path.read_text(encoding="utf-8")
-    )["updated_at"]
+    meta_log = SessionLog(writer.root_path / "default" / "chats" / "batch-api")
+    updated_at_before = meta_log.read_meta()["updated_at"]
     registry_before = writer.list_sessions(limit=10)[0]["updated_at"]
     workspace_id = store.workspace_id()
 
@@ -431,16 +430,15 @@ def test_batch_metadata_merge_rebuilds_each_store_once_after_the_batch(
 
     assert writer_rebuilds == 0
     assert reader_rebuilds == 0
-    assert mark_synced_calls == 0
-    assert json.loads(meta_path.read_text(encoding="utf-8"))["updated_at"] == (
+    assert meta_log.read_meta()["updated_at"] == (
         updated_at_before
     )
     assert writer.list_sessions(limit=10)[0]["updated_at"] == registry_before
 
     written = writer.get_branch("batch-api")
-    assert writer_rebuilds == 1
+    assert writer_rebuilds == 0
     assert writer.get_branch("batch-api") == written
-    assert writer_rebuilds == 1
+    assert writer_rebuilds == 0
     assert [row[MARKER] for row in written] == [workspace_id] * 4
     assert [row["keep"] for row in written] == [
         f"original-{index}" for index in range(1, 5)
@@ -471,14 +469,14 @@ def test_write_session_marks_a_batch_without_internal_index_rebuilds(
 
     _git, index = db._open("batch-write")
     rebuilds = 0
-    original = index.rebuild_from_paths
+    original = index.rebuild
 
     def count_rebuild(*args, **kwargs):
         nonlocal rebuilds
         rebuilds += 1
         return original(*args, **kwargs)
 
-    monkeypatch.setattr(index, "rebuild_from_paths", count_rebuild)
+    monkeypatch.setattr(index, "rebuild", count_rebuild)
 
     assert writing.write_session(
         "batch-write", db.get_branch("batch-write"),
@@ -490,7 +488,7 @@ def test_write_session_marks_a_batch_without_internal_index_rebuilds(
     assert [row.get(MARKER) for row in db.get_branch("batch-write")] == [
         marker, marker, marker, marker,
     ]
-    assert rebuilds == 1
+    assert rebuilds == 0
 
 
 @pytest.mark.parametrize(

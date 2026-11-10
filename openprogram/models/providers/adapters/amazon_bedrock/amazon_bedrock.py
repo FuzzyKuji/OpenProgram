@@ -61,11 +61,10 @@ def _supports_thinking_signature(model_id: str) -> bool:
 
 
 def _resolve_cache_retention(cache_retention: "CacheRetention | None") -> "CacheRetention":
-    if cache_retention:
-        return cache_retention
-    if os.environ.get("PI_CACHE_RETENTION") == "long":
+    from openprogram.models.providers.settings.cache_spec import with_lifetime_setting
+    if not cache_retention and os.environ.get("PI_CACHE_RETENTION") == "long":
         return "long"
-    return "short"
+    return with_lifetime_setting(cache_retention)
 
 
 def _normalize_tool_call_id(id_: str, _model=None, _msg=None) -> str:

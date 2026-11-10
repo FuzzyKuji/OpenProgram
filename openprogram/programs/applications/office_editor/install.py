@@ -30,7 +30,7 @@ def download_office_pack() -> OfficeAssetPack:
         archive = temporary / "office.zip"
         digest = hashlib.sha256()
         size = 0
-        with safe_http.safe_client("office.assets", timeout=30, overall_timeout=1800) as client:
+        with safe_http.safe_client("office.assets", timeout=30) as client:
             with client.stream("GET", OFFICE_DOWNLOAD_URL) as response, archive.open("wb") as output:
                 response.raise_for_status()
                 for chunk in response.iter_bytes(1024 * 1024):

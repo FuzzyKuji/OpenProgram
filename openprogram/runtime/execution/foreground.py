@@ -8,6 +8,13 @@ from .model import ExecutionRecord, ExecutionStatus, TERMINAL_EXECUTION_STATUSES
 # Any other pause (an explicit Pause) hands the conversation back.
 WAITING_PAUSE_REASONS = frozenset({"wait_open", "system_access_required"})
 
+#: Sources that are chat channels.
+CHANNEL_SOURCES = frozenset({"telegram", "discord", "slack", "wechat"})
+# A chat app's turn is a foreground turn like a typed one. When it pauses at a
+# question or approval its receiving thread ends and frees the run slot, so
+# only this record keeps another turn from starting on top of it.
+FOREGROUND_SOURCES = frozenset({"web", "tui", "acp"}) | CHANNEL_SOURCES
+
 
 def foreground_task_snapshot(store, execution: ExecutionRecord) -> dict | None:
     """Return controls for an active interactive turn, never a background Job."""
@@ -23,7 +30,7 @@ def foreground_task_snapshot(store, execution: ExecutionRecord) -> dict | None:
     if payload is None:
         return None
     request = payload.get("request", {}) if payload.get("kind") == "chat" else payload
-    if request.get("source") not in {"web", "tui", "acp"}:
+    if request.get("source") not in FOREGROUND_SOURCES:
         return None
     if request.get("interaction") not in {None, "interactive"}:
         return None

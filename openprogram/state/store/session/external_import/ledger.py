@@ -15,7 +15,7 @@ import json
 from pathlib import Path
 from typing import Any, Iterator, Optional
 
-from openprogram.state.store.session.git_session import atomic_write_text
+from openprogram.state.store.session.atomic_file import atomic_write_text
 from openprogram.state.store.session.session_lock import registry_file_lock
 
 _FILE = "external_sessions.json"

@@ -16,6 +16,40 @@ pytest_plugins = ["tests.support.memory_chats"]
 
 _HOST_HOME = Path.home()
 
+
+@pytest.fixture(autouse=True)
+def _no_system_notifications(monkeypatch):
+    """No test pops a real notification or leaves a report's waiting thread;
+    yields the real functions for the tests of them."""
+    from types import SimpleNamespace
+
+    from openprogram.runtime.conversation.always_on import runtime
+    from openprogram.runtime.scheduler import reminders
+
+    real = SimpleNamespace(system_notify=reminders.system_notify,
+                           report_fallback=runtime._system_notification_fallback)
+    monkeypatch.setattr(reminders, "system_notify", lambda *_args: True)
+    monkeypatch.setattr(runtime, "_system_notification_fallback", lambda *_args: None)
+    yield real
+
+
+@pytest.fixture(autouse=True)
+def _tests_leave_the_front_application_alone(monkeypatch):
+    """No test reads or changes which application is in front of the person running it."""
+    from openprogram.host._platform import front
+
+    monkeypatch.setattr(front, "desktop", lambda: None)
+    yield
+
+
+@pytest.fixture(autouse=True)
+def _this_process_writes_main_session_logs():
+    """Tests stand where the worker stands: appends land in ``main.jsonl``."""
+    from openprogram.state.store.session import session_log
+
+    session_log.claim_main_writer()
+    yield
+
 # ---------------------------------------------------------------------------
 # Network isolation: the suite must not depend on the host's proxy setup.
 # A developer shell with HTTP(S)_PROXY / a socks ALL_PROXY / a macOS
@@ -42,6 +76,11 @@ if os.environ.get("OPENPROGRAM_TEST_LIVE") != "1":
         "OPENPROGRAM_PROXY_URL",
     ):
         os.environ.pop(_var, None)
+
+    # The Codex adapter speaks the ChatGPT backend's WebSocket before HTTP;
+    # the tests' fakes of the backend speak HTTP, and a test never reaches
+    # the network. The socket's own tests turn it back on.
+    os.environ["OPENPROGRAM_CODEX_WEBSOCKET"] = "0"
 
     # Pin urllib's OS-settings fallback (macOS System Preferences / Windows
     # registry) to env-only, both for httpx's already-imported copy and for
@@ -281,6 +320,41 @@ def _reset_browser_operation_forwarding():
 
 
 @pytest.fixture(autouse=True)
+def _forget_learned_provider_limits():
+    """Clear what the process learned about providers and conversations.
+
+    A provider's byte cap (body_cap), a model's prefill refusal (prefill),
+    a conversation's compaction failures
+    (compaction.hold) and a conversation's credential (pool affinity) are
+    kept for the process's life on purpose. Under pytest every test shares
+    that process, so one test's refusals would hold another's compaction
+    or fit its requests.
+    """
+    yield
+    from openprogram.models.auth.pool import forget_affinity
+    from openprogram.models.providers.utils import body_cap, prefill
+    from openprogram.runtime.context.compaction.hold import default_hold
+
+    body_cap.forget()
+    prefill.forget()
+    default_hold.clear()
+    forget_affinity()
+
+
+@pytest.fixture(autouse=True)
+def _screen_reads_as_unlocked(monkeypatch):
+    """Keep the machine's lock state out of tests of the macOS desktop backend.
+
+    The backend stops application reads and steps while the Mac's screen is
+    locked. A run started before a break, or over SSH on a locked Mac,
+    would otherwise fail every test that steps through the real backend.
+    """
+    from openprogram.programs.tools.computer_use.computer_use_agent.desktop import macos
+
+    monkeypatch.setattr(macos, "_screen_locked", lambda: False)
+
+
+@pytest.fixture(autouse=True)
 def _reset_spawn_fanout():
     """Clear the per-turn spawn fan-out counter between tests.
 
@@ -294,6 +368,19 @@ def _reset_spawn_fanout():
     _fanout_used.clear()
     yield
     _fanout_used.clear()
+
+
+@pytest.fixture(autouse=True)
+def _subprocess_entry_stays_in_its_test():
+    """Tests call a function subprocess's entry point in this process."""
+    yield
+    from openprogram.runtime.agent import questions
+    from openprogram.runtime.execution import worker_calls
+    from openprogram.runtime.execution.store import run_tables
+
+    worker_calls._calls = None
+    run_tables._process_only_reads = False
+    questions._send_live_question_to_parent = None
 
 
 @pytest.fixture(autouse=True)
@@ -315,6 +402,17 @@ def _drop_tmp_rooted_session_store():
         return
     if "openprogram-test-home" not in str(getattr(cached, "root_path", "")):
         session_store.shared._default_store = None
+
+
+@pytest.fixture(autouse=True)
+def _forget_worktree_binding():
+    """A tool that switches the turn to a worktree leaves the binding set on
+    purpose, for the rest of that turn. A test calling such a tool directly
+    has no turn to end it, so it would reach whatever test runs next here."""
+    yield
+    from openprogram.state.worktree.context import clear_worktree
+
+    clear_worktree()
 
 
 # The home every test in this worker shares unless it points its state
@@ -347,4 +445,4 @@ def _own_execution_store(tmp_path_factory, monkeypatch):
             return folder / "executions.db"
         return Path(state) / "executions.db"
 
-    monkeypatch.setattr(paths, "get_execution_db_path", execution_db_path)
+    monkeypatch.setattr(paths, "get_run_state_path", execution_db_path)

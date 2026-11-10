@@ -1,11 +1,98 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Outbound network proxy</title><style>body{max-width:960px;margin:40px auto;padding:0 24px;font:16px/1.65 system-ui;color:#18242d}table{border-collapse:collapse}td,th{padding:10px;border:1px solid #ccd4da}code{background:#eef2f5}a{color:#145ea8}</style><body><h1>出站网络代理</h1><p>受管理的 Runtime HTTP 保留 URL、凭据、重定向与 TLS 策略，同时让公共目标走用户配置的普通代理。请求经代理发出时，目标 hostname 由代理解析；客户端先验证目标，再固定并检查代理 socket 地址。</p><h2>问题</h2><p>直连并固定对端地址的连接无法访问只能经用户代理到达的服务。Clash 等 fake-IP 代理还会用基准测试网段 <code>198.18.0.0/15</code> 回答本地 DNS 查询，只信任本地解析的策略会把每个公共 hostname 都判为非全局地址并拒绝（<code>NON_GLOBAL_ADDRESS</code>），尽管真正的解析发生在代理内部。</p><h2>适用边界</h2><ul><li>公共 consumer 使用普通代理：任意公共 URL（<code>tool.web_fetch</code>、<code>tool.image_result.download</code>、渠道附件与资源下载）以及固定的已审计 HTTPS 服务（包括 DuckDuckGo 在内的搜索 API、图像 API、更新器、技能目录、office 资源、渠道 API、TTS）。</li><li>Provider consumer（<code>provider.*</code>、<code>webui.model_listing.*</code>）只在目标 origin 位于 provider API 或 OAuth 审计列表中时使用普通代理。</li><li>配置的自定义 origin 与 loopback callback 保持直连并固定对端地址，它们常指向由所有者例外按地址授权的私有服务。</li></ul><p>每个请求和每一跳重定向都先选定路由，再运行目标策略，因此策略与传输对是否经代理始终一致。被 <code>NO_PROXY</code> 命中的 host，或没有任何路由的进程，直连并执行完整的本地地址检查。</p><h2>由代理解析的目标</h2><p>公共请求经代理发出时，策略按“由代理解析”评估：</p><ul><li>IP 字面量直接检查；私有、loopback、保留、fake-IP 与 metadata 字面量继续拒绝。</li><li>本地名称在任何查询前拒绝：单标签 host、<code>localhost</code>，以及 <code>.localhost</code>、<code>.local</code>、<code>.lan</code>、<code>.home.arpa</code>、<code>.internal</code>、<code>.intranet</code>、<code>.corp</code>、<code>.home</code> 后缀。metadata hostname 报告 <code>METADATA_ADDRESS</code>。</li><li>hostname 仍在本地解析。指向真实私有、loopback、link-local、保留或 metadata 地址的结果被拒绝；<code>198.18.0.0/15</code> 的 fake-IP 结果和解析失败交给代理处理；格式错误的结果按失败关闭处理。</li><li>决策带有 <code>requires_proxy</code>。为这类决策建立直连连接池或打开直连 socket 会抛出 <code>PROXY_ROUTE_REQUIRED</code>。</li></ul><p>固定的已审计 HTTPS 服务在直连时也接受 fake-IP 结果，因为调用方无法选择其 hostname，且 TLS 会验证它。不可信的公共 URL 在直连时从不接受 fake-IP 结果。</p><h2>解析和传输</h2><ol><li>显式 security.outbound_url.policy_proxy 优先，保留执行目标策略的要求；此时不使用普通代理。</li><li>OPENPROGRAM_PROXY_URL 覆盖普通代理配置，并保留 NO_PROXY。</li><li>HTTPX 解析标准环境变量，在适用时使用 Python 的 macOS 与 Windows 系统代理回退。loopback host 始终绕过代理。</li></ol><p>HTTP、HTTPS 与 SOCKS5 使用 httpcore 代理连接池和地址策略 backend。HTTPS 目标按 hostname 通过 CONNECT 隧道发送，明文 HTTP 目标以绝对形式转发。代理 authority 是用户选择的连接目标；metadata 和 link-local 地址仍被禁止。代理认证只传递给代理握手。TLS 验证原始服务 hostname，Host 来自验证过的 origin，重定向不能跨 origin 转发凭据。失败不回退直连。</p><p>客户端保留不可变的代理配置，配置参与共享客户端缓存身份。代理变更后新调用替换旧客户端。显式提供的传输安全对象不隐式继承环境代理。</p><h2>采用与排除</h2><p>复用 HTTPX 环境解析与 URLPattern 优先级，不实现第二套 NO_PROXY 匹配。普通代理和 PolicyProxyConfig 分离：Clash 不被视为执行任意 URL 策略的代理，因此本地检查仍在它之前运行。不增加 profile、不关闭 URL 保护、不改 OAuth 凭据、不把普通代理扩展到配置的自定义服务。CA 文件由出站安全配置显式控制。</p><p>接受的剩余风险：经代理时最终解析由代理完成，真实结果为私有地址的公共 hostname 只有在本地解析返回该真实结果时才会被拦截。在 fake-IP 解析器之后，或本地检查与代理查询之间发生 DNS rebinding 时，由代理自身的规则决定。只读方法、不可信 URL 的 80/443 端口限制与凭据剥离仍然生效。需要严格保证的所有者可配置执行策略的代理，或把 host 列入 <code>NO_PROXY</code>。</p><h2>验收条件</h2><p>公共同步与异步入口支持 HTTP、HTTPS、SOCKS5 路由；fake-IP 解析器之后 web_fetch 经代理按 hostname 到达目标；经代理时 IP 字面量、本地名称和真实私有结果仍被拒绝；NO_PROXY host 保留直连检查；由代理解析的决策从不打开直连 socket；保留 NO_PROXY 和覆盖优先级；路由变化后替换共享客户端；网络连接前拒绝非法目标与代理地址；隔离服务和代理凭据；保留显式策略代理行为与资源清理。</p><h2>实现状态</h2><p>已实现于 <code>openprogram/host/security/url_policy.py</code>（<code>proxy_resolves</code>、<code>requires_proxy</code>）、<code>openprogram/host/security/safe_http.py</code>（<code>uses_ambient_proxy</code>、先选路由再评估策略）与 <code>load_outbound_security_config</code>。沙箱命令代理（<code>openprogram/host/sandbox/network_policy.py</code>）保留自己的直连公共地址规则，尚不识别 fake-IP 结果。实际模型回复还需要有效的 provider 凭据和可用额度。</p><h2>2. OpenClaw 的处理方式</h2>
-<p>来源： <code>references/openclaw/src/infra/net/proxy-env.ts</code>, <code>proxy-fetch.ts</code>,
-<code>src/infra/net/proxy/</code>, and https://docs.openclaw.ai/cli/proxy/.</p>
+<title>出站网络代理</title>
+<meta name="description" content="托管 HTTP 如何跟随用户代理，同时保留 URL、凭据、重定向和 TLS 策略。">
+<h1>出站网络代理</h1>
+<p>直连并校验对端的连接到不了只能经用户代理访问的服务。Clash 这类 fake-IP 代理还会用 <code translate="no">198.18.0.0/15</code> 回答本地 DNS，只信本地解析的策略会按 <code translate="no">NON_GLOBAL_ADDRESS</code> 拒绝，而真正的解析发生在代理里。</p>
+
+<h2 id="routing-boundaries">谁走代理</h2>
+<table class="stack">
+<thead><tr><th scope="col">使用方</th><th scope="col">例子</th><th scope="col">路由</th></tr></thead>
+<tbody>
+<tr><th scope="row">任意公网 URL</th><td><code translate="no">tool.web_fetch</code>、<code translate="no">tool.image_result.download</code>、频道附件和资源</td><td>普通代理</td></tr>
+<tr><th scope="row">固定且审计过的 HTTPS 服务</th><td>搜索 API（含 DuckDuckGo）、图片 API、更新器、技能目录、office 资源、频道 API、TTS</td><td>普通代理</td></tr>
+<tr><th scope="row">提供商</th><td><code translate="no">provider.*</code>、<code translate="no">webui.model_listing.*</code></td><td>仅当确切 origin 在提供商 API 或 OAuth 清单里时走普通代理</td></tr>
+<tr><th scope="row">自定义 origin、回环回调</th><td>所有者例外放行的私有服务</td><td>直连，校验对端</td></tr>
+</tbody>
+</table>
+<p class="note">路由在目标策略之前选定，每个请求和每一跳重定向都如此。命中 <code translate="no">NO_PROXY</code> 或没有路由时直连，并做完整的本地地址检查。</p>
+
+<h2 id="proxy-resolved-targets">由代理解析的目标</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">目标</th><th scope="col">决定</th></tr></thead>
+<tbody>
+<tr><th scope="row">IP 字面量</th><td>直接检查；私有、回环、保留、fake-IP、元数据地址一律拒绝</td></tr>
+<tr><th scope="row">单标签、<code translate="no">localhost</code>，或 <code translate="no">.localhost .local .lan .home.arpa .internal .intranet .corp .home</code></th><td>查询前就拒绝</td></tr>
+<tr><th scope="row">元数据主机名</th><td><code translate="no">METADATA_ADDRESS</code></td></tr>
+<tr><th scope="row">本地答案是真实的私有、回环、链路本地、保留或元数据地址</th><td>拒绝</td></tr>
+<tr><th scope="row">本地答案是 fake-IP（<code translate="no">198.18.0.0/15</code>），或查询失败</th><td>交给代理</td></tr>
+<tr><th scope="row">答案格式错误</th><td>拒绝</td></tr>
+</tbody>
+</table>
+<p class="note">决定里带 <code translate="no">requires_proxy</code>；为它建直连池或 socket 会抛 <code translate="no">PROXY_ROUTE_REQUIRED</code>。固定审计服务的直连也接受 fake-IP，因为主机名调用方选不了，且 TLS 会校验。不可信的公网 URL 从不接受。</p>
+
+<h2 id="resolution-and-transport">用哪个代理</h2>
+<ol>
+<li>显式的 <code translate="no">security.outbound_url.policy_proxy</code>，保留其强制要求；此时普通路由不用。</li>
+<li><code translate="no">OPENPROGRAM_PROXY_URL</code>，保留 <code translate="no">NO_PROXY</code>。</li>
+<li>经 HTTPX 读标准环境变量，macOS、Windows 上回退到 Python 读系统设置。回环地址总是绕过。</li>
+</ol>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">连接池</th><td>httpcore 代理池加感知决定的 backend，支持 HTTP、HTTPS、SOCKS5</td></tr>
+<tr><th scope="row">转发</th><td>HTTPS 目标用 CONNECT 按主机名建隧道；明文 HTTP 用绝对形式</td></tr>
+<tr><th scope="row">代理地址</th><td>所有者选定；禁止元数据和链路本地地址</td></tr>
+<tr><th scope="row">凭据</th><td>代理认证只进握手；重定向不跨 origin 转发凭据</td></tr>
+<tr><th scope="row">校验</th><td>TLS 校验原服务主机名；Host 由校验过的 origin 生成</td></tr>
+<tr><th scope="row">失败</th><td>绝不回退直连</td></tr>
+<tr><th scope="row">客户端缓存</th><td>路由表在客户端内不可变，并计入缓存身份；路由变化后的新调用淘汰旧客户端</td></tr>
+<tr><th scope="row">显式传输安全对象</th><td>不继承环境路由</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>取舍和残余风险</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">取舍</th><th scope="col">决定</th></tr></thead>
+<tbody>
+<tr><th scope="row">环境解析</th><td>复用 HTTPX 的解析和 URLPattern 优先级，不再实现第二个 <code translate="no">NO_PROXY</code> 匹配器</td></tr>
+<tr><th scope="row"><code translate="no">PolicyProxyConfig</code></th><td>与普通路由分开：普通 Clash 代理不执行 URL 策略，所以本地检查仍在它前面</td></tr>
+<tr><th scope="row">不做</th><td>新增 profile、关闭 URL 保护、改 OAuth、让自定义服务走普通路由</td></tr>
+<tr><th scope="row">CA 证书</th><td>仍由出站安全配置控制</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">风险</th><th scope="col">立场</th></tr></thead>
+<tbody>
+<tr><th scope="row">最终解析</th><td>走代理时归代理</td></tr>
+<tr><th scope="row">真实答案是私有地址的公网主机名</th><td>只有本地解析返回真实答案时才拦得住；在 fake-IP 解析器后面，或检查与代理查询之间发生 DNS 重绑定时，由代理规则决定</td></tr>
+<tr><th scope="row">仍然生效</th><td>只读方法、不可信 URL 的 80/443 限制、凭据剥离</td></tr>
+<tr><th scope="row">要严格保证</th><td>配置强制策略代理，或把主机列入 <code translate="no">NO_PROXY</code></td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>验收</summary>
 <ul>
-<li><strong>统一环境解析器</strong>（<code>proxy-env.ts</code>）刻意复现 undici <code>EnvHttpProxyAgent</code> 语义：小写变量优先于大写；HTTPS 请求优先使用 <code>https_proxy</code>，随后回退到 <code>http_proxy</code>；<code>ALL_PROXY</code> 作为显式传入的回退。完整的 <code>NO_PROXY</code> 匹配器检查每次代理决策，支持逗号/空白分隔、不区分大小写、<code>*</code>、前导点、<code>*.</code>、子域后缀、可选 <code>:port</code>、方括号 IPv6，以及自定义 IPv4-CIDR 扩展。由于 undici 不导出匹配器，此实现需与 undici 保持同步。</li>
-<li><strong>统一显式覆盖</strong>：<code>--proxy-url</code> 参数 / <code>proxy.proxyUrl</code> 配置 / <code>OPENCLAW_PROXY_URL</code> 环境变量，可选 <code>--proxy-ca-file</code>。以包装 undici <code>ProxyAgent</code> 的 <code>makeProxyFetch(proxyUrl)</code> 实现，并管理代理生命周期，包括验证、TLS 选项和活动状态跟踪。</li>
-<li>Provider HTTP 辅助函数统一通过这些函数请求；SSRF 防护（<code>fetch-guard.ts</code>）也组合使用同一个 <code>matchesNoProxy</code>。</li>
+<li>同步和异步公网入口都能走 HTTP、HTTPS、SOCKS5 路由。</li>
+<li>fake-IP 解析器后面的 <code translate="no">web_fetch</code> 按主机名经代理到达目标。</li>
+<li>走代理时 IP 字面量、本地名称和真实私有答案仍被拒绝；<code translate="no">NO_PROXY</code> 主机保留直连检查。</li>
+<li>由代理解析的决定绝不打开直连 socket。</li>
+<li><code translate="no">NO_PROXY</code> 和覆盖优先级成立；路由变化时共享客户端被替换。</li>
+<li>未授权的目标和代理地址在联网前被拒绝；服务凭据与代理凭据隔离；策略代理行为和清理保留。</li>
 </ul>
-<p>OpenProgram 采用标准环境变量具有统一且文档化解释这一诊断特性，同时在受管 provider 路径增加独立的策略代理边界。OpenClaw 还提供代理生命周期验证与 SSRF 检查，本设计不需要这些机制。</p>
-<div id="3-resolution-order"></div>
-</body></html>
+</details>
+
+<details>
+<summary>OpenClaw 的做法</summary>
+<p>来源：<code translate="no">references/openclaw/src/infra/net/proxy-env.ts</code>、<code translate="no">proxy-fetch.ts</code>、<code translate="no">src/infra/net/proxy/</code>、<a href="https://docs.openclaw.ai/cli/proxy/">其代理文档</a>。</p>
+<ul>
+<li>一个环境解析器，跟随 undici 的 <code translate="no">EnvHttpProxyAgent</code>：小写优先；HTTPS 先 <code translate="no">https_proxy</code> 再 <code translate="no">http_proxy</code>；<code translate="no">ALL_PROXY</code> 兜底。自己实现完整的 <code translate="no">NO_PROXY</code> 匹配（含 IPv4 CIDR），把关每次决定。</li>
+<li>一个覆盖入口：<code translate="no">--proxy-url</code>、<code translate="no">proxy.proxyUrl</code>、<code translate="no">OPENCLAW_PROXY_URL</code>，可选 <code translate="no">--proxy-ca-file</code>，基于 undici <code translate="no">ProxyAgent</code>，带托管代理生命周期。</li>
+<li>提供商辅助函数都走这里；SSRF 防护共用 <code translate="no">matchesNoProxy</code>。</li>
+</ul>
+<p>OpenProgram 借鉴标准变量只有一种解释，并增加独立的策略代理边界。OpenClaw 的代理生命周期校验这里不需要。</p>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<p>实现在 <code translate="no">openprogram/host/security/url_policy.py</code>（<code translate="no">proxy_resolves</code>、<code translate="no">requires_proxy</code>）、<code translate="no">safe_http.py</code>（<code translate="no">uses_ambient_proxy</code>，路由先于策略）和 <code translate="no">load_outbound_security_config</code>。未实现：沙箱命令代理（<code translate="no">openprogram/host/sandbox/network_policy.py</code>）仍用自己的公网直连规则，不识别 fake-IP 答案。</p>

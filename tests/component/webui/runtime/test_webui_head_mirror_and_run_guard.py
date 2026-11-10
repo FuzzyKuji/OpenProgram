@@ -118,13 +118,15 @@ def test_run_merge_does_not_touch_head_on_failure(monkeypatch, server_events):
 
 # --- 2. WS merge_branches ---------------------------------------------------
 
-def test_merge_branches_syncs_mirror_before_session_reload(
+def test_merge_branches_syncs_mirror_before_views_are_told(
     monkeypatch, server_events,
 ):
     from openprogram.interfaces.server import server as _s
+    from openprogram.interfaces.server.transcript import publisher
     import openprogram.interfaces.server.ws_actions.merge as ws_merge
 
     monkeypatch.setattr(_s, "_is_run_active", lambda sid: False)
+    monkeypatch.setattr(publisher, "notice_merged", lambda sid: server_events.append(("merged", sid)))
     monkeypatch.setattr(
         ws_merge, "_run",
         lambda *a, **kw: {
@@ -147,10 +149,9 @@ def test_merge_branches_syncs_mirror_before_session_reload(
     assert not result["data"]["failed"]
     head_moves = [e for e in server_events if e[0] == "head"]
     assert head_moves == [("head", "t1", "asst1")]
-    # Mirror sync must precede the session_reload that makes clients
-    # re-pull — otherwise they reload the stale branch.
-    reload_idx = server_events.index(("broadcast", "session_reload"))
-    assert server_events.index(head_moves[0]) < reload_idx
+    # Mirror sync must precede the notice that sends open views to read
+    # again — otherwise they read the stale branch.
+    assert server_events.index(head_moves[0]) < server_events.index(("merged", "t1"))
 
 
 # --- 3. rewind partial failure ---------------------------------------------
@@ -421,7 +422,7 @@ def test_chat_startup_failure_fails_exact_admission_and_clears_task(
             assert request.permission_rules is not None
             return _Admission()
 
-        def fail_admission(self, admission, *, reason_code):
+        def fail_admission(self, admission, *, reason_code, failure_text=None):
             failures.append((admission.execution_id, reason_code))
 
     class _StartFailureThread:
@@ -650,7 +651,7 @@ def test_chat_ack_exposes_only_a_durable_cancellable_execution(
     assert command["command"]["status"] == "applied"
 
 
-def test_chat_ack_echoes_auto_when_missing_and_ask_when_invalid(
+def test_chat_ack_echoes_the_default_when_missing_or_invalid(
     monkeypatch, tmp_path,
 ):
     from openprogram.state.store.session.session_store import SessionStore
@@ -705,11 +706,14 @@ def test_chat_ack_echoes_auto_when_missing_and_ask_when_invalid(
                 )
         return observed.get("permission_mode")
 
-    assert _ack_mode({"text": "hi", "session_id": session_id}) == "auto"
+    assert _ack_mode({"text": "hi", "session_id": session_id}) == "bypass"
     assert _ack_mode({
         "text": "hi", "session_id": session_id, "permission_mode": "nope",
+    }) == "bypass"
+    assert _ack_mode({
+        "text": "hi", "session_id": session_id, "permission_mode": "ask",
     }) == "ask"
-    # The invalid mode above saved Ask on this session; inherit keeps it.
+    # The mode above is saved on this session; inherit keeps it.
     assert _ack_mode({
         "text": "hi", "session_id": session_id, "permission_mode": "inherit",
     }) == "ask"

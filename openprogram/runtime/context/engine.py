@@ -49,8 +49,7 @@ from typing import Any, Callable, Optional
 
 from openprogram.runtime.context.budget import BudgetAllocator, default_allocator
 from openprogram.runtime.context.persistence import Persister, default_persister
-from openprogram.runtime.context.references import ReferenceTracker, default_tracker as _ref_tracker
-from openprogram.runtime.context.summarize import Summarizer, default_summarizer
+from openprogram.runtime.context.compaction.summarize import Summarizer, default_summarizer
 from openprogram.runtime.context.tokens import real_context_window
 from openprogram.runtime.context.types import (
     CompactResult,
@@ -97,6 +96,8 @@ class ContextEngine:
                 model: Any,
                 tools: list[Any] | None = None,
                 system_prompt: Optional[str] = None,
+                tail_tokens: int | None = None,
+                clean_history: bool = False,
                 ) -> TurnPrep:
         raise NotImplementedError
 
@@ -133,17 +134,20 @@ class ContextEngine:
 # Default implementation — composes the components
 # ---------------------------------------------------------------------------
 
+_TOO_LONG = "Summary exceeds the render budget; history unchanged"
+_NO_REDUCTION = "Summary does not reduce context; history unchanged"
+
+
 class DefaultContextEngine(ContextEngine):
     """Production engine. Auto-compact and manual compact with full lifecycle.
 
-    Thresholds (overridable via constructor):
-        AUTO_COMPACT_PCT = 0.80 inline compaction before next LLM call
+    Automatic compaction runs before the next LLM call once the prompt and
+    the reply's reserve reach ``context.auto_compact_percent`` of the
+    window (80 by default), read at each decision so a change applies
+    live; a constructor ``auto_compact_pct`` overrides it.
     """
 
     name = "default"
-
-    # AUTO_COMPACT_PCT    proactive compact — still have summary budget
-    AUTO_COMPACT_PCT = 0.80
 
     def __init__(self,
                  *,
@@ -151,16 +155,13 @@ class DefaultContextEngine(ContextEngine):
                  budget_allocator: BudgetAllocator | None = None,
                  summarizer: Summarizer | None = None,
                  persister: Persister | None = None,
-                 references: ReferenceTracker | None = None,
                  auto_compact_pct: float | None = None,
                  ):
         self.usage = usage_tracker or _usage_tracker
         self.budgets = budget_allocator or default_allocator
         self.summarizer = summarizer or default_summarizer
         self.persister = persister or default_persister
-        self.references = references or _ref_tracker
-        if auto_compact_pct is not None:
-            self.AUTO_COMPACT_PCT = auto_compact_pct
+        self._auto_compact_pct = auto_compact_pct
 
     # ---- Lifecycle -----------------------------------------------------
 
@@ -185,19 +186,11 @@ class DefaultContextEngine(ContextEngine):
                 model: Any,
                 tools: list[Any] | None = None,
                 system_prompt: Optional[str] = None,
+                tail_tokens: int | None = None,
+                clean_history: bool = False,
                 ) -> TurnPrep:
         decision: list[str] = []
         session_id = (session or {}).get("id") or ""
-
-        # 1. Reference scan — surfaces cited tool_use ids in TurnPrep.
-        #    ContextCommit rules don't yet consume this (they use locked= flag
-        #    on items instead), but the TurnPrep caller still expects
-        #    n_redacted / ref counts in its log line — keep computing it.
-        ref_map = self.references.build(history)
-        if ref_map.cited_tool_use_ids:
-            decision.append(
-                f"references:protected={len(ref_map.cited_tool_use_ids)}"
-            )
 
         # 2-3. Build the LLM input from the DAG — render_context +
         #    render_dag_messages, the same pipeline runtime.exec uses.
@@ -213,6 +206,8 @@ class DefaultContextEngine(ContextEngine):
             session_id=session_id,
             history=history,
             model=model,
+            tail_tokens=tail_tokens,
+            clean_history=clean_history,
         )
         decision.append("input:dag render")
 
@@ -263,13 +258,20 @@ class DefaultContextEngine(ContextEngine):
             usage=usage,
             tool_results_redacted=n_redacted,
             tokens_freed_by_microcompact=tokens_freed,
-            references_protected=len(ref_map.cited_tool_use_ids),
             summary_id=summary_id,
             decision_path=decision,
         )
 
+    @property
+    def auto_compact_pct(self) -> float:
+        """The share of the window automatic compaction runs at."""
+        if self._auto_compact_pct is not None:
+            return self._auto_compact_pct
+        from openprogram.state.settings import setting_value
+        return setting_value("context.auto_compact_percent") / 100
+
     def should_auto_compact(self, prep: TurnPrep) -> bool:
-        return prep.budget_pct >= self.AUTO_COMPACT_PCT
+        return prep.budget_pct >= self.auto_compact_pct
 
     # ---- Compaction ----------------------------------------------------
 
@@ -294,7 +296,7 @@ class DefaultContextEngine(ContextEngine):
         # summary first, then the kept turns — so a re-compaction eats
         # "previous summary + more turns" instead of re-summarising raw
         # turns the previous summary already covers.
-        from openprogram.runtime.context.compaction_view import load_compaction_view
+        from openprogram.runtime.context.compaction.view import load_compaction_view
         from openprogram.runtime.context.tokens import estimate_history_tokens
         view = load_compaction_view(db, session_id)
         history = view.history
@@ -335,6 +337,17 @@ class DefaultContextEngine(ContextEngine):
             )
             return result
 
+        from openprogram.runtime.context.compaction.hold import default_hold, hold_key
+        held_as = hold_key(session_id, model)
+        held = None if user_initiated else default_hold.held(held_as)
+        if held is not None:
+            result = _no_op(held)
+            self._emit_compaction_finished(
+                on_event, session_id=session_id,
+                user_initiated=user_initiated, result=result,
+            )
+            return result
+
         # The active branch's previous summary is already in the covered
         # input. Never inject the session-global cache from another branch.
         previous_summary = None
@@ -347,17 +360,23 @@ class DefaultContextEngine(ContextEngine):
                 "tokens_before": tokens_before,
             }})
 
-        summary = await self.summarizer.summarise(
-            messages=history,
-            model=model,
-            previous_summary=previous_summary,
-            cancel_event=cancel_event,
-            keep_recent_tokens=keep_recent_tokens,
-            context_window=window,
-        )
+        try:
+            summary = await self.summarizer.summarise(
+                messages=history,
+                model=model,
+                previous_summary=previous_summary,
+                cancel_event=cancel_event,
+                keep_recent_tokens=keep_recent_tokens,
+                context_window=window,
+            )
+        except Exception as error:
+            default_hold.failed(held_as, f"{type(error).__name__}: {error}")
+            raise
 
         if (summary.cut_idx <= 0 or summary.summarised_count == 0
                 or not summary.summary_text):
+            if summary.error:
+                default_hold.failed(held_as, summary.error)
             result = _no_op(summary.error)
             self._emit_compaction_finished(
                 on_event, session_id=session_id,
@@ -369,7 +388,7 @@ class DefaultContextEngine(ContextEngine):
         from openprogram.state.store.session.spill import NODE_RENDER_CAP
         if (len(summary.summary_text) + len("[Previous conversation summary]\n") > NODE_RENDER_CAP
                 or _text_tokens(summary.summary_text) > self.summarizer.max_summary_tokens):
-            result = _no_op("Summary exceeds the render budget; history unchanged")
+            result = _no_op(_TOO_LONG)
         elif cancel_event is not None and cancel_event.is_set():
             result = _no_op("Compaction cancelled; history unchanged")
         elif not view.unchanged(db, session_id):
@@ -379,8 +398,10 @@ class DefaultContextEngine(ContextEngine):
         else:
             candidate = view.candidate_messages(summary.summary_text, summary.cut_idx)
             saved = estimate_history_tokens(view.messages) - estimate_history_tokens(candidate)
-            result = _no_op("Summary does not reduce context; history unchanged") if saved <= 0 else None
+            result = _no_op(_NO_REDUCTION) if saved <= 0 else None
         if result is not None:
+            if result.error in (_TOO_LONG, _NO_REDUCTION):
+                default_hold.failed(held_as, result.error)
             self._emit_compaction_finished(
                 on_event, session_id=session_id,
                 user_initiated=user_initiated, result=result,
@@ -400,6 +421,7 @@ class DefaultContextEngine(ContextEngine):
                 user_initiated=user_initiated, result=result,
             )
             return result
+        default_hold.done(held_as)
 
         from openprogram.runtime.context.persistence import covered_chain_ids
         covered_count = len(covered_chain_ids(history[:summary.cut_idx]))
@@ -492,6 +514,8 @@ class DefaultContextEngine(ContextEngine):
         session_id: str,
         history: list[dict],
         model: Any,
+        tail_tokens: int | None = None,
+        clean_history: bool = False,
     ) -> list:
         """Build provider Message[] via render_context + render_dag_messages —
         the SAME context pipeline runtime.exec uses (dag/overview.md
@@ -513,8 +537,18 @@ class DefaultContextEngine(ContextEngine):
         and past userN, and render from what precedes them. See
         test_retry_branch_isolation.py.
 
+        ``tail_tokens`` bounds the rendered conversation to the summary and
+        the latest steps (context/tail.py), for a turn that must stay small
+        without compacting.
+
+        ``clean_history`` is a run that starts from nothing (a scheduled
+        task, a clean Job or sub-agent): the conversation it sits in is not
+        its context.
+
         Raises on failure → prepare() catches and falls back to _assemble.
         """
+        if clean_history:
+            return []
         if not session_id:
             raise RuntimeError("dag render path requires session_id")
         from openprogram.runtime.context.nodes import render_context
@@ -553,13 +587,15 @@ class DefaultContextEngine(ContextEngine):
 
         # Drop abandoned assistant turns. A stream that died mid-flight
         # (crashed worker, dropped connection) leaves an llm node with
-        # status "running" and empty output sitting IN the branch, and
-        # rendering it feeds the model a contentless assistant message
-        # between two user messages — some providers reject that outright,
-        # and it teaches the model that empty replies are acceptable.
+        # empty output sitting IN the branch, whether it still says
+        # "running" or the owner stopped it afterwards, and rendering it
+        # feeds the model a contentless assistant message between two user
+        # messages — some providers reject that outright, and it teaches
+        # the model that empty replies are acceptable.
         # A node that owns tool calls is kept regardless: its ToolCall
         # entries have to hang off an assistant message or the following
-        # tool_result is orphaned.
+        # tool_result is orphaned. An attach node is kept too: it is a
+        # sub-agent's report, which says so even with no text of its own.
         owns_tool_call = {
             (graph.nodes[nid].caller or "")
             for nid in read_ids
@@ -568,23 +604,55 @@ class DefaultContextEngine(ContextEngine):
 
         def _is_abandoned(nid: str) -> bool:
             n = graph.nodes.get(nid)
-            if n is None or not n.is_llm():
+            if n is None or not n.is_llm() or (n.metadata or {}).get("function") == "attach":
                 return False
-            if (n.output or "").strip() or nid in owns_tool_call:
-                return False
-            return ((n.metadata or {}).get("status") or "") == "running"
+            return not (n.output or "").strip() and nid not in owns_tool_call
 
         read_ids = [nid for nid in read_ids if not _is_abandoned(nid)]
 
-        history_dir = None
+        omitted = False
+        if tail_tokens is not None:
+            from openprogram.runtime.context.tail import bounded_tail
+            read_ids, omitted = bounded_tail(graph, read_ids, tail_tokens)
+
+        session_directory = None
         try:
             _sdir_fn = getattr(db, "_session_dir", None)
             if _sdir_fn:
-                history_dir = str(_sdir_fn(session_id) / "history")
+                session_directory = str(_sdir_fn(session_id))
         except Exception:
-            history_dir = None
+            session_directory = None
 
-        return render_dag_messages(graph, read_ids, history_dir)
+        messages = render_dag_messages(graph, read_ids, session_directory)
+        if omitted:
+            messages = self._with_omitted_note(graph, read_ids, messages)
+        return messages
+
+    @staticmethod
+    def _with_omitted_note(graph: Any, read_ids: list[str], messages: list) -> list:
+        """Say that older messages were left out, right before the kept tail.
+
+        A summary renders first as one assistant message, so the note goes
+        after it. Being a user message, it also keeps a tail that starts on a
+        reply from opening the request with an assistant message.
+        """
+        import time
+
+        from openprogram.models.providers.types import TextContent, UserMessage
+        from openprogram.runtime.context.nodes import summary_covers_ids
+        from openprogram.runtime.context.tail import OMITTED_NOTE
+
+        has_summary = any(
+            nid in graph.nodes and summary_covers_ids(graph.nodes[nid]) is not None
+            for nid in read_ids[:1]
+        )
+        note = UserMessage(
+            role="user",
+            content=[TextContent(type="text", text=OMITTED_NOTE)],
+            timestamp=int(time.time() * 1000),
+        )
+        position = 1 if has_summary else 0
+        return [*messages[:position], note, *messages[position:]]
 
     def _estimate(self, history: list[dict]) -> int:
         from openprogram.runtime.context.tokens import estimate_history_tokens

@@ -584,7 +584,7 @@ def maybe_auto_name_branch(db, session_id: str, head_id: str) -> None:
         prompt = build_branch_name_prompt(chain)
 
         from openprogram.models.providers.streaming.background_llm import build_background_llm
-        llm = build_background_llm()
+        llm = build_background_llm(call_kind="title")
         if llm is None:
             return
         try:

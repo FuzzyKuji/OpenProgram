@@ -57,7 +57,7 @@ def verifier(store_fixture, live, monkeypatch, request):
         repair_config = freeze_repair(request, config, candidate_path=worktree.worktree_path, branch_name=worktree.branch_name)
         request = replace(request, pre_update_evidence=(*request.pre_update_evidence, repair_evidence(repair_config)))
     store.create(request, verifier_config=config, source_repair_config=repair_config)
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(request.update_id, phase)
     gate = probe_system(store.load(request.update_id))
     grant = channel.issue_grant(store, request.update_id, gate)
@@ -117,7 +117,7 @@ def tamper_job(job_id, **fields):
     """Modify persisted bytes to exercise verifier corruption detection."""
     from openprogram.state.store import default_store
 
-    path = default_store()._session_dir("p1") / "jobs.json"  # noqa: SLF001
+    path = default_store().state_file("p1", "jobs.json")
     body = json.loads(path.read_text(encoding="utf-8"))
     body["jobs"][job_id].update(fields)
     path.write_text(json.dumps(body), encoding="utf-8")
@@ -364,5 +364,5 @@ def test_generic_read_cannot_expose_verifier_authorization_even_without_sandbox(
     monkeypatch.setattr("openprogram.host.sandbox.resolve_policy", lambda: None)
     v.run()
     output = v.control["read_result"].content[0].text
-    assert "sandbox policy" in output
+    assert output.startswith("[blocked by sandbox]")
     assert v.grant["token"] not in output

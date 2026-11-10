@@ -320,6 +320,7 @@ export function ControlsCluster({
                         name="fire"
                         ref={effortIconRef}
                         size={16}
+                        fit="fill"
                         className={styles.effortIcon}
                         // Fast 开着时火苗变红；否则逐级颜色只在窄态（文字隐藏时）
                         // 显示，常规宽度跟随文字颜色。

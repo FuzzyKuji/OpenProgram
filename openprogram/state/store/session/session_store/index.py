@@ -7,7 +7,7 @@ from . import shared
 _MIGRATION_SETTLED = frozenset({"done", "deleted"})
 
 # Any of these in a session directory is user data worth keeping in place.
-_SESSION_DATA = ("meta.json", ".git", "events.jsonl")
+_SESSION_DATA = ("main.jsonl", "agents", "events.jsonl")
 
 
 class IndexOperations:
@@ -21,7 +21,10 @@ class IndexOperations:
             return {}
         try:
             data = shared.json.loads(shared.read_text_with_retry(p))
-            return {str(k): str(v) for k, v in data.items()} if isinstance(data, dict) else {}
+            if not isinstance(data, dict):
+                return {}
+            from ..placement import rooted_location
+            return {str(k): str(rooted_location(self.root_path, v)) for k, v in data.items()}
         except (OSError, shared.json.JSONDecodeError):
             return {}
 
@@ -120,7 +123,7 @@ class IndexOperations:
                     self._startup_cleanup()
                     return
             except (OSError, shared.json.JSONDecodeError):
-                shared._log.warning("index.json corrupted, rebuilding from meta.json files")
+                shared._log.warning("index.json corrupted, rebuilding from session logs")
         self._rebuild_index()
         self._startup_cleanup()
 
@@ -143,12 +146,15 @@ class IndexOperations:
                 seen.add(sid)
         for sdir in dirs_to_scan:
             try:
-                meta = shared.json.loads(shared.read_text_with_retry(sdir / "meta.json"))
+                log = shared.SessionLog(sdir)
+                meta = log.read_meta()
+                if not meta:
+                    continue
                 sid = meta.get("id") or sdir.name
                 entry = self._meta_to_entry(meta)
                 if not entry.get("created_at"):
                     try:
-                        entry["created_at"] = (sdir / "meta.json").stat().st_mtime
+                        entry["created_at"] = log.main_path.stat().st_mtime
                     except OSError:
                         pass
                 # Backfill preview from history.
@@ -173,11 +179,11 @@ class IndexOperations:
 
 
     def _startup_cleanup(self) -> None:
-        """Retire stale summary rows and history-less shells, losing nothing.
+        """Retire stale summary rows and log-less shells, losing nothing.
 
-        Every session ``create_session`` writes has ``history/`` from its
-        first meta write, so a directory without one is damaged or foreign,
-        not an abandoned draft. Such a directory is kept in place when it
+        Every session ``create_session`` writes has a log from its first
+        meta write, so a directory without one is damaged or foreign, not
+        an abandoned draft. Such a directory is kept in place when it
         holds any session data and otherwise moved to ``.quarantine``; this
         pass never deletes files. Anything it cannot judge with certainty
         (unknown age, unreadable migration journal, unresolved placement,
@@ -205,7 +211,7 @@ class IndexOperations:
                 continue
             try:
                 sdir = self._session_dir(sid)
-                if (sdir / "history").is_dir():
+                if (sdir / "main.jsonl").exists():
                     continue
                 if not shared.os.path.lexists(sdir):
                     # A non-default placement that is absent is unreachable
@@ -218,7 +224,7 @@ class IndexOperations:
                         dropped.append(sid)
                     continue
                 if any(shared.os.path.lexists(sdir / name) for name in _SESSION_DATA):
-                    shared._log.warning("session %s has no history/ at %s; retained", sid, sdir)
+                    shared._log.warning("session %s has no main log at %s; retained", sid, sdir)
                     continue
                 if self._quarantine_shell(sid, sdir, now):
                     dropped.append(sid)
@@ -237,7 +243,7 @@ class IndexOperations:
 
 
     def _quarantine_shell(self, session_id: str, sdir: shared.Path, now: float) -> bool:
-        """Move a history-less shell under ``.quarantine``. True when moved.
+        """Move a log-less shell under ``.quarantine``. True when moved.
 
         Directories outside the store root (legacy working-folder copies)
         are never moved.
@@ -253,21 +259,20 @@ class IndexOperations:
                 session_id, blocking=False,
                 root=self.root_path if self._explicit_root else None,
             ):
-                if any(shared.os.path.lexists(sdir / name)
-                       for name in ("history", *_SESSION_DATA)):
+                if any(shared.os.path.lexists(sdir / name) for name in _SESSION_DATA):
                     return False
                 dest.mkdir(parents=True)
                 shared.os.rename(sdir, dest / "session")
                 shared.atomic_write_text(dest / "reason.json", shared.json.dumps({
                     "session_id": session_id,
                     "source": str(sdir),
-                    "reason": "no history/ and no session data",
+                    "reason": "no session data",
                     "quarantined_at": now,
                 }, indent=2, ensure_ascii=False))
         except (BlockingIOError, OSError) as e:
             shared._log.warning("shell %s not quarantined: %s", sdir, e)
             return False
-        shared._log.info("quarantined history-less shell %s -> %s", sdir, dest)
+        shared._log.info("quarantined log-less shell %s -> %s", sdir, dest)
         return True
 
 

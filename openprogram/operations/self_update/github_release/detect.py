@@ -15,6 +15,29 @@ class InstallMethod(str, Enum):
     UNKNOWN = "unknown"
 
 
+class UpdateRoute(str, Enum):
+    """Which way a new version reaches this installation."""
+
+    VERSION_STORE = "version_store"
+    DESKTOP_APP = "desktop_app"
+    COMMAND_LINE_RELEASE = "command_line_release"
+    SOURCE_CHECKOUT = "source_checkout"
+    REINSTALL = "reinstall"
+
+
+INSTALL_GUIDE = "https://github.com/FuzzyKuji/OpenProgram/blob/main/docs/install/install.html"
+UPDATE_GUIDANCE = {
+    UpdateRoute.DESKTOP_APP: (
+        "This copy runs inside the desktop App, so the App updates it. "
+        "Open Settings in the App and use Check for updates."
+    ),
+    UpdateRoute.REINSTALL: (
+        "This copy was installed some other way, for example with pip, so it cannot update itself. "
+        f"Install the latest version by following {INSTALL_GUIDE}"
+    ),
+}
+
+
 def package_root() -> Path:
     """Filesystem location of the installed openprogram package."""
     import openprogram
@@ -99,16 +122,45 @@ def managed_runtime_root() -> Optional[Path]:
     return None
 
 
+def _in_version_store() -> bool:
+    from openprogram.operations.self_update.versions.layout import managed
+
+    return managed()
+
+
+def _inside_desktop_app(runtime_root: Path) -> bool:
+    """An App keeps its runtime in Electron's resources directory; a CLI install never does."""
+    return runtime_root.name == "runtime" and runtime_root.parent.name.lower() == "resources"
+
+
+def update_route() -> UpdateRoute:
+    """How this installation gets a new version."""
+    if _in_version_store():
+        return UpdateRoute.VERSION_STORE
+    runtime = managed_runtime_root()
+    if runtime is not None and _inside_desktop_app(runtime):
+        return UpdateRoute.DESKTOP_APP
+    method = detect_install_method()
+    if method is InstallMethod.MANAGED_RELEASE:
+        return UpdateRoute.COMMAND_LINE_RELEASE
+    if method is InstallMethod.SOURCE_CHECKOUT:
+        return UpdateRoute.SOURCE_CHECKOUT
+    return UpdateRoute.REINSTALL
+
+
 def detect_install_method() -> InstallMethod:
     """Classify the product update path.
 
-    Release launchers set ``OPENPROGRAM_IMMUTABLE_RUNTIME=1``.  Check that
-    first because their Python package naturally lives in site-packages and a
-    packaged Desktop may also be launched from a source worktree during tests.
+    An App's embedded runtime sets ``OPENPROGRAM_IMMUTABLE_RUNTIME=1`` and a
+    sealed version is recognised from where it runs.  Check those first because
+    their Python package naturally lives in site-packages and a packaged
+    Desktop may also be launched from a source worktree during tests.
     """
     if os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME", "").strip() in {
         "1", "true", "True", "yes",
     }:
+        return InstallMethod.MANAGED_RELEASE
+    if _in_version_store():
         return InstallMethod.MANAGED_RELEASE
     if is_pyinstaller_binary():
         return InstallMethod.MANAGED_RELEASE

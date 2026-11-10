@@ -98,7 +98,6 @@ def test_stop_retry_reuses_the_canonical_command_and_reports_driver_failure(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="test",
-        ttl_seconds=30,
     )
     attempt, running = attempts.activate(
         lease.attempt_id,
@@ -316,7 +315,6 @@ def test_live_canonical_states_cannot_resume(bound_goal, status):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="test",
-        ttl_seconds=30,
     )
     _attempt, running = attempts.activate(
         lease.attempt_id,

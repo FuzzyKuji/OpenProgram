@@ -91,27 +91,10 @@ class BorrowedOperations:
                 "driver": binding.driver,
             }
             self._done_events[job.id] = done_ev
-        lease_stop = shared.threading.Event()
-        lease_thread = shared.threading.Thread(
-            target=self._renew_borrowed_lease,
-            args=(
-                job.id,
-                parent_job_id,
-                lease_generation,
-                lease_stop,
-                attempt.attempt_id,
-                attempt.generation,
-            ),
-            daemon=True,
-            name=f"op-job-borrowed-lease-{job.id}",
-        )
-        lease_thread.start()
         result = None
         try:
             result = binding.handle.done.result()
         finally:
-            lease_stop.set()
-            lease_thread.join(timeout=1.0)
             execution = self._execution_store.get_execution(job.id)
             if execution is not None and execution.status.value in {
                 "completed", "cancelled", "failed", "interrupted",

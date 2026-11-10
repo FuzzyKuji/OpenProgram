@@ -154,16 +154,23 @@ async def load_mcp_servers() -> None:
     # management UI's left nav so users can re-enable them. The
     # ``_spawn_and_register`` helper handles the "disabled" branch:
     # marks the client with ``error='disabled'``, skips ``start()``.
-    for queued in load_configs(include_disabled=True):
-        # Management may delete, disable or replace later entries while an
-        # earlier connection awaits transport or consent. Do not replay its
-        # stale startup configuration over the owner's current state.
-        if queued.name in _clients:
-            continue
-        current = next((cfg for cfg in load_configs(include_disabled=True)
-                        if cfg.name == queued.name), None)
-        if current is not None:
-            await _spawn_and_register(current)
+    # Nobody is waiting on these connections: a server that needs a sign-in
+    # keeps its link pending and opens no browser (oauth_flow.unattended).
+    from .oauth_flow import unattended
+    attended = unattended.set(True)
+    try:
+        for queued in load_configs(include_disabled=True):
+            # Management may delete, disable or replace later entries while an
+            # earlier connection awaits transport or consent. Do not replay its
+            # stale startup configuration over the owner's current state.
+            if queued.name in _clients:
+                continue
+            current = next((cfg for cfg in load_configs(include_disabled=True)
+                            if cfg.name == queued.name), None)
+            if current is not None:
+                await _spawn_and_register(current)
+    finally:
+        unattended.reset(attended)
 
     # Fold every connected server's prompts into the unified
     # slash-command registry so users see them in the composer

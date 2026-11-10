@@ -7,6 +7,7 @@ conversions between it and a ``Job`` or a ``TurnRequest``.
 from __future__ import annotations
 
 import copy
+import dataclasses
 from dataclasses import fields
 from typing import Any, Mapping
 
@@ -31,7 +32,10 @@ class JobAgentInputV1(_JobAgentInputSchema):
     def from_job(cls, job: Any, *, run_id: str | None = None,
                  parent_execution_id: str | None = None,
                  permission_snapshot: Mapping[str, Any] | None = None,
-                 usage_goal: Mapping[str, Any] | None = None) -> "JobAgentInputV1":
+                 usage_goal: Mapping[str, Any] | None = None,
+                 automation: str | None = None,
+                 detached: bool = False) -> "JobAgentInputV1":
+        from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
         from openprogram.state.authority import normalize_authority
 
         deferred_inbox = None
@@ -50,6 +54,8 @@ class JobAgentInputV1(_JobAgentInputSchema):
                 "node_id": job.caller_msg_id,
             }
         authority = normalize_authority(job)
+        verifier = job.source in {"self_update_verify", "self_update_diagnose", "self_update_repair"}
+        owner_work = not verifier and authority.get("authority_tier") == "owner"
         spawn_caller = job.spawn_caller if job.spawn_caller is not None else (
             caller["node_id"] if caller else None
         )
@@ -66,12 +72,8 @@ class JobAgentInputV1(_JobAgentInputSchema):
             "agent_id": job.agent_id,
             "source": job.source,
             "permission_mode": (
-                "bypass"
-                if job.source in {
-                    "self_update_verify",
-                    "self_update_diagnose",
-                    "self_update_repair",
-                }
+                "bypass" if verifier
+                else DEFAULT_PERMISSION if owner_work
                 else "ask"
             ),
             "branch_from": job.parent_msg_id,
@@ -91,6 +93,14 @@ class JobAgentInputV1(_JobAgentInputSchema):
             "spawned_from_session": caller["session_id"] if caller else None,
             **authority,
         }
+        if job.message_origin:
+            # Only a delivered message names an origin, so every other Job keeps
+            # the payload and hash it always had.
+            request["message_origin"] = job.message_origin
+        if automation:
+            request["automation"] = automation
+        if detached:
+            request["detached"] = True
         if permission_snapshot is not None:
             from openprogram.runtime.permissions.modes import VALID_PERMISSION
             if (job.source not in {"agent_spawn", "self_update_replan", "self_update_continue"} or set(permission_snapshot) != {"mode", "rules"}
@@ -98,6 +108,14 @@ class JobAgentInputV1(_JobAgentInputSchema):
                 raise JobAgentInputError("invalid inherited permission snapshot")
             request["permission_mode"] = permission_snapshot["mode"]
             request["permission_rules"] = copy.deepcopy(permission_snapshot["rules"])
+        elif owner_work and job.parent_session_id:
+            # No live parent to inherit from (a message delivered once its
+            # target went idle): the turn runs as one sent in that conversation.
+            from openprogram.runtime.conversation.session_config import conversation_permission
+            permission = conversation_permission(job.parent_session_id)
+            request["permission_mode"] = permission["permission_mode"]
+            rules = permission["permission_rules"]
+            request["permission_rules"] = dataclasses.asdict(rules) if dataclasses.is_dataclass(rules) else rules
         payload = {
             "version": JOB_AGENT_INPUT_VERSION,
             "kind": "job_agent",
@@ -177,6 +195,7 @@ class JobAgentInputV1(_JobAgentInputSchema):
             source=request.get("source") or "agent_spawn",
             profile_snapshot=copy.deepcopy(request.get("profile_snapshot")),
             response_format=copy.deepcopy(request.get("response_format")),
+            message_origin=request.get("message_origin"),
             deferred_inbox=copy.deepcopy(context["deferred_inbox"]),
             target_branch_head_id=context["branch_frontier"],
             worktree_id=context["worktree_id"],

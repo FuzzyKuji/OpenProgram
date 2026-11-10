@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 
 
-# 权限规则跟着**项目**走（见 permission-model.md §2.3）。请求可直接带
+# 权限规则跟着**项目**走（见 docs/reference/design/runtime/security/permission-decision.html）。请求可直接带
 # project_id（Projects 页知道项目）；只带 session_id 时反查项目（composer 路径）。
 
 def _resolve_project_id(cmd: dict) -> str | None:

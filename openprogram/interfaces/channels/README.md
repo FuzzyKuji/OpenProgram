@@ -49,6 +49,8 @@ platforms via:
 - **`accounts.py`** — Multi-account channel credential store
 - **`base.py`** — Channel 抽象
 - **`bindings.py`** — Channel → Agent routing
+- **`bound_reply.py`** — Send a bound chat's assistant reply to its channel conversation
+- **`link_registration.py`** — The channels interface's implementation of the core's channel link
 - **`outbound.py`** — Outbound
 
 ## Sub-packages

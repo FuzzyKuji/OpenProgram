@@ -1,7 +1,9 @@
 """Session permission policy and execution lifecycle.
 
 ``state`` owns persisted modes and compare-and-set updates; ``policy`` owns
-operation decisions; ``classifier`` evaluates Auto risk; ``approval`` binds decisions to durable waits and tools;
+operation decisions; ``identity`` holds the limits on anyone but the owner;
+``refusal`` is the one source of refusal text and results; ``classifier``
+evaluates Auto risk; ``approval`` binds decisions to durable waits and tools;
 ``lifecycle`` applies confirmed changes to subsequent operations and waits.
 ``authority`` holds authenticated identity, ``attended`` denies questions in
 unattended runs, and process isolation

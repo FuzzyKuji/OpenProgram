@@ -44,6 +44,8 @@ import threading
 from pathlib import Path
 from typing import TYPE_CHECKING, Iterator, Optional
 
+from openprogram.programs._host.sources import use_dependency_directory
+
 if TYPE_CHECKING:
     from openprogram.programs._host.context import ProgramContext
 
@@ -52,6 +54,7 @@ logger = logging.getLogger(__name__)
 
 _contexts: dict[str, "ProgramContext"] = {}
 _contexts_lock = threading.RLock()
+_load_errors: list[dict[str, str]] = []
 
 
 def program_context(owner: str, name: str, root: str = "") -> "ProgramContext":
@@ -208,8 +211,10 @@ def load_program_modules(programs_dir: str | None = None) -> None:
     Built-in and user Programs are plain Python packages; their
     ``PROGRAM_ENTRIES`` register as tools. Failures are swallowed per entry
     so one broken package doesn't kill the whole import. Set
-    ``OPENPROGRAM_DEBUG_REGISTRY=1`` to surface swallowed errors.
+    ``OPENPROGRAM_DEBUG_REGISTRY=1`` to add the traceback to the log. What
+    failed in the latest pass is in :func:`load_errors`.
     """
+    _load_errors.clear()
     # 1. Tool packages with PROGRAM_ENTRIES.
     for mod_name, module_path in TOOL_PROGRAMS.items():
         try:
@@ -356,6 +361,7 @@ def _import_external_harness(harness_root: str) -> None:
     sys_path_root = os.path.dirname(pkg_dir)
     if sys_path_root not in sys.path:
         sys.path.insert(0, sys_path_root)
+    use_dependency_directory()
 
     pkg_name = os.path.basename(pkg_dir)
     from openprogram.programs._host.source_loader import install_program_source, register_public_entries
@@ -394,6 +400,7 @@ def _load_external_file(
     sys_path_root = os.path.dirname(inner_pkg_dir)
     if sys_path_root not in sys.path:
         sys.path.insert(0, sys_path_root)
+    use_dependency_directory()
 
     slug = re.sub(r"[^A-Za-z0-9_]", "_", mod_name).strip("_") or "mod"
     digest = hashlib.sha256(os.path.realpath(abs_path).encode()).hexdigest()[:12]
@@ -462,6 +469,7 @@ def iter_program_files(
         sys_path_root = os.path.dirname(pkg_dir)
         if sys_path_root not in sys.path:
             sys.path.insert(0, sys_path_root)
+        use_dependency_directory()
         pkg_name = os.path.basename(pkg_dir)
         try:
             mod = importlib.import_module(f"{pkg_name}.agentics")
@@ -484,8 +492,14 @@ def iter_program_files(
 # ---------------------------------------------------------------------------
 
 
+def load_errors() -> list[dict[str, str]]:
+    """What could not load in the latest pass: ``{"name", "error"}`` rows."""
+    return [dict(row) for row in list(_load_errors)]
+
+
 def _debug_registry_error(name: str, e: Exception) -> None:
     # OPENPROGRAM_DEBUG_REGISTRY adds the traceback.
+    _load_errors.append({"name": name, "error": f"{type(e).__name__}: {e}"})
     logger.warning("Cannot load Program %s: %s: %s", name, type(e).__name__, e,
                    exc_info=e if os.environ.get("OPENPROGRAM_DEBUG_REGISTRY") else None)
 

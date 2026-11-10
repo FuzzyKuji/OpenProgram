@@ -14,6 +14,9 @@ adapter 只在 parse 时把 platform 附件元数据填进
   ``[attachment: <绝对路径> (<mime>, <size>)]`` — agent 用文件工具打开.
   非图片文件只有这条腿.
 
+语音消息 (``Attachment.voice``) 另外经 :mod:`openprogram.runtime.speech_link`
+转成文字进 user_text. 下载或转写失败都写一行说明, 这一轮知道少了什么.
+
 平台差异:
 
 * telegram — Attachment 只带 ``file_id``, 下载时经 getFile 解析出
@@ -65,22 +68,38 @@ def attachments_dir(channel: str, account_id: str) -> Path:
     return d
 
 
+class _AttachmentTooLarge(ValueError):
+    """The body grew past :data:`MAX_DOWNLOAD_BYTES` while streaming."""
+
+
+def _too_large_reason() -> str:
+    return f"larger than the {MAX_DOWNLOAD_BYTES // (1024 * 1024)} MB limit"
+
+
 def download_inbound(
     channel: str, account_id: str, attachments: Iterable[Attachment],
+    failed: list[dict] | None = None,
 ) -> list[dict]:
     """把入站附件下载到账号附件目录. 返回落盘清单, 每项::
 
         {"path": "<绝对路径>", "name": ..., "mime": ..., "size": <bytes>}
 
     单个附件失败 (太大 / 网络 / 解析不出 URL) 打日志并跳过, 不影响
-    其余附件和消息本身.
+    其余附件和消息本身. 传了 ``failed`` 时每个失败的附件往里加一项
+    ``{"name": ..., "reason": ...}`` (:func:`failure_notes` 的输入).
     """
     tag = f"{channel}:{account_id}"
     saved: list[dict] = []
+
+    def give_up(att: Attachment, reason: str = "download failed") -> None:
+        if failed is not None:
+            failed.append({"name": att.name, "reason": reason})
+
     for att in attachments or ():
         if att.size and att.size > MAX_DOWNLOAD_BYTES:
             _log.warning("[%s] attachment %r skipped: %s bytes exceeds %s",
                          tag, att.name, att.size, MAX_DOWNLOAD_BYTES)
+            give_up(att, _too_large_reason())
             continue
         url, headers = att.url, dict(att.headers or ())
         if not url and att.file_id and channel == "telegram":
@@ -88,16 +107,19 @@ def download_inbound(
             if resolved is None:
                 _log.warning("[%s] attachment %r skipped: telegram getFile failed",
                              tag, att.name)
+                give_up(att)
                 continue
             url = resolved
         if not url:
             _log.warning("[%s] attachment %r skipped: no download URL", tag, att.name)
+            give_up(att)
             continue
         try:
             row = _download_one(channel, account_id, att, url, headers)
         except httpx.RequestError as e:
             _log.warning("[%s] attachment %r download failed: %s for %s",
                          tag, att.name, type(e).__name__, normalize_origin(url))
+            give_up(att)
             continue
         except Exception as e:  # noqa: BLE001
             detail = (
@@ -106,9 +128,13 @@ def download_inbound(
                 else type(e).__name__
             )
             _log.warning("[%s] attachment %r download failed: %s", tag, att.name, detail)
+            give_up(att, _too_large_reason()
+                    if isinstance(e, _AttachmentTooLarge) else "download failed")
             continue
-        if row is not None:
-            saved.append(row)
+        if row is None:
+            give_up(att)
+            continue
+        saved.append({**row, "voice": True} if att.voice else row)
     return saved
 
 
@@ -154,7 +180,7 @@ def _download_one(
                         output.write(chunk)
                         size += len(chunk)
                         if size > MAX_DOWNLOAD_BYTES:
-                            raise ValueError("attachment exceeds download limit")
+                            raise _AttachmentTooLarge("attachment exceeds download limit")
                     if decryptor is not None:
                         tail = decryptor.finish()
                         head = (head + tail)[:16] if len(head) < 16 else head
@@ -230,6 +256,52 @@ def to_turn_attachments(saved: list[dict]) -> list[dict]:
             "media_type": row["mime"],
         })
     return out
+
+
+def failure_notes(failed: list[dict]) -> list[str]:
+    """每个没收到的附件一行说明. 词法故意和 ``[attachment: ...]`` 标记不同,
+    网页不会把它渲染成可点开的 chip."""
+    return [
+        f"[attachment not received: {_one_line_name(row.get('name'))} ({row['reason']})]"
+        for row in failed
+    ]
+
+
+def _one_line_name(name: object) -> str:
+    return " ".join(str(name or "").split())[:80] or "unnamed file"
+
+
+def voice_notes(saved: list[dict]) -> list[str]:
+    """语音消息的文字. 转写失败时写明原因, 音频文件仍在标记那一行."""
+    return [_voice_note(row) for row in saved if row.get("voice")]
+
+
+def _voice_note(row: dict) -> str:
+    try:
+        text, silent = _transcribe_file(Path(row["path"]))
+    except Exception as e:  # noqa: BLE001
+        # Whatever went wrong here, the caption and the audio file still reach the turn.
+        _log.warning("voice message not transcribed: %s", type(e).__name__)
+        reason = " ".join(str(e).split())[:300] or type(e).__name__
+        return f"[voice message not transcribed: {reason}]"
+    if silent:
+        return "[voice message not transcribed: the recording is silent]"
+    if not text:
+        return "[voice message not transcribed: no speech was recognised]"
+    return f"[voice message transcript]\n{text}"
+
+
+def _transcribe_file(source: Path) -> tuple[str, bool]:
+    """``(text, silent)`` of one audio file; speech to text takes WAV only."""
+    from openprogram.programs.applications.meeting import audio
+    from openprogram.runtime import speech_link
+
+    if audio.ffmpeg() is None:
+        raise RuntimeError("ffmpeg is not installed, so the audio cannot be converted")
+    wav = audio.to_wav(source)
+    if audio.wav_info(wav)[1] < audio.SILENCE_PEAK:
+        return "", True  # Whisper invents words for silent audio.
+    return str(speech_link.transcribe(wav).get("text") or "").strip(), False
 
 
 def attachment_notes(saved: list[dict]) -> list[str]:

@@ -14,12 +14,14 @@ from openprogram.host.security.url_policy import URLTrustClass, evaluate_url
 
 EXPECTED_CONSUMERS = {
     "tool.web_fetch",
+    "tool.web_fetch.owner",
     "tool.web_search.fixed_api",
     "tool.web_search.configured_api",
     "tool.image_api.fixed",
     "tool.image_api.configured",
     "tool.voice_api.fixed",
     "tool.image_result.download",
+    "tool.image_result.download.owner",
     "channel.attachment.download",
     "channel.telegram.api",
     "channel.discord.api",

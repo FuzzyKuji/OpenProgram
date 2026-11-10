@@ -1,21 +1,18 @@
-"""Job persistence — one ``jobs.json`` file per session repo.
+"""Job persistence — one ``jobs.json`` document per session, kept in its log.
 
-Lives at ``<session-repo>/jobs.json`` (i.e. ``<state>/sessions/<id>/``,
-or inside a project-bound session's repo) so it rides the
-same git history as ``meta.json`` and ``context/``. Schema:
+Schema:
 
   {"jobs": {<job_id>: <Job.to_dict>, ...}, "version": 1}
 
 The store is intentionally per-session: jobs always belong to one
-session (design D6), and putting them in the session repo means a
-``git log`` on that repo replays the job lifecycle. No cross-session
-queries — UI's "list all running jobs" enumerates sessions and asks
-each store.
+session (design D6), and every write is one line of that session's log,
+so the log replays the job lifecycle. No cross-session queries — UI's
+"list all running jobs" enumerates sessions and asks each store.
 
-Concurrency: every public method takes the file lock for the session
-(one ``threading.Lock`` per session_id). Inside the lock we read →
-mutate → write → commit. The runner submits state transitions from
-worker threads; the lock serialises them.
+Concurrency: every public method takes the lock for the session (one
+``threading.Lock`` per session_id). Inside the lock we read → mutate →
+write. The runner submits state transitions from worker threads; the
+lock serialises them.
 
 Persistence is *idempotent* on Job.id — re-saving the same job just
 overwrites the dict entry. Status transitions are validated against
@@ -33,7 +30,6 @@ import json
 import threading
 import time
 from contextlib import contextmanager
-from pathlib import Path
 from typing import Any, Callable, Optional
 
 from openprogram.host._platform import locking
@@ -63,7 +59,7 @@ def _session_lock(session_id: str) -> threading.Lock:
 
 
 @contextmanager
-def _session_file_lock(path: Path):
+def _session_file_lock(path):
     lock_path = path.with_suffix(".lock")
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     with lock_path.open("a+b") as handle:
@@ -74,59 +70,18 @@ def _session_file_lock(path: Path):
             locking.flock(handle.fileno(), locking.LOCK_UN)
 
 
-def _jobs_path(session_id: str) -> Optional[Path]:
-    """Path to the session's jobs.json, or None if the session repo
+def _jobs_path(session_id: str):
+    """The session's jobs.json document, or None if the session
     doesn't exist (e.g. the session was deleted)."""
     from openprogram.state.store import default_store
     store = default_store()
     sdir = store._session_dir(session_id)  # noqa: SLF001 — re-read after session lock
     if not sdir.exists():
         return None
-    path = sdir / "jobs.json"
-    _migrate_legacy_file(path)
-    return path
+    return store.state_file(session_id, "jobs.json")
 
 
-def _rename_legacy_keys(value: Any) -> Any:
-    if isinstance(value, dict):
-        migrated: dict[str, Any] = {}
-        for key, item in value.items():
-            new_key = key.replace("task_id", "job_id")
-            new_value = _rename_legacy_keys(item)
-            if new_key in migrated and migrated[new_key] != new_value:
-                raise ValueError(f"conflicting legacy field: {new_key}")
-            migrated[new_key] = new_value
-        return migrated
-    if isinstance(value, list):
-        return [_rename_legacy_keys(item) for item in value]
-    return value
-
-
-def _migrate_legacy_file(path: Path) -> None:
-    """Move a valid legacy tasks.json into jobs.json once."""
-    legacy_path = path.with_name("tasks.json")
-    with _session_file_lock(path):
-        if not legacy_path.exists():
-            return
-        if path.exists():
-            try:
-                canonical = json.loads(path.read_text(encoding="utf-8"))
-            except Exception:
-                return
-            if isinstance(canonical, dict) and isinstance(canonical.get("jobs"), dict):
-                legacy_path.unlink()
-            return
-        try:
-            blob = json.loads(legacy_path.read_text(encoding="utf-8"))
-            legacy_jobs = blob.get("tasks") if isinstance(blob, dict) else None
-        except Exception:
-            return
-        if isinstance(legacy_jobs, dict):
-            _write_raw(path, _rename_legacy_keys(legacy_jobs))
-            legacy_path.unlink()
-
-
-def _load_raw(path: Path) -> dict[str, dict[str, Any]]:
+def _load_raw(path) -> dict[str, dict[str, Any]]:
     if not path.exists():
         return {}
     try:
@@ -141,31 +96,13 @@ def _load_raw(path: Path) -> dict[str, dict[str, Any]]:
     return jobs
 
 
-def _write_raw(path: Path, jobs: dict[str, dict[str, Any]]) -> None:
-    from openprogram.state.store.session.git_session import atomic_write_text
-
+def _write_raw(path, jobs: dict[str, dict[str, Any]]) -> None:
     payload = {"version": 1, "jobs": jobs}
-    atomic_write_text(
-        path,
-        json.dumps(payload, ensure_ascii=False, default=str, indent=2),
-    )
+    path.write_text(json.dumps(payload, ensure_ascii=False, default=str, indent=2))
 
 
-def _commit(session_id: str, message: str) -> None:
-    """Best-effort: ride the same commit machinery the dispatcher uses
-    at turn-end. Failures are swallowed because jobs.json on disk is
-    already correct; the git commit just records the transition."""
-    try:
-        from openprogram.state.store import default_store
-        default_store().commit_turn(session_id, message)
-    except Exception:
-        # jobs.json on disk is already correct; the commit only records history.
-        _log.debug("job transition not committed for session %s", session_id, exc_info=True)
-
-
-def _ensure_session(session_id: str) -> Optional[Path]:
-    """Materialise the session's repo (so jobs.json lives next to a
-    real meta.json / .git) and return the jobs.json path. Returns
+def _ensure_session(session_id: str):
+    """Materialise the session and return its jobs.json document. Returns
     None if the session can't be opened — caller should treat as
     "job store unavailable" and degrade gracefully."""
     from openprogram.state.store import default_store
@@ -173,18 +110,15 @@ def _ensure_session(session_id: str) -> Optional[Path]:
     pair = store._open(session_id, create_if_missing=True)  # noqa: SLF001
     if pair is None:
         return None
-    git, _ = pair
-    git._ensure_init()  # noqa: SLF001 — job store needs a real repo
-    path = git.path / "jobs.json"
-    _migrate_legacy_file(path)
-    return path
+    session_log, _ = pair
+    session_log._ensure_init()  # noqa: SLF001 — the job needs a session log
+    return store.state_file_at(session_log.path, "jobs.json")
 
 
 def save_job(
     session_id: str,
     job: Job,
     *,
-    commit_message: Optional[str] = None,
     _mirror: bool = True,
 ) -> None:
     """Idempotent write — overwrites the entry for ``job.id``."""
@@ -198,8 +132,6 @@ def save_job(
                 jobs = _load_raw(path)
                 jobs[job.id] = job.to_dict()
                 _write_raw(path, jobs)
-    msg = commit_message or f"job: {job.id} {job.status.value}"
-    _commit(session_id, msg)
     if _mirror:
         mirror_linked_job_to_caller(job)
 
@@ -219,7 +151,6 @@ def mirror_linked_job_to_caller(job: Job) -> None:
     save_job(
         caller_session_id,
         replace(job, parent_session_id=caller_session_id),
-        commit_message=f"job link: {job.id} {job.status.value}",
         _mirror=False,
     )
 
@@ -247,10 +178,15 @@ def list_jobs(
     *,
     status_filter: Optional[set[JobStatus]] = None,
     limit: Optional[int] = None,
+    lock_timeout: Optional[float] = None,
 ) -> list[Job]:
-    """Return jobs in this session, newest first (by created_at desc)."""
+    """Return jobs in this session, newest first (by created_at desc).
+
+    With ``lock_timeout``, raises :class:`TimeoutError` if another process
+    keeps the session locked that long; by default it waits for the lock.
+    """
     from openprogram.state.store.session.session_lock import session_interprocess_lock
-    with session_interprocess_lock(session_id):
+    with session_interprocess_lock(session_id, timeout=lock_timeout):
         path = _jobs_path(session_id)
         if path is None or not path.exists():
             return []
@@ -299,34 +235,31 @@ def update_job_status(
         path = _ensure_session(session_id)
         if path is None:
             return None
-        result, old_status = _update_job_status_locked(
+        result = _update_job_status_locked(
             session_id, path, job_id, new_status,
             expected_status=expected_status, fields=fields)
     if result is None:
         return None
-    if old_status is not None:
-        _commit(session_id, f"job: {job_id} {old_status.value}→{new_status.value}")
     mirror_linked_job_to_caller(result)
     return result
 
 
 def _update_job_status_locked(
-    session_id: str, path: Path, job_id: str, new_status: JobStatus,
+    session_id: str, path, job_id: str, new_status: JobStatus,
     *, expected_status: Optional[JobStatus], fields: dict[str, Any],
-) -> tuple[Optional[Job], JobStatus | None]:
-    old_status: JobStatus | None = None
+) -> Optional[Job]:
     with _session_lock(session_id):
         with _session_file_lock(path):
             jobs = _load_raw(path)
             row = jobs.get(job_id)
             if not row:
-                return None, None
+                return None
             try:
                 t = Job.from_dict(row)
             except Exception:
-                return None, None
+                return None
             if expected_status is not None and t.status != expected_status:
-                return t, None
+                return t
             if t.status == new_status:
                 # Non-terminal no-op transitions may refresh progress fields.
                 # A terminal row is an immutable outcome: a retry or racing
@@ -343,7 +276,6 @@ def _update_job_status_locked(
                     f"{new_status.value} (job {job_id})"
                 )
             else:
-                old_status = t.status
                 t.status = new_status
                 # Time-stamp the transition.
                 now = time.time()
@@ -360,7 +292,7 @@ def _update_job_status_locked(
                         setattr(t, k, v)
                 jobs[job_id] = t.to_dict()
                 _write_raw(path, jobs)
-    return t, old_status
+    return t
 
 
 def reconcile_orphans(
@@ -385,8 +317,7 @@ def reconcile_orphans(
     linked_updates: list[Job] = []
     from openprogram.state.store.session.placement import iter_session_dirs
     for sid, sdir in iter_session_dirs(store.root_path):
-        path = sdir / "jobs.json"
-        _migrate_legacy_file(path)
+        path = store.state_file_at(sdir, "jobs.json")
         if not path.exists():
             continue
         with _session_lock(sid):
@@ -419,8 +350,6 @@ def reconcile_orphans(
                     _ = old  # quiet linter
                 if mutated:
                     _write_raw(path, rows)
-        if path.exists():
-            _commit(sid, "job: reconcile orphans (startup)")
     for job in linked_updates:
         mirror_linked_job_to_caller(job)
         # A cross-session linked job is also stored as a caller-side mirror

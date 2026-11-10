@@ -28,7 +28,7 @@ window.show=(mode)=>{
  const marker={id:'candidate',status:mode==='pending'?'pending':mode==='unmet'?'unmet':mode==='unknown'?'unavailable':'met',requirements:[{id:'objective',text:'核对计算结果',verdict:'met',reason:'计算一致 <img src=x onerror=alert(1)>',evidence:['message:work']},{id:'todo:0',text:'计算乘法',verdict:'met',reason:'结果为 1073',evidence:['message:work']}]};
  const rows=convToChatMsgs([{id:'verify',role:'assistant',content:raw,status:mode==='pending'?'running':'completed',goal_verification:mode==='ordinary'?undefined:marker,extra:JSON.stringify({blocks:[{type:'text',text:raw}]})}]);
  if(mode==='cancelled'||mode==='error') {rows[0].status=mode;rows[0].goalVerification.status='pending';}
- if(mode==='legacy') {rows[0].goalVerification=undefined;rows[0].calledBy='legacy-parent';rows[0].content='{"met":true,"reason":"LEGACY_REPORT"}';rows[0].blocks=[{type:'text',text:rows[0].content}];useSessionStore.setState({messagesById:{'legacy-parent':{spawnedFrom:{label:'goal 判定'}}}});}
+ if(mode==='legacy') {rows[0].goalVerification=undefined;rows[0].calledBy='legacy-parent';rows[0].content='{"met":true,"reason":"LEGACY_REPORT"}';rows[0].blocks=[{type:'text',text:rows[0].content}];useSessionStore.setState({rowsByView:{s:{'legacy-parent':{spawnedFrom:{label:'goal 判定'}}}}});}
  root.render(<QueryClientProvider client={query}><div id="transcript"><AssistantMessage key={mode==='history'?'history':'live'} msg={rows[0]} sessionIdOverride="s"/></div><DetailPanel/></QueryClientProvider>);
 };
 window.historyCard=()=>root.render(<GoalDetails sessionId="s" historical goal={{goal_id:'old',version:3,status:'achieved',text:'Original completed objective',checklist:[{text:'Original todo',done:true}]}}/>);

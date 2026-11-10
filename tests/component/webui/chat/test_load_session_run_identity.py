@@ -4,7 +4,6 @@ import json
 
 from openprogram.state.store import SessionStore
 from openprogram.interfaces.server.ws_actions import session as ws_session
-from openprogram.interfaces.server.session_history import close_snapshots
 
 
 def test_turn_ending_during_load_is_cleared_by_name(tmp_path, monkeypatch):
@@ -26,9 +25,6 @@ def test_turn_ending_during_load_is_cleared_by_name(tmp_path, monkeypatch):
     monkeypatch.setattr(server, 'refresh_context_stats', turn_ends)
 
     class WS:
-        _bounded_history = True
-        _history_protocol = 1
-
         def __init__(self):
             self.frames = []
 
@@ -53,7 +49,6 @@ def test_turn_ending_during_load_is_cleared_by_name(tmp_path, monkeypatch):
         assert clears == [{'session_id': sid, 'msg_id': 'm1', 'execution_id': 'exec-1'}]
         assert not any(f['type'] == 'running_task' for f in ws.frames)
     finally:
-        close_snapshots(ws)
         with server._sessions_lock:
             server._sessions.pop(sid, None)
         with server._running_tasks_lock:

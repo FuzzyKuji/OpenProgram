@@ -37,18 +37,12 @@ from . import audio
 from . import keys as keymap
 from . import ocr
 from .base import (HOVER_SECONDS, INCLUDE, MAX_COPY_CHARS, MAX_TEXT_CHARS, OCR_SPARSE_NODES, AudioClip,
-                   ComputerUseError, Observation, Report, check_cancelled, click_args, click_words, find_text,
+                   ComputerUseError, Observation, RefusedApps, Report, refuse_password_field, check_cancelled, click_args, click_words, find_text,
                    menu_key, menu_path, save_recording, scroll_args, seconds_arg, window_node_count)
-from .tree import Node, Snapshot, diff, number, role_name, snapshot
+from .tree import Node, Snapshot, diff, number, rebind, role_name, snapshot
 
-# Desktop ids and process names the tool never reads or drives: credential
-# prompts and stores, and OpenProgram itself.
-REFUSED_APPS = frozenset({
-    "org.gnome.seahorse.application", "seahorse", "gcr-prompter", "gcr-prompter4",
-    "polkit-gnome-authentication-agent-1", "polkit-kde-authentication-agent-1", "lxpolkit",
-    "org.kde.kwalletmanager5", "kwalletmanager5", "kwalletd5", "kwalletd6",
-    "ai.openprogram.desktop", "openprogram",
-})
+# OpenProgram's own windows, refused where they could show an approval card.
+OWN_APPS = frozenset({"ai.openprogram.desktop", "openprogram"})
 
 MAX_NODES = 1500
 MAX_DEPTH = 60
@@ -158,6 +152,28 @@ def _clients() -> list[int] | None:
     if done.returncode != 0 or "#" not in done.stdout:
         return None
     return [int(raw.strip(), 16) for raw in done.stdout.split("#", 1)[1].split(",") if raw.strip()]
+
+
+def _stacking() -> list[str]:
+    """The managed windows bottom to top (_NET_CLIENT_LIST_STACKING), as decimal ids; empty without one."""
+    if shutil.which("xprop") is None:
+        return []
+    try:
+        done = subprocess.run(["xprop", "-root", "_NET_CLIENT_LIST_STACKING"], capture_output=True, text=True, timeout=5)
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    if done.returncode != 0 or "#" not in done.stdout:
+        return []
+    return [str(int(raw.strip(), 16)) for raw in done.stdout.split("#", 1)[1].split(",") if raw.strip()]
+
+
+def _put_under(window_id: object, before: list[str]) -> None:
+    """Raise again, lowest first, the windows that stood over ``window_id`` in ``before``."""
+    window = str(window_id)
+    if window not in before:
+        return
+    for other in before[before.index(window) + 1:][-24:]:
+        _x("windowraise", other, check=False)
 
 
 def _window_class(xid: str) -> str:
@@ -455,12 +471,14 @@ class LinuxComputer:
         return sorted(apps.values(), key=lambda a: a.name.lower())
 
     @staticmethod
-    def _refused(app: App | dict) -> bool:
+    def _keys(app: App | dict) -> tuple[str, ...]:
         if isinstance(app, App):
-            keys = {app.desktop_id.lower(), _proc_name(app.pid).lower(), app.name.lower()}
-        else:
-            keys = {str(app.get("desktop_id", "")).lower(), str(app.get("executable", "")).lower()}
-        return bool(keys & REFUSED_APPS)
+            return (app.desktop_id, _proc_name(app.pid), app.name)
+        return (str(app.get("desktop_id", "")), str(app.get("executable", "")))
+
+    @classmethod
+    def _refused(cls, app: App | dict) -> bool:
+        return RefusedApps(OWN_APPS).hits(*cls._keys(app))
 
     def _running_match(self, query: str) -> App | None:
         wanted = str(query or "").strip().lower()
@@ -478,13 +496,18 @@ class LinuxComputer:
 
     def resolve_app(self, query: str, *, launch: bool = True) -> App:
         app = self._running_match(query)
+        from openprogram.host._platform import front
+
         if app is None and launch:
-            app = self._launch(query)
+            # An application that starts may take the front; the guard is told which process is the new one.
+            with front.starting():
+                app = self._launch(query)
+                if app is not None:
+                    front.note(app.pid)
         if app is None:
             raise ComputerUseError(f"{query!r} is not running; list_apps shows the running and installed apps")
-        if self._refused(app):
-            raise ComputerUseError(f"{app.name} is not controllable: computer_use does not operate credential "
-                                   "prompts, password stores or OpenProgram itself")
+        RefusedApps(OWN_APPS).refuse(app.name, *self._keys(app))
+        front.note(app.pid)
         return app
 
     def _installed_match(self, query: str) -> dict[str, str] | None:
@@ -499,8 +522,7 @@ class LinuxComputer:
         row = self._installed_match(query)
         if row is None:
             return None
-        if self._refused(row):
-            raise ComputerUseError(f"{row['name']} is not controllable")
+        RefusedApps(OWN_APPS).refuse(row["name"], *self._keys(row))
         Gio = _gio()
         info = Gio.DesktopAppInfo.new(row["desktop_id"] + ".desktop")
         if info is None:
@@ -906,8 +928,29 @@ class LinuxComputer:
         if acc is None:
             raise ComputerUseError(f"element {index} is not in the last state; call get_app_state")
         if not self._role(acc):
-            raise ComputerUseError(f"element {index} no longer exists; call get_app_state for a fresh tree")
+            acc = self._rebind(state, index)
+            if acc is None:
+                raise ComputerUseError(f"element {index} no longer exists; call get_app_state for a fresh tree")
         return acc
+
+    def _rebind(self, state: WindowState, index: int):
+        """The element now behind ``index`` when the app replaced the one read earlier (see :func:`tree.rebind`)."""
+        try:
+            app = next((app for app in self._running() if app.pid == state.pid), None)
+            if app is None:
+                return None
+            if state.window_id:
+                window, _ = self._pair(app, None, state.window_id)
+            else:
+                named = [w for w in self._accessible_windows(app) if self._name(w) == state.window_title]
+                window = named[0] if len(named) == 1 else None
+            if window is None:
+                return None
+            nodes, elements, _ = self._read_tree(window)
+            return rebind(state, index, nodes, elements)
+        except Exception:
+            # The step then fails as it did before: the model reads the window again.
+            return None
 
     def _node_at(self, state: WindowState, index) -> Node:
         return state.by_index[int(index)]
@@ -956,8 +999,7 @@ class LinuxComputer:
 
     def _refuse_secure(self, acc) -> None:
         if acc is not None and self._role(acc) == _SECURE:
-            raise ComputerUseError("This is a password field; computer_use does not type into it. Ask the user to "
-                                   "enter it.")
+            refuse_password_field("typing into this password field")
 
     # ------------------------------------------------------------------ foreground input
     @contextmanager
@@ -965,21 +1007,28 @@ class LinuxComputer:
         """Bring the window forward for XTEST input, then give focus and the pointer back."""
         if not state.window_id:
             raise ComputerUseError("this window has no X window id; act by element_index")
-        previous = _x("getactivewindow", check=False)
-        pointer = dict(line.split("=", 1) for line in _x("getmouselocation", "--shell", check=False).splitlines()
-                       if "=" in line)
-        _x("windowactivate", "--sync", state.window_id, check=False, timeout=3)
-        if _x("getactivewindow", check=False) != str(state.window_id):
-            # Without an EWMH window manager, activation does nothing; focus the window directly.
-            _x("windowraise", state.window_id, check=False)
-            _x("windowfocus", "--sync", state.window_id, check=False, timeout=3)
-        try:
-            yield
-        finally:
-            if not keep_pointer and "X" in pointer and "Y" in pointer:
-                _x("mousemove", pointer["X"], pointer["Y"], check=False)
-            if previous and previous != str(state.window_id):
-                _x("windowactivate", previous, check=False, timeout=3)
+        from openprogram.host._platform import front
+
+        # The front guard would give the focus back in the middle of the input.
+        with front.forward():
+            previous = _x("getactivewindow", check=False)
+            before = _stacking()
+            pointer = dict(line.split("=", 1) for line in _x("getmouselocation", "--shell", check=False).splitlines()
+                           if "=" in line)
+            _x("windowactivate", "--sync", state.window_id, check=False, timeout=3)
+            if _x("getactivewindow", check=False) != str(state.window_id):
+                # Without an EWMH window manager, activation does nothing; focus the window directly.
+                _x("windowraise", state.window_id, check=False)
+                _x("windowfocus", "--sync", state.window_id, check=False, timeout=3)
+            try:
+                yield
+            finally:
+                if not keep_pointer and "X" in pointer and "Y" in pointer:
+                    _x("mousemove", pointer["X"], pointer["Y"], check=False)
+                if previous and previous != str(state.window_id):
+                    # The windows that stood over it go back over it, then the user's window takes the focus.
+                    _put_under(state.window_id, before)
+                    _x("windowactivate", previous, check=False, timeout=3)
 
     @staticmethod
     def _chord(key: str) -> list[str]:
@@ -1628,4 +1677,4 @@ def backend() -> LinuxComputer:
         return _BACKEND
 
 
-__all__ = ["LinuxComputer", "REFUSED_APPS", "backend", "support"]
+__all__ = ["LinuxComputer", "OWN_APPS", "backend", "support"]

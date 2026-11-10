@@ -24,13 +24,3 @@ def set_plugin_contrib(name: str, contrib: dict[str, Any]) -> None:
 def clear_plugin_contrib(name: str) -> None:
     with _lock:
         _contrib.pop(name, None)
-
-
-def get_plugin_contrib(name: str) -> dict[str, Any]:
-    with _lock:
-        return dict(_contrib.get(name, {}))
-
-
-def all_contrib() -> dict[str, dict[str, Any]]:
-    with _lock:
-        return {k: dict(v) for k, v in _contrib.items()}

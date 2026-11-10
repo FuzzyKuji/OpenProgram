@@ -83,6 +83,8 @@ export function useFunctionDispatch({
     if (pendingProjectId) body.project_id = pendingProjectId;
     if (dispatchSessionId) body.session_id = dispatchSessionId;
     if (options.forkOf) body.fork_of_node = options.forkOf;
+    const requestId = crypto.randomUUID();
+    body.client_request_id = requestId;
 
     const dispatchChannelChoice = draftChannelChoiceFor(
       draftChannelChoiceHost,
@@ -98,14 +100,19 @@ export function useFunctionDispatch({
       const store = useSessionStore.getState();
       const startedAt = Date.now();
       placeholderId = `__optimistic_fn__:${fn.name}:${startedAt}`;
-      store.appendMessage(dispatchSessionId, {
-        id: placeholderId,
-        role: "assistant",
-        content: "",
-        display: "runtime",
-        function: fn.name,
-        status: "running",
-        timestamp: startedAt,
+      store.applyLocalChange(dispatchSessionId, {
+        kind: "local_append",
+        row: {
+          id: placeholderId,
+          role: "assistant",
+          rowKind: "function_run",
+          clientRequestId: requestId,
+          content: "",
+          display: "runtime",
+          function: fn.name,
+          status: "running",
+          timestamp: startedAt,
+        },
       });
       store.setRunningTaskFor(dispatchSessionId, {
         session_id: dispatchSessionId,
@@ -170,10 +177,13 @@ export function useFunctionDispatch({
         }
 
         const shouldActivate = !background && sessionAckIsActive(sid);
+        // A shown run's read replaces the placeholder by request id; no read comes for any other.
+        if (placeholderId && dispatchSessionId && !shouldActivate) {
+          useSessionStore.getState().applyLocalChange(dispatchSessionId, { kind: "local_remove", rowId: placeholderId });
+        }
         useCenterTabs.getState().markSessionReady(sid);
         if (shouldActivate) {
           runtimeState.currentSessionId = sid;
-          runtimeState.__reloadOnTaskClear.add(sid);
           send({ action: "load_session", session_id: sid });
           if (sid !== currentSessionId) {
             setCurrentConv(sid);
@@ -192,7 +202,7 @@ export function useFunctionDispatch({
         console.error("function call failed:", error);
         const store = useSessionStore.getState();
         if (placeholderId && dispatchSessionId) {
-          store.truncateFrom(dispatchSessionId, placeholderId);
+          store.applyLocalChange(dispatchSessionId, { kind: "local_remove", rowId: placeholderId });
           store.setRunningTaskFor(dispatchSessionId, null);
         }
         if (!background && shouldClearLegacyRunning(

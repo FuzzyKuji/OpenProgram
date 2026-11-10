@@ -12,11 +12,10 @@ import { requestSessionLoad, acceptSessionLoad, failSessionLoad, disposeSessionL
  */
 import { useEffect } from "react";
 import { interfaceWindowId, receiveInterface } from "@/lib/framework/connection";
-import { createExecutionRecovery, shouldReloadAfterExecution } from "../execution/execution-recovery";
+import { createExecutionRecovery, shouldReleaseAfterExecution } from "../execution/execution-recovery";
 import { createHistoryFragmentDecoder } from "./history-fragments";
 import { noteFrontendBuild } from "./frontend-reload";
 import { executionMessageIds, pendingExecutionReplayRequests } from "../execution/execution-message-recovery";
-import { executionStatusUpdates, turnReplyUnsettled } from "../execution/execution-message-status";
 import { useFunctions } from "@/lib/abilities/functions-store";
 
 import { permissionSnapshotPatch } from "@/lib/session-store/permission-state";
@@ -34,7 +33,6 @@ import {
   onChannelAccountsMessage,
 } from "@/lib/runtime-bridge/session/conversations";
 import {
-  clearHydratedTreePaths,
   handleRunningTask,
   handleRunningTaskClear,
   restoreForegroundExecutionTask,
@@ -42,15 +40,17 @@ import {
   handleSessionsList,
   handleSessionUpdated,
   initChatPage,
-  settleFunctionReloadAfterSessionLoad,
   wsHandleChatAck,
   wsHandleChatResponse,
   wsHandleStatus,
 } from "@/lib/runtime-bridge/session/chat-handlers";
 import { mirrorUpsertConv } from "@/lib/runtime-bridge/session/conv-store-mirror";
 import { runtimeState, setSocket } from "@/lib/runtime-bridge/state";
-import { applyChatWsMessage, clearSessionByMsgId, flushPendingChatDeltas, replayStreamAfterLoad } from "@/lib/net/ws/chat-stream";
+import { applyChatWsMessage, clearSessionByMsgId } from "@/lib/net/ws/chat-stream";
+import { flushTextFrames } from "@/lib/net/ws/text-frames";
 import { noteJobStatus } from "@/lib/chat/transcript/sub-agent-transcripts";
+import { HISTORY_PROTOCOL, useSessionHistory } from "@/lib/chat/history/session-history";
+import { applyTranscriptUpdate, handleViewClosed, repairSessionViews } from "@/lib/runtime-bridge/session/transcript-updates";
 import { acceptRunFrame } from "@/lib/chat/decisions/run-seq";
 import { waitForOwnerAuthBootstrap } from "@/lib/net/auth/owner-auth-bootstrap";
 import { recoverOwnerAuth } from "@/lib/net/auth/owner-auth-recovery";
@@ -185,60 +185,30 @@ export function useWS(): void {
         // steer-message.ts. It needs no global session-store mutation here.
         case "steer_ack":
           return true;
-        case "session_reload": {
-          const sid = d?.session_id as string | undefined;
-          if (sid && sid === runtimeState.currentSessionId) {
-            requestSessionLoad({ action: "load_session", session_id: sid }, true);
-          }
+        case "transcript_update":
+          if (d) applyTranscriptUpdate(d as never);
           return true;
-        }
-        case "rewind_points": {
-          // `/rewind` with no argument asks for the list; the user then
-          // types `/rewind N`. Render it as a numbered system line in the
-          // transcript so the indices stay on screen while they type the
-          // follow-up.
+        case "transcript_gap":
+          if (typeof d?.session_id === "string") repairSessionViews(d.session_id);
+          return true;
+        case "view_closed":
+          if (typeof d?.view === "string") handleViewClosed(d.view);
+          return true;
+        case "branches_changed": {
           const sid = d?.session_id as string | undefined;
-          if (sid && sid !== runtimeState.currentSessionId) return true;
-          const target = sid ?? runtimeState.currentSessionId;
-          if (!target) return true;
-          const err = d?.error as string | undefined;
-          const points = (d?.points as Array<Record<string, unknown>>) ?? [];
-          const body = err
-            ? `无法列出回退点：${err}`
-            : points.length === 0
-              ? "没有可回退的对话轮次。"
-              : "回退点（用 /rewind N 选择）：\n"
-                + points
-                    .map((p, i) => {
-                      const files = (p.files_affected as string[]) ?? [];
-                      const tail = files.length
-                        ? `  [${files.length} 个文件]`
-                        : "";
-                      return `${i + 1}. ${(p.summary as string) || "(空)"}${tail}`;
-                    })
-                    .join("\n");
-          void import("@/lib/session-store").then(({ useSessionStore }) => {
-            useSessionStore.getState().appendMessage(target, {
-              id: "rewindpts_" + Math.random().toString(36).slice(2, 10),
-              role: "system",
-              content: body,
-              source: "rewind_points",
-            } as unknown as Parameters<
-              ReturnType<typeof useSessionStore.getState>["appendMessage"]
-            >[1]);
-          }).catch(() => { /* best-effort UI line */ });
+          if (sid && useSessionHistory.getState().pages[sid]) {
+            socket?.send(JSON.stringify({ action: "list_branches", session_id: sid }));
+          }
           return true;
         }
         case "attach_branch_result": {
           // Failure surface for the Branches panel's "Attach to" action.
-          // On success (including duplicate re-attach) the backend
-          // broadcasts `session_reload` for the anchor session and the
-          // load_session → session_loaded chain redraws the attach card
-          // and branch list (ws_actions/branch.py::handle_attach_branch),
+          // On success (including duplicate re-attach) the attach card
+          // reaches open chats as a transcript update and the branch list
+          // as `branches_changed` (ws_actions/branch.py::handle_attach_branch),
           // so only the failure branch needs handling here.
           if (d?.ok !== false) return true;
-          // Same ownership rule as the rewind_result consumer: a frame
-          // owned by another conversation must not toast into this one.
+          // A frame owned by another conversation must not toast into this one.
           const sid = d?.session_id as string | undefined;
           if (sid && sid !== runtimeState.currentSessionId) return true;
           const err = (d?.error as string | undefined) || "unknown error";
@@ -253,7 +223,7 @@ export function useWS(): void {
         }
         case "merge_branches_result": {
           // Failure surface for the Branches panel's merge action. A
-          // successful merge broadcasts `session_reload` (reason "merge")
+          // successful merge reaches a chat as `window_stale` (reason "branch"),
           // which re-fetches the conversation
           // (ws_actions/merge.py::handle_merge_branches), so only the
           // failure branch needs handling here.
@@ -274,8 +244,8 @@ export function useWS(): void {
         case "nodes_restored":
           // Replies to the DAG canvas's delete / undo
           // (dag/interaction/selection/node-delete.ts owns the undo stack and the
-          // action bar). Success also broadcasts `session_reload`, which
-          // redraws transcript and graph through the case above.
+          // action bar). The transcript learns of the change as a
+          // transcript update.
           window.dispatchEvent(new CustomEvent("op:dag-nodes", {
             detail: { type: msg.type, data: d || {} },
           }));
@@ -367,23 +337,12 @@ export function useWS(): void {
               reportExecutionStatus(eid, attentionSessionId, attentionStatus));
           }
           restoreForegroundExecutionTask(d?.foreground_task ?? execution.foreground_task, execution);
-          import("@/lib/session-store").then(({ useSessionStore }) => {
+          {
             const store = useSessionStore.getState();
             const sid = String(execution.session_id || "");
             if (["cancelled", "completed", "failed", "interrupted"].includes(String(execution.status))) {
               for (const decision of store.pendingDecisions) {
                 if (decision.executionId === eid) store.dequeueDecision(decision.id);
-              }
-            }
-            if (sid) {
-              // 终态不可回退：stopSession 已乐观把消息标 cancelled，服务端
-              // 随后广播的 cancelling（宽限期中间态）不能把它拉回"运行中"，
-              // 否则气泡会重新显示思考中（turn-occupancy.md）。
-              for (const [targetId, status] of executionStatusUpdates(
-                store.messagesById, eid, messageIds, String(execution.status),
-                typeof execution.reason_code === "string" ? execution.reason_code : undefined,
-              )) {
-                store.updateMessage(sid, targetId, { status: status as never });
               }
             }
             let task = sid ? store.runningTasks[sid] : undefined;
@@ -435,29 +394,20 @@ export function useWS(): void {
                 ) delete runtimeState._optimisticCancels[commandId];
               }
             }
-            // Stop releases the task optimistically. If the command was
-            // applied, the terminal execution frame is still responsible for
-            // the final legacy/UI cleanup; do not let an old execution clear
-            // a newer task that already occupies this session.
+            // The terminal execution frame releases the composer; the reply's
+            // own terminal row reaches the chat as a transcript update. An old
+            // execution must not clear a newer task occupying this session.
             const fresh = useSessionStore.getState();
             if (
               sid === runtimeState.currentSessionId
-              && shouldReloadAfterExecution(recovered, observedRunningExecution)
+              && shouldReleaseAfterExecution(recovered, observedRunningExecution)
               && terminal.has(String(execution.status))
               && (!fresh.runningTasks[sid]
                 || fresh.runningTasks[sid]?.execution_id === eid)
             ) {
               setRunning(false);
-              // Durable approval continuations can finish after the original
-              // streaming transport has ended. Reconcile the persisted message
-              // and tool results when the authoritative execution becomes terminal,
-              // unless the stream already settled the turn's reply. Never reload
-              // an older execution over a newer active turn.
-              if (socket?.readyState === WebSocket.OPEN && turnReplyUnsettled(fresh.messagesById, eid, messageIds)) {
-                requestSessionLoad({ action: "load_session", session_id: sid }, true);
-              }
             }
-          });
+          }
           return true;
         }
         case "execution.replay": {
@@ -500,9 +450,9 @@ export function useWS(): void {
           noteJobStatus((d ?? {}) as JobStatusDetail);
           // Async job lifecycle broadcast. Dispatch a
           // window event so any panel listening (BranchesPanel,
-          // JobsPanel) can update without prop-drilling. The
-          // existing session_reload broadcast picks up DAG/attach
-          // changes; this event is purely for the in-flight badge.
+          // JobsPanel) can update without prop-drilling. Transcript
+          // updates carry the attach changes; this event is purely for
+          // the in-flight badge.
           try {
             window.dispatchEvent(
               new CustomEvent("op:job-status", {
@@ -599,7 +549,7 @@ export function useWS(): void {
           return true;
         // runtime.ask/confirm/approval —— 系统停下来等用户决定。入 composer
         // 的 pendingDecisions 队列，由输入框 question/approval mode 承接呈现
-        // （docs/reference/design/ui/composer/composer-interaction-modes.md）。不再走独立浮窗。
+        // （docs/reference/design/ui/composer/composer-interaction-modes.html）。不再走独立浮窗。
         case "system_access.waiting":
         case "system_access.resolved":
           if (msg.type === "system_access.waiting" && d) {
@@ -613,19 +563,6 @@ export function useWS(): void {
               void import("@/lib/desktop/attention").then(({ reportAttention }) => reportAttention({
                 kind: "system_access", sessionId: waitSessionId, key: `system-access:${waitId}`,
               }));
-            }
-            const sid = typeof d.session_id === "string" ? d.session_id : "";
-            const eid = typeof d.execution_id === "string" ? d.execution_id : "";
-            const task = sid ? useSessionStore.getState().runningTasks[sid] : undefined;
-            if (sid && eid) {
-              const store = useSessionStore.getState();
-              const targetIds = [eid, task?.execution_id === eid ? task.msg_id : undefined]
-                .filter((id): id is string => Boolean(id));
-              for (const targetId of new Set(targetIds)) {
-                if (store.messagesById[targetId]) {
-                  store.updateMessage(sid, targetId, { status: "paused" });
-                }
-              }
             }
             for (const request of pendingExecutionReplayRequests([d])) {
               recovery?.request(request.execution_id, request.after_sequence);
@@ -736,39 +673,21 @@ export function useWS(): void {
           return true;
         case "session_loaded":
           if (!socket || !d || !acceptSessionLoad(socket, d, loadSessionData)) return true;
-          // Stream events received after the server read the reply apply on
-          // top of the row it returned.
-          replayStreamAfterLoad(d.id as string);
           clearTimeout(historyDeadline);
           recovery?.start();
-          // A fresh transcript invalidates the per-run hydrate dedup —
-          // see clearHydratedTreePaths for why this is the drain point.
-          clearHydratedTreePaths();
-          // Same drain point for the msg_id → session map: entries whose
-          // terminal frame (result/error/cancelled) got lost would
-          // otherwise sit in the module-level Map forever.
-          clearSessionByMsgId(d.id as string);
           notifyDesktopSessionLoaded((d as { id?: unknown } | null)?.id);
           {
             const dd = d as {
               id?: unknown;
               head_id?: unknown;
               messages?: unknown;
+              turns?: Array<{ rows: Array<{ id?: unknown; status?: unknown; attachCards?: unknown[]; runtimeChildren?: unknown[] }> }>;
               graph?: unknown;
               run_active?: unknown;
               run_task?: { msg_id?: string; execution_id?: string; status_version?: number } | null;
               run_seq?: unknown;
             } | undefined;
             if (typeof dd?.id === "string" && dd.id) {
-              const rows = [
-                ...(Array.isArray(dd.messages) ? dd.messages : []),
-                ...(Array.isArray(dd.graph) ? dd.graph : []),
-              ] as Array<{ id?: unknown; status?: unknown }>;
-              const head = rows.find((row) => row?.id === dd.head_id);
-              settleFunctionReloadAfterSessionLoad(
-                dd.id,
-                head?.status,
-              );
               const runFresh = acceptRunFrame(dd.id, dd.run_seq);
               void import("@/lib/chat/send/send-queue").then((m) =>
                 m.reconcileAfterSessionLoad(dd.id as string, dd.run_active === true, dd.run_task, runFresh),
@@ -901,12 +820,21 @@ export function useWS(): void {
         case "always_on_report": {
           const report = d?.report as { id?: unknown; session_id?: unknown; title?: unknown } | undefined;
           const sid = report?.session_id;
+          // The server decides from the Agent's notify rules whether this
+          // kind of report raises a desktop notification (lib/desktop/attention).
+          // The desktop App says it took the notification; without that answer
+          // the worker posts it itself.
           if (typeof sid === "string" && sid && typeof report?.id === "string") {
-            void import("@/lib/desktop/attention").then(({ reportAttention }) => reportAttention({
-              kind: "report", sessionId: sid, key: `always-on-report:${report.id}`,
-              title: typeof d?.agent_name === "string" ? d.agent_name : undefined,
-              detail: typeof report.title === "string" ? report.title : undefined,
-            }));
+            const reportId = report.id;
+            void import("@/lib/desktop/attention").then(({ reportAttention, reportNotifiesDesktop }) => {
+              if (!reportNotifiesDesktop(d)) return;
+              const shown = reportAttention({
+                kind: "report", sessionId: sid, key: `always-on-report:${reportId}`,
+                title: typeof d?.agent_name === "string" ? d.agent_name : undefined,
+                detail: typeof report.title === "string" ? report.title : undefined,
+              });
+              if (shown) socket?.send(JSON.stringify({ action: "reminder_shown", id: reportId }));
+            });
           }
           if (typeof sid === "string" && sid) {
             void import("@/lib/chat/conversation-work").then(({ notifyConversationWorkChanged }) => notifyConversationWorkChanged(sid));
@@ -977,12 +905,6 @@ export function useWS(): void {
         case "session_updated":
           handleSessionUpdated((d ?? null) as never);
           return true;
-        case "message_chapter_updated":
-          // A turn was pinned or unpinned as a chapter, here or in another
-          // window (ws_actions/session/chapter.py).
-          void import("@/lib/chat/transcript/chapter-pin").then(({ applyChapterFrame }) =>
-            applyChapterFrame(d as never));
-          return true;
         case "session_deleted": {
           // Broadcast by ws_actions/session/lifecycle.py::handle_delete_session so
           // every OTHER tab drops the row too (the deleting tab already
@@ -1016,7 +938,7 @@ export function useWS(): void {
         }
         // Catch-all: surface any unhandled backend message as a window
         // event so component-level listeners (project menu, settings
-        // panel, rewind button, etc.) can pick them up without needing
+        // panel, etc.) can pick them up without needing
         // a dedicated case here. This replaces the legacy
         // window.handleMessage fallback.
         default:
@@ -1064,9 +986,9 @@ export function useWS(): void {
                   "所有者认证已过期。请重新打开 OpenProgram 后再继续。",
                 )
                 : translateText(
-                  "This sign-in expired because the service restarted. Open a new sign-in link from `openprogram web auth-url` (`openprogram dev open` for the development instance).",
-                  "服务重启过，这次登录已失效。请用 `openprogram web auth-url` 取新的登录链接（开发版用 `openprogram dev open`）。",
-                ), { tone: "error" });
+                  "This page isn't signed in, so it can't load providers, models or agents. Run `openprogram web` in a terminal to open it signed in (`openprogram dev open` for the development instance).",
+                  "这个页面没有登录，读不到 Provider、模型和 Agent。在终端运行 `openprogram web`，会打开已登录的页面（开发版用 `openprogram dev open`）。",
+                ), { tone: "error", duration: 20000 });
             }
             if (!stopped) reconnectTimer = setTimeout(connect, 5000);
             return;
@@ -1122,7 +1044,12 @@ export function useWS(): void {
             action: "webtab_register", window_id: desktopWindowId,
           }));
         }
-        socket?.send(JSON.stringify({ action: "list_sessions", history_version: 2 }));
+        // Before the focus below: a fresh socket counts as visible, and a
+        // reconnect in a background window must not read the open chat.
+        socket?.send(JSON.stringify({
+          action: "set_window_hidden", hidden: document.visibilityState === "hidden",
+        }));
+        socket?.send(JSON.stringify({ action: "list_sessions", history_version: HISTORY_PROTOCOL }));
         // Environment changes broadcast while disconnected were missed;
         // the reply lands in the `environments` case below.
         socket?.send(JSON.stringify({ action: "list_environments" }));
@@ -1187,7 +1114,7 @@ export function useWS(): void {
         disposeSessionLoads(connection);
         historyFragments.clear();
         if (socket !== connection || stopped) return;
-        flushPendingChatDeltas();
+        flushTextFrames();
         clearSessionByMsgId();
         settleSendsOnDisconnect();
         clearTimeout(historyDeadline);
@@ -1227,7 +1154,7 @@ export function useWS(): void {
         socket.close();
       }
       if (runtimeState.ws === socket) {
-        flushPendingChatDeltas();
+        flushTextFrames();
         clearSessionByMsgId();
         window.dispatchEvent(new CustomEvent("op:browser-connection", { detail: { connected: false } }));
         setSocket(null);

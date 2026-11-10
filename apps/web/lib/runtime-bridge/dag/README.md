@@ -4,7 +4,7 @@ Self-contained SVG renderer for the session context DAG (PyCharm-style
 conversation history view). It paints into `#historyPanel .history-body`,
 hosted by the chat pane's graph perspective
 (`apps/web/components/chat/dag/dag-view.tsx`) — see
-`docs/reference/design/runtime/dag/rendering.md`. Imported for side
+`docs/reference/design/runtime/dag/rendering.html`. Imported for side
 effects by `apps/web/components/app-shell.tsx` via `./index`, which
 exports `renderHistoryGraph` / `repaintBranchTags` /
 `setHistoryContextRange` / `refreshHistoryContextRange` /
@@ -84,7 +84,7 @@ shorten those signatures; nothing depends on it happening.
 
 ## Node kinds and tiles
 
-See `docs/reference/design/runtime/dag/rendering.md` §4 for the full schema.
+See `docs/reference/design/runtime/dag/rendering.html` §4 for the full schema.
 Every node is the same rounded icon tile; `tileFor` (`render/tiles.ts`)
 picks its icon and tone:
 
@@ -139,7 +139,7 @@ State that survives across calls (`_threadOpen`, `_summaryExpanded`,
 
 A capture redraws the whole SVG, and gestures fire faster than the
 screen refreshes. The rules that keep both cheap
-(`docs/reference/design/runtime/dag/rendering.md` §7):
+(`docs/reference/design/runtime/dag/rendering.html` §7):
 
 * Gestures move the view in the store; `applyView` paints once a frame.
   Work bound to the scale runs only when the scale or the graph changes.

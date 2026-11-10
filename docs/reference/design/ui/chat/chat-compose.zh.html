@@ -1,1 +1,49 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><title>聊天引用与消息编辑</title><style>body{max-width:850px;margin:48px auto;font:16px/1.6 system-ui}code{background:#eee}</style><h1>聊天引用与消息编辑</h1><p>选中文字后松开指针，在选区上方显示“加入当前聊天”操作。拖动期间工具栏保持隐藏；重新按下指针或取消选区时隐藏，也支持完成的键盘选区。“加入当前聊天”把选区追加到当前草稿。引用只通过选中文字完成，消息操作行没有引用操作。工具栏采用紧凑的 28 px 操作、3 px 外边距、8 px 圆角、细边框和阴影，一个圆角操作目标，背景使用不透明的主题 popover 表面。悬停和按下状态混合实色主题颜色，不替换成透明覆盖。键盘焦点有可见轮廓。引用作为 Markdown 引用块追加到所属对话草稿，并聚焦其输入框。保留已有草稿和附件，发送仍由用户明确操作。</p><p>历史用户消息通过内联输入框编辑，与底部输入框共用文本字段、文件提及、附件处理和预览。可以移除已有附件，选择、粘贴或拖入图片和文档。URL 保持可编辑文本。取消只丢弃本次编辑。“保存并重新发送”通过已有编辑接口创建兄弟分支。错误保留编辑内容并显示可重试提示。</p><p>参考：用户提供的 Codex 选区截图定义了选区操作；不声称外部产品能力对齐。独立侧边聊天窗口不在本次范围内。</p><h2>聊天操作图标</h2><p>选区操作使用共享 animated-icons 组件。<a href="https://github.com/pqoqubbw/icons/tree/main/icons">上游目录</a>没有 Quote 组件，因此 QuoteIcon 遵循已有 Monitor 和 Pin 回退方式：官方 Lucide 图形、共享 start/stop 接口，以及已有 CopyIcon 弹簧与平移动画。不编写 SVG 路径或新增动画风格。整个按钮在指针悬停和键盘聚焦时驱动动画；既无悬停也无焦点时恢复静止。禁用控件和减少动态效果用户看到静态图标。保留已有尺寸、颜色、表面、草稿更新及会话归属。</p><p>限定计划：添加共享 QuoteIcon 和聊天操作动画 hook；连接选区工具栏；在正常和减少动态效果下，通过真实组件的引用/编辑浏览器测试验证，再执行聊天 UI、可访问性、TypeScript 和文档链接检查。运行时、输入框语义、后端 API 与无关界面不在范围内。集成前进行独立规格和质量审查；本次源码修改不更新已安装 App。</p><h2>实现与验收</h2><p>每个面板的会话归属明确。上传数据使用已有的有界附件持久化和图片分发流程。保留图片副本通过授权 raw-file API 读取；旧附件文本保持无损。不自动发送，不新增权限模式。</p><p>检查要求：引用草稿保留和分屏归属、内联附件编辑及失败保留的针对性浏览器交互测试；REST 编辑附件验证和分发测试；TypeScript；文档链接；标准本地刷新期间的生产构建。独立规格与质量审查先于集成。</p><p>图标一致性状态：源码修改和正常/减少动态效果的两个浏览器用例已验证。TypeScript、聊天 UI 和文档链接通过。全局可访问性检查仍受未修改的 canvas-controls role-button 键盘事件缺失影响，已在任务基线复现。独立规格和质量审查通过。集成与生产构建尚未进行，已安装 App 保持原状。</p><p>已有引用编辑状态：规格和质量审查通过。6 项 REST 附件用例、分屏浏览器交互测试（包括保留和粘贴图片）、13 项已有附件用例、本地附件路径契约、TypeScript 和文档链接通过。生产打包使用标准本地 App 刷新。</p></html>
+<title>聊天引用与消息编辑</title>
+<meta name="description" content="选中文字如何变成草稿里的引用，已发送的用户消息如何编辑并重新发送。">
+<h1>聊天引用与消息编辑</h1>
+
+<h2 id="quotes">引用选中文字</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">显示</th><td>松开指针或键盘选择完成后，在选区上方显示<strong>加入当前聊天</strong></td></tr>
+<tr><th scope="row">隐藏</th><td>拖动过程中、再次按下指针、选区取消时</td></tr>
+<tr><th scope="row">结果</th><td>向该会话的草稿追加 Markdown 引用块并聚焦其输入框。原有草稿和附件保留；发送由用户决定</td></tr>
+<tr><th scope="row">唯一入口</th><td>消息操作行没有引用按钮</td></tr>
+<tr><th scope="row">归属</th><td>每个窗格明确对应自己的会话，引用回到来源窗格。独立的侧边对话窗口不在范围内</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>工具条外观与图标</summary>
+<ul>
+<li>一个紧凑操作，外边距 3 px，圆角 8 px，细边框和阴影，不透明、跟随主题的弹层背景。</li>
+<li>悬停和按下混合实色主题色，不用半透明覆盖层。键盘焦点有可见轮廓。</li>
+<li><code translate="no">QuoteIcon</code> 在共享 animated-icons 组件中。上游<a href="https://github.com/pqoqubbw/icons/tree/main/icons">图标目录</a>没有 Quote，所以用官方 Lucide 字形，配共享的 start/stop 接口和 <code translate="no">CopyIcon</code> 的弹簧与位移。</li>
+<li>整个按钮在悬停和键盘聚焦时驱动动画，两者都结束后复位。禁用控件和减少动态偏好下图标静止。</li>
+</ul>
+</details>
+
+<h2 id="editing">编辑已发送的消息</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">编辑器</th><td>内联，与底部输入框相同的文本框、文件提及选择器、附件处理和预览条</td></tr>
+<tr><th scope="row">附件</th><td>已有附件可移除；图片和文档可选择、粘贴或拖入。URL 仍是可编辑文本</td></tr>
+<tr><th scope="row"><strong>取消</strong></th><td>只放弃这次编辑</td></tr>
+<tr><th scope="row"><strong>保存并重新发送</strong></th><td>通过 <code translate="no">POST /api/chat/edit</code> 创建同级分支</td></tr>
+<tr><th scope="row">失败</th><td>保留编辑内容，显示可重试的提示</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>存储与权限</summary>
+<ul>
+<li>上传字节走有上限的附件持久化和图片分发路径。保留的图片副本经授权的原始文件 API 读取；保留的旧式附件块不损失内容。</li>
+<li>不自动提交，不增加权限模式。</li>
+</ul>
+</details>
+
+<h2 id="status">实现状态</h2>
+<p>已实现。浏览器测试覆盖引用时草稿保留、分屏归属、内联附件编辑、失败保留，以及图标在普通和减少动态下的表现；REST 测试覆盖编辑附件的校验和分发。</p>
+<p class="note">选区操作参照用户提供的 Codex 截图，不声称与其他产品一致。</p>

@@ -1,5 +1,5 @@
 """Tests for cache-aware Microcompact (Context Editing API integration)."""
-from openprogram.runtime.context.cache_aware_microcompact import (
+from openprogram.runtime.context.compaction.cache_aware_microcompact import (
     increment_tool_calls,
     should_trigger,
     build_cache_edits,

@@ -26,6 +26,18 @@ _RESTORABLE_LIFECYCLES = frozenset({
 _FROZEN_SQL = (
     "'closed','unavailable','restoring','restore_failed','superseded'"
 )
+# A superseded Page has handed its associations to its successor; it is kept
+# this long only so a late write from the old connection is fenced, not misrouted.
+SUPERSEDED_RETENTION_SECONDS = 24 * 3600
+
+
+def _forget_old_superseded(db: sqlite3.Connection, now: float) -> None:
+    stale = """SELECT resource_id FROM browser_resources
+        WHERE lifecycle='superseded' AND updated_at < ?"""
+    cutoff = (now - SUPERSEDED_RETENTION_SECONDS,)
+    db.execute(f"DELETE FROM browser_resource_control WHERE resource_id IN ({stale})", cutoff)
+    db.execute(f"DELETE FROM browser_resource_presentation WHERE resource_id IN ({stale})", cutoff)
+    db.execute("DELETE FROM browser_resources WHERE lifecycle='superseded' AND updated_at < ?", cutoff)
 
 
 def resource_db_path() -> Path:
@@ -79,6 +91,12 @@ class BrowserResourceStore:
                 resource_id TEXT PRIMARY KEY, control_state TEXT NOT NULL,
                 pause_command_id TEXT, pause_execution_id TEXT,
                 last_input_seq INTEGER NOT NULL)"""
+            )
+            db.execute(
+                """CREATE TABLE IF NOT EXISTS browser_tabs_opened (
+                window_id TEXT NOT NULL, tab_id TEXT NOT NULL,
+                conversation_session_id TEXT NOT NULL, opened_at REAL NOT NULL,
+                PRIMARY KEY (window_id, tab_id))"""
             )
             db.execute(
                 "CREATE INDEX IF NOT EXISTS browser_assoc_conversation "
@@ -266,6 +284,28 @@ class BrowserResourceStore:
                     (resource_id, "idle" if live else "closed", None, None, 0),
                 )
         return assoc_id
+
+    def note_tab_opened(self, window_id: str, tab_id: str, conversation: str) -> None:
+        """Remember that a conversation's agent opened this tab, across restarts."""
+        with self.connect() as db:
+            db.execute("INSERT OR REPLACE INTO browser_tabs_opened VALUES (?, ?, ?, ?)",
+                       (window_id, tab_id, conversation, time.time()))
+
+    def tabs_opened_by(self, conversation: str) -> set[tuple[str, str]]:
+        with self.connect() as db:
+            rows = db.execute("SELECT window_id, tab_id FROM browser_tabs_opened WHERE conversation_session_id=?",
+                              (conversation,)).fetchall()
+        return {(row["window_id"], row["tab_id"]) for row in rows}
+
+    def move_opened_tab(self, old: tuple[str, str], new: tuple[str, str]) -> None:
+        """A tab dragged to another window stays the conversation's."""
+        with self.connect() as db:
+            db.execute("UPDATE OR REPLACE browser_tabs_opened SET window_id=?, tab_id=? WHERE window_id=? AND tab_id=?",
+                       (*new, *old))
+
+    def forget_opened_tab(self, window_id: str, tab_id: str) -> None:
+        with self.connect() as db:
+            db.execute("DELETE FROM browser_tabs_opened WHERE window_id=? AND tab_id=?", (window_id, tab_id))
 
     def update_display(
         self, resource_id: str, *, title: str = "", target: str = "",
@@ -495,6 +535,7 @@ class BrowserResourceStore:
                     sequence=sequence+1, updated_at=? WHERE resource_id=?""",
                     [(now, old["resource_id"]) for old in preds],
                 )
+                _forget_old_superseded(db, now)
             existing_control = db.execute(
                 "SELECT last_input_seq FROM browser_resource_control WHERE resource_id=?",
                 (successor_id,),
@@ -1433,25 +1474,6 @@ def _wait_open_paused(execution) -> bool:
     return status == "paused" and getattr(execution, "reason_code", None) == "wait_open"
 
 
-def _control_state_for_execution(execution, unresolved: bool, fenced: bool) -> str:
-    if execution is None:
-        return "yielding" if fenced else "idle"
-    status = getattr(getattr(execution, "status", None), "value", None) or str(
-        getattr(execution, "status", "") or ""
-    )
-    if _wait_open_paused(execution):
-        return "waiting"
-    if status == "paused" and not unresolved:
-        return "paused"
-    if status == "paused" and unresolved:
-        return "yielding"
-    if status in {"pausing"} or (fenced and status == "running"):
-        return "yielding"
-    if fenced:
-        return "stop_unconfirmed"
-    return "idle"
-
-
 def _active_execution(execution) -> bool:
     status = getattr(execution, "status", None)
     value = getattr(status, "value", status)
@@ -1718,68 +1740,6 @@ async def request_page_pause(
             execution = last
         elif isinstance(last, dict):
             last = executions.get_execution(execution_id)
-    return last
-
-
-async def request_page_resume(
-    *, resource_id: str, command_id: str, actor: Mapping[str, Any] | None,
-    conversation_session_id: str,
-):
-    from openprogram.runtime.execution import default_control_service, default_store
-    from openprogram.runtime.execution.conversation_scope import authorize_conversation_execution
-    from openprogram.runtime.execution.model import ExecutionStatus
-
-    store = BrowserResourceStore()
-    reconcile_resource_control(resource_id, store=store)
-    resource = store.get_resource(resource_id)
-    if resource is None or not resource.get("live"):
-        raise PermissionError("disconnected")
-    executions = default_store()
-    owners = []
-    wait_open = (resource.get("control_state") or "") == "waiting"
-    owner_ids = _lease_execution_ids(resource_id) or [
-        assoc.get("execution_id") for assoc in store.associations_for_page(resource_id)
-        if assoc.get("execution_id")
-    ]
-    for execution_id in owner_ids:
-        if not execution_id or executions is None:
-            continue
-        execution = executions.get_execution(execution_id)
-        if execution is None or not _active_execution(execution):
-            continue
-        if _wait_open_paused(execution):
-            wait_open = True
-            continue
-        authorize_conversation_execution(
-            actor or {}, "execution.continue", execution, store=executions,
-            session_id=conversation_session_id, bound_session=None,
-        )
-        if execution.status is not ExecutionStatus.PAUSED:
-            raise PermissionError("not_paused")
-        try:
-            unresolved = default_control_service().effects.list_unresolved(execution_id)
-        except Exception as exc:
-            raise PermissionError("unresolved_effect") from exc
-        if unresolved:
-            raise PermissionError("unresolved_effect")
-        owners.append(execution)
-    if wait_open:
-        raise PermissionError("wait_open")
-    if (resource.get("control_state") or "") != "paused":
-        raise PermissionError("not_paused")
-    from openprogram.programs.applications.browser.web_use.runtime import get_registry
-    get_registry().invalidate_page_frames(resource_id)
-    last = None
-    try:
-        for execution in owners:
-            last = await _submit_owner_command(
-                operation="continue", command_id=command_id, execution=execution,
-                actor=actor, conversation_session_id=conversation_session_id,
-            )
-    except Exception:
-        raise
-    clear_page_write_fence(resource_id)
-    store.set_control_state(resource_id, "idle", clear_pause=True)
     return last
 
 

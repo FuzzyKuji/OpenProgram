@@ -234,6 +234,20 @@ contextBridge.exposeInMainWorld("openprogramDesktop", {
       return () => ipcRenderer.removeListener("terminal:data", listener);
     },
   },
+  pointerFollow: {
+    start(held, onCursor, onReleased) {
+      const cursor = (_event, point) => onCursor(point);
+      const released = () => onReleased();
+      ipcRenderer.on("pointer-follow:cursor", cursor);
+      ipcRenderer.on("pointer-follow:released", released);
+      ipcRenderer.send("pointer-follow:start", held);
+      return () => {
+        ipcRenderer.removeListener("pointer-follow:cursor", cursor);
+        ipcRenderer.removeListener("pointer-follow:released", released);
+        ipcRenderer.send("pointer-follow:stop");
+      };
+    },
+  },
   tabTransfer: {
     // Synchronous by contract: called from pointer/mouse down so the
     // token exists before a same-tick dragstart reads it.

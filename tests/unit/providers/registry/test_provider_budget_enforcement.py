@@ -192,9 +192,7 @@ def _drain_entry(entry, model, opts):
 
 def _reservation_states(ledger):
     return sorted(
-        row[0] for row in ledger.connection().execute(
-            "SELECT state FROM usage_reservations"
-        )
+        row["state"] for row in ledger.run_tables().handle.rows("usage_reservations")
     )
 
 
@@ -296,9 +294,7 @@ def test_agent_loop_default_provider_resolves_config_credentials_once_after_pref
     assert resolver_calls == ["fakeprov"]
     assert len(env["provider"].seen_opts) == 1
     assert env["provider"].seen_opts[0].api_key == "agent-key"
-    assert env["ledger"].connection().execute(
-        "SELECT COUNT(*) FROM usage_reservations"
-    ).fetchone()[0] == 1
+    assert env["ledger"].run_tables().handle.count("usage_reservations") == 1
 
 
 def test_agent_loop_injected_stream_fn_keeps_config_credential_semantics(wired):
@@ -714,11 +710,12 @@ def test_crash_before_settle_leaves_started_exposure_for_recovery(wired):
         requested_max_output_tokens=20, model=env["model"],
     )
     governor.start_provider_request(reservation.reservation_id)
-    ledger.connection().execute(
-        "UPDATE usage_reservations SET expires_at = 0 WHERE reservation_id LIKE ?",
-        (reservation.reservation_id + ":%",),
-    )
-    ledger.connection().commit()
+    with ledger.run_tables().transaction() as tables:
+        tables.update(
+            "usage_reservations",
+            {"expires_at": 0},
+            where=lambda row: row["reservation_id"].startswith(reservation.reservation_id + ":"),
+        )
 
     # Expiry reclaims only never-started requests.
     assert governor.recover_provider_reservations(now=1) == 0
@@ -740,8 +737,9 @@ def test_concurrent_budgeted_calls_share_one_job_budget(wired):
 
     assert accepted, "at least one call must fit the budget"
     assert refused, "the budget must stop the rest"
-    reserved = env["ledger"].connection().execute(
-        "SELECT COALESCE(SUM(reserved_tokens), 0) FROM usage_reservations "
-        "WHERE kind = 'token' AND state IN ('reserved','started')"
-    ).fetchone()[0]
+    reserved = sum(row["reserved_tokens"] for row in env["ledger"].run_tables().handle.rows(
+        "usage_reservations",
+        kind="token",
+        state=("reserved", "started"),
+    ))
     assert reserved <= 400

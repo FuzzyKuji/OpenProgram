@@ -191,7 +191,8 @@ def test_windows_release_contract_has_public_bootstrap_and_ci_gate() -> None:
         marker not in installer
         for marker in ("icacls", "Set-Acl", "Add-MpPreference", "Set-MpPreference")
     )
-    matrix = runpy.run_path(str(ROOT / "scripts/release/release-matrix.py"))["release_matrices"](True)
+    selection = runpy.run_path(str(ROOT / "scripts/release/release-matrix.py"))
+    matrix = selection["release_matrices"](selection["Switches"](windows_arm64=True))
     windows = [row for row in matrix["runtime"] if row["platform"] == "windows"]
     assert {(row["runner"], row["arch"]) for row in windows} == {
         ("windows-2025", "x86_64"), ("windows-11-vs2026-arm", "arm64"),
@@ -205,7 +206,7 @@ def test_windows_release_contract_has_public_bootstrap_and_ci_gate() -> None:
     assert r'Join-Path $RuntimeRoot "assets\tui\index.cjs"' in builder
 
 
-def test_windows_desktop_release_requires_signed_installer_and_native_checks() -> None:
+def test_windows_desktop_release_signs_when_it_can_and_keeps_native_checks() -> None:
     package = json.loads(
         (ROOT / "apps" / "desktop" / "package.json").read_text(encoding="utf-8")
     )
@@ -237,7 +238,9 @@ def test_windows_desktop_release_requires_signed_installer_and_native_checks() -
     assert package["build"]["nsis"]["perMachine"] is False
     assert "WINDOWS_CSC_LINK" in workflow
     assert "Get-AuthenticodeSignature" in workflow
-    assert "smoke-packaged-runtime.ps1" in workflow
+    assert '$Signature.Status -ne "NotSigned"' in workflow
+    assert 'throw "Windows Desktop publication requires' not in workflow
+    assert "the seed in the Windows App is missing" in workflow
     assert "windows-desktop:" in ci
     assert "runner: windows-2025" in ci
     assert "runner: windows-11-vs2026-arm" in ci
@@ -416,10 +419,10 @@ def test_windows_release_install_upgrade_and_failed_upgrade_keep_active_launcher
         timeout=90,
     )
     assert first.returncode == 0, first.stderr or first.stdout
-    launcher = bin_dir / "openprogram.ps1"
+    launcher = bin_dir / "openprogram.cmd"
+    assert not (bin_dir / "openprogram.ps1").exists()
     first_launcher = launcher.read_text(encoding="utf-8")
     assert str(state / "runtime" / "cli" / "releases" / first_version) in first_launcher
-    assert (bin_dir / "openprogram.cmd").is_file()
 
     second_version = "9.9.8"
     second = subprocess.run(
@@ -441,7 +444,7 @@ def test_windows_release_install_upgrade_and_failed_upgrade_keep_active_launcher
     assert second.returncode == 0, second.stderr or second.stdout
     second_launcher = launcher.read_text(encoding="utf-8")
     assert str(state / "runtime" / "cli" / "releases" / second_version) in second_launcher
-    assert (bin_dir / "openprogram.previous.ps1").read_text(
+    assert (bin_dir / "openprogram.previous.cmd").read_text(
         encoding="utf-8"
     ) == first_launcher
 

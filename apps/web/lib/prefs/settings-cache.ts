@@ -46,7 +46,17 @@ export async function cachedFetch<T = unknown>(
   }
   const p = (async () => {
     const r = await fetch(url, init);
-    if (!r.ok) throw new Error(`${url} → ${r.status}`);
+    if (!r.ok) {
+      // Keep what the server said went wrong, so a page can show it.
+      let detail = "";
+      try {
+        const body = (await r.json()) as { error?: unknown };
+        if (typeof body?.error === "string") detail = body.error;
+      } catch {
+        /* not JSON */
+      }
+      throw new Error(detail || `${url} → ${r.status}`);
+    }
     const data = (await r.json()) as T;
     cache.set(url, { data, ts: Date.now() });
     return data;

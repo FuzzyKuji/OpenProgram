@@ -323,7 +323,7 @@ export function summarizeResult(raw: string, text: Text): string {
     // Stored results are often truncated mid-object; still pull out the
     // telling string fields rather than echoing the braces.
     const found: string[] = [];
-    for (const key of ["error", "title", "message", "summary", "status", "url"]) {
+    for (const key of ["error", "progress", "title", "message", "summary", "status", "url"]) {
       const m = new RegExp(`"${key}"\\s*:\\s*"((?:[^"\\\\]|\\\\.)*)"`).exec(trimmed);
       if (m?.[1]) found.push(m[1]);
       if (found.length >= 2) break;
@@ -338,7 +338,7 @@ export function summarizeResult(raw: string, text: Text): string {
   const pieces: string[] = [];
   const failed = obj.ok === false || obj.success === false || typeof obj.error === "string";
   if (failed) pieces.push(str(obj.error) ?? text("failed", "失败"));
-  for (const key of ["title", "message", "summary", "status", "url", "path", "result", "output"]) {
+  for (const key of ["progress", "title", "message", "summary", "status", "url", "path", "result", "output"]) {
     const v = str(obj[key]);
     if (v && !pieces.includes(v)) pieces.push(firstLine(v) ?? v);
     if (pieces.length >= 2) break;

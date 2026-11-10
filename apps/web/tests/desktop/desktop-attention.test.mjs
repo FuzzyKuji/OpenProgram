@@ -122,3 +122,13 @@ test("a reminder notifies with its text even outside any conversation", () => {
   assert.equal(attention.reportAttention({ kind: "done", sessionId: "", key: "execution:x:completed" }), false);
   assert.deepEqual(notified, [{ key: "reminder:r1", title: "Reminder", body: "Send the invoice", sessionId: "", urgent: true }]);
 });
+
+test("an always-on report frame notifies unless the server says its kind does not", () => {
+  const report = { id: "r1", session_id: "s1", title: "x", kind: "finding" };
+  assert.equal(attention.reportNotifiesDesktop({ report }), true, "frames from before the rules notify");
+  assert.equal(attention.reportNotifiesDesktop({ report, notify_desktop: false }), false);
+  assert.equal(attention.reportNotifiesDesktop({ report, notify_desktop: true }), true);
+  assert.equal(attention.reportNotifiesDesktop({ report, notify: { desktop: false, channels: true } }), false);
+  assert.equal(attention.reportNotifiesDesktop({ report: { ...report, notify_desktop: false } }), false);
+  assert.equal(attention.reportNotifiesDesktop(null), true);
+});

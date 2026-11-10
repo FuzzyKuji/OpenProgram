@@ -278,7 +278,7 @@ def commit_message_builtin_handler(
 
     from openprogram.models.providers.streaming.background_llm import build_background_llm
 
-    llm = build_background_llm()
+    llm = build_background_llm(call_kind="tool")
     if llm is None:
         return {"text": "Commit message generation unavailable: no model has been used yet."}
 

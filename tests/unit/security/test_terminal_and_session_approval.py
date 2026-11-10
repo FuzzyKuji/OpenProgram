@@ -6,29 +6,32 @@ from types import SimpleNamespace
 import pytest
 
 
+def _decided(decision):
+    return decision.outcome, decision.code
+
+
 @pytest.fixture
 def decide(monkeypatch):
     from openprogram.runtime.permissions import tool_authority
-    from openprogram.runtime.permissions import policy, recovery
+    from openprogram.runtime.permissions import identity, policy
     from openprogram.programs._host.runtime import get
-
-    monkeypatch.setattr(policy, "_hard_constraint_violation", lambda *a, **k: None)
+    monkeypatch.setattr(identity, "scope_violation", lambda *a, **k: None)
+    monkeypatch.setattr(policy, "can_approve", lambda req: True)
     monkeypatch.setattr(tool_authority, "decide_tool_authority",
                         lambda *a, **k: SimpleNamespace(allowed=True, reason_code="", capability=""))
-    monkeypatch.setattr(recovery, "approval_context", lambda *a, **k: None)
 
     def run(tool, args, *, mode="bypass", allow=()):
         rules = SimpleNamespace(allow=list(allow), ask=[], deny=[])
         req = SimpleNamespace(permission_mode=mode, permission_rules=rules, session_id="s-test",
                               source="web", surface_context=None)
-        return policy.permission_decision(get(tool), req, args)[:2]
+        return _decided(policy.permission_decision(get(tool), req, args))
     return run
 
 
 @pytest.mark.parametrize("terminal_id", ["terminal:desktop:shell", "terminal-resource:" + "0" * 32])
 def test_terminal_input_follows_the_permission_mode(decide, terminal_id):
     args = {"action": "input", "terminal_id": terminal_id, "data": "ls\r"}
-    assert decide("terminal_use", args) == ("allow", "BYPASS")
+    assert decide("terminal_use", args) == ("allow", "MODE_UNRESTRICTED")
     assert decide("terminal_use", args, mode="auto") == ("auto", "AUTO_CLASSIFY")
     assert decide("terminal_use", args, mode="default") == ("ask", "MODE_APPROVAL")
 

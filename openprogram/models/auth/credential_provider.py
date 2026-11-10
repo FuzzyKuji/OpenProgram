@@ -33,6 +33,7 @@ from dataclasses import dataclass, field
 from typing import Awaitable, Callable, Optional
 
 from . import pool as _pool
+from .context import get_affinity_key
 from .pool import PoolFailurePolicy
 from .store import AuthStore, get_store
 from .types import (
@@ -318,7 +319,7 @@ class CredentialProvider:
 
         # Pick a healthy credential — may raise PoolExhausted.
         try:
-            cred = _pool.pick(pool)
+            cred = _pool.pick(pool, affinity_key=get_affinity_key())
         except AuthPoolExhaustedError:
             # Try the pool-specific fallback chain first (set on the pool
             # itself), then provider-level, then surrender.

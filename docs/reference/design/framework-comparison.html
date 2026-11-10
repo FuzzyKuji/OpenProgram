@@ -1,834 +1,198 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Framework comparison: OpenProgram and twelve references</title>
-<style>
-  :root{
-    --bg:#16150f; --pan:#1d1c14; --bd:#2e2c20; --tx:#bdb9a6; --acc:#d4843a;
-    --cb:#12110b; --dim:#8a8675;
-    --c0:#4f8ef7; --c1:#5aad4e; --c2:#d4843a; --c3:#9d6fe0; --c4:#2db3d5;
-    --no:#e0445a;
-  }
-  *{box-sizing:border-box}
-  body{margin:0;background:var(--bg);color:var(--tx);
-    font:14px/1.7 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;padding:40px 24px 96px}
-  .wrap{max-width:1180px;margin:0 auto}
-  h1{font-size:23px;color:#f0eee6;margin:0 0 6px}
-  .sub{color:var(--tx);margin:0 0 18px;max-width:84ch}
-  h2{font-size:16px;color:var(--acc);margin:38px 0 8px;scroll-margin-top:20px}
-  h2 .num{color:var(--dim);font-size:12px;margin-right:8px;letter-spacing:.16em}
-  h2 .ly{font-size:10.5px;letter-spacing:.18em;padding:2px 8px;border-radius:99px;
-    margin-left:10px;vertical-align:2px;font-weight:600}
-  .ly0{color:#e0445a;border:1px solid #6d2530}
-  .ly1{color:#4f8ef7;border:1px solid #2c4a78}
-  .ly2{color:#5aad4e;border:1px solid #2f5228}
-  .ly3{color:#d4843a;border:1px solid #6b4519}
-  .ly4{color:#9d6fe0;border:1px solid #4c3670}
-  h3{font-size:13.5px;color:#f0eee6;margin:24px 0 6px;font-weight:600}
-  .lead{color:var(--dim);font-size:13px;margin:0 0 12px;max-width:90ch}
-  .card{background:var(--pan);border:1px solid var(--bd);border-radius:12px;padding:8px;margin-bottom:16px}
-  svg{display:block;width:100%;height:auto;background:var(--cb);border-radius:8px}
-  .scroll{overflow-x:auto}
-  .scroll svg{min-width:900px}
-  .legend{font-size:12.5px;color:var(--dim);padding:8px 10px;line-height:1.8}
-  .legend b{color:#f0eee6}
-  code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
-  a{color:var(--acc)}
-  text{font-family:-apple-system,"Segoe UI",sans-serif}
+<title>Framework comparison</title>
+<meta name="description" content="OpenProgram against twelve reference frameworks: product forms, strengths, gaps and candidates.">
+<h1>Framework comparison</h1>
+<p class="note">Whole frameworks only. Subsystem detail stays in the <a href="#status">linked comparisons</a>.</p>
 
-  .toc{display:flex;flex-wrap:wrap;gap:7px;margin:0 0 24px}
-  .toc a{font-size:12px;color:var(--tx);text-decoration:none;border:1px solid var(--bd);
-    background:var(--pan);border-radius:99px;padding:4px 12px}
-  .toc a:hover{border-color:var(--acc);color:#f0eee6}
-  .toc a.l0{border-color:#6d2530}
-  .toc a.l1{border-color:#2c4a78} .toc a.l2{border-color:#2f5228}
-  .toc a.l3{border-color:#6b4519} .toc a.l4{border-color:#4c3670}
-
-  .tbl{overflow-x:auto;background:var(--pan);border:1px solid var(--bd);border-radius:12px;margin-bottom:16px}
-  table{width:100%;border-collapse:collapse;font-size:13px;min-width:900px}
-  table.wide{min-width:1180px}
-  table.matrix{min-width:1160px;font-size:12px}
-  th{text-align:left;padding:10px 12px;color:var(--dim);font-weight:600;font-size:11px;
-    letter-spacing:.12em;border-bottom:1px solid var(--bd);white-space:nowrap;vertical-align:bottom}
-  td{padding:9px 12px;border-bottom:1px solid #26241a;vertical-align:top;line-height:1.6}
-  tr:last-child td{border-bottom:none}
-  td.y{color:var(--c1)} td.n{color:var(--no)} td.p{color:var(--c2)}
-  td b{color:#f0eee6;font-weight:600}
-  td.name{white-space:nowrap;color:#f0eee6;font-weight:600}
-  tr.us td{background:#1b2231}
-  tr.us td.name{color:#4f8ef7}
-  table.matrix td{padding:7px 9px;text-align:center;white-space:nowrap}
-  table.matrix td.dimname{text-align:left;white-space:normal;min-width:150px;color:#f0eee6;font-weight:600}
-  table.matrix th.us{color:#4f8ef7}
-  table.matrix td.us{background:#1b2231}
-  .src{display:block;color:#a5a190;font:10.5px/1.5 Menlo,monospace;margin-top:3px;word-break:break-word}
-  td.sz{white-space:nowrap;color:#a5a190;font:10.5px/1.6 Menlo,monospace}
-  .srcin{color:#a5a190;font:10.5px/1.5 Menlo,monospace}
-
-  pre{background:var(--cb);border:1px solid var(--bd);border-radius:10px;padding:14px 16px;
-    overflow-x:auto;margin:0 0 16px;font:12.5px/1.9 Menlo,monospace;color:#a5a190}
-  pre b{color:var(--acc);font-weight:400}
-  pre i{color:#6b6a63;font-style:normal}
-
-  .note{border-left:3px solid var(--bd);padding:2px 0 2px 13px;color:var(--dim);
-    font-size:12.5px;margin:0 0 16px;max-width:92ch;line-height:1.8}
-  .note b{color:#f0eee6}
-  .note.blue{border-left-color:#2c4a78}
-  .note.green{border-left-color:#2f5228}
-  .note.orange{border-left-color:#6b4519}
-  .note.purple{border-left-color:#4c3670}
-  .note.red{border-left-color:#6d2530}
-
-  .three{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin:0 0 18px}
-  .q{min-width:0;background:var(--pan);border:1px solid var(--bd);border-top-width:3px;border-radius:12px;padding:14px 16px}
-  .q .k{font-size:10.5px;letter-spacing:.2em;color:var(--dim);margin-bottom:5px}
-  .q h4{margin:0 0 8px;font-size:15px;font-weight:700;color:#f0eee6;line-height:1.45}
-  .q p{margin:0 0 8px;font-size:12.5px;color:#a5a190;line-height:1.7}
-  .q p:last-child{margin-bottom:0}
-  .q .ev{font:10.5px/1.6 Menlo,monospace;color:#6b6a63;display:block;margin-top:6px;overflow-wrap:anywhere}
-  @media(max-width:980px){.three{grid-template-columns:1fr}}
-
-  ul{margin:0 0 14px;padding-left:20px;max-width:92ch}
-  li{margin-bottom:6px;font-size:13px;line-height:1.75}
-  li b{color:#f0eee6}
-  .tag{font:10px Menlo,monospace;border-radius:4px;padding:1px 5px;border:1px solid var(--bd);
-    color:var(--dim);margin-left:6px;white-space:nowrap}
-  .tag.bin{color:#d4843a;border-color:#6b4519}
-  .tag.leak{color:#8a8675}
-  .tag.rt{color:#2db3d5;border-color:#1d5f70}
-</style>
-</head>
-<body>
-<div class="wrap">
-
-<h1>Framework comparison: OpenProgram and twelve references</h1>
-<p class="sub">This page compares complete frameworks: their product forms, strengths, weaknesses and missing capabilities. Six subsystem comparisons already cover sandboxing, agent collaboration, long-term memory, memory adoption, speaker identity and chat attachments. This page uses their conclusions without repeating their detail. Twelve dimensions each have a concise assessment and a diagram; detailed evidence stays in the subsystem documents.</p>
-
-<div class="toc">
-  <a class="l0" href="#three">Strengths · Weaknesses · Unexpected findings</a>
-  <a class="l1" href="#now">1 OpenProgram</a>
-  <a class="l1" href="#scale">Codebase size</a>
-  <a class="l2" href="#others">2 Twelve references</a>
-  <a class="l2" href="#exec">Four execution models</a>
-  <a class="l2" href="#matrix">Twelve-dimension matrix</a>
-  <a class="l2" href="#cn">Four Chinese projects</a>
-  <a class="l2" href="#blind">Missing capabilities</a>
-  <a class="l2" href="#ours">Three distinctive mechanisms</a>
-  <a class="l3" href="#plan">3 Candidate state</a>
-  <a class="l4" href="#ideal">4 Target state</a>
-  <a href="#method">Evidence method</a>
-  <a href="#disagree">Source discrepancies</a>
-  <a href="#status">Implementation status</a>
-</div>
-
-<!-- ══════════════════════════ Three questions ══════════════════════════ -->
-<h2 id="three"><span class="num">00</span>Three questions<span class="ly ly0">Conclusions</span></h2>
-<p class="lead">The investigation answers these three questions. The twelve-dimension matrix and missing-capability inventory provide the supporting evidence.</p>
-
-<div class="three">
-  <div class="q" style="border-top-color:#5aad4e">
-    <div class="k">Strongest</div>
-    <h4>Sessions are graphs, and code execution is recorded as nodes</h4>
-    <p>Among the twelve references, no second implementation was confirmed to <b>record the function call tree in conversation history</b>. Model tool results and successfully persisted function calls with session DAG recording enabled, excluding <code>expose=hidden</code>, are recorded at the <code>Agent method</code> call level as code nodes in the session DAG. They share caller/predecessor edges with user and llm nodes and reside in the same session Git repository. Multiple heads can reference different history branches.</p>
-    <p>OpenClaw and pi-mono both support transcript branching. OpenClaw Control UI provides fork, rewind and branch; pi-mono JSONL records carry parentId and <code>/tree</code> switches branches. OpenProgram additionally shares a DAG across user, llm and code nodes, with code nodes representing both tool results and nested calls. Transcript branching and worktrees are independent: agent branches share the current working directory by default; only jobs explicitly bound to <code>worktree_id</code> isolate file changes.</p>
-    <span class="ev">context/git/dag.py · store/session/session_store.py · agent/call_state.py</span>
-  </div>
-  <div class="q" style="border-top-color:#e0445a">
-    <div class="k">Weakest</div>
-    <h4>Standard local entry points exist; a stable remote-control contract is missing</h4>
-    <p>OpenProgram supports bundled, dynamic community and custom providers, an MCP client, skills and plugins. External programs can invoke tools through an <b>authenticated stdio MCP server</b> and drive sessions through an <b>ACP server</b>. An OpenAI-compatible endpoint, stable versioned remote-control SDK, complete public headless event protocol and maintained IDE extension remain unconfirmed. Owner-authenticated WebSocket and Python library entry points are internal or embedded interfaces; they do not provide these external compatibility commitments.</p>
-    <p>For project instructions, OpenProgram and OpenClaw both store agent-level guidance in agent workspaces. OpenClaw provides <code>migrate-claude</code> and <code>migrate-hermes</code>. Codex desktop/CLI import can migrate Claude Code and Cursor setup and recent work. OpenProgram currently has no importer for external agent sessions, configuration or skills.</p>
-    <span class="ev">openprogram/extensions/mcp/server/server.py · openprogram/interfaces/acp/server.py · openprogram/interfaces/cli/commands/mcp.py · agent_registry/workspace.py</span>
-  </div>
-  <div class="q" style="border-top-color:#9d6fe0">
-    <div class="k">Unexpected</div>
-    <h4>Codex code mode: model-written code invokes tools</h4>
-    <p>Instead of emitting tool calls, the model writes JavaScript that invokes tools in the current turn. In <code>CodeModeOnly</code> mode, the model-visible tools are limited to <code>exec</code> and <code>wait</code>. Four crates and a V8 runtime implement this feature, which the feature registry <b>disables by default</b>; examining only default behavior would miss it.</p>
-    <p>OpenProgram lets a model generate a workflow package, then execute a versioned Python workflow after static validation and atomic publication. Codex code mode instead generates JavaScript and invokes tools immediately within the current turn. OpenProgram currently has neither this per-turn code mode nor a model-visible tool set reduced to <code>exec</code>/<code>wait</code> as its two entry points.</p>
-    <span class="ev">codex-rs/features/src/lib.rs · code-mode / code-mode-host / code-mode-protocol / code-mode-runtime / v8-poc</span>
-  </div>
-</div>
-
-<div class="note red">
-  <b>Separate capability scope by use case</b>: OpenProgram provides three core Python/TypeScript LSP tools: diagnostics, references and definition. It has no maintained IDE extension, formatter collection, tree-sitter code index or GitHub Action. These differences directly affect coding use cases. Channel breadth concerns the general harness: OpenClaw and Hermes expose considerably more integrations than OpenProgram’s four channels.
-</div>
-
-<!-- ══════════════════════════ LAYER 1 ══════════════════════════ -->
-<h2 id="now"><span class="num">01</span>What OpenProgram is<span class="ly ly1">Current state</span></h2>
-<p class="lead">A general-purpose Python agent harness. Installation provides the <code>openprogram</code> command and a persistent worker. TUI, Web, Electron desktop and four chat channels share <code>process_user_turn</code> through the dispatcher; the Python library enters through <code>Agent.run</code> or Runtime directly into <code>agent_loop</code>. Each session’s Git repository is the source of truth for its transcript. SQLite holds the usage ledger. Memory content is Markdown, with rebuildable in-memory BM25/embedding indexes for retrieval. Workflows can be Python functions decorated with <code>Agent method</code>; nested calls that meet recording conditions and persist successfully enter the same session DAG. The history/ JSON nodes support updates and deletion; context/commits/ is frozen per turn. Providers can be bundled, dynamic or custom. Web and WebSocket entry points enforce single-owner authentication through owner_auth, using a per-start token and profile-specific cookie. This is a single-user framework, not a multitenant service.</p>
-
-<div class="card scroll">
-<svg viewBox="0 0 960 300" role="img" aria-label="OpenProgram architecture: four chat surfaces enter a persistent worker through the dispatcher; session Git storage and tools sit beneath it">
-  <title>OpenProgram runtime and storage</title>
-  <desc>TUI, Web, Electron and chat channels reach the persistent worker through the dispatcher, then connect to the session DAG, dynamic tool registry, usage ledger and memory workspace. The Python library entry is described separately in the prose.</desc>
-  <text x="16" y="22" fill="#8a8675" font-size="10.5" letter-spacing="1.6">Surfaces</text>
-  <text x="250" y="22" fill="#8a8675" font-size="10.5" letter-spacing="1.6">Persistent worker · port 18100</text>
-  <text x="558" y="22" fill="#8a8675" font-size="10.5" letter-spacing="1.6">Turn processing</text>
-  <text x="790" y="22" fill="#8a8675" font-size="10.5" letter-spacing="1.6">Storage</text>
-  <line x1="16" y1="30" x2="944" y2="30" stroke="#2e2c20"/>
-
-  <rect x="16" y="42" width="176" height="34" rx="7" fill="#1d1c14" stroke="#4f8ef7"/>
-  <text x="28" y="63" fill="#f0eee6" font-size="11.5">TUI · Ink + React</text>
-  <rect x="16" y="84" width="176" height="34" rx="7" fill="#1d1c14" stroke="#4f8ef7"/>
-  <text x="28" y="105" fill="#f0eee6" font-size="11.5">Web · Next.js 14.2.35</text>
-  <rect x="16" y="126" width="176" height="34" rx="7" fill="#1d1c14" stroke="#4f8ef7"/>
-  <text x="28" y="147" fill="#f0eee6" font-size="11.5">Desktop · Electron shell</text>
-  <rect x="16" y="168" width="176" height="34" rx="7" fill="#1d1c14" stroke="#4f8ef7"/>
-  <text x="28" y="182" fill="#f0eee6" font-size="11.5">Channels · 4</text>
-  <text x="28" y="196" fill="#8a8675" font-size="10">Telegram Discord Slack WeChat</text>
-  <line x1="192" y1="59" x2="246" y2="132" stroke="#5c5a4e" marker-end="url(#a1)"/>
-  <line x1="192" y1="101" x2="246" y2="132" stroke="#5c5a4e" marker-end="url(#a1)"/>
-  <line x1="192" y1="143" x2="246" y2="140" stroke="#5c5a4e" marker-end="url(#a1)"/>
-  <line x1="192" y1="185" x2="246" y2="148" stroke="#5c5a4e" marker-end="url(#a1)"/>
-  <defs>
-    <marker id="a1" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-      <path d="M0 0 L7 3.5 L0 7 z" fill="#5c5a4e"/>
-    </marker>
-  </defs>
-
-  <rect x="250" y="42" width="212" height="202" rx="10" fill="#12110b" stroke="#2f5228"/>
-  <text x="262" y="64" fill="#5aad4e" font-size="12" font-weight="600">process_user_turn</text>
-  <text x="262" y="80" fill="#6b6a63" font-size="9.5" font-family="Menlo,monospace">conversation/turn_runtime/__init__.py</text>
-  <line x1="262" y1="90" x2="450" y2="90" stroke="#2e2c20"/>
-  <text x="262" y="108" fill="#bdb9a6" font-size="11">Context assembly L0 / L1 / L2</text>
-  <text x="262" y="126" fill="#bdb9a6" font-size="11">Snip first; compact if still over budget</text>
-  <text x="262" y="144" fill="#bdb9a6" font-size="11">agent_loop: models and tools</text>
-  <text x="262" y="162" fill="#bdb9a6" font-size="11">tool.before gate can deny</text>
-  <text x="262" y="180" fill="#bdb9a6" font-size="11">finalize: ContextCommit, Git commit</text>
-  <line x1="262" y1="192" x2="450" y2="192" stroke="#2e2c20"/>
-  <text x="262" y="210" fill="#8a8675" font-size="10.5">Web/TUI: daemon thread per turn; JobRunner: bounded pool</text>
-  <text x="262" y="228" fill="#8a8675" font-size="10.5">dispatcher: asyncio loop per turn; scheduler: threads/processes</text>
-
-  <line x1="462" y1="140" x2="514" y2="140" stroke="#5c5a4e" marker-end="url(#a1)"/>
-
-  <rect x="518" y="42" width="222" height="60" rx="8" fill="#1d1c14" stroke="#6b4519"/>
-  <text x="530" y="62" fill="#d4843a" font-size="11.5" font-weight="600">Session DAG</text>
-  <text x="530" y="78" fill="#8a8675" font-size="10">Three roles: user / llm / code</text>
-  <text x="530" y="93" fill="#8a8675" font-size="10">caller / predecessor; branch heads</text>
-
-  <rect x="518" y="110" width="222" height="52" rx="8" fill="#1d1c14" stroke="#6b4519"/>
-  <text x="530" y="130" fill="#d4843a" font-size="11.5" font-weight="600">Dynamic tools · four domains</text>
-  <text x="530" y="146" fill="#8a8675" font-size="10">todo · task · agent · message</text>
-
-  <rect x="518" y="170" width="222" height="74" rx="8" fill="#1d1c14" stroke="#6b4519"/>
-  <text x="530" y="190" fill="#d4843a" font-size="11.5" font-weight="600">Extensions</text>
-  <text x="530" y="206" fill="#8a8675" font-size="10">MCP client/server · ACP · skills · plugins</text>
-  <text x="530" y="221" fill="#8a8675" font-size="10">34 events · agent.json · providers</text>
-  <text x="530" y="236" fill="#8a8675" font-size="10">Deferred tools: catalog + tool_search</text>
-
-  <line x1="740" y1="140" x2="778" y2="140" stroke="#5c5a4e" marker-end="url(#a1)"/>
-
-  <rect x="782" y="42" width="162" height="66" rx="8" fill="#12110b" stroke="#4c3670"/>
-  <text x="794" y="62" fill="#9d6fe0" font-size="11.5" font-weight="600">Git per session</text>
-  <text x="794" y="78" fill="#8a8675" font-size="10">history/: mutable JSON nodes</text>
-  <text x="794" y="93" fill="#8a8675" font-size="10">Frozen context/commits/</text>
-
-  <rect x="782" y="116" width="162" height="50" rx="8" fill="#12110b" stroke="#4c3670"/>
-  <text x="794" y="136" fill="#9d6fe0" font-size="11.5" font-weight="600">usage.db</text>
-  <text x="794" y="152" fill="#8a8675" font-size="10">Usage ledger</text>
-
-  <rect x="782" y="174" width="162" height="70" rx="8" fill="#12110b" stroke="#4c3670"/>
-  <text x="794" y="194" fill="#9d6fe0" font-size="11.5" font-weight="600">Memory workspace</text>
-  <text x="794" y="210" fill="#8a8675" font-size="10">Markdown; background writes</text>
-  <text x="794" y="225" fill="#8a8675" font-size="10">7 memory_* tools</text>
-
-  <text x="16" y="272" fill="#8a8675" font-size="10.5">Web/WebSocket: owner_auth with a per-start token and profile-specific cookie; single-user authentication.</text>
-  <text x="16" y="290" fill="#8a8675" font-size="10.5">Chat channels also use pairing and allowlists (channels/_access.py) to establish a source-identity boundary independent of owner Web authentication.</text>
-</svg>
-</div>
-
-<h3 id="scale">1.1 Codebase size: below the middle of the comparison</h3>
-<p class="lead">First-party source lines use one counting method: .py/.ts/.tsx/.js/.rs/.go only, excluding tests, node_modules, dist, target and vendor. The horizontal axis is logarithmic because the largest and smallest differ by 350 times. This indicates differences in complexity, not capability quality.</p>
-<div class="card scroll">
-<svg viewBox="0 0 960 352" role="img" aria-label="Log-scale bar chart of first-party source lines for nine projects">
-  <title>First-party code size at nine fixed source revisions</title>
-  <desc>A logarithmic comparison of source lines in nine revisions fixed during evidence collection. The chart does not represent current size or a capability ranking.</desc>
-  <line x1="150" y1="38" x2="150" y2="332" stroke="#2e2c20"/>
-  <line x1="340" y1="38" x2="340" y2="332" stroke="#26241a" stroke-dasharray="3 4"/>
-  <line x1="530" y1="38" x2="530" y2="332" stroke="#26241a" stroke-dasharray="3 4"/>
-  <line x1="720" y1="38" x2="720" y2="332" stroke="#26241a" stroke-dasharray="3 4"/>
-  <line x1="910" y1="38" x2="910" y2="332" stroke="#26241a" stroke-dasharray="3 4"/>
-  <text x="150" y="30" fill="#6b6a63" font-size="10" text-anchor="middle">1K</text>
-  <text x="340" y="30" fill="#6b6a63" font-size="10" text-anchor="middle">10K</text>
-  <text x="530" y="30" fill="#6b6a63" font-size="10" text-anchor="middle">100K</text>
-  <text x="720" y="30" fill="#6b6a63" font-size="10" text-anchor="middle">1M</text>
-  <text x="910" y="30" fill="#6b6a63" font-size="10" text-anchor="middle">10M</text>
-
-  <text x="142" y="70" fill="#bdb9a6" font-size="11.5" text-anchor="end">openclaw</text>
-  <rect x="150" y="56" width="627" height="18" rx="3" fill="#3b3524"/>
-  <text x="785" y="70" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">1,987,813</text>
-
-  <text x="142" y="100" fill="#bdb9a6" font-size="11.5" text-anchor="end">codex-cli</text>
-  <rect x="150" y="86" width="576" height="18" rx="3" fill="#3b3524"/>
-  <text x="734" y="100" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">1,070,595</text>
-
-  <text x="142" y="130" fill="#bdb9a6" font-size="11.5" text-anchor="end">hermes-agent</text>
-  <rect x="150" y="116" width="520" height="18" rx="3" fill="#3b3524"/>
-  <text x="678" y="130" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">544,917</text>
-
-  <text x="142" y="160" fill="#bdb9a6" font-size="11.5" text-anchor="end">claude-code leaked tree</text>
-  <rect x="150" y="146" width="515" height="18" rx="3" fill="#2e2a1c"/>
-  <text x="673" y="160" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">512,685 · through 2026-04</text>
-
-  <text x="142" y="190" fill="#bdb9a6" font-size="11.5" text-anchor="end">opencode</text>
-  <rect x="150" y="176" width="487" height="18" rx="3" fill="#3b3524"/>
-  <text x="645" y="190" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">366,499</text>
-
-  <text x="142" y="220" fill="#4f8ef7" font-size="11.5" text-anchor="end" font-weight="600">OpenProgram</text>
-  <rect x="150" y="206" width="457" height="18" rx="3" fill="#2c4a78"/>
-  <text x="615" y="220" fill="#4f8ef7" font-size="10.5" font-family="Menlo,monospace">254,320</text>
-
-  <text x="142" y="250" fill="#bdb9a6" font-size="11.5" text-anchor="end">pi-mono</text>
-  <rect x="150" y="236" width="393" height="18" rx="3" fill="#3b3524"/>
-  <text x="551" y="250" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">116,599</text>
-
-  <text x="142" y="280" fill="#bdb9a6" font-size="11.5" text-anchor="end">weclaw</text>
-  <rect x="150" y="266" width="144" height="18" rx="3" fill="#3b3524"/>
-  <text x="302" y="280" fill="#8a8675" font-size="10.5" font-family="Menlo,monospace">5,723</text>
-
-  <text x="142" y="310" fill="#6b6a63" font-size="11.5" text-anchor="end">pi-ai</text>
-  <rect x="150" y="296" width="115" height="18" rx="3" fill="#26241a"/>
-  <text x="273" y="310" fill="#6b6a63" font-size="10.5" font-family="Menlo,monospace">4,021 · protocol snapshot, not a framework</text>
-
-  <text x="16" y="344" fill="#6b6a63" font-size="10">pi-ai is a read-only slice of packages/ai in pi-mono. It remains under references as a protocol reference for the Python Codex provider and is excluded from capability comparisons.</text>
-</svg>
-</div>
-<div class="note">
-  <b>Reading this chart</b>: Counts are static measurements of revisions fixed during evidence collection, not the latest sizes on 2026-09-01. OpenClaw and Codex had about four to eight times OpenProgram’s first-party source, mainly in channels, TUI and IDE integration. weclaw implemented WeChat forwarding and ACP calls in about five thousand lines. OpenProgram then had about 250 thousand lines, including 73 thousand in Web, 35 thousand in TUI and <code>openprogram/</code> at about 134 thousand.
-</div>
-
-<!-- ══════════════════════════ LAYER 2 ══════════════════════════ -->
-<h2 id="others"><span class="num">02</span>The twelve references<span class="ly ly2">Comparison</span></h2>
-<p class="lead">Capability conclusions for Claude Code, Codex, OpenClaw and OpenCode were checked against official stable releases and documentation on 2026-09-01. Code counts, internal implementation details and other references continue to use fixed versions from <code>references/</code> and locally installed packages. These two evidence types are not presented as a complete source audit from one date.</p>
-
-<h3 id="exec">2.1 Four execution models</h3>
-<div class="card scroll">
-<svg viewBox="0 0 960 322" role="img" aria-label="Four execution models: single process, local client/server, persistent daemon and remote execution">
-  <title>Four execution models in the reference frameworks</title>
-  <desc>Compare single-process, local client/server, persistent-service and remote execution. Identify OpenProgram’s persistent worker and the absence of hosted cloud execution.</desc>
-  <text x="16" y="22" fill="#8a8675" font-size="10.5" letter-spacing="1.6">Where a conversation runs</text>
-  <line x1="16" y1="30" x2="944" y2="30" stroke="#2e2c20"/>
-
-  <rect x="16" y="42" width="214" height="240" rx="10" fill="#1d1c14" stroke="#2e2c20" stroke-width="1"/>
-  <rect x="16" y="42" width="214" height="3" rx="1.5" fill="#4f8ef7"/>
-  <text x="30" y="68" fill="#f0eee6" font-size="13" font-weight="700">Single process</text>
-  <text x="30" y="85" fill="#8a8675" font-size="10.5">Starts with the terminal; exits when done</text>
-  <rect x="30" y="98" width="52" height="26" rx="5" fill="#12110b" stroke="#2c4a78"/>
-  <text x="56" y="115" fill="#4f8ef7" font-size="10" text-anchor="middle">Terminal</text>
-  <line x1="82" y1="111" x2="102" y2="111" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <rect x="106" y="98" width="58" height="26" rx="5" fill="#12110b" stroke="#2c4a78"/>
-  <text x="135" y="115" fill="#4f8ef7" font-size="10" text-anchor="middle">Agent loop</text>
-  <line x1="164" y1="111" x2="184" y2="111" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <rect x="188" y="98" width="30" height="26" rx="5" fill="#12110b" stroke="#2c4a78"/>
-  <text x="203" y="115" fill="#4f8ef7" font-size="10" text-anchor="middle">Model</text>
-  <text x="30" y="152" fill="#6b6a63" font-size="10" letter-spacing="1.4">Examples</text>
-  <text x="30" y="170" fill="#bdb9a6" font-size="11.5">pi-mono</text>
-  <text x="30" y="188" fill="#bdb9a6" font-size="11.5">weclaw</text>
-  <text x="30" y="216" fill="#6b6a63" font-size="10" letter-spacing="1.4">State storage</text>
-  <text x="30" y="234" fill="#8a8675" font-size="10.5">pi-mono: JSONL session tree</text>
-  <text x="30" y="250" fill="#8a8675" font-size="10.5">parentId links; leaf is current position</text>
-  <text x="30" y="270" fill="#8a8675" font-size="10.5">weclaw: forwards to an external ACP agent</text>
-
-  <rect x="254" y="42" width="214" height="240" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
-  <rect x="254" y="42" width="214" height="3" rx="1.5" fill="#5aad4e"/>
-  <text x="268" y="68" fill="#f0eee6" font-size="13" font-weight="700">Local client/server split</text>
-  <text x="268" y="85" fill="#8a8675" font-size="10.5">Client and server remain separate</text>
-  <rect x="268" y="98" width="62" height="26" rx="5" fill="#12110b" stroke="#2f5228"/>
-  <text x="299" y="115" fill="#5aad4e" font-size="10" text-anchor="middle">TUI client</text>
-  <line x1="330" y1="105" x2="356" y2="105" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <line x1="356" y1="117" x2="330" y2="117" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <text x="343" y="94" fill="#6b6a63" font-size="9" text-anchor="middle">RPC</text>
-  <rect x="360" y="98" width="94" height="26" rx="5" fill="#12110b" stroke="#2f5228"/>
-  <text x="407" y="115" fill="#5aad4e" font-size="10" text-anchor="middle">HTTP server in worker</text>
-  <text x="268" y="152" fill="#6b6a63" font-size="10" letter-spacing="1.4">Examples</text>
-  <text x="268" y="170" fill="#bdb9a6" font-size="11.5">OpenCode is the only example here</text>
-  <text x="268" y="216" fill="#6b6a63" font-size="10" letter-spacing="1.4">State storage</text>
-  <text x="268" y="234" fill="#8a8675" font-size="10.5">SQLite + Drizzle; messages append</text>
-  <text x="268" y="250" fill="#8a8675" font-size="10.5">to a seq log; system-context snapshots</text>
-  <text x="268" y="266" fill="#8a8675" font-size="10.5">use a separate epoch table</text>
-
-  <rect x="492" y="42" width="214" height="240" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
-  <rect x="492" y="42" width="214" height="3" rx="1.5" fill="#d4843a"/>
-  <text x="506" y="68" fill="#f0eee6" font-size="13" font-weight="700">Persistent daemon</text>
-  <text x="506" y="85" fill="#8a8675" font-size="10.5">Multiple entry points share one process</text>
-  <rect x="506" y="96" width="56" height="20" rx="4" fill="#12110b" stroke="#6b4519"/>
-  <text x="534" y="110" fill="#d4843a" font-size="9.5" text-anchor="middle">Channels</text>
-  <rect x="506" y="120" width="56" height="20" rx="4" fill="#12110b" stroke="#6b4519"/>
-  <text x="534" y="134" fill="#d4843a" font-size="9.5" text-anchor="middle">Web / TUI</text>
-  <line x1="562" y1="106" x2="586" y2="118" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <line x1="562" y1="130" x2="586" y2="122" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <rect x="590" y="98" width="100" height="42" rx="5" fill="#12110b" stroke="#6b4519"/>
-  <text x="640" y="115" fill="#d4843a" font-size="10" text-anchor="middle">Persistent process</text>
-  <text x="640" y="130" fill="#8a8675" font-size="9" text-anchor="middle">Session routing + registry</text>
-  <text x="506" y="152" fill="#6b6a63" font-size="10" letter-spacing="1.4">Examples</text>
-  <text x="506" y="170" fill="#4f8ef7" font-size="11.5" font-weight="600">OpenProgram</text>
-  <text x="506" y="188" fill="#bdb9a6" font-size="11.5">hermes-agent · openclaw</text>
-  <text x="506" y="206" fill="#bdb9a6" font-size="11.5">claude-code · codex (both have daemons)</text>
-  <text x="506" y="230" fill="#6b6a63" font-size="10" letter-spacing="1.4">State storage</text>
-  <text x="506" y="248" fill="#8a8675" font-size="10.5">OpenProgram: Git repository per session</text>
-  <text x="506" y="264" fill="#8a8675" font-size="10.5">hermes / codex: SQLite</text>
-  <text x="506" y="278" fill="#8a8675" font-size="10.5">claude-code: JSONL files per project</text>
-
-  <rect x="730" y="42" width="214" height="240" rx="10" fill="#1d1c14" stroke="#2e2c20"/>
-  <rect x="730" y="42" width="214" height="3" rx="1.5" fill="#9d6fe0"/>
-  <text x="744" y="68" fill="#f0eee6" font-size="13" font-weight="700">Remote execution</text>
-  <text x="744" y="85" fill="#8a8675" font-size="10.5">Local session, remote commands</text>
-  <rect x="744" y="98" width="50" height="26" rx="5" fill="#12110b" stroke="#4c3670"/>
-  <text x="769" y="115" fill="#9d6fe0" font-size="10" text-anchor="middle">Local</text>
-  <line x1="794" y1="111" x2="818" y2="111" stroke="#5c5a4e" marker-end="url(#a2)"/>
-  <rect x="822" y="98" width="108" height="26" rx="5" fill="#12110b" stroke="#4c3670"/>
-  <text x="876" y="115" fill="#9d6fe0" font-size="10" text-anchor="middle">Remote / cloud</text>
-  <text x="744" y="152" fill="#6b6a63" font-size="10" letter-spacing="1.4">Examples</text>
-  <text x="744" y="170" fill="#bdb9a6" font-size="11.5">codex: remote + cloud tasks</text>
-  <text x="744" y="188" fill="#bdb9a6" font-size="11.5">claude-code: cloud teleport</text>
-  <text x="744" y="206" fill="#bdb9a6" font-size="11.5">openclaw: optional cloud workers</text>
-  <text x="744" y="224" fill="#bdb9a6" font-size="11.5">hermes: 7 execution backends</text>
-  <text x="744" y="248" fill="#4f8ef7" font-size="11.5">OpenProgram: docker.py / ssh.py</text>
-  <text x="744" y="264" fill="#4f8ef7" font-size="11.5">backend/; no sandbox integration</text>
-  <text x="744" y="278" fill="#4f8ef7" font-size="11.5">or cloud-side service</text>
-
-  <defs>
-    <marker id="a2" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto">
-      <path d="M0 0 L7 3.5 L0 7 z" fill="#5c5a4e"/>
-    </marker>
-  </defs>
-  <text x="16" y="314" fill="#8a8675" font-size="10.5">Models can coexist. OpenProgram: persistent worker, Docker/SSH backends, no hosted cloud execution.</text>
-</svg>
-</div>
-<div class="note orange">
-  The four execution models can coexist: Codex and Claude Code support local processes, services and remote execution. Claude Code can teleport to cloud containers, Codex supports remote environments and cloud tasks, and OpenClaw pairs optional cloud workers with managed worktrees. OpenProgram has a persistent worker and Docker/SSH backends, but no hosted cloud execution service. <b>Mechanisms to consider</b>: OpenCode separates the local TUI and execution service through RPC. <code>control-plane/move-session.ts</code> can relocate a session and Git changes within a project to another absolute directory or worktree, but cannot move them to another machine or take over an active turn. OpenProgram already has a persistent worker, WebSocket clients and per-session Git storage. Cross-worker migration would still require a versioned migration protocol, target placement, authentication, active-turn semantics and failure recovery.
-</div>
-
-<h3 id="matrix">2.2 Twelve-dimension matrix</h3>
-<p class="lead">Each cell gives a concise assessment. OpenProgram’s column is colored by the assessment: <span style="color:#5aad4e">green = ahead</span>, <span style="color:#d4843a">orange = comparable</span>, <span style="color:#e0445a">red = behind</span>. Scroll the wide table horizontally.</p>
-<div class="tbl">
-<table class="matrix">
-<tr>
-  <th>Dimension</th><th class="us">OpenProgram</th><th>claude-code</th><th>codex</th><th>openclaw</th>
-  <th>opencode</th><th>hermes-agent</th><th>pi-mono</th><th>weclaw</th>
-</tr>
-<tr>
-  <td class="dimname">Product form</td>
-  <td class="us">General-purpose harness</td><td>Coding CLI + cloud</td><td>Coding CLI + cloud</td><td>Multichannel gateway platform</td>
-  <td>Coding CLI + SaaS services</td><td>Personal assistant + research harness</td><td>Coding TUI + library</td><td>WeChat relay</td>
-</tr>
-<tr>
-  <td class="dimname">Target user</td>
-  <td class="us">Single local user</td><td>Individual, subscription or enterprise</td><td>Individual; seven configuration layers</td><td>Single operator; multiple channel users</td>
-  <td>Individual developer</td><td>Individual; pairing codes for strangers</td><td>Single local user</td><td>Individual; no authentication</td>
-</tr>
-<tr>
-  <td class="dimname">Execution model</td>
-  <td class="us p">Persistent worker</td><td>In-process + daemon + cloud containers</td><td>In-process + App Server + cloud</td><td>Gateway + paired devices, opt-in cloud workers and managed worktrees</td>
-  <td>Local client/server separation</td><td>In-process + gateway daemon</td><td>Single process</td><td>Forwarding daemon</td>
-</tr>
-<tr>
-  <td class="dimname">State storage</td>
-  <td class="us y">Git per session</td><td>JSONL files per project</td><td>Rollout JSONL + five SQLite databases</td><td>Per-agent SQLite for runtime state and transcripts; JSONL only for archives or legacy migration</td>
-  <td>SQLite + Drizzle</td><td>SQLite + FTS5</td><td>JSONL session tree</td><td>In memory; lost on restart</td>
-</tr>
-<tr>
-  <td class="dimname">Context assembly</td>
-  <td class="us y">L0/L1/L2 component registry</td><td>Static prefix + dynamic boundary markers</td><td>Per-model prompts compiled into the binary</td><td>Workspace files + bootstrap budget</td>
-  <td>13 model-specific prompt sets</td><td>Three layers: stable/context/volatile</td><td>Prompt restricted to enabled tools</td><td>None</td>
-</tr>
-<tr>
-  <td class="dimname">Project instructions</td>
-  <td class="us p">AGENTS.md in agent workspace</td><td>Four CLAUDE.md levels, including system-wide</td><td>AGENTS.md accumulated below Git root</td><td>Workspace AGENTS/SOUL/TOOLS</td>
-  <td>Global + project; first match</td><td>Four formats + subdirectory guidance</td><td>All ancestor directories</td><td>None</td>
-</tr>
-<tr>
-  <td class="dimname">Tool surface</td>
-  <td class="us p">Dynamic registry; persistent presets + deferred tool_search catalog</td><td>About 24 exposed tools; ToolSearch</td><td>About 28; code mode can reduce to two</td><td>About 35 in 11 groups; tool_search</td>
-  <td>16; model-dependent apply_patch</td><td>About 82; 32 toolsets</td><td>Seven; three disabled by default</td><td>Zero</td>
-</tr>
-<tr>
-  <td class="dimname">Permission approval</td>
-  <td class="us p">Five modes + rules + tool.before gate</td><td>Six modes: default/acceptEdits/plan/auto/dontAsk/bypassPermissions</td><td>Four, including Granular; execpolicy DSL</td><td>Layered restrictions; approval cards in chat</td>
-  <td>Ask by default; Bash command tokenization</td><td>55 dangerous patterns; auxiliary-LLM auto-approval</td><td>None; tool allowlist only</td><td>Automatically approve all</td>
-</tr>
-<tr>
-  <td class="dimname">Extensions</td>
-  <td class="us p">Plugins + skills + MCP client + 34 events</td><td>Plugin marketplace + 27 hooks + 122 commands</td><td>Plugin marketplace + 11 hooks; model can self-install</td><td>126 plugins + 59 skills + ClawHub</td>
-  <td>Plugins with 19 hooks; can render inside TUI</td><td>20 hooks + shell-script hooks + 178 skills</td><td>About 40 events + package manager; no MCP</td><td>Configuration file only</td>
-</tr>
-<tr>
-  <td class="dimname">Channels</td>
-  <td class="us n">Four</td><td>Mobile Web bridge, Slack, Discord</td><td>Slack integration; depends on cloud account and workspace configuration</td><td>Ten native channels; over 20 plugin channels</td>
-  <td>GitHub + Slack + ACP + two IDEs</td><td>About 26, plus webhooks and cron</td><td>None</td><td>One</td>
-</tr>
-<tr>
-  <td class="dimname">Interfaces</td>
-  <td class="us p">TUI + Web + Electron</td><td>Custom Ink fork + Vim + voice</td><td>ratatui; IDE context over sockets</td><td>TUI + control panel + macOS/iOS/watchOS/Android nodes</td>
-  <td>OpenTUI + Web + Electron</td><td>Ink TUI + React Web</td><td>Custom TUI framework that can run DOOM</td><td>Terminal only</td>
-</tr>
-<tr>
-  <td class="dimname">External interfaces</td>
-  <td class="us p">Authenticated stdio MCP server + ACP; no stable remote SDK</td><td>MCP server + Agent SDK + session service</td><td>App Server + Python/TypeScript SDK; <code>codex mcp-server</code>deprecated</td><td>Three MCP server forms + OpenAI compatibility + 74 RPCs</td>
-  <td>HTTP service + JS SDK + ACP</td><td>MCP server + OpenAI compatibility + ACP</td><td>RPC mode + JSON mode + SDK</td><td>Local HTTP push</td>
-</tr>
-<tr>
-  <td class="dimname">Observability and billing</td>
-  <td class="us p">Append-only ledger with cache reads/writes and itemized costs</td><td>OTel + Perfetto + BigQuery; budget limits</td><td>OTel + analytics; tokens but no currency amounts</td><td>Trace export + OTel + Prometheus</td>
-  <td>OTel + data lake; stats command</td><td>Log redaction + Langfuse; provider quota retrieval</td><td>Optional installation counts; scripted cost aggregation</td><td>One log file</td>
-</tr>
-<tr>
-  <td class="dimname">First-party source lines</td>
-  <td class="us">254,320</td><td>512,685<span class="srcin"> through 2026-04</span></td><td>1,070,595</td><td>1,987,813</td>
-  <td>366,499</td><td>544,917</td><td>116,599</td><td>5,723</td>
-</tr>
+<h2 id="three">Conclusions</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Finding</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Strongest</th><td>Sessions are graphs, and code execution is recorded as nodes.</td></tr>
+<tr><th scope="row">Weakest</th><td>Standard local entry points exist; a stable remote-control contract does not.</td></tr>
+<tr><th scope="row">Unexpected</th><td>Codex code mode: model-written code invokes tools.</td></tr>
+</tbody>
 </table>
-</div>
+<details><summary>Strongest: evidence</summary>
+<ul>
+<li>No second implementation among the twelve was confirmed to record the function call tree in conversation history.</li>
+<li>Model tool results and successfully persisted Agent method calls (session DAG recording on, <code translate="no">expose</code> not <code translate="no">hidden</code>) are code nodes. They share caller and predecessor edges with user and llm nodes, in the session's append-only log. Multiple heads reference different history branches.</li>
+<li>OpenClaw Control UI has fork, rewind and branch; pi-mono JSONL carries parentId and <code translate="no">/tree</code> switches branches. OpenProgram adds one DAG across user, llm and code nodes, where code nodes hold both tool results and nested calls.</li>
+<li>Transcript branches and worktrees are independent. Agent branches share the working directory; only jobs bound to <code translate="no">worktree_id</code> isolate file changes.</li>
+</ul>
+<p><code translate="no">runtime/context/git/dag.py</code> · <code translate="no">state/store/session/session_store/</code> · <code translate="no">runtime/agent/call_state.py</code></p>
+</details>
+<details><summary>Weakest: evidence</summary>
+<ul>
+<li>Present: bundled, dynamic community and custom providers, MCP client, skills, plugins, an authenticated stdio MCP server for tools and an ACP server for sessions.</li>
+<li>Unconfirmed: OpenAI-compatible endpoint, stable versioned remote-control SDK, complete public headless event protocol, maintained IDE extension. Owner-authenticated WebSocket and Python library entry points are internal or embedded and promise no external compatibility.</li>
+<li>OpenProgram and OpenClaw both keep agent guidance in agent workspaces. OpenClaw ships <code translate="no">migrate-claude</code> and <code translate="no">migrate-hermes</code>; Codex desktop and CLI import Claude Code and Cursor setup and recent work. OpenProgram has no importer for external sessions, configuration or skills.</li>
+</ul>
+<p><code translate="no">extensions/mcp/server/server.py</code> · <code translate="no">interfaces/acp/server.py</code> · <code translate="no">interfaces/cli/commands/mcp.py</code> · <code translate="no">runtime/agent_registry/workspace.py</code></p>
+</details>
+<details><summary>Unexpected: evidence</summary>
+<ul>
+<li>The model writes JavaScript that invokes tools in the current turn. In <code translate="no">CodeModeOnly</code> the visible tools are only <code translate="no">exec</code> and <code translate="no">wait</code>. Four crates and a V8 runtime implement it; the feature registry disables it by default, so checking default behaviour misses it.</li>
+<li>OpenProgram generates a workflow package and runs a versioned Python workflow after static validation and atomic publication. It has neither per-turn code mode nor a surface reduced to <code translate="no">exec</code> and <code translate="no">wait</code>.</li>
+</ul>
+<p><code translate="no">codex-rs/features/src/lib.rs</code> · <code translate="no">code-mode</code>, <code translate="no">code-mode-host</code>, <code translate="no">code-mode-protocol</code>, <code translate="no">code-mode-runtime</code>, <code translate="no">v8-poc</code></p>
+</details>
+<p class="note">By use case. Coding: three core Python and TypeScript LSP tools (diagnostics, references, definition); no maintained IDE extension, formatter collection, tree-sitter index or GitHub Action. General harness: OpenClaw and Hermes have far more integrations than OpenProgram's four channels.</p>
 
-<div class="note blue">
-  <b>Matrix conclusions</b>. OpenProgram, OpenClaw and Hermes all use persistent services for multiple entry points. OpenClaw also supports paired devices, opt-in cloud workers and managed worktrees; Codex spans local App Server, managed worktrees, Web/cloud, GitHub and Slack. OpenProgram currently has four channels, authenticated stdio MCP server and ACP. Remaining differences include channel breadth, a stable remote SDK, an OpenAI-compatible endpoint, cross-worker session placement and a complete versioned headless event contract. Community sizes and plugin inventories change continuously; unfixed star, fork or skill counts are not treated as current capability evidence here.
-</div>
+<h2 id="now">OpenProgram</h2>
+<p>A general-purpose Python agent harness for one local user: the <code translate="no">openprogram</code> command and a persistent worker on port <code translate="no">18100</code>.</p>
+<dl class="pairs">
+<dt>Surfaces</dt><dd>TUI (Ink and React), Web (Next.js), Electron desktop, four channels: Telegram, Discord, Slack, WeChat</dd>
+<dt>Turn processing</dt><dd>Surfaces share <code translate="no">ChatAgent().run_turn</code>; the Python library enters through <code translate="no">Agent</code> or Runtime straight into <code translate="no">agent_loop</code>. Context assembly L0, L1, L2; compact when over budget; <code translate="no">tool.before</code> gate can deny; finalize writes ContextCommit output and Git commits</dd>
+<dt>Threads</dt><dd>Web and TUI: daemon thread per turn. JobRunner: bounded pool. Dispatcher: asyncio loop per turn. Scheduler: threads and processes</dd>
+<dt>Session storage</dt><dd>One append-only log per session is the source of truth, three roles (user, llm, code), caller and predecessor edges, branch heads. <code translate="no">context/commits/</code> holds per-turn context records</dd>
+<dt>Other storage</dt><dd><code translate="no">usage.db</code>: SQLite usage ledger. Memory: Markdown with rebuildable in-memory BM25 and embedding indexes, background writes, three <code translate="no">memory_*</code> tools</dd>
+<dt>Tools</dt><dd>Dynamic registry in four domains (todo, task, agent, message); deferred catalog plus <code translate="no">tool_search</code></dd>
+<dt>Extensions</dt><dd>MCP client and server, ACP, skills, plugins, 34 events, <code translate="no">agent.json</code>; bundled, dynamic and custom providers</dd>
+<dt>Authentication</dt><dd>Web and WebSocket: <code translate="no">owner_auth</code> with a per-start token and profile-specific cookie. Channels: pairing and allowlists (<code translate="no">interfaces/channels/_access.py</code>), a separate source-identity boundary. Not multitenant</dd>
+</dl>
 
-<h3 id="cn">2.3 Four Chinese projects: adapting an open-source framework for enterprise use</h3>
-<p class="lead">Four Tencent CLIs are installed locally. The first three adapt upstream projects for an intranet; their modifications show what a framework intended for other users must consider. codebuddy-code is independently developed and offers the strongest comparison. No readable local implementation of ByteDance Trae is available, so no speculative assessment is included.</p>
-<div class="tbl">
-<table class="wide">
-<tr><th>Package</th><th>Form</th><th>Changes from upstream</th><th>Size</th></tr>
-<tr>
-  <td class="name">claude-code-internal<br>v1.1.9</td>
-  <td>Not a source fork, but a <b>launcher wrapper</b>. It depends on upstream <code>@anthropic-ai/claude-code@2.1.154</code> unchanged; modifications are confined to environment variables and proxying.</td>
-  <td>Replaces endpoints with an intranet gateway; retrieves a model allowlist from that gateway; maps both Opus and Sonnet to GLM-5.1; redirects the configuration directory to <code>~/.claude-internal</code>; <b>prevent users from overriding it</b> (scans settings files and removes all <code>ANTHROPIC_*</code> keys). Disables upstream telemetry and replaces it with intranet reporting that includes <b>the Git repository and commit</b>. Three authentication methods include device-code flow for CI. A local MITM proxy daemon uses fixed port 12639. Server-provided startup announcements require acknowledgment.</td>
-  <td class="sz">388 lines<br>133 KB</td>
-</tr>
-<tr>
-  <td class="name">codex-internal<br>v0.0.8</td>
-  <td>Also a wrapper around upstream <code>@openai/codex@0.118.0</code>.</td>
-  <td>rewrites <code>config.toml</code> to inject and force an intranet provider; disables upstream update checks and feedback reporting; <b>injects request-header mappings</b> so each request reports open repositories, YOLO mode and session ID to the gateway; <b>restricts capabilities</b>: <code>codex mcp add</code> by rejecting changes to administrator-managed settings; <code>codex app-server</code> exits immediately. Clears inherited <code>OPENAI_*</code> and <code>CODEX_HOME</code>, and binds the user ID and email to the subprocess environment.</td>
-  <td class="sz">502 lines<br>572 KB</td>
-</tr>
-<tr>
-  <td class="name">gemini-cli-internal<br>v1.9.0</td>
-  <td>The only <b>actual source fork</b>.</td>
-  <td> among the three. Adds a <code>codebuddy/</code> core module as a fourth ContentGenerator backend alongside Google; the authentication enum gains <b>two variants</b> (intranet GitLab OAuth and intranet API key). Existing Google methods remain, so one binary works inside and outside the intranet. Reports repository remotes and submodule paths to the gateway; passes API keys into sandbox-container environments.</td>
-  <td class="sz">576,579 lines<br>25 MB</td>
-</tr>
-<tr class="us">
-  <td class="name">codebuddy-code<br>v2.109.3</td>
-  <td>Tencent’s own implementation, internally named genie, built on an IoC container. It has 44 tools, many named similarly to claude-code (Agent, Skill, ToolSearch, EnterWorktree, SendMessage, TeamCreate), plus LSP, ComputerUse, CronCreate, Workflow and WeChatReply/WeComReply.</td>
-  <td><b>Prompts and tool authorization are data rather than code</b>: a 326 KB <code>product.json</code> contains 109 Nunjucks templates, per-agent tool allowlists, model allowlists and command tables. Changing deployment changes this file: SaaS, intranet, zero-trust, self-hosted and cloud-hosted modes share one codebase. Sessions are stored as <code>~/.codebuddy/projects/&lt;cwd-slot&gt;/&lt;uuid&gt;.jsonl</code>. A native sandbox binary has bubblewrap/seatbelt fallbacks. A PWA named “CodeBuddy Code Remote Control” controls local sessions from a mobile browser. Headless mode is a separate webpack artifact, not a CLI flag.</td>
-  <td class="sz">2,629 bundled lines<br>21.7 MB<br>plus 16 MB of <br>headless</td>
-</tr>
+<h3 id="scale">Codebase size</h3>
+<table class="stack fixed">
+<thead><tr><th scope="col">Project</th><th scope="col">First-party lines</th></tr></thead>
+<tbody>
+<tr><th scope="row">openclaw</th><td>1,987,813</td></tr>
+<tr><th scope="row">codex-cli</th><td>1,070,595</td></tr>
+<tr><th scope="row">hermes-agent</th><td>544,917</td></tr>
+<tr><th scope="row">opencode</th><td>366,499</td></tr>
+<tr><th scope="row">OpenProgram</th><td>254,320: Web 73 thousand, TUI 35 thousand, <code translate="no">openprogram/</code> 134 thousand</td></tr>
+<tr><th scope="row">pi-mono</th><td>116,599</td></tr>
+<tr><th scope="row">weclaw</th><td>5,723: WeChat forwarding and ACP calls</td></tr>
+<tr><th scope="row">pi-ai</th><td>4,021: read-only slice of pi-mono <code translate="no">packages/ai</code>, protocol reference for the Python Codex provider, no capability comparison</td></tr>
+</tbody>
 </table>
-</div>
+<p class="note">Only .py, .ts, .tsx, .js, .rs, .go; no tests, node_modules, dist, target or vendor. Static counts at fixed revisions. Size indicates complexity, not quality. OpenClaw and Codex's lead is mainly channels, TUI and IDE integration.</p>
 
-<div class="note purple">
-  <b>Four additional mechanisms found in codebuddy-code</b>.
-  <b>One</b>: intercept deletion at runtime. <code>vendor/shim/safe-bin/</code> contains <code>rm</code>／<code>rmdir</code>／<code>unlink</code> as three PATH replacements, active only when a session environment variable is present. A <code>sitecustomize.py</code> loaded automatically through PYTHONPATH patches <code>os.remove</code>／<code>shutil.rmtree</code>／<code>pathlib</code> and redirects deletion to the bundled trash binary. This operates <b>below</b> the tool layer and also covers agent subprocesses. OpenProgram now injects common shell, Python and Node deletion interception into local agent subprocesses bound to a session/turn and provides <code>trash list/restore</code>. Cron, background jobs, Docker, SSH, absolute-path commands, direct syscalls and disabled injection remain outside coverage.
-  <b>Two</b>: measure AI-written changes. A Git HEAD watcher attributes per-file change proportions to the agent or human and reports them. This is a management metric rather than an end-user feature, but demonstrates the enterprise requirement for auditable agent output.
-  <b>Three</b>: remote enterprise policy with a fail-open cache. The organization server decides whether users may add custom models or upload skills; decisions are cached locally.
-  <b>Four</b>: compliance content policy appears at the start of the system prompt, with client-side interception before model execution.
-</div>
+<h2 id="others">Twelve references</h2>
+<p class="note">Claude Code, Codex, OpenClaw and OpenCode capabilities come from the official stable releases in <a href="#method">evidence</a>. Code counts, internals and other references come from fixed versions. These are not one audit.</p>
 
-<h3 id="blind">2.4 Missing-capability inventory: external mechanisms and current state</h3>
-<p class="lead">The six subsystem comparisons investigate existing questions. This section checks the twelve reference capability inventories for previously omitted mechanisms. Some entries now have an implementation basis; each row distinguishes implemented boundaries from candidates still requiring verification. Inclusion is not implementation approval.</p>
-<div class="tbl">
-<table class="wide">
-<tr><th>Available in</th><th>Mechanism</th><th>Why it was missed</th><th>Assessment</th></tr>
-
-<tr><td colspan="4" style="background:#12110b;color:#9d6fe0;font-size:11px;letter-spacing:.16em;padding:8px 12px">Theme 1 · Challenges to the current approach</td></tr>
-<tr>
-  <td class="name">codex</td>
-  <td><b>code mode</b>: the model writes JavaScript to invoke tools rather than emitting tool calls. <code>CodeModeOnly</code> exposes only <code>exec</code> and <code>wait</code>. Four crates and a V8 runtime; disabled by default.<span class="src">code-mode / code-mode-host / code-mode-protocol / code-mode-runtime / v8-poc</span></td>
-  <td>OpenProgram’s agentic-programming approach turns workflows into Python <b>in advance</b> for agents to invoke. It has not explored having the model write tool-invoking code <b>during the turn</b>. These are two forms of the same approach; only one is implemented here.</td>
-  <td class="p"><b>Warrants a separate comparison</b>. It also demonstrates a different tool-selection mechanism: exposing the entire tool surface through one exec entry.</td>
-</tr>
-<tr>
-  <td class="name">hermes</td>
-  <td><b>The harness generates training data</b>: run datasets in batches, sample the toolset visible to each example from a probability distribution, compress trajectories into a token budget and connect them to the Atropos reinforcement-learning environment.<span class="src">batch_runner.py · toolset_distributions.py · trajectory_compressor.py · environments/</span></td>
-  <td>OpenProgram treats tool selection as a permission question—what an agent may use. This system treats it as sampling the observation space for a training example. The same control serves two purposes.</td>
-  <td class="p">Training pipelines are outside the current scope. Trajectory export currently provides human-readable output only; a complete versioned format remains a candidate requiring separate design approval.</td>
-</tr>
-
-<tr><td colspan="4" style="background:#12110b;color:#4f8ef7;font-size:11px;letter-spacing:.16em;padding:8px 12px">Theme 2 · Adoption by other users</td></tr>
-<tr>
-  <td class="name">codex<br>openclaw</td>
-  <td><b>Import users’ data from other agents</b>. Codex has an approximately 16-thousand-line <code>external-agent-migration</code> crate that imports sessions, configuration and skills from other agents, including claude-code, and keeps <code>external_agent_session_imports.json</code> on disk. OpenClaw has <code>migrate-claude</code> and <code>migrate-hermes</code> as two extensions.</td>
-  <td>Feature completeness has received attention, but importing months of conversations and configuration from another tool has not. Migration support addresses an adoption problem through engineering.</td>
-  <td class="n"><b>Not implemented</b>. Session and configuration import remain candidates requiring separate design approval. Reading an external skills format is not an implemented migration.</td>
-</tr>
-<tr>
-  <td class="name">codex</td>
-  <td><b>A 105-entry feature registry with lifecycle stages</b>: <code>features/src/lib.rs</code> records each capability as Stable, UnderDevelopment, Experimental, Removed or Deprecated, with <code>default_enabled</code> for each entry. One third of shipped capabilities are disabled by default.</td>
-  <td>OpenProgram’s capabilities are distributed through the code, without one registry showing which capabilities ship in each version or depend on experimental switches. An earlier audit mistakenly classified Codex long-term memory as unimplemented because the complete subsystem was disabled by default.</td>
-  <td class="n"><b>Not implemented</b>. A unified feature registry remains a candidate requiring separate design approval.</td>
-</tr>
-<tr>
-  <td class="name">codebuddy</td>
-  <td><b>Five deployment profiles; prompts and tool authorization are data</b>: 109 prompt templates, per-agent tool allowlists and model allowlists reside in one <code>product.json</code>. SaaS, intranet, zero-trust, self-hosted and cloud-hosted deployments replace that file without changing code.</td>
-  <td>OpenProgram’s system-prompt components are Python functions, and tool authorization is in <code>agent.json</code>, but there is no replaceable deployment profile containing the complete configuration.</td>
-  <td class="p">Partly applicable. The component registry already supplies the structure; the missing part is externalizing the full set of values into one replaceable profile.</td>
-</tr>
-<tr>
-  <td class="name">opencode</td>
-  <td><b>Control plane: relocate sessions and Git changes within one project to another directory or worktree</b>, and <b>publish a session at a public URL</b> (incremental updates stream into a Durable Object and object storage; self-hosting is also supported).<span class="src">control-plane/move-session.ts · share/share-next.ts</span></td>
-  <td>OpenProgram treats sessions as local assets. Per-session Git repositories can support the design of local directory relocation and public sharing, but corresponding product entry points do not currently exist.</td>
-  <td class="y"><b>Evaluate local relocation and public sharing; cross-worker migration requires a separate protocol design</b>.</td>
-</tr>
-
-<tr><td colspan="4" style="background:#12110b;color:#e0445a;font-size:11px;letter-spacing:.16em;padding:8px 12px">Theme 3 · Agent trust</td></tr>
-<tr>
-  <td class="name">codebuddy</td>
-  <td><b>Intercept deletion below the tool layer</b>: put <code>rm</code>／<code>rmdir</code>／<code>unlink</code> replacements on PATH and load <code>sitecustomize.py</code> through PYTHONPATH to patch Python deletion APIs, redirecting deletion to a trash binary. Agent subprocesses are covered too.</td>
-  <td>OpenProgram covers common shell, Python and Node deletion entry points in local agent subprocesses bound to a session/turn. Unbound cron and background jobs, Docker, SSH, absolute-path commands, direct syscalls and disabled injection remain outside coverage.</td>
-  <td class="p"><b>Partially implemented</b>. Remaining coverage is still a candidate for assessment. This mechanism is not a complete security boundary.</td>
-</tr>
-<tr>
-  <td class="name">codex</td>
-  <td><b>execpolicy</b>: command allowlists use a dedicated small language, with rule files distributed to <code>~/.codex/rules/default.rules</code>, separate from the operating-system sandbox. It also has <b>guardian</b>, which uses an LLM to review approval prompts.</td>
-  <td>OpenProgram permission rules use string matching and fnmatch. They cannot express checks such as “the command’s third argument must not be an absolute path.” Reviewing approval decisions is also an unexplored question.</td>
-  <td class="p">Defer the DSL. A guardian is worth evaluating because it addresses the unresolved state in <code>Gate.ask</code> approval decisions.</td>
-</tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>Record sandbox capability separately from default behavior</b>: backends support Docker, Podman, SSH and OpenShell; <code>mode</code> accepts <code>off</code>／<code>non-main</code>／<code>all</code> and defaults to <code>off</code>. Docker mode defaults to no network, a read-only root filesystem, a non-root user and dropped capabilities. Official documentation also states that it is not a perfect security boundary.</td>
-  <td>The presence of a Docker backend does not imply isolation is enabled by default. Compare backend capability, activation scope, defaults and security guarantees separately.</td>
-  <td class="p">Consider Docker’s restrictive defaults without treating containers as a complete trust boundary. Acceptance must check both the default mode and actual launch arguments.</td>
-</tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>The extension marketplace and public Gateway are separate attack surfaces</b>: ClawHub allows anyone to publish skills, and malicious instruction-injection cases have occurred. Gateway has <code>CVE-2026-25253</code>.</td>
-  <td>OpenProgram skills and the owner-authenticated Gateway assume a single local user. A skill marketplace introduces untrusted publishers; a public service introduces remote attackers. Both change existing trust assumptions.</td>
-  <td class="y">A skill marketplace requires publisher identity, permission descriptions, scanning, takedown and installation confirmation. Public service exposure separately requires authentication, binding defaults, patch response and version upgrades; local-only assumptions cannot be reused.</td>
-</tr>
-<tr>
-  <td class="name">codebuddy</td>
-  <td><b>Measure AI-written code</b>: a Git HEAD watcher attributes and reports per-file agent versus human changes.</td>
-  <td>OpenProgram records tokens and costs, not output attribution. Enterprises may require the latter.</td>
-  <td class="p">Record locally before adding reporting. Per-turn Git commits already provide attribution data.</td>
-</tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>Trajectory export</b>: package the system prompt, tool definitions and every event after redaction, using a versioned format with 10 MB / 50 MB / 256 KB limits.<span class="src">src/trajectory/</span></td>
-  <td>OpenProgram exports sessions as Markdown or HTML with redaction enabled by default. Output is intended for human reading and truncates tool arguments and results. It does not yet package system prompts, complete tool definitions, runtime events, provider artifacts, usage/cache data and runtime settings into a versioned trajectory.</td>
-  <td class="p"><b>Partially implemented</b>. Complete structured trajectories remain an unconfirmed candidate.</td>
-</tr>
-
-<tr><td colspan="4" style="background:#12110b;color:#5aad4e;font-size:11px;letter-spacing:.16em;padding:8px 12px">Theme 4 · Proactivity and testing</td></tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>Automations + Heartbeat</b>: Automations support cron, fixed intervals and one-time tasks, delivering results to chat channels or webhooks. Heartbeat runs a proactive main-session turn every 30 minutes by default and reports only noteworthy items.</td>
-  <td>OpenProgram Scheduler persistently registers one-time, recurring and monitoring tasks, with signed execution, retries, recovery and a persistent worker. It runs agent prompts or controlled commands. It has no result-delivery protocol for chat channels or webhooks, and no default main-session heartbeat with importance filtering.</td>
-  <td class="p"><b>Two independent scopes remain</b>: a Scheduler result-delivery protocol, and a main-session heartbeat with frequency, quiet-period and filtering rules. Both require separate design approval.</td>
-</tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>Commitment tracking</b>: extract implicit commitments from chat into typed entries (agreements, deadlines, concerns and unfinished work), using a confidence threshold of 0.86 and at most three proactive messages per day. Heartbeat and one-time startup actions are separate proactive paths.<span class="src">src/commitments/</span></td>
-  <td>OpenProgram’s proactive layer executes explicitly registered external events or Scheduler tasks. Ordinary conversation content does not currently create future actions automatically.</td>
-  <td class="p">Automatic commitment extraction would need a confidence threshold, daily message limit, revocation mechanism and false-trigger handling. Implementation is not currently approved.</td>
-</tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>Dreaming</b>: background processing extracts entries above a score threshold from daily notes in <code>memory/YYYY-MM-DD.md</code> and promotes them to <code>MEMORY.md</code>. An automatic pre-compaction memory flush separately saves information suitable for long-term retention.</td>
-  <td>OpenProgram memory has nightly <code>reorganize()</code>, but no explicit scored promotion lifecycle from daily notes into core memory. Pre-compaction extraction and background organization are distinct stages.</td>
-  <td class="p">Continue comparing this as a layered-memory mechanism. Define scoring thresholds, automatic-write attribution and pre-compaction failure semantics together.</td>
-</tr>
-<tr>
-  <td class="name">openclaw</td>
-  <td><b>Nodes expose remote device capabilities as tools</b>: macOS, iOS, watchOS and Android have native nodes. Mobile nodes expose sensors, calendars and notifications; Android can use accessibility services for device control, while macOS provides <code>computer.act</code> desktop automation.</td>
-  <td>OpenProgram channels only exchange messages; they do not register another device’s capabilities as agent tools. A node protocol and a native mobile application are separate choices. Declining to build a mobile app does not imply excluding remote-device tools.</td>
-  <td class="p">A node protocol warrants a separate design. A native app is not a prerequisite; select device capabilities individually according to permissions, revocable authorization and platform cost.</td>
-</tr>
-<tr>
-  <td class="name">pi-mono</td>
-  <td><b>Scripted provider + HTTP record/replay</b>: a fully registered simulated model emits scripted text, reasoning and tool calls with configurable chunk sizes. HTTP and WebSocket record/replay stores recordings in test fixtures.</td>
-  <td>OpenProgram has a test-only scripted provider that uses normal registration to drive text, reasoning, tool calls, errors and multi-turn responses, including real <code>agent_loop</code> tool-result feedback. It is not a shipped production provider.</td>
-  <td class="p"><b>Partially implemented</b>. Shipping a production provider requires separate design approval.</td>
-</tr>
-<tr>
-  <td class="name">pi-mono</td>
-  <td><b>Switch providers within a session</b>: normalize reasoning-block signatures and tool-call IDs so the same history can continue across providers. A separate extension creates a new session using a generated handoff prompt.</td>
-  <td>OpenProgram Web/TUI can switch models in the same session. <code>providers/shared/transform_messages.py</code> normalizes cross-protocol messages, reasoning blocks and tool-call IDs; tests cover cross-provider tool-call history. This differs from a handoff-prompt extension that creates a new session.</td>
-  <td class="y"><b>Same-session cross-provider continuation is implemented</b>; a separate new-session handoff workflow is not required by this contract.</td>
-</tr>
+<h3 id="exec">Four execution models</h3>
+<table class="stack">
+<thead><tr><th scope="col">Model</th><th scope="col">Shape</th><th scope="col">Examples and state</th></tr></thead>
+<tbody>
+<tr><th scope="row">Single process</th><td>Terminal, agent loop, model. Exits when done</td><td>pi-mono: JSONL session tree, parentId links, leaf is current. weclaw: forwards to an external ACP agent</td></tr>
+<tr><th scope="row">Local client and server</th><td>TUI client over RPC to an HTTP server in a worker</td><td>opencode only: SQLite and Drizzle, messages in a seq log, system-context snapshots in an epoch table</td></tr>
+<tr><th scope="row">Persistent daemon</th><td>Channels, Web and TUI share one process with session routing and a registry</td><td>OpenProgram: append-only log per session. hermes-agent, codex: SQLite. openclaw. claude-code: JSONL per project</td></tr>
+<tr><th scope="row">Remote execution</th><td>Local session, remote or cloud commands</td><td>codex: remote and cloud tasks. claude-code: cloud teleport. openclaw: optional cloud workers, managed worktrees. hermes: seven backends. OpenProgram: <code translate="no">docker.py</code>, <code translate="no">ssh.py</code> backends, no sandbox integration or hosted service</td></tr>
+</tbody>
 </table>
-</div>
 
-<div class="note green">
-  <b>Current boundary</b>: the test-only scripted provider exercises the real agent loop; sessions support redacted Markdown/HTML exports by default; the same session can continue across providers. A shipped scripted provider and versioned structured trajectories containing full runtime events, provider artifacts, usage and settings remain candidates. This page does not authorize implementation.
-</div>
+<h3 id="matrix">By dimension</h3>
+<table class="stack"><thead><tr><th scope="col">Dimension</th><th scope="col">OpenProgram</th><th scope="col">Standing</th></tr></thead><tbody>
+<tr><th scope="row">Product form</th><td>General-purpose harness</td><td>—</td></tr>
+<tr><th scope="row">Target user</th><td>Single local user</td><td>—</td></tr>
+<tr><th scope="row">Execution model</th><td>Persistent worker</td><td>Comparable</td></tr>
+<tr><th scope="row">State storage</th><td>Append-only log per session</td><td>Ahead</td></tr>
+<tr><th scope="row">Context assembly</th><td>L0/L1/L2 component registry</td><td>Ahead</td></tr>
+<tr><th scope="row">Project instructions</th><td>AGENTS.md in agent workspace</td><td>Comparable</td></tr>
+<tr><th scope="row">Tool surface</th><td>Dynamic registry; persistent presets + deferred tool_search catalog</td><td>Comparable</td></tr>
+<tr><th scope="row">Permission approval</th><td>Five modes + rules + tool.before gate</td><td>Comparable</td></tr>
+<tr><th scope="row">Extensions</th><td>Plugins + skills + MCP client + 34 events</td><td>Comparable</td></tr>
+<tr><th scope="row">Channels</th><td>Four</td><td>Behind</td></tr>
+<tr><th scope="row">Interfaces</th><td>TUI + Web + Electron</td><td>Comparable</td></tr>
+<tr><th scope="row">External interfaces</th><td>Authenticated stdio MCP server + ACP; no stable remote SDK</td><td>Comparable</td></tr>
+<tr><th scope="row">Observability and billing</th><td>Append-only ledger with cache reads/writes and itemized costs</td><td>Comparable</td></tr>
+</tbody></table>
+<details><summary>The other seven, by dimension</summary>
+<table class="stack"><thead><tr><th scope="col">Dimension</th><th scope="col">claude-code</th><th scope="col">codex</th><th scope="col">opencode</th><th scope="col">pi-mono</th></tr></thead><tbody>
+<tr><th scope="row">Product form</th><td>Coding CLI + cloud</td><td>Coding CLI + cloud</td><td>Coding CLI + SaaS services</td><td>Coding TUI + library</td></tr>
+<tr><th scope="row">Target user</th><td>Individual, subscription or enterprise</td><td>Individual; seven configuration layers</td><td>Individual developer</td><td>Single local user</td></tr>
+<tr><th scope="row">Execution model</th><td>In-process + background supervisor + cloud VMs</td><td>In-process + App Server + cloud</td><td>Local client/server separation</td><td>Single process</td></tr>
+<tr><th scope="row">State storage</th><td>JSONL files per project</td><td>Rollout JSONL + five SQLite databases</td><td>SQLite + Drizzle</td><td>JSONL session tree</td></tr>
+<tr><th scope="row">Context assembly</th><td>Stable content first for prompt caching</td><td>Per-model prompts compiled into the binary</td><td>13 model-specific prompt sets</td><td>Prompt restricted to enabled tools</td></tr>
+<tr><th scope="row">Project instructions</th><td>Four CLAUDE.md levels, including system-wide</td><td>AGENTS.md accumulated below Git root</td><td>Global + project; first match</td><td>All ancestor directories</td></tr>
+<tr><th scope="row">Tool surface</th><td>About 45 in the official reference, many conditional; ToolSearch</td><td>About 28; code mode can reduce to two</td><td>16; model-dependent apply_patch</td><td>Seven; three disabled by default</td></tr>
+<tr><th scope="row">Permission approval</th><td>Six modes: default/acceptEdits/plan/auto/dontAsk/bypassPermissions</td><td>Four, including Granular; execpolicy DSL</td><td>Ask by default; Bash command tokenization</td><td>None; tool allowlist only</td></tr>
+<tr><th scope="row">Extensions</th><td>Plugin marketplace + 33 hook events; command count undocumented</td><td>Plugin marketplace + 11 hooks; model can self-install</td><td>Plugins with 19 hooks; can render inside TUI</td><td>About 40 events + package manager; no MCP</td></tr>
+<tr><th scope="row">Channels</th><td>Remote Control, Slack; Telegram, Discord and iMessage channels in research preview</td><td>Slack integration; depends on cloud account and workspace configuration</td><td>GitHub + Slack + ACP + two IDEs</td><td>None</td></tr>
+<tr><th scope="row">Interfaces</th><td>Terminal UI + Vim + voice dictation</td><td>ratatui; IDE context over sockets</td><td>OpenTUI + Web + Electron</td><td>Custom TUI framework that can run DOOM</td></tr>
+<tr><th scope="row">External interfaces</th><td>Agent SDK + Remote Control</td><td>App Server + Python/TypeScript SDK; <code translate="no">codex mcp-server</code> deprecated</td><td>HTTP service + JS SDK + ACP</td><td>RPC mode + JSON mode + SDK</td></tr>
+<tr><th scope="row">Observability and billing</th><td>OTel; print-mode budget cap and spend limits</td><td>OTel + analytics; tokens but no currency amounts</td><td>OTel + data lake; stats command</td><td>Optional installation counts; scripted cost aggregation</td></tr>
+</tbody></table>
+<table class="stack"><thead><tr><th scope="col">Dimension</th><th scope="col">openclaw</th><th scope="col">hermes-agent</th><th scope="col">weclaw</th></tr></thead><tbody>
+<tr><th scope="row">Product form</th><td>Multichannel gateway platform</td><td>Personal assistant + research harness</td><td>WeChat relay</td></tr>
+<tr><th scope="row">Target user</th><td>Single operator; multiple channel users</td><td>Individual; pairing codes for strangers</td><td>Individual; no authentication</td></tr>
+<tr><th scope="row">Execution model</th><td>Gateway + paired devices, opt-in cloud workers and managed worktrees</td><td>In-process + gateway daemon</td><td>Forwarding daemon</td></tr>
+<tr><th scope="row">State storage</th><td>Per-agent SQLite for runtime state and transcripts; JSONL only for archives or legacy migration</td><td>SQLite + FTS5</td><td>In memory; lost on restart</td></tr>
+<tr><th scope="row">Context assembly</th><td>Workspace files + bootstrap budget</td><td>Three layers: stable/context/volatile</td><td>None</td></tr>
+<tr><th scope="row">Project instructions</th><td>Workspace AGENTS/SOUL/TOOLS</td><td>Four formats + subdirectory guidance</td><td>None</td></tr>
+<tr><th scope="row">Tool surface</th><td>About 35 in 11 groups; tool_search</td><td>About 82; 32 toolsets</td><td>Zero</td></tr>
+<tr><th scope="row">Permission approval</th><td>Layered restrictions; approval cards in chat</td><td>55 dangerous patterns; auxiliary-LLM auto-approval</td><td>Automatically approve all</td></tr>
+<tr><th scope="row">Extensions</th><td>126 plugins + 59 skills + ClawHub</td><td>20 hooks + shell-script hooks + 178 skills</td><td>Configuration file only</td></tr>
+<tr><th scope="row">Channels</th><td>Ten native channels; over 20 plugin channels</td><td>About 26, plus webhooks and cron</td><td>One</td></tr>
+<tr><th scope="row">Interfaces</th><td>TUI + control panel + macOS/iOS/watchOS/Android nodes</td><td>Ink TUI + React Web</td><td>Terminal only</td></tr>
+<tr><th scope="row">External interfaces</th><td>Three MCP server forms + OpenAI compatibility + 74 RPCs</td><td>MCP server + OpenAI compatibility + ACP</td><td>Local HTTP push</td></tr>
+<tr><th scope="row">Observability and billing</th><td>Trace export + OTel + Prometheus</td><td>Log redaction + Langfuse; provider quota retrieval</td><td>One log file</td></tr>
+</tbody></table>
+</details>
+<p class="note">OpenProgram, OpenClaw and Hermes all serve multiple entry points from persistent services. Remaining gaps: channel breadth, stable remote SDK, OpenAI-compatible endpoint, cross-worker session placement, complete versioned headless event contract. Unpinned star, fork and skill counts are not evidence.</p>
 
-<h3 id="ours">2.5 Three distinctive mechanisms and their closest counterparts</h3>
-<p class="lead">Distinctiveness matters only when it provides an additional capability. Two of these mechanisms do so; the third is currently distinctive mainly in its organization.</p>
-<div class="tbl">
-<table class="wide">
-<tr><th>OpenProgram mechanism</th><th>Definition</th><th>Closest counterpart</th><th>Resulting capability</th></tr>
-<tr class="us">
-  <td class="name">Session DAG<br>Branches are head pointers</td>
-  <td>One graph, three node roles (user/llm/code), two edges (caller/predecessor). Each session uses a Git repository; history JSON nodes can be created, have output/metadata backfilled, or be deleted under a lock. <code>meta.json</code> uses CAS for the current head and optional branch refs; title/archive updates use lock-protected atomic replacement. The system does not maintain a mutable complete transcript snapshot.</td>
-  <td><b>OpenClaw</b> Control UI provides transcript fork, rewind and branch. <b>pi-mono</b> JSONL records carry <code>parentId</code>, <code>/tree</code> switches branches and summarizes abandoned branches. <b>opencode</b> fork creates a new session; <b>codex</b> agent graph records agent relationships.</td>
-  <td class="y">OpenProgram’s confirmed distinction combines transcript branches, a unified user/llm/code DAG and per-session Git storage. OpenClaw and pi-mono already support transcript branching; this capability cannot be attributed only to OpenProgram and pi-mono. OpenProgram does not automatically create a worktree per transcript branch. File isolation applies only to jobs explicitly bound to <code>worktree_id</code>.</td>
-</tr>
-<tr class="us">
-  <td class="name">Agent method<br>Workflows implemented as code</td>
-  <td>A Python decorator. With session DAG recording enabled, calls other than <code>expose=hidden</code> that persist successfully become code nodes in the session DAG, sharing edges and the same Git repository with user messages, model messages and tool results.</td>
-  <td>No direct counterpart. <b>pi-mono</b> extensions, <b>opencode</b> <code>tool/*.ts</code>, <b>hermes</b> skills can register new tools, but their histories expose tool inputs and returns rather than internal execution steps.<br>The complementary approach is <b>Codex code mode</b>: the model writes code to invoke tools during the turn.</td>
-  <td class="y">Successfully persisted internal steps can be reviewed with the conversation. Top-level manual functions can produce sibling branches through Retry/Edit. State restoration or replay from arbitrary nested steps is not implemented.</td>
-</tr>
-<tr class="us">
-  <td class="name">Four-domain collaboration tools<br>todo／task／agent／message</td>
-  <td>Four nouns define four domains: todo for plans, task for running work, agent for executors and message for communication. Each tool operates only on the noun in its domain, making naming systematic.</td>
-  <td>Other frameworks provide these capabilities without domain-based naming. <b>opencode</b> uses <code>task</code> plus <code>todowrite</code>; <b>hermes</b> uses <code>delegate</code> and a board; <b>claude-code</b> uses Task/TaskOutput/SendMessage/Brief; <b>codebuddy</b> includes TaskCreate/Get/Update/List/Stop/Output among its 44 tools without separating domains.</td>
-  <td class="p">The distinction is <b>in naming</b>, not capability. A separate comparison establishes the substantive difference: among eight references, only OpenProgram limits subagent tools by remaining message budget; its loop-prevention mechanisms are as extensive as OpenClaw’s.<span class="src">See runtime/collaboration/agent-collab-comparison.html</span></td>
-</tr>
+<h2 id="more">Separate pages</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Page</th><th scope="col">Contents</th></tr></thead>
+<tbody>
+<tr id="blind"><th scope="row"><a href="framework-capability-differences.html#blind">Missing capabilities</a></th><td>What the twelve have that subsystem comparisons missed</td></tr>
+<tr id="ours"><th scope="row"><a href="framework-capability-differences.html#ours">Distinctive mechanisms</a></th><td>What OpenProgram has, and its closest counterparts</td></tr>
+<tr id="cn"><th scope="row"><a href="framework-capability-differences.html#cn">Four Chinese CLIs</a></th><td>What each Tencent CLI changes from upstream</td></tr>
+</tbody>
 </table>
-</div>
 
-<!-- ══════════════════════════ LAYER 3 ══════════════════════════ -->
-<h2 id="plan"><span class="num">03</span>Candidate state<span class="ly ly3">Pending confirmation</span></h2>
-<p class="lead">The following six items retain their original candidate scope while updating current implementation status. They do not authorize implementation. Remaining work requires separate design, estimation and approval; this page does not add an implementation plan.</p>
-<div class="tbl">
-<table class="wide">
-<tr><th>ID</th><th>Item and current status</th><th>Verified boundary</th><th>Current location</th></tr>
-<tr>
-  <td class="name">1</td>
-  <td><b>Scripted provider: partially implemented</b>. The test-only implementation emits scripted text, reasoning, tool calls, errors and multi-turn responses.</td>
-  <td>Normal provider registration already exercises the real <code>agent_loop</code> and tool-result feedback. A shipped production provider is neither implemented nor approved.</td>
-  <td class="src">tests/component/providers/scripted_provider.py · test_scripted_provider.py</td>
-</tr>
-<tr>
-  <td class="name">2</td>
-  <td><b>MCP server: implemented</b>. The CLI provides an authenticated stdio server exposing allowed OpenProgram tools.</td>
-  <td>It reuses existing tool registration, permission modes and allow-pattern mapping. A stable remote SDK, OpenAI-compatible endpoint and inbound webhooks are outside this implementation.</td>
-  <td class="src">openprogram/extensions/mcp/server/server.py · openprogram/interfaces/cli/commands/mcp.py</td>
-</tr>
-<tr>
-  <td class="name">3</td>
-  <td><b>Trajectory export: partially implemented</b>. Sessions export as Markdown or HTML with redaction enabled by default.</td>
-  <td>Current formats serve human reading and truncate tool arguments and results. System prompts, complete tool definitions, runtime events, provider artifacts, usage/cache data and runtime settings are not yet combined into a versioned structured package.</td>
-  <td class="src">openprogram/state/store/session/export.py</td>
-</tr>
-<tr>
-  <td class="name">4</td>
-  <td><b>Recoverable deletion: partially implemented</b>. Local agent subprocesses bound to a session/turn have interception for common shell, Python and Node deletion operations, a manifest and <code>trash list/restore</code>.</td>
-  <td>Unbound cron and background jobs, Docker, SSH, absolute-path commands, direct syscalls and disabled injection remain outside coverage. This is not a complete security boundary.</td>
-  <td class="src">openprogram/host/sandbox/recoverable_delete.py · openprogram/interfaces/cli/commands/trash.py</td>
-</tr>
-<tr>
-  <td class="name">5</td>
-  <td><b>Feature registry and default stages: not implemented</b>.</td>
-  <td>No unified runtime feature registry records each capability’s stage and default switch. The candidate requires separate design approval.</td>
-  <td class="src">No unified feature registry</td>
-</tr>
-<tr>
-  <td class="name">6</td>
-  <td><b>External agent session/configuration import: not implemented</b>.</td>
-  <td>Existing external-CLI credential discovery does not migrate sessions, configuration, skills or history. The candidate requires separate design approval.</td>
-  <td class="src">No external session/config importer</td>
-</tr>
+<h2 id="plan">Candidates</h2>
+<table class="stack">
+<thead><tr><th scope="col">Item</th><th scope="col">State</th><th scope="col">Where</th></tr></thead>
+<tbody>
+<tr><th scope="row">Scripted provider</th><td>Partial: test-only</td><td><code translate="no">tests/component/providers/scripted_provider.py</code></td></tr>
+<tr><th scope="row">MCP server</th><td>Done: authenticated stdio, allowed tools only, existing registration, permission modes and allow patterns. No remote SDK, OpenAI-compatible endpoint or inbound webhooks</td><td><code translate="no">extensions/mcp/server/server.py</code>, <code translate="no">interfaces/cli/commands/mcp.py</code></td></tr>
+<tr><th scope="row">Trajectory export</th><td>Partial: Markdown or HTML, redacted</td><td><code translate="no">state/store/session/export.py</code></td></tr>
+<tr><th scope="row">Recoverable deletion</th><td>Partial: <code translate="no">trash list</code>, <code translate="no">trash restore</code>, manifest</td><td><code translate="no">host/sandbox/recoverable_delete.py</code>, <code translate="no">interfaces/cli/commands/trash.py</code></td></tr>
+<tr><th scope="row">Feature registry and default stages</th><td>Not implemented</td><td>None</td></tr>
+<tr><th scope="row">External session and configuration import</th><td>Not implemented. External-CLI credential discovery migrates none of this</td><td>None</td></tr>
+</tbody>
 </table>
-</div>
-<div class="note orange">
-  <b>Explicit exclusions</b>: training-data pipelines (OpenProgram does not train models), a native mobile app (not a prerequisite for node protocols or remote-device tools), a complete formatter collection and a new execpolicy-style argument-semantics DSL. Existing ToolName prefix/glob/exact rules and Python/TypeScript LSP diagnostics, references and definition tools remain; additional languages depend on concrete demand.
-</div>
+<p class="note">Remaining work needs separate design, estimation and approval. Excluded: training-data pipelines, a native mobile app, a complete formatter collection, a new execpolicy-style argument DSL. ToolName prefix, glob and exact rules and the Python and TypeScript LSP tools stay; more languages follow concrete demand.</p>
 
-<!-- ══════════════════════════ LAYER 4 ══════════════════════════ -->
-<h2 id="ideal"><span class="num">04</span>Target state<span class="ly ly4">Target</span></h2>
-<p class="lead">Three framework-level targets correspond to the three opening questions.</p>
-<div class="three">
-  <div class="q" style="border-top-color:#5aad4e">
-    <div class="k">Complete the strongest capability</div>
-    <h4>A session is portable, shareable and reproducible</h4>
-    <p>A session is already a Git repository containing a complete graph. The target is to transfer that repository to another machine for continuation, publish a redacted version for others to inspect, and branch again from any node. All three operations use the same representation rather than three export formats.</p>
-  </div>
-  <div class="q" style="border-top-color:#4f8ef7">
-    <div class="k">Complete external control</div>
-    <h4>Other programs can operate OpenProgram through stable contracts</h4>
-    <p>MCP server and ACP already provide standard local entry points. The target additionally requires a stable versioned remote-control contract and external session/configuration import. These latter capabilities remain unapproved candidates.</p>
-  </div>
-  <div class="q" style="border-top-color:#9d6fe0">
-    <div class="k">Systematically identify missing capabilities</div>
-    <h4>One capability registry and one reproducible execution record</h4>
-    <p>Each capability has a registry entry recording its stage and default switch; every run can export a redacted complete trajectory. The registry makes supported behavior explicit, while trajectories make failures reproducible for others. Both are needed as complexity grows.</p>
-  </div>
-</div>
-
-<!-- ══════════════════════════ Method ══════════════════════════ -->
-<h2 id="method"><span class="num">05</span>Evidence collection and status</h2>
-<p class="lead">Major product capabilities were checked against official stable releases on 2026-09-01. Source structure, line counts and installed Chinese packages use fixed local versions. The table distinguishes these evidence types.</p>
-<div class="tbl">
-<table>
-<tr><th>Reference</th><th>Evidence source</th><th>Date</th><th>Notes</th></tr>
-<tr><td class="name">OpenProgram</td><td><code>integrated candidate@d91c3e66</code> code, CLI/Web/TUI entry points and corresponding tests</td><td>2026-09-01</td><td>MCP server, ACP, LSP, mid-turn steering, Scheduler, cross-session agent provenance, session export, cross-provider history compatibility and recoverable deletion were checked against current implementation boundaries. Design-only candidates are not marked complete.</td></tr>
-<tr><td class="name">claude-code</td><td class="p"><a href="https://github.com/anthropics/claude-code/releases/tag/v2.1.252">Official stable release <code>v2.1.252</code></a> and <a href="https://code.claude.com/docs/en/overview">official documentation</a></td><td>2026-09-01</td><td>Older reference source and local <code>2.1.226</code> supplement internal implementation evidence only; current public capabilities follow official stable-release evidence.</td></tr>
-<tr><td class="name">codex</td><td class="p"><a href="https://github.com/openai/codex/releases/tag/rust-v0.152.0">Official stable release <code>rust-v0.152.0</code></a> and <a href="https://learn.chatgpt.com/docs">official documentation</a></td><td>2026-09-01</td><td>Worktrees, cloud, Web, GitHub, Slack, Automations, import and App Server/SDK count as official public capabilities. Older local source only supplements internal structure.</td></tr>
-<tr><td class="name">openclaw</td><td><a href="https://github.com/openclaw/openclaw/releases/tag/v2026.8.1">Official stable release <code>v2026.8.1</code></a> and <a href="https://docs.openclaw.ai/">official documentation</a></td><td>2026-09-01</td><td>session SQLite/search/archive, paired devices, <a href="https://docs.openclaw.ai/gateway/cloud-workers">cloud workers requiring explicit profile configuration</a>, managed worktrees, Control UI and Workboard were checked against documentation for the corresponding release.</td></tr>
-<tr><td class="name">opencode</td><td><a href="https://github.com/anomalyco/opencode/releases/tag/v1.18.25">Official stable release <code>v1.18.25</code></a>, tag-pinned source and <a href="https://opencode.ai/docs/">official documentation</a></td><td>2026-09-01</td><td>Scout has a documentation/source discrepancy and remains unconfirmed in stable source. Worktree core exists, but routing remains experimental.</td></tr>
-<tr><td class="name">Four other references</td><td><code>references/</code> fixed source: Hermes, pi-mono, weclaw and the pi-ai protocol reference</td><td>Fixed version</td><td>Not claimed to be the latest releases; capability conclusions are limited to the specified evidence.</td></tr>
-<tr><td class="name">Four Chinese projects</td><td>Local<code>~/.npm-global/lib/node_modules/</code> npm packages; inspect <code>dist/</code>bundled artifacts</td><td>2026-08</td><td>The first three are wrappers whose changes focus on environment and configuration; the Gemini variant is a source fork.</td></tr>
-<tr><td class="name">Trae</td><td class="n">Implementation unavailable</td><td>—</td><td>Not installed locally; absent from <code>/Applications</code>, application-support directories, and VS Code/Cursor extension directories. No speculation.</td></tr>
+<h2 id="ideal">Target</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Goal</th><th scope="col">Target</th></tr></thead>
+<tbody>
+<tr><th scope="row">A session is portable, shareable and reproducible</th><td>The session log already holds the whole graph. Transfer it to another machine, publish it redacted, branch from any node: one representation, not three export formats.</td></tr>
+<tr><th scope="row">Other programs operate OpenProgram through stable contracts</th><td>MCP server and ACP exist. Still needed and unapproved: a stable versioned remote-control contract and external session and configuration import.</td></tr>
+<tr><th scope="row">One capability registry, one reproducible record</th><td>Each capability has a stage and default switch; every run can export a redacted complete trajectory.</td></tr>
+</tbody>
 </table>
-</div>
 
-<div class="note">
-  Official pages supporting changed Claude Code, Codex, OpenClaw and OpenCode assessments are listed in <a href="feature-matrix.html#current-evidence">the feature matrix’s current official evidence table</a>. This page does not duplicate that evidence list.
-</div>
+<h2 id="method">Evidence</h2>
 
-<h3 id="disagree">Differences within fixed local evidence</h3>
-<div class="tbl">
-<table class="wide">
-<tr><th>Item</th><th>Older reference source</th><th>Fixed local binary</th><th>Use</th></tr>
-<tr>
-  <td class="name">claude-code subagent depth limit</td>
-  <td>Switch absent from the source tree</td>
-  <td class="y">Present; defaults to three, supports environment override and staged rollout<span class="src">2.1.226 near @249432727</span></td>
-  <td>Supplementary internal evidence; current public capabilities use <code>v2.1.252</code> official evidence</td>
-</tr>
-<tr>
-  <td class="name">claude-code per-agent tool filtering</td>
-  <td>Filtering exists but excludes depth</td>
-  <td class="y">The filtering function directly receives <code>agentDepth</code> and exposes subagent-dispatch tools only below the depth limit. Three constant tables separately govern ordinary agents, asynchronous agents and coordinator mode.<span class="src">@256834891 · @75243888 · @75243840 · @75243792</span></td>
-  <td>Supplementary internal evidence; current public capabilities use <code>v2.1.252</code> official evidence</td>
-</tr>
-<tr>
-  <td class="name">claude-code Slack</td>
-  <td>Only a marketplace installation link</td>
-  <td class="y">Complete Slack conversation interface, including bot/human-turn validation and channel search<span class="src">@78014240 · @106577664 · @106582768 · @70680752</span></td>
-  <td>Supplementary internal evidence; current public capabilities use <code>v2.1.252</code> official evidence</td>
-</tr>
-<tr>
-  <td class="name">claude-code artifact publication</td>
-  <td>Entirely absent</td>
-  <td class="y">Complete system: plan artifacts published as hosted HTML with script-hash allowlists, plus a separate artifact tool and feature switches<span class="src">@75228592 · @75228672 · @75228896 · @75229360 · @75180658</span></td>
-  <td>Supplementary internal evidence; current public capabilities use <code>v2.1.252</code> official evidence</td>
-</tr>
-<tr>
-  <td class="name">claude-code scheduling and external triggers</td>
-  <td>None</td>
-  <td class="y">Three scheduling tools, one remote-trigger tool and tools for self-hosted CI<span class="src">@75240320</span></td>
-  <td>Supplementary internal evidence; current public capabilities use <code>v2.1.252</code> official evidence</td>
-</tr>
-<tr>
-  <td class="name">Codex long-term memory</td>
-  <td colspan="2" class="p">A complete subsystem in source (two-stage read/write pipeline and its own database), marked Stable in the feature registry but <code>default_enabled: false</code>. Looking only at default behavior would incorrectly suggest it is absent; an earlier assessment made this error.</td>
-  <td>Count as present</td>
-</tr>
-</table>
-</div>
+<table class="stack"><thead><tr><th scope="col">Reference</th><th scope="col">Evidence</th><th scope="col">Notes</th></tr></thead><tbody>
+<tr><th scope="row">OpenProgram</th><td>Current code, CLI, Web and TUI entry points and their tests</td><td>MCP server, ACP, LSP, mid-turn steering, Scheduler, cross-session agent provenance, session export, cross-provider history compatibility and recoverable deletion were checked against current implementation boundaries. Design-only candidates are not marked complete.</td></tr>
+<tr><th scope="row">claude-code</th><td><a href="https://github.com/anthropics/claude-code/releases/tag/v2.1.252">Official stable release <code translate="no">v2.1.252</code></a> and <a href="https://code.claude.com/docs/en/overview">official documentation</a></td><td>Only public documentation and releases are used; anything they do not describe is treated as undocumented.</td></tr>
+<tr><th scope="row">codex</th><td><a href="https://github.com/openai/codex/releases/tag/rust-v0.152.0">Official stable release <code translate="no">rust-v0.152.0</code></a> and <a href="https://learn.chatgpt.com/docs">official documentation</a></td><td>Worktrees, cloud, Web, GitHub, Slack, Automations, import and App Server/SDK count as official public capabilities. Older local source only supplements internal structure.</td></tr>
+<tr><th scope="row">openclaw</th><td><a href="https://github.com/openclaw/openclaw/releases/tag/v2026.8.1">Official stable release <code translate="no">v2026.8.1</code></a> and <a href="https://docs.openclaw.ai/">official documentation</a></td><td>session SQLite/search/archive, paired devices, <a href="https://docs.openclaw.ai/gateway/cloud-workers">cloud workers requiring explicit profile configuration</a>, managed worktrees, Control UI and Workboard were checked against documentation for the corresponding release.</td></tr>
+<tr><th scope="row">opencode</th><td><a href="https://github.com/anomalyco/opencode/releases/tag/v1.18.25">Official stable release <code translate="no">v1.18.25</code></a>, tag-pinned source and <a href="https://opencode.ai/docs/">official documentation</a></td><td>Scout has a documentation/source discrepancy and remains unconfirmed in stable source. Worktree core exists, but routing remains experimental.</td></tr>
+<tr><th scope="row">Four other references</th><td><code translate="no">references/</code> fixed source: Hermes, pi-mono, weclaw and the pi-ai protocol reference</td><td>Not claimed to be the latest releases; capability conclusions are limited to the specified evidence.</td></tr>
+<tr><th scope="row">Four Chinese projects</th><td>Local<code translate="no">~/.npm-global/lib/node_modules/</code> npm packages; inspect <code translate="no">dist/</code>bundled artifacts</td><td>The first three are wrappers whose changes focus on environment and configuration; the Gemini variant is a source fork.</td></tr>
+<tr><th scope="row">Trae</th><td>Implementation unavailable</td><td>Not installed locally; absent from <code translate="no">/Applications</code>, application-support directories, and VS Code/Cursor extension directories. No speculation.</td></tr>
+</tbody></table>
+<p class="note">Official pages behind changed assessments: <a href="feature-matrix.html#current-evidence">feature matrix evidence</a>.</p>
+<h3 id="disagree">Source discrepancies</h3>
+<table class="stack"><thead><tr><th scope="col">Item</th><th scope="col">Source</th><th scope="col">Assessment</th></tr></thead><tbody>
+<tr><th scope="row">Codex long-term memory</th><td>A complete subsystem in source (two-stage read/write pipeline and its own database), marked Stable in the feature registry but <code translate="no">default_enabled: false</code>. Looking only at default behavior would incorrectly suggest it is absent; an earlier assessment made this error.</td><td>Counts as present. A default-off subsystem still exists; an earlier assessment missed it.</td></tr>
+</tbody></table>
 
-<h3 id="status">Implementation status of this page</h3>
-<p class="lead">Layer 1 checks OpenProgram against the integration candidate. Layer 2 checks four major products’ public capabilities against official stable releases on 2026-09-01, while code counts and internal details remain tied to fixed local versions. Layer 3 updates six candidates; layer 4 describes a target not yet fully achieved.</p>
-<div class="tbl">
-<table>
-<tr><th>Item</th><th>Status</th><th>Location</th></tr>
-<tr><td>Architecture diagrams, code size, twelve-dimension matrix, four Chinese projects, missing-capability inventory and distinctive mechanisms</td><td class="p">Capabilities checked against the versions above; code size and internal structure represent fixed local versions only</td><td class="src">Official stable-release evidence plus fixed references/ and local packages, as listed above</td></tr>
-<tr><td>Six layer-3 candidates and three layer-4 targets</td><td class="p">Candidates are not approvals; the target state is not fully implemented</td><td class="src">See the scope of each layer-3 row</td></tr>
-<tr><td>MCP server</td><td class="y">Implemented</td><td class="src">openprogram/extensions/mcp/server/server.py · openprogram/interfaces/cli/commands/mcp.py</td></tr>
-<tr><td>Scripted provider, trajectory export and recoverable deletion</td><td class="p">Partially implemented</td><td class="src">tests/component/providers/scripted_provider.py · store/session/export.py · sandbox/recoverable_delete.py</td></tr>
-<tr><td>Feature registry and external agent session/configuration import</td><td class="n">Not implemented; separate design approval required</td><td class="src">No unified feature registry or external session/config importer</td></tr>
-</table>
-</div>
-
-<div class="note">
-  <b>Relationship to other documents</b>.<a href="framework-overview.html">framework-overview</a> explains how a conversation runs inside OpenProgram without comparing other systems. This page compares whole frameworks without repeating internal mechanisms.<a href="feature-matrix.html">feature-matrix</a> compares the same twelve references using a <b>feature inventory</b> (feature switches, commands, tools, shipped agents, help text and runtime catalogs). Its 160-entry canonical table currently identifies 56 candidate differences. The two pages use different evidence units, so their counts cannot be combined directly. Subsystem comparisons have separate documents: sandboxing in <a href="runtime/sandbox.html">runtime/sandbox</a> (<a href="runtime/security/sandbox-architecture.html">diagram</a>), agent collaboration in <a href="runtime/collaboration/agent-collab-comparison.html">agent-collab-comparison</a>, long-term memory in <a href="memory/comparison.html">memory-comparison</a> and <a href="memory/adoption.html">memory-adoption</a>, multi-user conversation identity in <a href="memory/speaker-identity.html">speaker-identity</a>, chat attachments in <a href="ui/chat/chat-attachments.html">chat-attachments</a>, context composition in <a href="context/comparison.html">context/comparison</a>, and extension admission in <a href="extension-gating/reference-comparison.html">extension-gating/reference-comparison</a>. This page cites those conclusions when needed instead of duplicating them.
-</div>
-
-</div>
-</body>
-</html>
+<h3 id="status">Status and related pages</h3>
+<p class="note">Candidates are not approvals, and the target is not fully implemented. Code size and internal structure describe fixed local versions.</p>
+<dl class="pairs">
+<dt><a href="framework-overview.html">Framework overview</a></dt><dd>How one conversation runs inside OpenProgram</dd>
+<dt><a href="feature-matrix.html">Feature matrix</a></dt><dd>Same twelve references by feature inventory: 160 canonical entries, 56 candidate differences. Counts do not combine with this page</dd>
+<dt><a href="runtime/sandbox.html">Sandboxing</a></dt><dd><a href="runtime/security/sandbox-architecture.html">Architecture diagram</a></dd>
+<dt><a href="runtime/collaboration/agent-collab-comparison.html">Agent collaboration</a></dt><dd>Only OpenProgram limits subagent tools by remaining message budget</dd>
+<dt><a href="memory/comparison.html">Long-term memory</a></dt><dd><a href="memory/adoption.html">Adoption</a></dd>
+<dt><a href="memory/speaker-identity.html">Speaker identity</a></dt><dd>Multi-user conversations</dd>
+<dt><a href="ui/chat/chat-attachments.html">Chat attachments</a></dt><dd></dd>
+<dt><a href="context/comparison.html">Context composition</a></dt><dd></dd>
+<dt><a href="extension-gating/reference-comparison.html">Extension admission</a></dt><dd></dd>
+</dl>

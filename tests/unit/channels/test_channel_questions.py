@@ -46,7 +46,7 @@ def _durable_registry(monkeypatch, tmp_path):
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="channel", ttl_seconds=30,
+        owner_id="channel",
     )
     _attempt, _running = attempts.activate(
         leased.attempt_id, generation=leased.generation,

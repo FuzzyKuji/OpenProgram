@@ -23,7 +23,7 @@ import {
   getExecutionEvents,
   getExecutionSnapshot,
   getSessionExecutions,
-  parseRevisionState,
+  inspectionFromDebuggerState,
   postExecutionCommand,
   postExecutionWait,
   postRevisionDraftCommand,
@@ -111,18 +111,7 @@ export function useExecutionDebugger(active: boolean, sessionId: string | null, 
   const loadDebuggerData = useCallback(async (executionId: string, signal?: AbortSignal) => {
     const state = await getExecutionDebuggerState(executionId, signal, sessionId);
     if (!mounted.current || signal?.aborted) return state;
-    setDebuggerData((current) => ({ ...current, [executionId]: {
-      checkpoints: (state.checkpoints || []).map((checkpoint) => ({
-        ...checkpoint,
-        status_version: checkpoint.status_version ?? checkpoint.source_execution_version ?? 0,
-        safe_point: checkpoint.safe_point || null,
-        frontier: checkpoint.frontier || [],
-        effect_receipts: checkpoint.effect_receipts || [],
-      })),
-      unresolvedEffects: state.unresolved_effects || [],
-      waits: state.waits || [],
-      drafts: (state.drafts || []).map(parseRevisionState),
-    } }));
+    setDebuggerData((current) => ({ ...current, [executionId]: inspectionFromDebuggerState(state) }));
     return state;
   }, [sessionId]);
 

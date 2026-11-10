@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+from openprogram.interfaces.server.transcript.legacy import parsed_extra
+
 
 # Keep ordinary tool results byte-for-byte compatible while preventing one
 # abnormal result from dominating the session_loaded JSON frame. The full
@@ -10,19 +12,69 @@ import json
 TOOL_OUTPUT_INLINE_MAX_BYTES = 32 * 1024
 
 
-def _serialized_string_prefix(text: str) -> str:
-    """Longest leading substring whose JSON string stays within the cap."""
+def _serialized_string_prefix(text: str, limit: int = TOOL_OUTPUT_INLINE_MAX_BYTES) -> str:
+    """Longest leading substring whose JSON string stays within ``limit``."""
     low, high = 0, len(text)
     while low < high:
         middle = (low + high + 1) // 2
         size = len(json.dumps(
             text[:middle], ensure_ascii=False,
         ).encode("utf-8"))
-        if size <= TOOL_OUTPUT_INLINE_MAX_BYTES:
+        if size <= limit:
             low = middle
         else:
             high = middle - 1
     return text[:low]
+
+
+# What the call tree under a reply draws; arguments and blocks stay in the store.
+CALL_ROW_FIELDS = ("id", "role", "function", "content", "status", "is_error", "duration_ms", "caller")
+
+
+# One reply's whole call tree on the wire. It leaves room in the initial
+# history page (128 KiB) for the reply itself and the turns around it.
+CALL_TREE_MAX_BYTES = 96 * 1024
+
+
+def _serialized_size(value) -> int:
+    return len(json.dumps(value, ensure_ascii=False, default=str).encode("utf-8"))
+
+
+def call_tree_rows(rows: list[dict]) -> list[dict]:
+    """One reply's call tree, given depth-first, within ``CALL_TREE_MAX_BYTES``.
+
+    The tree's shape is paid for first. Only a tree too wide to describe at all
+    loses rows, from the end of the walk, so every kept row keeps its ancestors.
+    Bodies then fill what is left in the same order, each under the inline cap,
+    and rows reached after the budget is spent carry an empty body.
+    """
+    kept: list[tuple[dict, dict]] = []
+    spent = _serialized_size([])
+    for row in rows:
+        shape = {field: row[field] for field in CALL_ROW_FIELDS if field in row}
+        if "content" in shape:
+            shape["content"] = ""
+        cost = _serialized_size(shape) + len(", ")
+        if spent + cost > CALL_TREE_MAX_BYTES:
+            break
+        spent += cost
+        kept.append((row, shape))
+    empty_body = _serialized_size("")
+    for row, shape in kept:
+        content = row.get("content")
+        if "content" not in shape:
+            continue
+        text = content if isinstance(content, str) else json.dumps(content, ensure_ascii=False, default=str)
+        limit = min(TOOL_OUTPUT_INLINE_MAX_BYTES, CALL_TREE_MAX_BYTES - spent + empty_body)
+        size = _serialized_size(text)
+        if size <= limit:
+            shape["content"] = content
+        else:
+            text = _serialized_string_prefix(text, limit)
+            shape["content"] = text
+            size = _serialized_size(text)
+        spent += size - empty_body
+    return [shape for _, shape in kept]
 
 
 def _truncate_tool_record(
@@ -109,13 +161,7 @@ def _truncate_tool_outputs_for_wire(messages: list[dict]) -> list[dict]:
                 copied = {**copied, "blocks": truncated_blocks}
                 changed = True
 
-        raw_extra = message.get("extra")
-        extra = raw_extra
-        if isinstance(raw_extra, str):
-            try:
-                extra = json.loads(raw_extra)
-            except (TypeError, json.JSONDecodeError):
-                extra = None
+        extra = parsed_extra(message)
         if isinstance(extra, dict) and isinstance(extra.get("blocks"), list):
             extra_blocks, extra_changed = _truncate_tool_blocks(
                 extra["blocks"],
@@ -124,7 +170,7 @@ def _truncate_tool_outputs_for_wire(messages: list[dict]) -> list[dict]:
             )
             if extra_changed:
                 truncated_extra = {**extra, "blocks": extra_blocks}
-                if isinstance(raw_extra, str):
+                if isinstance(message.get("extra"), str):
                     truncated_extra = json.dumps(
                         truncated_extra, ensure_ascii=False, default=str,
                     )
@@ -152,10 +198,13 @@ async def handle_get_full_tool_output(ws, cmd: dict) -> None:
     if all(isinstance(value, str) and value for value in (
         session_id, message_id, node_id,
     )):
+        # A block names the provider's call id, and the row is named after it
+        # and its reply.
+        row_ids = {node_id, f"{message_id}_t_{node_id}"}
         row = next(
             (
                 message for message in default_db().get_messages(session_id)
-                if message.get("id") == node_id
+                if message.get("id") in row_ids
                 and message.get("role") == "tool"
                 and message.get("caller") == message_id
             ),

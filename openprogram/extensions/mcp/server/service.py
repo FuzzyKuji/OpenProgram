@@ -23,6 +23,7 @@ from openprogram.runtime.permissions.authority import (
     mcp_web_control_authority,
     mcp_client_authority,
 )
+from openprogram.runtime.permissions import refusal
 from openprogram.runtime.permissions.tool_authority import decide_tool_authority
 from openprogram.runtime.context.session_db import SessionDB, default_db
 from openprogram.models.providers.types import AgentTool, AgentToolResult
@@ -239,15 +240,6 @@ def _best_effort(
         return None
 
 
-_APPROVAL_GATE_DENIAL_TEXT = {
-    "HARD_CONSTRAINT_DENIED": "[denied] hard constraint",
-    "PERMISSION_RULE_DENY": "[denied] blocked by permission rule",
-    "APPROVAL_UNAVAILABLE_NON_INTERACTIVE": (
-        "[denied] approval unavailable for non-interactive MCP"
-    ),
-}
-
-
 def _trusted_approval_denial(
     result: AgentToolResult,
     *,
@@ -263,29 +255,9 @@ def _trusted_approval_denial(
         decision = decide_tool_authority(request, tool_name, arguments)
         if decision.allowed or decision.reason_code != reason_code:
             return None
-        return AgentToolResult(
-            content=[
-                TextContent(
-                    text=(
-                        f"[denied] authority tier does not allow {decision.capability}"
-                    )
-                )
-            ],
-            details={
-                "denied": True,
-                "reason_code": reason_code,
-                "capability": decision.capability,
-            },
-            is_error=True,
-        )
-    text = _APPROVAL_GATE_DENIAL_TEXT.get(reason_code)
-    if text is None:
-        return None
-    return AgentToolResult(
-        content=[TextContent(text=text)],
-        details={"denied": True, "reason_code": reason_code},
-        is_error=True,
-    )
+        return refusal.tool_result(refusal.mcp_authority(tool_name, decision), capability=decision.capability)
+    gate = refusal.MCP_GATE_REFUSALS.get(reason_code)
+    return refusal.tool_result(gate) if gate is not None else None
 
 
 def _number(value: Any) -> bool:
@@ -789,11 +761,7 @@ class MCPService:
         authority = mcp_web_control_authority(self.context.authority)
         decision = decide_capability(authority, "browser.control")
         if not decision.allowed:
-            return AgentToolResult(
-                content=[TextContent(text="[denied] browser control unavailable")],
-                details={"denied": True, "reason_code": decision.reason_code},
-                is_error=True,
-            )
+            return refusal.tool_result(refusal.mcp_browser_unavailable(decision.reason_code))
         if cancel_event.is_set():
             return _execution_error()
         copied = _copy_json(arguments)

@@ -1,5 +1,6 @@
 "use client";
 
+import { settingsSend } from "@/lib/settings/settings-request";
 import { useState } from "react";
 
 import styles from "./channels.module.css";
@@ -11,7 +12,6 @@ import { AddBindingDialog } from "./add-binding-dialog";
 import { PLATFORM_LABEL } from "./types";
 import type { ChannelAccount, ChannelBinding } from "./types";
 import { confirmAction } from "@/components/ui/confirm-dialog";
-import { showToast } from "@/lib/format-utils/toast";
 
 interface Props {
   bindings: ChannelBinding[];
@@ -32,16 +32,11 @@ export function BindingsList({ bindings, accounts, onChange }: Props) {
     }))) return;
     setBusyId(binding_id);
     try {
-      const r = await fetch(
-        `/api/channels/bindings/${encodeURIComponent(binding_id)}`,
-        { method: "DELETE" },
-      );
-      if (!r.ok) {
-        const d = await r.json().catch(() => null);
-        showToast(d?.detail || text("Delete failed", "删除失败"), { tone: "error" });
-      } else {
-        await onChange();
-      }
+      const deleted = await settingsSend(`/api/channels/bindings/${encodeURIComponent(binding_id)}`, {
+        method: "DELETE",
+        failure: text("Delete failed", "删除失败"),
+      });
+      if (deleted !== null) await onChange();
     } finally {
       setBusyId(null);
     }
@@ -67,7 +62,7 @@ export function BindingsList({ bindings, accounts, onChange }: Props) {
     <>
       <div className="flex items-start justify-between gap-[16px]">
         <div>
-          <div className={styles.sectionTitle}>{text("Step 3 - Dispatch rules", "步骤 3 - 分发规则")}</div>
+          <div className={styles.sectionTitle}>{text("Step 4 - Dispatch rules", "步骤 4 - 分发规则")}</div>
           <div className={styles.sectionSub}>
             {text(
               "Decide which agent handles which incoming messages. Without any rule, every message goes to the default agent. Add a rule to route a specific platform / group / sender to a chosen agent. Most-specific rule wins.",

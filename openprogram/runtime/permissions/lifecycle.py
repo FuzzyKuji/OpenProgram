@@ -26,6 +26,21 @@ def current_permission_request(request):
     return req
 
 
+def policy_changed(before, after, tool_name: str) -> bool:
+    """Whether the policy that decides a call of ``tool_name`` differs between two requests.
+
+    Mode and version decide every call; of the rules, only those naming this
+    tool do. A rule added or removed for another tool meanwhile (an agent
+    started with a computer_use_agent grant takes it back when it ends) leaves
+    the call's decision as reviewed.
+    """
+    from openprogram.runtime.permissions.policy import rules_for_tool
+    if any(getattr(before, key, None) != getattr(after, key, None) for key in ("permission_mode", "_permission_version")):
+        return True
+    return (rules_for_tool(getattr(before, "permission_rules", None), tool_name)
+            != rules_for_tool(getattr(after, "permission_rules", None), tool_name))
+
+
 def spawn_permission_snapshot(store, parent, child):
     """Freeze policy only from the exact live, same-principal owner parent.
 
@@ -63,8 +78,6 @@ def spawn_permission_snapshot(store, parent, child):
     request_values.setdefault("session_id", parent.session_id)
     request_values.setdefault("interaction", parent_authority.get("interaction"))
     request = current_permission_request(SimpleNamespace(**request_values))
-    if facts().in_plan_mode(parent.session_id):
-        request.permission_mode = "plan"
     if request.permission_mode not in VALID_PERMISSION:
         raise ValueError("parent permission mode is invalid")
     rules = getattr(request, "permission_rules", None)
@@ -82,6 +95,10 @@ def wrap_live_permission(tool, request, on_event):
     """
     from openprogram.runtime.permissions.approval import wrap_with_approval
     pending = None
+    # The desktop operations whose macOS grants this turn has found: its first
+    # application step probes for them, the later ones do not (see
+    # system_access.required_access_state).
+    access_found: set[str] = set()
     wrapped = copy.copy(tool)
 
     async def preflight(call_id, args, *, operation_id=None):
@@ -90,7 +107,7 @@ def wrap_live_permission(tool, request, on_event):
         snapshot = copy.deepcopy(current_permission_request(request))
         reviewed_args = copy.deepcopy(args)
         working_dir = current_worktree_path() or os.getcwd()
-        inner = wrap_with_approval(tool, snapshot, on_event, _live=False)
+        inner = wrap_with_approval(tool, snapshot, on_event, _live=False, _access_found=access_found)
         await inner._permission_preflight(call_id, reviewed_args, operation_id=operation_id)
         pending = (call_id, inner, reviewed_args, snapshot, working_dir)
 
@@ -102,7 +119,7 @@ def wrap_live_permission(tool, request, on_event):
             inner = pending[1]
         else:
             snapshot = current_permission_request(request)
-            inner = wrap_with_approval(tool, snapshot, on_event, _live=False)
+            inner = wrap_with_approval(tool, snapshot, on_event, _live=False, _access_found=access_found)
             import copy
             pending = (call_id, inner, copy.deepcopy(args), snapshot, current_worktree_path() or os.getcwd())
         return inner._interaction_manifest(call_id, args)
@@ -115,18 +132,39 @@ def wrap_live_permission(tool, request, on_event):
         pending = None
         if operation is not None and operation[0] == call_id:
             current = current_permission_request(request)
-            fields = ("permission_mode", "permission_rules", "_permission_version")
-            if operation[2] != args or operation[4] != (current_worktree_path() or os.getcwd()) or any(getattr(current, key, None) != getattr(operation[3], key, None) for key in fields):
-                from openprogram.models.providers.types import AgentToolResult
-                from openprogram.models.providers.types import TextContent
-                return AgentToolResult(content=[TextContent(text="Permission policy or arguments changed during review; submit a new operation.")],
-                                       details={"denied": True, "reason_code": "PERMISSION_REVIEW_STALE", "outcome": "not_started"}, is_error=True)
+            stale = operation[2] != args or operation[4] != (current_worktree_path() or os.getcwd())
+            if not stale and policy_changed(operation[3], current, tool.name):
+                # The policy moved while this operation waited (the owner switched
+                # mode during an approval, say). The review stands only where the
+                # policy now allows the call outright; anything else reviews anew.
+                from openprogram.runtime.permissions.policy import permission_decision
+                from openprogram.runtime.permissions.approval import wrap_with_approval
+                stale = permission_decision(tool, current, args).outcome != "allow"
+                if not stale:
+                    operation = (*operation[:1],
+                                 wrap_with_approval(tool, current, on_event, _live=False,
+                                                    _access_found=access_found),
+                                 *operation[2:])
+            if stale:
+                from openprogram.runtime.permissions import refusal
+                return refusal.tool_result(refusal.stale(
+                    "PERMISSION_REVIEW_STALE", "Permission policy or arguments changed during review; submit a new operation."))
             inner = operation[1]
         return await inner.execute(call_id, args, cancel, on_update)
 
     def visible():
         from openprogram.runtime.permissions.rule import parse_rule
-        rules = getattr(current_permission_request(request), "permission_rules", None)
+        from openprogram.runtime.permissions.tool_authority import lacks_static_capability
+        from openprogram.programs import _unsafe_in_for
+        current = current_permission_request(request)
+        if lacks_static_capability(current, tool.name):
+            return False
+        # Read each provider call, so a mode change inside the turn applies.
+        if tool.name == "exit_plan_mode":
+            return current.permission_mode == "plan"
+        if current.permission_mode == "plan" and "plan" in _unsafe_in_for(tool.name):
+            return False
+        rules = getattr(current, "permission_rules", None)
         return not any(rule.tool_name == tool.name and rule.pattern in (None, "")
                        for rule in (parse_rule(raw) for raw in (getattr(rules, "deny", None) or ())))
 
@@ -138,9 +176,16 @@ def wrap_live_permission(tool, request, on_event):
     return wrapped
 
 
-async def reconcile_permission_waits(session_id: str, *, service=None) -> None:
-    """Resume only mode-dependent approvals through canonical wait commands."""
+async def reconcile_permission_waits(session_id: str, *, service=None, force: bool = False) -> None:
+    """Resume every approval the current policy no longer asks about, through canonical wait commands.
+
+    ``force`` re-decides an owner's wait even though the conversation's
+    permission version has not moved: the policy changed underneath it, as in
+    the one-time open-permissions migration. Only a decision of ``allow``
+    resumes such a wait.
+    """
     from types import SimpleNamespace
+    from openprogram.runtime.permissions.authority import LOCAL_OWNER_SPEAKER
     from openprogram.runtime.permissions.policy import permission_decision
     from openprogram.runtime.permissions.session_facts import facts
     from openprogram.runtime.execution import default_control_service
@@ -153,7 +198,7 @@ async def reconcile_permission_waits(session_id: str, *, service=None) -> None:
     service = service or default_control_service()
     store = service.executions
     for wait in DurableWaitStore(store).list_open(session_id=session_id):
-        if wait.kind != "approval" or wait.request.get("approval_reason") not in {"MODE_APPROVAL", "RECOVERY_EFFECT_UNCERTAIN"}:
+        if wait.kind != "approval":
             continue
         execution = store.get_execution(wait.execution_id)
         if execution is None or store.get_agent_turn_input(wait.execution_id) is None:
@@ -164,16 +209,24 @@ async def reconcile_permission_waits(session_id: str, *, service=None) -> None:
         request = facts().turn_request_for(store, execution)
         current = current_permission_request(request)
         version = getattr(current, "_permission_version", 0)
-        if version <= wait.request.get("permission_version", 0):
+        if wait.request.get("approval_reason") == "PLAN_EXIT":
+            # Leaving Plan by the selector approves no plan: only the owner's answer does.
+            continue
+        if force:
+            # Only the owner at this machine: a chat turn's stored tier dates
+            # from when any approved sender counted as the owner.
+            if current.authority_tier != "owner" or getattr(current, "speaker_id", None) != LOCAL_OWNER_SPEAKER:
+                continue
+        elif version <= wait.request.get("permission_version", 0):
             continue
         tool = SimpleNamespace(name=wait.request.get("tool"), _accept_edits_safe=wait.request.get("accept_edits_safe", False))
         with facts().bind_execution(execution.execution_id):
             token = set_worktree(wait.request.get("working_dir"))
             try:
-                decision = permission_decision(tool, current, dict(wait.request.get("args") or {}))[0]
+                decision = permission_decision(tool, current, dict(wait.request.get("args") or {})).outcome
             finally:
                 reset_worktree(token)
-        if decision not in {"allow", "auto"}:
+        if decision != "allow" and (force or not (decision == "auto" and wait.request.get("approval_reason") == "MODE_APPROVAL")):
             continue
         try:
             dispatch = await service.request_wait_answer(

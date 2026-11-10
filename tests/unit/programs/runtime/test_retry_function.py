@@ -81,6 +81,51 @@ def test_retry_call_node_rejects_nested_call(monkeypatch):
 
 # ---- handle_retry_function ---------------------------------------------
 
+def test_retry_carries_the_send_id(monkeypatch):
+    nodes = [_code("word_count", {"text": "hello world"}, seq=1)]
+    _patch_db(monkeypatch, nodes)
+    seen = {}
+
+    def _fake_run(name, kwargs, session_id, **options):
+        seen.update(options)
+        return {"session_id": session_id, "msg_id": "abc"}
+
+    monkeypatch.setattr(
+        "openprogram.interfaces.server.routes.chat.run_agent_method_call", _fake_run
+    )
+    asyncio.run(chat.handle_retry_function(_FakeWS(), {
+        "session_id": "s1", "function": "word_count",
+        "node_id": nodes[0].id, "client_request_id": "req-retry",
+    }))
+
+    assert seen["client_request_id"] == "req-retry"
+
+
+def test_retry_ack_names_the_send_and_carries_a_first_read(monkeypatch):
+    nodes = [_code("word_count", {"text": "hello world"}, seq=1)]
+    _patch_db(monkeypatch, nodes)
+    monkeypatch.setattr(
+        "openprogram.interfaces.server.routes.chat.run_agent_method_call",
+        lambda name, kwargs, session_id, **options: {"session_id": session_id, "msg_id": "abc"},
+    )
+    ended = []
+
+    async def _read(_ws, _session_id):
+        return {"first_read": {"turns": [], "window": {}}}, lambda: ended.append(True)
+
+    monkeypatch.setattr("openprogram.interfaces.server.ws_actions.chat.turn._join_and_read", _read)
+    ws = _FakeWS()
+    asyncio.run(chat.handle_retry_function(ws, {
+        "session_id": "s1", "function": "word_count",
+        "node_id": nodes[0].id, "client_request_id": "req-retry",
+    }))
+
+    ack = next(json.loads(text)["data"] for text in ws.sent if json.loads(text)["type"] == "chat_ack")
+    assert ack["client_request_id"] == "req-retry"
+    assert ack["first_read"] == {"turns": [], "window": {}}
+    assert ended == [True]
+
+
 def test_retry_redispatches_with_original_kwargs(monkeypatch):
     nodes = [
         _code("word_count", {"text": "hello world"}, seq=1),
@@ -704,7 +749,6 @@ def test_new_run_passes_empty_caller_so_decorator_stamps_head(monkeypatch):
                 admission.execution_id,
                 expected_version=admission.status_version,
                 owner_id="unit-test",
-                ttl_seconds=30,
             )
             active, running = service.attempts.activate(
                 attempt.attempt_id,

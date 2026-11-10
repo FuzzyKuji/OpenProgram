@@ -82,7 +82,7 @@ def scoped_execution(function):
                 if req is not request_or_continuation or (kwargs.get('execution_context') or {}).get('restart_initial'):
                     from openprogram.runtime.context.session_db import default_db
                     if req is not request_or_continuation:
-                        user_id = request_or_continuation.state.payload['turn']['user_message_id']
+                        user_id = request_or_continuation.user_message_id
                         reply_id = request_or_continuation.assistant_message_id
                     else:
                         user_id = req.user_msg_id

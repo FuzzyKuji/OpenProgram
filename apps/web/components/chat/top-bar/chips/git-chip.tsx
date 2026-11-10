@@ -370,7 +370,7 @@ export function GitChip({
             className={cn("folder-pill-seg git-seg", status.is_worktree && "git-seg-worktree")}
             aria-label={text(`Git: ${branchLabel}`, `Git：${branchLabel}`)}
           >
-            <SolarIcon name="git-branch" size={14} className="git-icon" />
+            <SolarIcon name="git-branch" size={16} fit="fill" className="git-icon" />
             <span className="git-seg-label">{shortBranch}</span>
             {hasLines ? (
               <>
@@ -405,7 +405,7 @@ export function GitChip({
               data-tip={sessionId ? undefined : text("Send a message first to review changes.", "发送消息后才能审阅修改。")}
               onClick={() => sessionId && (openReviewTab(sessionId, undefined, "workspace"), setOpen(false))}
             >
-              <SolarIcon name="file-text" size={14} className="opacity-70" />
+              <SolarIcon name="file-text" size={16} fit="fill" className="opacity-70" />
               <span className="min-w-0 flex-1 truncate">
                 {text(`${changes.files} uncommitted ${changes.files === 1 ? "file" : "files"}`, `${changes.files} 个未提交文件`)}
               </span>
@@ -489,7 +489,7 @@ export function GitChip({
           </div>
           {typed && !typedExists ? (
             <div className={itemCls(false)} onClick={() => !busy && goToBranch(typed, true)}>
-              <SolarIcon name="add-circle" size={14} className="opacity-70" />
+              <SolarIcon name="add-circle" size={16} fit="fill" className="opacity-70" />
               <span className="min-w-0 flex-1 truncate">
                 {mode === "worktree"
                   ? text(`Create branch “${typed}” in a new worktree`, `在新 worktree 上新建分支“${typed}”`)
@@ -501,7 +501,7 @@ export function GitChip({
           <div className={MENU_SEPARATOR} />
           {openPr ? (
             <div className={itemCls(false)} data-tip={openPr.title} onClick={() => openUrl(openPr.url)}>
-              <SolarIcon name="square-arrow-right-up" size={14} className="opacity-70" />
+              <SolarIcon name="square-arrow-right-up" size={16} fit="fill" className="opacity-70" />
               <span className="min-w-0 flex-1 truncate">
                 {text(`View pull request #${openPr.number ?? ""}`, `查看 PR #${openPr.number ?? ""}`)}
               </span>
@@ -512,7 +512,7 @@ export function GitChip({
               data-tip={prBlocked ?? text("Pushes this branch and opens a PR from its commits.", "推送当前分支，并用它的提交创建 PR。")}
               onClick={() => !prBlocked && !busy && void createPr()}
             >
-              <SolarIcon name="git-pull-request" size={14} className="opacity-70" />
+              <SolarIcon name="git-pull-request" size={16} fit="fill" className="opacity-70" />
               <span className="min-w-0 flex-1 truncate">{text("Create pull request", "创建 PR")}</span>
             </div>
           )}
@@ -521,13 +521,13 @@ export function GitChip({
           ) : null}
           {openPr?.checks?.failed_count ? (
             <div className={itemCls(false)} onClick={() => askAgentToFixChecks(openPr)}>
-              <SolarIcon name="chat-round-dots" size={14} className="opacity-70" />
+              <SolarIcon name="chat-round-dots" size={16} fit="fill" className="opacity-70" />
               <span className="min-w-0 flex-1 truncate">{text("Fix failing checks with the agent…", "让 agent 修复未通过的检查…")}</span>
             </div>
           ) : null}
           {changes.files && !openPr ? (
             <div className={itemCls(false)} onClick={askAgentForPr}>
-              <SolarIcon name="chat-round-dots" size={14} className="opacity-70" />
+              <SolarIcon name="chat-round-dots" size={16} fit="fill" className="opacity-70" />
               <span className="min-w-0 flex-1 truncate">{text("Commit & open PR with the agent…", "让 agent 提交并创建 PR…")}</span>
             </div>
           ) : null}

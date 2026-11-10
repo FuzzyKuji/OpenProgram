@@ -626,3 +626,23 @@ def test_loopback_callback_rejects_a_non_loopback_exact_origin():
             **kwargs,
         )
     assert exc.value.reason == "CALLBACK_ADDRESS_MISMATCH"
+
+
+@pytest.mark.parametrize("url, addresses", [
+    ("http://127.0.0.1:8080/x", ("127.0.0.1",)),
+    ("http://169.254.169.254/latest/meta-data", ("169.254.169.254",)),
+    ("http://10.1.2.3:9000/", ("10.1.2.3",)),
+    ("http://printer.local/", ("192.168.1.9",)),
+    ("https://example.com:8443/", (PUBLIC_IP,)),
+])
+def test_an_owner_tool_fetch_reaches_any_address(url, addresses):
+    decision = evaluate_url(
+        "tool.web_fetch.owner",
+        "DELETE",
+        url,
+        trust_class=URLTrustClass.OWNER_TOOL,
+        allowed_methods=frozenset({"GET", "DELETE"}),
+        allowed_ports=None,
+        resolver=answers(*addresses),
+    )
+    assert decision is not None

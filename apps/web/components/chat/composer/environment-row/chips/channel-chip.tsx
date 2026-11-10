@@ -3,25 +3,30 @@
 import { useEffect, useState } from "react";
 
 import { SolarIcon } from "@/components/solar-icons";
+import { ChannelLogo } from "@/components/channels/channel-logo";
 import { HoverTip, TipBody } from "@/components/ui/tooltip";
 import {
-  Popover,
-  PopoverContent,
-  PopoverTrigger,
-} from "@/components/ui/popover";
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { MENU_PANEL } from "@/components/ui/menu/menu-styles";
 import { buttonVariants } from "@/components/ui/button";
 import { useSessionStore } from "@/lib/session-store";
 import { closeAllPopovers } from "@/lib/runtime-bridge/ui";
 import { useTranslation } from "@/lib/i18n";
 import { cn } from "@/lib/utils";
-import { channelBrand, useCurrentChannel } from "../../../top-bar/menus/channel-choices";
+import { channelChipText } from "@/lib/channels/channel-brands";
+import { useCurrentChannel } from "../../../top-bar/menus/channel-choices";
 import { ChannelMenu } from "../../../top-bar/menus/channel-menu";
 
 /** Channel chip — which chat channel account this conversation's
  *  messages are mirrored to, beside the environment chip. Always shown:
- *  unbound reads "No channel", bound shows "WeChat · account"; the chat
- *  glyph is tinted by the channel poll's health (yellow degraded, red
- *  unreachable). The popover binds, switches or disconnects. */
+ *  unbound reads "No channel" beside the chat glyph; bound shows the
+ *  app's logo and the account id (the logo alone when the row squeezes
+ *  the chip to its icon). The channel poll's health is a dot on the
+ *  logo's corner (yellow degraded, red unreachable). The dropdown binds,
+ *  switches or disconnects. */
 export function ChannelChip() {
   const { text } = useTranslation();
   const { channel, account_id } = useCurrentChannel();
@@ -42,11 +47,10 @@ export function ChannelChip() {
     setOpen(next);
   }
 
-  const brand = channel ? channelBrand(channel) : "";
-  const label = !channel
-    ? text("No channel", "未接渠道")
-    : account_id ? `${brand} · ${account_id}` : brand;
-  const color =
+  const chip = channelChipText(channel, account_id);
+  const label = chip.label ?? text("No channel", "未接渠道");
+  const tipName = chip.tip ?? label;
+  const dot =
     !channel ? undefined
     : health === "err" ? "var(--accent-red)" : health === "warn" ? "var(--accent-yellow)" : undefined;
   const healthText =
@@ -58,11 +62,11 @@ export function ChannelChip() {
         : "";
 
   return (
-    <Popover open={open} onOpenChange={onOpenChange}>
+    <DropdownMenu open={open} onOpenChange={onOpenChange} modal={false}>
       <HoverTip
         label={
           <TipBody
-            title={text(`Channel: ${label}`, `渠道：${label}`)}
+            title={text(`Channel: ${tipName}`, `渠道：${tipName}`)}
             detail={[
               channel
                 ? text("Messages are mirrored to this account. Click to change or disconnect.",
@@ -74,25 +78,44 @@ export function ChannelChip() {
           />
         }
       >
-        <PopoverTrigger asChild>
+        <DropdownMenuTrigger asChild>
           <button
             type="button"
             className={cn(buttonVariants({ variant: "elevated", size: "sm" }), "status-badge")}
             data-channel-chip=""
+            aria-label={text(`Channel: ${tipName}`, `渠道：${tipName}`)}
           >
-            <SolarIcon name="chat-round-dots" size={14} aria-hidden="true" style={color ? { color } : undefined} />
+            {channel ? (
+              <span className="relative flex shrink-0">
+                <ChannelLogo channel={channel} size={16} fit="fill" />
+                {dot ? (
+                  // Health on the logo's corner, ringed in the chip's own
+                  // fill so it reads as a badge on the mark.
+                  <span
+                    aria-hidden="true"
+                    data-channel-health={health}
+                    className="absolute -right-[2px] -bottom-[2px] size-[6px] rounded-full ring-[1.5px] ring-bg-input"
+                    style={{ backgroundColor: dot }}
+                  />
+                ) : null}
+              </span>
+            ) : (
+              <SolarIcon name="chat-round-dots" size={16} fit="fill" aria-hidden="true" />
+            )}
             <span className="badge-short">{label}</span>
           </button>
-        </PopoverTrigger>
+        </DropdownMenuTrigger>
       </HoverTip>
-      <PopoverContent
+      <DropdownMenuContent
         side="top"
         align="start"
-        sideOffset={10}
-        className="w-auto border-0 bg-transparent p-0 shadow-none"
+        /* Same gap as the model chip's menu: 10px band gap − 1px ring. */
+        sideOffset={9}
+        onCloseAutoFocus={(e) => e.preventDefault()}
+        className={cn(MENU_PANEL, "text-text-primary")}
       >
         <ChannelMenu onClose={() => setOpen(false)} />
-      </PopoverContent>
-    </Popover>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

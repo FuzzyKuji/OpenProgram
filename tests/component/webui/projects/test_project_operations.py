@@ -92,9 +92,28 @@ def test_default_archive_includes_legacy_unbound_chats(tmp_path, monkeypatch):
         def get_session(self, sid): return rows.get(sid)
         def update_session(self, sid, **fields): rows[sid].update(fields)
     monkeypatch.setattr(session_db, "default_db", lambda:DB())
+    stopped=[]
+    monkeypatch.setattr("openprogram.runtime.conversation.always_on.runtime.archive_changed", lambda sid, archived: stopped.append((sid, archived)))
     result=invoke("archive_project_chats", home.id)
     assert result["ok"] and result["session_ids"]==["unbound"]
     assert rows["unbound"]["archived"] and "archived" not in rows["other"]
+    assert stopped == [("unbound", True)]
+
+
+def test_archiving_a_project_again_does_not_stop_a_goal_someone_resumed(tmp_path, monkeypatch):
+    from openprogram.runtime.context import session_db
+    monkeypatch.setattr(store, "_registry_path", lambda:tmp_path / "registry.json")
+    home=store.get_default_project()
+    rows={"done":{"id":"done","archived":True}}
+    class DB:
+        def list_sessions(self, **kw): return list(rows.values())
+        def get_session(self, sid): return rows.get(sid)
+        def update_session(self, sid, **fields): rows[sid].update(fields)
+    monkeypatch.setattr(session_db, "default_db", lambda:DB())
+    stopped=[]
+    monkeypatch.setattr("openprogram.runtime.conversation.always_on.runtime.archive_changed", lambda sid, archived: stopped.append((sid, archived)))
+    assert invoke("archive_project_chats", home.id)["ok"]
+    assert stopped == []
 
 
 def test_subfolder_project_worktree_cannot_modify_containing_checkout(tmp_path, monkeypatch):

@@ -49,6 +49,21 @@ common_dir="$(cd "$repo_root" && cd "$(git rev-parse --git-common-dir)" && pwd)"
 mkdir -p "$HOME/.openprogram"
 printf '%s\n' "$(dirname "$common_dir")" > "$HOME/.openprogram/source-repo"
 
+# The commits in a deploy come from every session, so docs problems are
+# reported and never stop it; a page that fails the format builds as a visible
+# error page. Git hooks are unversioned, so every deploy syncs them.
+"$repo_root/scripts/git-hooks/install.sh" || stamp "could not sync the git hooks"
+docs_python="$(dirname "$common_dir")/.venv/bin/python"
+last_revision="$(cat "$runtime/source-revision" 2>/dev/null || true)"
+if test -x "$docs_python" && test -n "$last_revision" && test "$last_revision" != "$revision" \
+  && git -C "$repo_root" cat-file -e "$last_revision^{commit}" 2>/dev/null; then
+  (cd "$repo_root" && "$docs_python" -B -m scripts.docs_site.check --base "$last_revision" --report-only) \
+    || stamp "the docs check could not run; continuing"
+else
+  stamp "docs check skipped: no venv or no earlier deploy to compare with"
+fi
+export OPENPROGRAM_DOCS_FORMAT=quarantine
+
 stamp "building Web assets and wheel from ${revision:0:10}"
 rm -rf "$repo_root/build"
 "$repo_root/scripts/release/stage-release-assets.sh"
@@ -122,7 +137,7 @@ else
   dev worker stop >/dev/null 2>&1 || true
   dev worker start
 fi
-deadline=$((SECONDS + 120))
+deadline=$((SECONDS + 300))
 until curl -fsS --connect-timeout 1 --max-time 2 "http://127.0.0.1:$port/healthz" >/dev/null 2>&1; do
   if test "$SECONDS" -ge "$deadline"; then
     printf 'dev worker did not become healthy on port %s; logs: %s/worker.log\n' "$port" "$state_dir" >&2

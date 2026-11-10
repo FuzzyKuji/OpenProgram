@@ -1,82 +1,121 @@
-<!doctype html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
 <title>统一系统访问</title>
-<style>
-body{font:16px/1.65 system-ui,sans-serif;max-width:1080px;margin:40px auto;padding:0 24px;color:#202124}
-h1,h2{line-height:1.25} table{border-collapse:collapse;width:100%;margin:16px 0}th,td{border:1px solid #d9d9d9;padding:9px 11px;vertical-align:top;text-align:left}code{background:#f3f3f3;padding:2px 4px;border-radius:3px} .state{font-family:ui-monospace,monospace}
-</style>
-</head>
-<body>
+<meta name="description" content="宿主能力注册表：报告、显式请求、操作等待、身份和恢复。">
 <h1>统一系统访问</h1>
-<p>系统访问属于主机能力边界，与模型工具审批、工作区权限规则、账号凭据和提供商授权相互独立。产品只有一个能力注册表、一份实时报告、一条显式设置路径、一种等待表示和一套恢复策略。状态读取从不打开原生提示。模型或远程客户端不能授予操作系统能力。</p>
+<p>宿主能力边界，独立于模型工具审批、工作区权限规则、账号凭据和 provider 授权。读取状态绝不弹出系统提示。模型或远程客户端不能授予操作系统能力。</p>
 
-<h2>当前实现与已确认缺口</h2>
-<p>基础 runtime 原先使用两条硬编码 macOS 项：<code>screen_recording</code> 和 <code>accessibility</code>。后端报告、原生探测、请求路由、GUI 预检和 Web 设置各维护部分列表，其他类别的包声明则独立存在。这导致定义不一致，也可能把重连表现为未经请求的权限申请。</p>
-<p>已实现的注册表移除重复能力定义，使普通聊天、浏览器和无界面使用不依赖可选桌面访问。原有双能力 API 保持 wire 兼容，其条目由注册表生成。包用途说明、entitlement、报告 schema、身份元数据、GUI 预检、设置 UI 和等待 manifest 现在使用同一份声明。</p>
-
-<h2>参考范围与边界</h2>
-<table>
-<tr><th>参考</th><th>采用规则</th><th>边界</th></tr>
-<tr><td><a href="https://support.apple.com/en-me/guide/mac-help/mchld6aa7d23/mac">Apple 屏幕与系统音频录制</a></td><td>macOS 管理授权，用户在系统设置中控制。</td><td>产品可打开对应设置页并验证执行身份，不能静默启用授权。</td></tr>
-<tr><td><a href="https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions?preferredLanguage=occ">AXIsProcessTrustedWithOptions</a></td><td>辅助功能单独查询，只有显式本地 owner 操作才能申请。</td><td>信任属于具名 runtime 执行器；另一应用或匿名 Python 进程不能作为证据。</td></tr>
-<tr><td><a href="https://support.apple.com/en-kw/guide/mac-help/-mchl211c911f/mac">Apple 隐私控制</a></td><td>每个隐私类别各自具有同意和撤销生命周期。</td><td>plist 配置和 entitlement 签名只是前提，不等于授权。</td></tr>
-<tr><td><a href="https://support.apple.com/en-ca/guide/security/secddd1d86a6/web">macOS 文件与访问控制</a></td><td>文件访问报告为针对具体操作的能力。</td><td>一次路径读取成功不能证明完整磁盘访问权限，也不得将完整磁盘访问作为通用解决办法申请。</td></tr>
-<tr><td><a href="https://www.electronjs.org/docs/latest/api/system-preferences">Electron systemPreferences</a></td><td>查询与申请是不同操作。</td><td>Electron API 不会取消 macOS 同意要求或针对目标的 Apple Events 授权。</td></tr>
+<h2 id="capability-registry">能力注册表</h2>
+<table class="stack">
+<thead><tr><th scope="col"><code translate="no">id</code></th><th scope="col"><code translate="no">subject</code></th><th scope="col"><code translate="no">request_mode</code></th><th scope="col">范围</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">screen_recording</code></th><td><code translate="no">runtime</code></td><td><code translate="no">native</code></td><td>屏幕与系统录音；<code translate="no">computer_use:desktop</code></td></tr>
+<tr><th scope="row"><code translate="no">accessibility</code></th><td><code translate="no">runtime</code></td><td><code translate="no">native</code></td><td><code translate="no">computer_use:desktop</code></td></tr>
+<tr><th scope="row"><code translate="no">apple_events</code></th><td><code translate="no">target_app</code></td><td><code translate="no">targeted</code></td><td>按目标应用</td></tr>
+<tr><th scope="row"><code translate="no">calendar</code></th><td><code translate="no">runtime</code></td><td><code translate="no">native</code></td><td>EventKit 类别授权</td></tr>
+<tr><th scope="row"><code translate="no">reminders</code></th><td><code translate="no">runtime</code></td><td><code translate="no">native</code></td><td>EventKit 类别授权</td></tr>
+<tr><th scope="row"><code translate="no">file_read</code></th><td><code translate="no">user_selected_path</code></td><td><code translate="no">operation</code></td><td>所选路径或安全作用域书签</td></tr>
+<tr><th scope="row"><code translate="no">file_write</code></th><td><code translate="no">user_selected_path</code></td><td><code translate="no">operation</code></td><td>所选路径或安全作用域书签</td></tr>
+<tr><th scope="row"><code translate="no">microphone</code></th><td><code translate="no">runtime</code></td><td><code translate="no">native</code></td><td>只由使用它的操作请求</td></tr>
+<tr><th scope="row"><code translate="no">camera</code></th><td><code translate="no">runtime</code></td><td><code translate="no">native</code></td><td>只由使用它的操作请求</td></tr>
+</tbody>
 </table>
-<p>Linux portal 和 Windows 桌面完整性规则仍各自遵循平台机制。注册表表示它们的状态，不假装这些平台存在 macOS 设置。浏览器和 VM 界面使用自身提供商及会话边界，不检查本机 macOS 权限。</p>
+<p class="note"><code translate="no">openprogram.host.system_access</code> 持有不可变注册表。报告、CLI 和 TUI doctor、HTTP 设置、Web 设置、等待清单、包的用途说明、entitlement、GUI 预检和测试都读取它。导入时校验；构建测试核对包声明和 id。</p>
 
-<h2>能力注册表</h2>
-<p><code>openprogram.host.system_access</code> 维护不可变注册表。每项包含稳定 id、类别、显示名称、平台、必需或可选策略、目标身份、不弹提示的检查、显式请求模式、设置目标、包声明、操作映射和恢复策略。后端报告、CLI/TUI doctor、HTTP 设置、Web 设置、等待 manifest 和测试共用该注册表，不独立定义能力 id。全部 macOS 原生检查与申请均通过已签名 runtime bundle 身份 <code>ai.openprogram.runtime</code> 执行；源码 checkout 可回退到开发解释器，但已安装 App 绝不注册裸 <code>python3</code> 进程。</p>
-<table>
-<tr><th>字段</th><th>含义</th></tr>
-<tr><td><code>id</code></td><td>稳定协议 id，例如 <code>screen_recording</code>, <code>accessibility</code>, <code>apple_events</code>, <code>calendar</code>, <code>reminders</code>, <code>file_read</code>, <code>file_write</code>, <code>microphone</code> 和 <code>camera</code>.</td></tr>
-<tr><td><code>subject</code></td><td>平台检查的身份：<code>runtime</code>, <code>containing_app</code>, <code>target_app</code>, <code>user_selected_path</code> 或 <code>provider_session</code>.</td></tr>
-<tr><td><code>check</code></td><td>不弹提示的探测，返回 <span class="state">granted</span>, <span class="state">not_granted</span>, <span class="state">unknown</span>, <span class="state">unavailable</span> 或 <span class="state">unsupported</span>.</td></tr>
-<tr><td><code>request_mode</code></td><td><code>native</code> 表示支持的操作系统申请，<code>settings</code> 表示只能通过设置授权，<code>targeted</code> 表示必须提供目标应用，<code>operation</code> 表示只能通过实际操作验证，<code>none</code> 表示平台没有申请 API。</td></tr>
-<tr><td><code>settings</code></td><td>固定的能力专属系统设置 URL 或文档说明。只有 owner 点击操作后才打开。</td></tr>
-<tr><td><code>identity</code></td><td>Bundle id 和 designated requirement，或提供商/路径身份。匿名 <code>python3</code>, <code>node</code> 和过时缓存路径不作为 OpenProgram 身份。</td></tr>
-<tr><td><code>operations</code></td><td>需要此能力的工具与操作名称。GUI 桌面需要屏幕录制和辅助功能；浏览器、VM 和普通 CLI 操作不需要。</td></tr>
+<details>
+<summary>条目字段</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">字段</th><th scope="col">含义</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">subject</code></th><td>平台检查的身份：<code translate="no">runtime</code>、<code translate="no">containing_app</code>、<code translate="no">target_app</code>、<code translate="no">user_selected_path</code>、<code translate="no">provider_session</code></td></tr>
+<tr><th scope="row"><code translate="no">check</code></th><td>不弹提示的探测，返回下表的状态</td></tr>
+<tr><th scope="row"><code translate="no">request_mode</code></th><td><code translate="no">native</code>：系统请求。<code translate="no">settings</code>：只能去设置。<code translate="no">targeted</code>：需要目标应用。<code translate="no">operation</code>：只有真实操作能验证。<code translate="no">none</code>：没有请求 API</td></tr>
+<tr><th scope="row"><code translate="no">settings</code></th><td>固定的能力专属系统设置 URL 或说明；所有者点击后才打开</td></tr>
+<tr><th scope="row"><code translate="no">identity</code></th><td>Bundle id 和 designated requirement，或 provider、路径身份</td></tr>
+<tr><th scope="row"><code translate="no">operations</code></th><td>需要该能力的工具。GUI 桌面需要屏幕录制和辅助功能；浏览器、VM 和普通 CLI 不需要</td></tr>
+</tbody>
 </table>
-<p>注册表在导入时验证：id 唯一，每个原生条目具有不弹提示检查和显式请求方式，具有作用域的条目声明状态语义，每个设置操作拥有固定目标，每个操作引用均指向已声明能力。构建测试对照相同 id 检查包用途说明与 entitlement。</p>
+<p class="note">导入校验：id 唯一；每个 native 条目有不弹提示的检查和显式请求方式；有范围的条目说明状态语义；每个设置动作有固定目标；每个操作指向已声明的能力。</p>
+</details>
 
-<h2>状态与 API 合同</h2>
-<p>每份报告包含 <code>schema</code>, platform、host、执行身份、时间戳和能力数组。条目包含 id、类别、状态、详情、说明、请求模式、设置可用性、所需操作及恢复元数据。状态含义如下：</p>
-<ul><li><span class="state">granted</span>：当前具名执行器通过最新检查。</li><li><span class="state">not_granted</span>：检查完成，macOS 表示该能力未获授予。</li><li><span class="state">unknown</span>：检查失败、超时或无法证明身份；不视为拒绝。</li><li><span class="state">unavailable</span>：依赖或原生 API 缺失。</li><li><span class="state">unsupported</span>：平台或后端没有实现。</li></ul>
-<p><code>GET /api/system/access</code> 返回注册表派生报告。<code>POST /api/system/access/setup</code> 是仅限 owner、仅限回环的首次设置操作：通过已签名 runtime 申请全部注册原生 runtime 能力，并返回一份汇总报告。<code>POST /api/system/access/{id}</code> 是逐项显式回退操作：重新检查，按声明可选执行原生申请，然后返回最新条目。<code>open_settings=true</code> 只打开已声明设置目标，从不声称已经授权。现有 <code>/waits</code> 记录使用同一套 id 和 schema。响应禁止缓存且不含秘密。</p>
+<h2 id="state-and-api">状态和 API</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">状态</th><th scope="col">含义</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">granted</code></th><td>指定执行者通过了最新检查</td></tr>
+<tr><th scope="row"><code translate="no">not_granted</code></th><td>检查完成，macOS 表示没有</td></tr>
+<tr><th scope="row"><code translate="no">unknown</code></th><td>检查失败、超时或无法证明身份。不算拒绝</td></tr>
+<tr><th scope="row"><code translate="no">unavailable</code></th><td>缺少依赖或原生 API</td></tr>
+<tr><th scope="row"><code translate="no">unsupported</code></th><td>该平台或后端没有实现</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">接口</th><th scope="col">作用</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">GET /api/system/access</code></th><td>报告（schema 2）：平台、主机、执行身份、时间戳，每行含 id、类别、状态、详情、说明、请求方式、设置可用性、操作、恢复元数据</td></tr>
+<tr><th scope="row"><code translate="no">GET /api/system/access/waits</code></th><td>未结束的等待，id 和 schema 相同</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/system/access/setup</code></th><td>仅限所有者和回环地址。请求所有已注册的原生 runtime 能力，返回一份合并报告</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/system/access/{id}</code></th><td>单行：重新检查，可选原生请求，返回新行。<code translate="no">open_settings=true</code> 只打开目标，绝不声称已授权</td></tr>
+</tbody>
+</table>
+<p class="note">响应禁止缓存，不含机密。前两行保持旧的 <code translate="no">screen_recording</code> 和 <code translate="no">accessibility</code> 线路格式；旧回执按旧格式读取。未知 id 是客户端错误，什么也不打开。权限规则、Auto 模式、profile、Worker 和端口不受影响。</p>
 
-<h2>首次设置与操作流程</h2>
+<h2 id="flow">首次设置和操作</h2>
 <ol>
-<li>首次使用时，Web 设置页按产品领域分组显示注册表，解释各能力用途，并在页面加载时对全部条目执行一次只读检查。</li>
-<li>用户为首次原生能力组选择“设置 OpenProgram 全部访问权限”，或为单项选择“请求授权”或“打开系统设置”。页面挂载、重连、状态轮询、历史回放和模型输出渲染从不发送原生申请。</li>
-<li>后端针对每个执行身份串行处理原生申请，使用具名 runtime 执行原生检查和申请，随后重新检查。不同隐私类别或目标应用仍可能分别弹出 macOS 对话框；UI 逐项报告结果，不声称一次点击能授权未知未来目标。</li>
-<li>执行操作前，该操作声明所需能力。worker 生成最新报告，仅针对缺失的必需能力创建持久化 <code>system_access</code> 等待。浏览器和 VM 操作不经过此主机检查。等待保存原始检查点，全部必需条目获授权后继续同一次执行。</li>
-<li>用户返回 App 后，焦点或可见性变化触发只读刷新。授权通过 worker 协调路径解除等待；不提交假回答，不调用重试函数，也不创建新执行。</li>
+<li>Web 设置按产品领域显示注册表、每项用途，每次加载页面做一次只读检查。</li>
+<li>用户选择“Set up all OpenProgram access”，或某行的“Request authorization”/“Open System Settings”。页面挂载、重连、轮询、历史回放和模型输出都不会发请求。</li>
+<li>后端按执行者串行化原生请求，用指定 runtime 请求后重新检查。macOS 仍可能弹多个对话框，UI 逐项报告结果。</li>
+<li>操作前 Worker 做一次新报告，只为缺失的必需能力创建持久的 <code translate="no">system_access</code> 等待。浏览器和 VM 操作跳过。</li>
+<li>回到应用触发只读刷新。授权后等待经 Worker 对账解除，同一执行从检查点继续：没有伪造回答、重试或新执行。</li>
 </ol>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">轮次中</th><th scope="col">报告</th></tr></thead>
+<tbody>
+<tr><th scope="row">已确认授权的能力</th><td>后续步骤不再报告；一次报告要启动进程，约 0.4 秒</td></tr>
+<tr><th scope="row">有能力缺失</th><td>每步都报告，授权后立刻看到</td></tr>
+<tr><th scope="row">轮次中撤销授权</th><td>桌面后端让该步失败并指出设置项，下一轮重新报告</td></tr>
+</tbody>
+</table>
 
-<h2>恢复与身份</h2>
-<p>普通状态读取、启动协调、重试和重复事件从不运行 <code>tccutil</code>，也不重置其他应用。已验证的过时回执可授权针对固定 OpenProgram bundle 身份的一次显式迁移；标记在操作系统调用前写入以防循环。未验证代码、未知检查、未变化要求、辅助功能迁移和其他全部应用都要求用户使用系统设置。具名 runtime 及所属应用保留稳定 bundle id 和持久本地签名 requirement。标记为 <code>python3</code> 或 <code>node</code> 的构建或缓存路径不作为受认可身份。</p>
-<p>第三方 Apple Events 授权针对具体目标。原生后端支持时，日历和提醒事项使用 EventKit 类别同意。文件访问限于用户选择的路径或 security-scoped bookmark。麦克风与摄像头仅由实际使用它们的操作声明和申请。产品不能预先授权从未访问的应用、用户从未选择的路径或已被用户撤销的权限。</p>
-
-<h2>信任、隐私与并发</h2>
-<p>只有执行主机的本地 owner 可以申请或打开设置。回环和 Origin 检查始终必需；转发请求及远程客户端被拒绝。模型可说明缺失能力，但不能调用设置端点。原生探测在新的有限时进程中运行，每轮协调共用一份报告，不枚举屏幕内容。请求按执行器串行处理。等待解除受 execution id、generation、checkpoint version 和取消状态保护。探测失败保持等待；终止或取消的执行不能恢复。</p>
-
-<h2>兼容性与迁移</h2>
-<p>旧客户端可继续发送 <code>screen_recording</code> 和 <code>accessibility</code>。API 保留这些 id 并添加注册表元数据。现有回执以旧屏幕录制格式读取。未知 id 返回客户端错误且不打开设置。现有权限规则与 Auto 模式保持不变。不创建额外应用 profile、worker 或端口。</p>
-
-<h2>验收条件</h2>
+<h2 id="identity-and-recovery">身份和恢复</h2>
 <ul>
-<li>报告、请求、设置、等待 manifest、UI 标签及包声明共用一个注册表；一致性测试在发生偏差时失败。</li>
-<li>重复报告调用、重连、历史回放和模型输出渲染产生零次原生提示。</li>
-<li>已授权条目产生零次原生申请。请求必须具有本地 owner、固定身份和显式用户操作。</li>
-<li>缺少任一桌面能力的 GUI 任务在规划前暂停，两项均获授权后恰好一次恢复同一执行，从不使用普通提问或审批 API。</li>
-<li>unknown、unavailable 和 unsupported 与 denied 分别显示。可选项失败不使安装或普通聊天被判为不健康。</li>
-<li>对实际安装的 `/Applications/OpenProgram.app` 验收确认具名执行器身份、当前屏幕录制及辅助功能状态、设置操作，以及没有 Python/node 身份迁移。</li>
-<li>自动化检查覆盖后端注册表、探测、请求路由、等待恢复、Web 渲染和禁止自动申请行为；两项独立审查后执行完整仓库及文档门禁。</li>
+<li>macOS 的检查和请求都经已签名的 runtime bundle <code translate="no">ai.openprogram.runtime</code>。源码检出可回落到开发解释器。已安装的 App 绝不注册裸 <code translate="no">python3</code>；匿名的 <code translate="no">python3</code>、<code translate="no">node</code> 和过期缓存路径都不是身份。</li>
+<li>读取状态、启动对账、重试和重复事件都不运行 <code translate="no">tccutil</code>，也不重置其他应用。</li>
+<li>经验证的过期回执可授权一次针对固定 OpenProgram bundle 身份的显式迁移；系统调用前写入的标记防止循环。其他情况（未验证代码、未知检查、要求未变、辅助功能迁移、其他应用）都走系统设置。</li>
+<li>产品不能预先授权从未作为目标的应用、从未选择的路径或已撤销的权限。绝不推断完全磁盘访问，也不把它当绕过手段请求。</li>
+<li>Linux portal 和 Windows 完整性规则保持平台专属。浏览器和 VM 用自己的 provider 或 session 边界。</li>
 </ul>
 
-<h2>实现状态</h2>
-<p>本文是统一注册表的权威设计。统一注册表、原生 EventKit/AVFoundation 检查与申请、带版本 schema 报告、身份元数据、包一致性检查、显式设置 UI、不自动申请的恢复、操作预检一致性，以及桌面访问 unavailable 或 unsupported 时的终止处理均已实现。剩余验收取决于安装环境：验证默认已安装的 <code>/Applications/OpenProgram.app</code>（端口 <code>18100</code>） 及其当前 macOS 授权；授权仍由 macOS 控制。</p>
-</body>
-</html>
+<h2 id="trust">信任和并发</h2>
+<ul>
+<li>只有执行主机上的本地所有者能请求或打开设置。回环和 Origin 检查必须通过，转发请求和远程客户端被拒绝。模型可以描述缺失的能力，不能调用设置接口。</li>
+<li>探测在新的有界进程中运行，每轮对账共用一份报告，不枚举屏幕内容。</li>
+<li>等待解除由执行 id、代次、检查点版本和取消状态把关。探测失败时等待保持打开；已终止或已取消的执行不能恢复。</li>
+</ul>
+
+<details>
+<summary>外部参考</summary>
+<table class="stack">
+<thead><tr><th scope="col">参考</th><th scope="col">规则</th><th scope="col">边界</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://support.apple.com/en-me/guide/mac-help/mchld6aa7d23/mac">屏幕与系统录音</a></th><td>macOS 拥有授权，由用户控制</td><td>产品打开面板并验证执行者，绝不静默开启</td></tr>
+<tr><th scope="row"><a href="https://developer.apple.com/documentation/applicationservices/1459186-axisprocesstrustedwithoptions?preferredLanguage=occ">AXIsProcessTrustedWithOptions</a></th><td>单独查询，只由本地所有者的显式动作请求</td><td>信任针对指定执行者</td></tr>
+<tr><th scope="row"><a href="https://support.apple.com/en-kw/guide/mac-help/-mchl211c911f/mac">Apple 隐私控制</a></th><td>每个类别有自己的授权和撤销</td><td>plist 和 entitlement 是前提，不是授权</td></tr>
+<tr><th scope="row"><a href="https://support.apple.com/en-ca/guide/security/secddd1d86a6/web">macOS 文件访问</a></th><td>按操作报告</td><td>读成功一个路径不代表完全磁盘访问</td></tr>
+<tr><th scope="row"><a href="https://www.electronjs.org/docs/latest/api/system-preferences">Electron systemPreferences</a></th><td>查询和请求分开</td><td>不能免除 macOS 授权或 Apple Events 目标授权</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>验收</summary>
+<ul>
+<li>报告、请求、设置、等待、标签和包声明都来自同一注册表，一致性测试在漂移时失败。</li>
+<li>重复报告、重连、回放和模型输出不产生提示。已授权行不产生请求。</li>
+<li>缺少桌面能力的 GUI 任务在规划前暂停，两项都授权后同一执行恰好恢复一次，不使用提问或审批 API。</li>
+<li>unknown、unavailable、unsupported 和拒绝分开显示。可选项失败不影响安装或聊天的健康状态。</li>
+<li>已安装的 <code translate="no">/Applications/OpenProgram.app</code> 确认执行者身份、当前授权、设置动作，且没有 Python 或 Node 身份迁移。</li>
+<li>自动化：注册表、探测和请求路由、等待恢复、Web 渲染、不自动请求。</li>
+</ul>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<p>已实现：注册表、EventKit 和 AVFoundation 原生检查与请求、带版本的报告、身份元数据、包检查、显式设置 UI、不自动请求的恢复、操作预检、桌面访问不可用或不支持时的终止处理。待完成：在端口 <code translate="no">18100</code> 上按当前 macOS 授权验证已安装的默认 App。</p>

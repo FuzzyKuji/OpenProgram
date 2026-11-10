@@ -1,0 +1,211 @@
+<title>Overview</title>
+<meta name="description" content="How the context layer selects what the model reads on each call: the assembly pipeline, the DAG, aging, compaction, attach and merge, and occupancy.">
+<span id="context-the-context-layer"></span>
+<h1>Overview</h1>
+<p>Each call renders a selection of the session's execution DAG into a <code translate="no">Context</code> (system, messages, tools): the branch it continues, old tool output shortened, the oldest turns replaced by one summary once the window fills. This layer decides what to feed; the <a href="../providers/README.html">provider layer</a> decides how to send it.</p>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 170" role="img" aria-label="process_user_turn calls engine.prepare, which renders history from the DAG and computes the token budget. At 80 percent of the budget engine.compact writes a summary inline. The agent loop then sends the Context to the provider. If the provider reports context overflow, reactive compaction runs and the request is retried once.">
+  <defs>
+    <marker id="ov-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker>
+    <marker id="ov-n" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head-no" d="M0 0L8 4L0 8z"/></marker>
+  </defs>
+  <text class="t-big" x="0" y="40">Prepare</text>
+  <text class="t-soft" x="0" y="66">history from the DAG,</text>
+  <text class="t-soft" x="0" y="86">token budget</text>
+  <line class="ln" x1="80" y1="33" x2="164" y2="33" marker-end="url(#ov-a)"/>
+  <text class="t-big" x="176" y="40">Compact</text>
+  <text class="t-soft" x="176" y="66">at 80% of budget,</text>
+  <text class="t-soft" x="176" y="86">inline summary</text>
+  <line class="ln" x1="262" y1="33" x2="344" y2="33" marker-end="url(#ov-a)"/>
+  <text class="t-big" x="356" y="40">Agent loop</text>
+  <text class="t-soft" x="356" y="66">system, messages,</text>
+  <text class="t-soft" x="356" y="86">tools</text>
+  <line class="ln" x1="460" y1="33" x2="544" y2="33" marker-end="url(#ov-a)"/>
+  <text class="t-big" x="556" y="40">Provider</text>
+  <path class="ln-no" d="M600 52V126H220V102" marker-end="url(#ov-n)"/>
+  <text class="t-no" x="240" y="150">Context overflow: reactive compaction, one retry</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>Prepare</strong><small>history from the DAG, token budget</small></li>
+  <li><strong>Compact</strong><small>at 80% of budget, inline summary</small></li>
+  <li><strong>Agent loop</strong><small>system, messages, tools</small></li>
+  <li class="flow-end"><strong>Provider</strong><p class="refused">Context overflow: reactive compaction, one retry</p></li>
+</ol>
+</figure>
+<p class="note">The DAG render is the only pipeline. A render failure fails the turn visibly. Auxiliary calls (summarization, memory sleep, branch summary, mixture-of-agents) bypass <code translate="no">engine.prepare</code> and build a minimal <code translate="no">Context</code>: a system prompt and one user message, no tools.</p>
+
+<details>
+<summary>What <code translate="no">engine.prepare</code> does</summary>
+<p><code translate="no">process_user_turn</code> (<code translate="no">openprogram/runtime/conversation/turn_runtime/</code>) calls <code translate="no">openprogram/runtime/context/engine.py</code>:</p>
+<ol>
+<li>Scan references: <code translate="no">tool_use</code> ids cited later.</li>
+<li>Resolve the head, then <code translate="no">render_context</code>, then <code translate="no">render_dag_messages</code>.</li>
+<li>Take the system prompt the caller assembled (identity, <code translate="no">AGENTS.md</code> chain, skills, tools).</li>
+<li>Compute the token budget: system, history, tools, output reserve.</li>
+<li>Reconcile usage: the last provider measurement plus a local estimate of what was added since.</li>
+<li>Return <code translate="no">TurnPrep</code>.</li>
+</ol>
+</details>
+
+<h2 id="storage-model-dag">Storage: the DAG</h2>
+<p>A git-backed, append-only session store (<code translate="no">openprogram/state/store/session/</code>). No rule rewrites a node. Each turn is a commit and <code translate="no">predecessor</code> is what it responds to.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Operation</th><th scope="col">Effect</th></tr></thead>
+<tbody>
+<tr><th scope="row">New message</th><td>Node under HEAD; HEAD advances</td></tr>
+<tr><th scope="row">Retry</th><td>Sibling with the same content</td></tr>
+<tr><th scope="row">Edit</th><td>Sibling with different content</td></tr>
+<tr><th scope="row">Switch version <code translate="no">&lt; N/M &gt;</code></th><td>Checkout to a sibling; re-renders only</td></tr>
+<tr><th scope="row">Copy conversation</th><td>New session holding the history up to HEAD</td></tr>
+</tbody>
+</table>
+<p class="note">Edit, retry and checkout are refused while an agent runs, so the active tree never hangs on a stale node. The workdir does not roll back with checkout.</p>
+
+<details>
+<summary><code translate="no">Call</code> node fields</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Field</th><th scope="col">Meaning</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">id</code>, <code translate="no">created_at</code>, <code translate="no">metadata</code></th><td>Identity, wall-clock time, extras</td></tr>
+<tr><th scope="row"><code translate="no">seq</code></th><td>Increases within a session; the sole ordering key</td></tr>
+<tr><th scope="row"><code translate="no">role</code></th><td><code translate="no">user</code>, <code translate="no">llm</code> or <code translate="no">code</code></td></tr>
+<tr><th scope="row"><code translate="no">name</code></th><td>Model id, function name or user name; <code translate="no">context/*</code> names are pipeline nodes</td></tr>
+<tr><th scope="row"><code translate="no">input</code></th><td>Prompt blocks or arguments</td></tr>
+<tr><th scope="row"><code translate="no">output</code></th><td>Reply, return value or user content. Permanent: aging and compaction never touch it</td></tr>
+<tr><th scope="row"><code translate="no">caller</code></th><td>Call edge; top-level turns use <code translate="no">ROOT</code></td></tr>
+<tr><th scope="row"><code translate="no">predecessor</code></th><td>Conversation edge: the turn this one continues</td></tr>
+<tr><th scope="row"><code translate="no">reads</code></th><td>Nodes that went into this call's prompt</td></tr>
+</tbody>
+</table>
+<p class="note">Pipeline nodes join the chain: <code translate="no">context/system_prompt</code> records the exact prompt whenever it changes; <code translate="no">context/summary</code> stands in for compacted turns.</p>
+</details>
+
+<h2 id="rendering-aging-and-compaction">Rendering, aging, compaction</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Stage</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Selection</th><td><code translate="no">render_context</code> walks the predecessor chain from the head and admits each turn's call subtree through the frame and <code translate="no">expose</code> rules. It writes nothing. <code translate="no">render_dag_messages</code> turns a tool call into a ToolCall and ToolResult pair inside its assistant message, a direct function call into a text pair.</td></tr>
+<tr><th scope="row">Aging</th><td>The last <code translate="no">TAIL_TURNS</code> assistant turns keep tool output in full; older results become a short <code translate="no">[aged]</code> stub. Each model call records a <code translate="no">render_manifest</code> (policy version, aging boundary, spilled nodes). Oversized nodes spill to disk when written.</td></tr>
+<tr><th scope="row">Compaction</th><td>At <code translate="no">context.auto_compact_percent</code> (default 80), on <code translate="no">/compact</code>, or when the provider rejects a request as too long, <code translate="no">engine.compact</code> summarizes the oldest whole turns into one <code translate="no">context/summary</code> whose <code translate="no">covers_ids</code> lists them. A branch containing the whole covered segment renders summary and kept tail; any other renders raw. The summary must be non-empty and strictly smaller. <a href="compaction.html">Compaction</a></td></tr>
+</tbody>
+</table>
+
+<h3 id="cross-turn-tool-context">Tool aging</h3>
+<p>Whole-segment summaries lose which tools ran; without per-item aging the model repeats calls and claims files it never checked. Code: <code translate="no">openprogram/runtime/context/tool_aging/</code>, <code translate="no">aging.py</code>, <code translate="no">render.py</code>.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Setting</th><th scope="col">Effect</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">TAIL_TURNS</code> = 3</th><td>Tail window kept in full (from OpenCode)</td></tr>
+<tr><th scope="row"><code translate="no">MAX_TOOL_ARGS_CHARS</code> = 200</th><td>Older turns keep the <code translate="no">tool_use</code> head with truncated arguments; the result becomes a one-line stub (from Hermes)</td></tr>
+<tr><th scope="row"><code translate="no">MAX_TOOL_RESULT_CHARS</code> = 4000</th><td>Any larger result is cut at head and tail, even in the tail window (from OpenCode)</td></tr>
+<tr><th scope="row"><code translate="no">PRUNE_PROTECTED_TOOLS</code></th><td><code translate="no">todo_create</code>, <code translate="no">todo_update</code>, <code translate="no">todo_list</code>, <code translate="no">open_work</code>, <code translate="no">web_search</code> never age (from OpenCode)</td></tr>
+</tbody>
+</table>
+
+<h2 id="attach-merge">Attach and merge</h2>
+<p>One mechanism: an attach pointer, a node with <code translate="no">function="attach"</code> hanging off a user turn as a side child. It renders as text between <code translate="no">[Attached from "label"]</code> and <code translate="no">[End of attached content]</code>.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Use</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Attach</th><td>Passive: staged, read on the next model call</td></tr>
+<tr><th scope="row">Sub-agent report</th><td>Pointer holding the task, final reply and the <code translate="no">read_conversation(session_id, head_id)</code> address of the transcript. A synchronous spawn returns the reply in its <code translate="no">agent</code> tool result.</td></tr>
+<tr><th scope="row">Merge</th><td><code translate="no">process_merge_turn()</code> writes one pointer per peer after the target head, plus an instruction, and runs a normal turn. A base peer stays verbatim; others may be summarized. Merged heads are marked and a multi-parent context commit records the lineage.</td></tr>
+</tbody>
+</table>
+
+<h2 id="invariants">Invariants</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Subject</th><th scope="col">Invariant</th></tr></thead>
+<tbody>
+<tr><th scope="row">DAG</th><td>Append-only; aging and compaction never change node content</td></tr>
+<tr><th scope="row">Rendering</th><td>Writes nothing; spill happens on write</td></tr>
+<tr><th scope="row">Aging boundary</th><td>Only advances, and only at turn commit, so requests in one turn share a cache prefix</td></tr>
+<tr><th scope="row">Historical call</th><td>Re-renders byte for byte from its <code translate="no">render_manifest</code>, not today's policy</td></tr>
+<tr><th scope="row">Summary</th><td>At most one active per session; the next compaction absorbs it. Never moves HEAD or rewrites edges</td></tr>
+<tr><th scope="row">Branch</th><td>Never reads a sibling or a spawned sub-agent's internals; those arrive only through attach pointers</td></tr>
+<tr><th scope="row">Checkout</th><td>Does not re-run or roll back the workdir</td></tr>
+</tbody></table>
+
+<h2 id="ui">UI</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">View</th><th scope="col">Shows</th></tr></thead>
+<tbody>
+<tr><th scope="row">History</th><td>The full DAG, one node shape per role: tool calls, retry branches, merges</td></tr>
+<tr><th scope="row">Context timeline</th><td>Recorded context commits, with siblings at one fork grouped; items, state badges, token counts. <code translate="no">apps/web/components/right-sidebar/context-commit-timeline/</code>, <code translate="no">ws_actions/context_commits.py</code></td></tr>
+<tr><th scope="row">Ring</th><td><code translate="no">apps/web/components/chat/badges/context-badge.tsx</code>: <code translate="no">total_used / window</code></td></tr>
+<tr><th scope="row"><code translate="no">/context</code> panel</th><td><code translate="no">context-breakdown-panel.tsx</code>: same fields; derives Free space</td></tr>
+</tbody>
+</table>
+
+<h3 id="occupancy">Occupancy: one record, two readers</h3>
+<pre translate="no" tabindex="0"><code>{"window": int, "total_used": int, "basis": "measured" | "estimated",
+ "estimated": int, "calibration": float}   # calibration only when measured</code></pre>
+<p class="note"><code translate="no">openprogram/runtime/context/session_stats.py</code> builds it; <code translate="no">server.session_context_stats</code> serves <code translate="no">/context</code>; <code translate="no">server._broadcast_context_stats</code> pushes the <code translate="no">context_stats</code> frame. <a href="occupancy-status.html">Occupancy and compaction</a></p>
+<table class="stack">
+<thead><tr><th scope="col">Basis</th><th scope="col">When</th><th scope="col"><code translate="no">total_used</code></th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">measured</code></th><td>A real request just completed</td><td>What the provider billed for that prompt: <code translate="no">input_tokens + cache_read</code>. <code translate="no">calibration</code> is measured ÷ estimated for the same graph</td></tr>
+<tr><th scope="row"><code translate="no">estimated</code></th><td>The graph moved since</td><td>Recomputed from the current branch with the local tokenizer</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>What re-estimates, and the window</summary>
+<p><code translate="no">server.refresh_context_stats</code> re-estimates and broadcasts when the next request would change:</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Change</th><th scope="col">Site, under <code translate="no">openprogram/interfaces/server/</code></th></tr></thead>
+<tbody>
+<tr><th scope="row">Compaction mid-turn</th><td><code translate="no">ws_actions/chat/context_usage.py</code></td></tr>
+<tr><th scope="row">Model switch</th><td><code translate="no">routes/execution/runtime.py</code>, <code translate="no">ws_actions/runtime.py</code></td></tr>
+<tr><th scope="row">Branch checkout, delete</th><td><code translate="no">ws_actions/branch.py</code></td></tr>
+<tr><th scope="row">Sibling checkout</th><td><code translate="no">routes/chat_branches.py</code></td></tr>
+</tbody>
+</table>
+<ul>
+<li>A measurement belongs to its branch; another head is re-estimated.</li>
+<li>Occupancy uses the last measured request, never the sum of a turn's requests. Empty terminal events keep the last measurement. With none, the UI uses a local estimate. Usage and calibration in the older cumulative format are invalidated; cumulative billing totals are unchanged.</li>
+<li>Window: <code translate="no">get_model(provider, model)</code> and <code translate="no">real_context_window()</code>, splitting <code translate="no">provider:model</code> on the colon (<code translate="no">server._resolve_context_window</code>). The session's picker override beats its persisted model.</li>
+<li>The WebSocket chat runner records each request's prompt size as it finishes, so ring and panel update between tool calls. At turn end it refreshes the branch head and persists the final measurement.</li>
+<li>Session loading recovers a newer provider usage record from an older turn that never broadcast, unless a later session edit superseded it.</li>
+</ul>
+</details>
+
+<details>
+<summary><code translate="no">/context</code> panel levels</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Detail</th></tr></thead>
+<tbody>
+<tr><th scope="row">System prompt</th><td>Base prompt, output style, agent's own prompt, environment, <code translate="no">AGENTS.md</code>, skills index, workflows and tool notes, date, plan mode, with their text</td></tr>
+<tr><th scope="row">Tools</th><td>Loaded, on demand, MCP</td></tr>
+<tr><th scope="row">Memory</th><td><code translate="no">MEMORY.md</code> of each layer</td></tr>
+<tr><th scope="row">Conversation</th><td>By kind (<code translate="no">messages_detail.groups</code>) and largest messages (<code translate="no">messages_detail.top</code>), each linking to its transcript row</td></tr>
+</tbody>
+</table>
+<ul>
+<li>Detail rows scale with their category, so they add up to it.</li>
+<li>A chat with no session reads <code translate="no">GET /api/context/draft?provider=&amp;model=</code> (<code translate="no">session_stats.compute_draft_breakdown</code>).</li>
+<li><code translate="no">context/system_prompt</code> metadata carries <code translate="no">sections: [{name, chars}]</code>, so the text is cut back into components exactly. An older node is split by locating a fresh build's blocks; the rest shows as Other.</li>
+</ul>
+</details>
+
+<h2 id="three-layer-composition">Where the three layers get their content</h2>
+<table class="stack">
+<thead><tr><th scope="col">Layer</th><th scope="col">Content</th><th scope="col">Source</th></tr></thead>
+<tbody>
+<tr><th scope="row">L0</th><td>Base prompt, output style, agent instructions, tool list</td><td>System-prompt assembly</td></tr>
+<tr><th scope="row">L1</th><td>Project blocks and history</td><td>System-prompt assembly; DAG render, aging, compaction</td></tr>
+<tr><th scope="row">L2</th><td>This call's input and sections</td><td>The turn</td></tr>
+</tbody>
+</table>
+
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Status</th><th scope="col">Items</th></tr></thead>
+<tbody>
+<tr><th scope="row">Authoritative</th><td><code translate="no">openprogram/runtime/context/engine.py</code>, <code translate="no">nodes.py</code>, <code translate="no">render.py</code>, <code translate="no">aging.py</code>, <code translate="no">compaction/view.py</code></td></tr>
+<tr><th scope="row">Partial</th><td>Context commits are written at turn finalization and by merge turns; they are not on the render path, and the timeline does not show an ordinary turn's rendered view</td></tr>
+<tr><th scope="row">Not yet</th><td>Summarization and branch summary use a fixed prompt (<code translate="no">compaction/prompts.py</code>) that does not follow the agent's <code translate="no">AGENTS.md</code>, identity or skills. No manual pin or unpin of context items.</td></tr>
+</tbody>
+</table>
+<p class="next"><a href="composition.html">Composition: how each call is layered</a></p>

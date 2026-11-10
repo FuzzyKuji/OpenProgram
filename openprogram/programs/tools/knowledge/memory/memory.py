@@ -214,9 +214,8 @@ def _cited_chat(ref: str) -> str:
     authority = normalize_authority(authority_from_message(current, turn_id))
     # Another conversation is the owner's to read, like read_conversation.
     if session_id != current and authority.get("authority_tier") != "owner":
-        raise TransactionError(
-            "MEMORY_ACCESS_DENIED", "only the owner reads another conversation",
-        )
+        from openprogram.runtime.permissions import refusal
+        raise refusal.memory_access(f'memory_get "{ref}"')
     excerpt = chat_refs.ChatLookup().excerpt(ref)
     return sanitize_context(chat_refs.render_excerpt(excerpt))
 

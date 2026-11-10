@@ -220,6 +220,25 @@ def stream_backoff_seconds(
     return base * random.uniform(0.75, 1.25)
 
 
+RETRY_AFTER_CAP_S: float = float(
+    os.environ.get("OPENPROGRAM_RETRY_AFTER_CAP_S", "300") or 300
+)
+"""The longest server-asked wait a retry sits through in-process."""
+
+
+def retry_after_beyond_cap(retry_after_s: Optional[float]) -> bool:
+    """A ``Retry-After`` longer than :data:`RETRY_AFTER_CAP_S`: give up now, don't wait.
+
+    A plan's quota or an account's rest can ask for a wait of hours. Sat
+    through in-process, the turn hangs that long before any fallback,
+    credential switch or the user gets a say; past the cap the failure goes
+    up at once instead, still carrying the server's hint. A shorter hint is
+    honored as before: the cap is never a floor. After magpie's Retry-After
+    cap (yetone/magpie, MIT).
+    """
+    return bool(retry_after_s and RETRY_AFTER_CAP_S > 0 and retry_after_s > RETRY_AFTER_CAP_S)
+
+
 def read_retry_after(headers: Any) -> Optional[float]:
     """Extract ``Retry-After`` seconds from httpx-style headers.
 
@@ -329,6 +348,19 @@ def network_wait_allowed(max_attempts: int) -> bool:
 
 
 RetryNotice = Callable[[dict[str, Any]], None]
+
+
+RETRY_ERROR_MAX_CHARS = 300
+
+
+def retry_error_text(exc: BaseException | None) -> str | None:
+    """The failure a retry answers, as the chat's retry row shows it."""
+    if exc is None:
+        return None
+    message = " ".join(str(exc).split())
+    name = type(exc).__name__
+    text = f"{name}: {message}" if message and not message.startswith(name) else (message or name)
+    return text if len(text) <= RETRY_ERROR_MAX_CHARS else text[:RETRY_ERROR_MAX_CHARS - 1] + "…"
 
 
 def _notify(on_retry: RetryNotice | None, **event: Any) -> None:
@@ -466,7 +498,7 @@ async def _wait_for_network(
             state.phase = "retrying"
         probe += 1
         _notify(on_retry, attempt=probe, max_attempts=None, reason="network_wait",
-                delay_ms=round(sleep_s * 1000))
+                delay_ms=round(sleep_s * 1000), error=retry_error_text(failure))
         await _sleep_unless_aborted(sleep_s, abort_check)
         try:
             await attempt_fn()
@@ -561,6 +593,8 @@ async def _retry_attempts(
         state = current_recovery.get()
         if state is not None and state.phase == "cancelled":
             raise ExecInterrupt("cancelled")
+        if retry_after_beyond_cap(getattr(last_exc, "retry_after_s", None)):
+            raise _mark_exhausted(last_exc)
         if not reserve_recovery("transport"):
             raise _mark_exhausted(last_exc)
         transport_reserved += 1
@@ -581,11 +615,13 @@ async def _retry_attempts(
             label, attempt + 1, max_attempts, sleep_s, last_exc,
         )
         _notify(on_retry, attempt=attempt + 2, max_attempts=max_attempts,
-                reason="transport", delay_ms=round(sleep_s * 1000))
+                reason="transport", delay_ms=round(sleep_s * 1000),
+                error=retry_error_text(last_exc))
         await _sleep_unless_aborted(sleep_s, abort_check)
 
 
 __all__ = [
+    "retry_error_text",
     "PROVIDER_STREAM_MAX_ATTEMPTS",
     "ProviderStreamError",
     "NETWORK_WAIT_MAX_S",
@@ -595,6 +631,8 @@ __all__ = [
     "network_wait_started",
     "is_retryable_status",
     "read_retry_after",
+    "RETRY_AFTER_CAP_S",
+    "retry_after_beyond_cap",
     "retry_stream",
     "stream_backoff_seconds",
     "_sleep_unless_aborted",

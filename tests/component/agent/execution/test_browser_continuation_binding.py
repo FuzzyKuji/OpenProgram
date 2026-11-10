@@ -53,7 +53,7 @@ def test_public_continuation_binds_exact_turn_and_releases_on_error(monkeypatch,
 
     monkeypatch.setattr(dispatcher, "_run_loop_blocking", run)
     continuation = SimpleNamespace(request=request, assistant_message_id="reply",
-        state=SimpleNamespace(payload={"turn": {"user_message_id": "user"}}))
+        user_message_id="user")
     with pytest.raises(RuntimeError, match="stop after ownership check"):
         dispatcher.process_agent_continuation(continuation)
     assert (_current_turn_id.get(), get_current_session_id()) == before

@@ -211,7 +211,7 @@ export function WorkingDirChips() {
               }
             >
               <span className="folder-pill-name">
-                <SolarIcon name="folder-with-files" size={14} className="workdir-icon" />
+                <SolarIcon name="folder-with-files" size={16} fit="fill" className="workdir-icon" />
                 <span className="badge-short">{baseName(dir)}</span>
               </span>
             </HoverTip>
@@ -260,7 +260,7 @@ export function WorkingDirChips() {
               className={`${cn(buttonVariants({ variant: "elevated", size: "icon-sm" }))} runtime-badge workdir-badge workdir-add-badge`}
               aria-label={text("Add working folder", "添加工作目录")}
             >
-              <SolarIcon name="add-folder" size={14} className="workdir-icon" />
+              <SolarIcon name="add-folder" size={16} fit="fill" className="workdir-icon" />
             </button>
           </PopoverTrigger>
         </HoverTip>
@@ -291,7 +291,7 @@ export function WorkingDirChips() {
               </>
             ) : null}
             <div className={itemCls(false)} onClick={() => void chooseFolder()}>
-              <SolarIcon name="folder-with-files" size={14} className="opacity-70" />
+              <SolarIcon name="folder-with-files" size={16} fit="fill" className="opacity-70" />
               <span className="flex-1">
                 {text("Choose folder…", "选择文件夹…")}
               </span>

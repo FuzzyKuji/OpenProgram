@@ -376,6 +376,19 @@ export function enqueueMessage(
   return useSendQueue.getState().enqueue(sessionId, draft);
 }
 
+/** A message on its way into the running turn: its steer request or the
+ *  receipt it waits on is in flight and nothing has failed. The transcript
+ *  shows it at the end of the running reply, not the queue card. */
+export function steeringIntoTurn(row: QueuedMessage): boolean {
+  return Boolean((row.injecting || row.steerCommand) && !row.steerError && !row.deliveryError && !row.editing);
+}
+
+/** The turn has written the steer this row was waiting on: the row is done. */
+export function settleDeliveredSteer(sessionId: string, commandId: string): void {
+  const row = queueFor(sessionId).find(item => item.steerCommand?.command_id === commandId);
+  if (row) useSendQueue.getState().remove(sessionId, row.id);
+}
+
 /** Non-reactive read for imperative call sites. */
 export function queueFor(sessionId: string): QueuedMessage[] {
   return useSendQueue.getState().queues[sessionId] ?? EMPTY;
@@ -602,6 +615,21 @@ export function rememberSendSettings(
   settings: Omit<QueueDraft, "text">,
 ): void {
   lastSettings[sessionId] = settings;
+}
+
+/** Send `text` as the user's next message in `sessionId` from something
+ *  shown in the transcript (a button in a reply's visual): it takes the
+ *  queue, so it goes out now when the conversation is idle and waits its
+ *  turn otherwise, with the settings of this window's last send there. */
+export function sendFromTranscript(sessionId: string, text: string): string | null {
+  const settings = lastSettings[sessionId] ?? {
+    thinking: "medium",
+    webSearchEnabled: false,
+    background: false,
+  };
+  const id = enqueueMessage(sessionId, { ...settings, text });
+  if (id) useSendQueue.getState().drain(sessionId);
+  return id;
 }
 
 /** Re-queue a message the backend rejected with `run_active`, at the

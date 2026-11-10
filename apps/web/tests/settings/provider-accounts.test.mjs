@@ -21,6 +21,7 @@ installLoader({
   replace: {
     "/components/ui/switch.tsx": "import { createElement as h } from 'react'; export const Switch = ({ checked, onCheckedChange, disabled, size, className, ...rest }) => h('button', { type: 'button', role: 'switch', 'aria-checked': String(Boolean(checked)), disabled, onClick: () => onCheckedChange?.(!checked), ...rest });",
     "/components/ui/select.tsx": "export const SimpleSelect = () => null;",
+    "/components/ui/confirm-dialog.tsx": "export const confirmAction = async (request) => { globalThis.confirmRequests.push(request); return globalThis.confirmAnswer; };",
     "/components/ui/tooltip.tsx": "export const HoverTip = ({ children }) => children; export const TipBody = () => null;",
     "/components/settings/providers/auth/provider-login.tsx": "export const ProviderLogin = () => null;",
   },
@@ -123,6 +124,15 @@ test("each account action is named, and Remove and the use switch post for that 
   await view.act(() => named(container, "Rename account").click());
   assert.ok(named(container, "Account name"), "rename opens a named input");
 
+  // Removing asks first: declined posts nothing, confirmed posts for that account.
+  globalThis.confirmRequests = [];
+  globalThis.confirmAnswer = false;
+  const before = posts.length;
+  await view.act(async () => { named(container, "Remove account").click(); await settle(); });
+  assert.equal(globalThis.confirmRequests.length, 1);
+  assert.equal(globalThis.confirmRequests[0].destructive, true);
+  assert.equal(posts.length, before, "a declined removal posts nothing");
+  globalThis.confirmAnswer = true;
   await view.act(async () => { named(container, "Remove account").click(); await settle(); });
   assert.deepEqual(posts.at(-1), ["/api/providers/openai/accounts/remove", { id: "acct-1" }]);
   await view.unmount();

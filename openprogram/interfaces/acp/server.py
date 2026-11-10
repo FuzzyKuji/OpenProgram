@@ -154,7 +154,7 @@ class ACPServer:
         writer=None,
         *,
         agent_id: str = "main",
-        permission_mode: str = "ask",
+        permission_mode: str | None = None,
     ) -> None:
         self._conn = Connection(
             reader if reader is not None else sys.stdin,
@@ -162,7 +162,9 @@ class ACPServer:
             self._handle,
         )
         self._agent_id = agent_id
-        self._permission_mode = permission_mode
+        from openprogram.runtime.permissions.modes import resolve_mode
+
+        self._permission_mode = resolve_mode(permission_mode)
         self._sessions: dict[str, _Session] = {}
         self._lock = threading.Lock()
         self._unsubscribe = None
@@ -598,7 +600,7 @@ def _locations(raw_input) -> list[dict]:
 
 
 
-def serve_stdio(*, agent_id: str = "main", permission_mode: str = "ask") -> int:
+def serve_stdio(*, agent_id: str = "main", permission_mode: str | None = None) -> int:
     """Run an ACP server on stdin/stdout until the editor disconnects."""
     # stdout is the protocol channel — anything else printed there corrupts
     # the stream, so logging goes to stderr. The CLI has already attached the

@@ -285,6 +285,8 @@ def web_use_available(context: dict | None) -> bool:
         return False
     if tool_enabled(context):
         return True
+    if os.environ.get("OPENPROGRAM_IN_AGENTIC_SUBPROCESS") == "1" and (context or {}).get("origin_window_id"):
+        return True  # The window's Pages are reached through the parent's bridge.
     try:
         from openprogram.host.resources import desktop_link
 
@@ -430,8 +432,9 @@ def _local_file_url(url: str) -> dict | None:
     from openprogram.host.sandbox import validate_read_path
     violation = validate_read_path(path)
     if violation:
+        from openprogram.runtime.permissions import refusal
         return {"ok": False, "reason_code": "unsupported_url",
-                "error": f"sandbox policy: {violation}"}
+                "error": refusal.sandbox("open_page", violation).text}
     if not os.path.exists(path):
         return {"ok": False, "reason_code": "unsupported_url",
                 "error": f"local file not found: {path}"}
@@ -471,6 +474,17 @@ def open_page(
 
     session_id = get_current_session_id()
     requested_window_id = _text(window_id, 160)
+    if (
+        background and not requested_window_id
+        and os.environ.get("OPENPROGRAM_IN_AGENTIC_SUBPROCESS") == "1"
+    ):
+        # The parent opens a background Page only in the run's own window. A
+        # scheduled run has that window and no Page in it yet, so the window
+        # is named here; unnamed, the parent refuses every such open.
+        turn = current() or {}
+        requested_window_id = _text(
+            turn.get("origin_window_id") or turn.get("window_id"), 160,
+        )
     command = {
         "op": "open",
         "url": normalized,
@@ -1102,6 +1116,12 @@ def capture_pages_for_listing(context: Any = _ALL_WINDOWS) -> dict:
                 raise
         check_cancelled()
         time.sleep(_DESKTOP_RECONNECT_POLL_SECONDS)
+
+
+def without_primary_page(context: dict) -> dict:
+    """The same Pages, with none picked for a call that names no Page. A
+    capture picks the one in front, which a detached turn must leave alone."""
+    return {**context, "primary_surface_key": ""}
 
 
 def release_bindings(context: dict | None) -> None:

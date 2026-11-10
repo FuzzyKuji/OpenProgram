@@ -1,5 +1,6 @@
 "use client";
 
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -28,16 +29,14 @@ export function BaseUrl({
 
   async function save() {
     try {
-      const response = await fetch(`/api/providers/${encodeURIComponent(provider.id)}/config`, {
+      const result = await jsonFetch<{ error?: string }>(`/api/providers/${encodeURIComponent(provider.id)}/config`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ base_url: value.trim() }),
       });
-      const result = await response.json();
-      if (!response.ok || result.error) { setStatus(result.error || text("Save failed", "保存失败")); return; }
+      if (result.error) { setStatus(result.error); return; }
       setStatus(text("Saved", "已保存"));
       onChanged();
-    } catch { setStatus(text("Save failed", "保存失败")); }
+    } catch (e) { setStatus((e as Error).message || text("Save failed", "保存失败")); }
   }
 
   return (

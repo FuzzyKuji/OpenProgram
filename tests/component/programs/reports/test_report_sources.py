@@ -238,8 +238,9 @@ def test_real_sandbox_blocks_cached_conversation_and_public_tool(tmp_path, monke
     monkeypatch.setattr(session_db, 'default_db', lambda: db)
     monkeypatch.setattr(sources, 'memory_candidates', lambda *a: [])
     session_dir = db._session_dir('private')
-    file_path = next((session_dir/'history').glob('*.json'))
-    for denied in (str(session_dir) + '/**', str(session_dir/'history') + '/**', str(file_path)):
+    file_path = session_dir/'main.jsonl'
+    assert file_path.is_file()
+    for denied in (str(session_dir) + '/**', str(file_path)):
         monkeypatch.setattr('openprogram.host.sandbox.resolve_policy', lambda: SandboxPolicy(deny_read=(denied,)))
         result = asyncio.run(read_conversation.execute('read', {'session_id':'private'}, None, None))
         assert 'PRIVATE_OWNER_REPORT_FACT' not in str(result)

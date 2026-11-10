@@ -29,6 +29,9 @@ import {
   setDesktopSplitLayoutAvailable,
 } from "@/lib/desktop/desktop-bridge";
 import { ToastHost } from "./ui/toast-host";
+import { VersionNotices } from "./settings/version-notices";
+import { RewindDialog } from "./chat/rewind/rewind-dialog";
+import { RewindPicker } from "./chat/rewind/rewind-picker";
 import { CommandPalette } from "./command-palette";
 import { Composer } from "./chat/composer";
 import { LegacyTopbarBridge } from "./chat/top-bar";
@@ -44,7 +47,7 @@ import { useTranslation } from "@/lib/i18n";
 import { isSplitLayoutAvailable } from "@/lib/tabs/canvas/split-layout";
 import { getSocket, runtimeState } from "@/lib/runtime-bridge/state";
 import { newSession } from "@/lib/runtime-bridge/session/conversations";
-import { markSessionReadLocally } from "@/lib/runtime-bridge/session/chat-handlers";
+import { markSessionReadLocally, windowVisibilityChanged } from "@/lib/runtime-bridge/session/chat-handlers";
 import { completeTabRouteNavigation } from "@/lib/tabs/navigation/route";
 import { setNavigate } from "@/lib/nav/navigate";
 import { startAttentionBridge } from "@/lib/desktop/attention";
@@ -181,6 +184,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       "/scheduler",
       "/settings/environments",
       "/settings/voice",
+      "/settings/appearance",
       "/settings/channels",
       "/settings/search",
       "/mcp",
@@ -284,21 +288,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
   // route reaches the shell renders later (activeId → URL → store), so
   // switch it in the same tick as the layout; otherwise its first frames
   // show the session that just left.
-  // Coming back to a window whose open chat finished meanwhile: the chat is
-  // on screen again, so its dot clears like on opening it.
   useEffect(() => {
-    const onVisible = () => {
-      const sid = runtimeState.currentSessionId;
-      if (document.visibilityState !== "visible" || !sid) return;
-      if (!useSessionStore.getState().conversations[sid]?.unread) return;
-      markSessionReadLocally(sid);
-      const sock = getSocket();
-      if (sock && sock.readyState === WebSocket.OPEN) {
-        sock.send(JSON.stringify({ action: "mark_session_read", session_id: sid }));
-      }
-    };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => document.removeEventListener("visibilitychange", onVisible);
+    document.addEventListener("visibilitychange", windowVisibilityChanged);
+    return () => document.removeEventListener("visibilitychange", windowVisibilityChanged);
   }, []);
 
   useEffect(() => useCenterTabs.subscribe((s, prev) => {
@@ -363,7 +355,7 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       // client-side routing — this is the only "seen" signal the server gets.
       // (On first load the socket may not be open yet; use-ws's onopen
       // re-sends this for the current conv.)
-      if (sid) markSessionReadLocally(sid);
+      if (sid && document.visibilityState !== "hidden") markSessionReadLocally(sid);
       const sock = getSocket();
       if (sock && sock.readyState === WebSocket.OPEN) {
         sock.send(JSON.stringify({ action: "mark_session_read", session_id: sid }));
@@ -706,6 +698,9 @@ export function AppShell({ children }: { children: React.ReactNode }) {
       {/* App-wide transient toasts — mounted at the shell so they show on
          every route (chat AND settings), not just where the TopBar is. */}
       <ToastHost />
+      <VersionNotices />
+      <RewindDialog />
+      <RewindPicker />
       <CommandPalette />
       </div>
     </div>

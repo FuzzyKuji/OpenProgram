@@ -301,6 +301,45 @@ def test_parent_webtab_bridge_targets_background_open(monkeypatch):
     }
 
 
+def test_scheduled_run_background_open_passes_the_worker(monkeypatch):
+    """Both halves together: the command a scheduled run's child makes for a
+    background open is one the Worker serving that run accepts."""
+    from openprogram.runtime.conversation import process_runner, surface_context
+    from openprogram.interfaces.server.ws_actions import webtab
+
+    owner = object()
+    monkeypatch.setattr(webtab, "registered_desktop_windows", lambda: [(owner, "window-2", 7)])
+    monkeypatch.setattr(webtab, "request_on_ws", lambda ws, command, timeout=5.0: {
+        "ok": True, "window_id": "window-2", "tab_id": "tab-background",
+        "target_id": "target-background", "created": True, "reused": False,
+    })
+    monkeypatch.setattr(webtab, "register_binding", lambda *args, **kwargs: "surface-background")
+    monkeypatch.setattr(webtab, "binding_connection", lambda binding_id: owner)
+
+    def worker(command, timeout):
+        replies = Queue()
+        monkeypatch.delenv("OPENPROGRAM_IN_AGENTIC_SUBPROCESS")
+        try:
+            process_runner._bridge_webtab_to_parent(
+                {"req_id": "open", "command": command, "timeout": timeout}, replies, {},
+                allowed_window_id="window-2",
+            )
+        finally:
+            monkeypatch.setenv("OPENPROGRAM_IN_AGENTIC_SUBPROCESS", "1")
+        return replies.get(timeout=1)["result"]
+
+    monkeypatch.setenv("OPENPROGRAM_IN_AGENTIC_SUBPROCESS", "1")
+    monkeypatch.setattr(webtab, "_request", worker)
+    token = surface_context.bind(surface_context.window_context("window-2"))
+    try:
+        opened = surface_context.open_page("https://www.google.com/", background=True)
+    finally:
+        surface_context.reset(token)
+
+    assert opened.get("ok") is not False, opened
+    assert opened["surfaces"][0]["binding_id"] == "surface-background"
+
+
 def test_parent_background_open_response_timeout_requires_manual_cleanup(
     monkeypatch,
 ):

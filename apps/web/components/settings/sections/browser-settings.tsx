@@ -1,33 +1,22 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 
 import { Button } from "@/components/ui/button";
 import { Switch } from "@/components/ui/switch";
-import {
-  setShowBookmarksBar,
-  showBookmarksBar,
-  subscribeBrowserPrefs,
-} from "@/lib/browser/browser-prefs";
-import { desktopBridge } from "@/lib/desktop/desktop-bridge";
+import { useDesktopBridge } from "@/lib/desktop/use-desktop-bridge";
 import { useTranslation } from "@/lib/i18n";
 import { BrowserImportDialog } from "@/components/center-tabs/browser/browser-home-page";
-import styles from "../settings-page.module.css";
+import { SettingsHeading, SettingsPage, SettingsRow, SettingsSection } from "../settings-ui";
 
 export function BrowserSettings() {
   const { t, text } = useTranslation();
-  const bridge = desktopBridge();
-  const [bookmarksVisible, setBookmarksVisible] = useState(showBookmarksBar);
+  const bridge = useDesktopBridge();
   const [showImport, setShowImport] = useState(false);
   const [clearHistory, setClearHistory] = useState(true);
   const [clearCookies, setClearCookies] = useState(true);
   const [clearing, setClearing] = useState(false);
   const [clearResult, setClearResult] = useState("");
-
-  useEffect(
-    () => subscribeBrowserPrefs(() => setBookmarksVisible(showBookmarksBar())),
-    [],
-  );
 
   async function clearData() {
     if (!bridge?.browserData || (!clearHistory && !clearCookies)) return;
@@ -52,103 +41,72 @@ export function BrowserSettings() {
   const canClear = Boolean(bridge?.browserData);
 
   return (
-    <div className={styles.page}>
-      <div className={styles.pageHeader}>
-        <h2 className={styles.pageTitle}>{t("settings.tab.browser")}</h2>
-        <p className={styles.pageMeta}>
-          {text(
-            "Manage the built-in browser appearance and local browsing data.",
-            "管理内置浏览器的外观和本地浏览数据。",
-          )}
-        </p>
-      </div>
-      <div className={styles.pageBody}>
-        <section>
-          <h3 className={styles.sectionTitle}>{text("Appearance", "外观")}</h3>
-          <div className={styles.card}>
-            <div className={styles.row}>
-              <span className={styles.label}>{text("Show bookmarks bar", "显示书签栏")}</span>
-              <div className={styles.control}>
-                <Switch
-                  checked={bookmarksVisible}
-                  onCheckedChange={(checked) => setShowBookmarksBar(checked)}
-                  aria-label={text("Show bookmarks bar", "显示书签栏")}
-                />
-              </div>
-            </div>
-          </div>
-        </section>
-
-        {bridge?.browserImport ? (
-          <section>
-            <h3 className={styles.sectionTitle}>{text("Import", "导入")}</h3>
-            {showImport ? (
-              <BrowserImportDialog onDismiss={() => setShowImport(false)} />
-            ) : (
-              <div className={styles.card}>
-                <div className={`${styles.row} ${styles.rowTop} ${styles.systemRow}`}>
-                  <span className={styles.label}>
-                    {text("Import history, bookmarks, and cookies from a local browser", "从本地浏览器导入历史、书签和 Cookie")}
-                  </span>
-                  <div className={styles.control}>
-                    <Button variant="elevated" onClick={() => setShowImport(true)}>
-                      {text("Import data", "导入资料")}
-                    </Button>
-                  </div>
-                </div>
-              </div>
-            )}
+    <SettingsPage
+      title={t("settings.tab.browser")}
+      description={text(
+        "Import and clear the built-in browser's local data. The bookmarks bar is in Appearance.",
+        "导入和清除内置浏览器的本地数据。书签栏在「外观」里。",
+      )}
+    >
+      {bridge?.browserImport ? (
+        showImport ? (
+          <section className="flex flex-col gap-3">
+            <SettingsHeading title={text("Import", "导入")} />
+            <BrowserImportDialog onDismiss={() => setShowImport(false)} />
           </section>
-        ) : null}
+        ) : (
+          <SettingsSection title={text("Import", "导入")}>
+            <SettingsRow
+              label={text("Import from another browser", "从其他浏览器导入")}
+              description={text("Copies history, bookmarks and cookies from a browser on this computer.", "从这台电脑上的浏览器复制历史、书签和 Cookie。")}
+            >
+              <Button variant="elevated" onClick={() => setShowImport(true)}>
+                {text("Import data", "导入资料")}
+              </Button>
+            </SettingsRow>
+          </SettingsSection>
+        )
+      ) : null}
 
-        <section id="clear-data">
-          <h3 className={styles.sectionTitle}>{text("Clear browsing data", "清除浏览数据")}</h3>
-          <div className={styles.card}>
-            <div className={styles.row}>
-              <span className={styles.label}>{text("Browsing history", "浏览历史")}</span>
-              <div className={styles.control}>
-                <Switch
-                  checked={clearHistory}
-                  disabled={!canClear}
-                  onCheckedChange={setClearHistory}
-                  aria-label={text("Browsing history", "浏览历史")}
-                />
-              </div>
-            </div>
-            <div className={styles.row}>
-              <span className={styles.label}>{text("Cookies", "Cookie")}</span>
-              <div className={styles.control}>
-                <Switch
-                  checked={clearCookies}
-                  disabled={!canClear}
-                  onCheckedChange={setClearCookies}
-                  aria-label={text("Cookies", "Cookie")}
-                />
-              </div>
-            </div>
-            <div className={`${styles.row} ${styles.rowTop} ${styles.systemRow}`}>
-              <span className={styles.label}>
-                {text("Bookmarks are not removed.", "不会删除书签。")}
-              </span>
-              <div className={styles.control}>
-                <Button
-                  variant="destructive"
-                  disabled={clearing || !canClear || (!clearHistory && !clearCookies)}
-                  onClick={() => void clearData()}
-                >
-                  {clearing ? text("Clearing…", "正在清除…") : text("Clear data", "清除资料")}
-                </Button>
-              </div>
-            </div>
-            {clearResult ? <p className={styles.pageMeta} role="status">{clearResult}</p> : null}
-            {!canClear ? (
-              <p className={styles.pageMeta}>
-                {text("Clearing browsing data is available in the desktop app.", "清除浏览数据仅在桌面 App 中可用。")}
-              </p>
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </div>
+      <SettingsSection
+        className="scroll-mt-6"
+        title={<span id="clear-data">{text("Clear browsing data", "清除浏览数据")}</span>}
+      >
+        <SettingsRow label={text("Browsing history", "浏览历史")}>
+          <Switch
+            checked={clearHistory}
+            disabled={!canClear}
+            onCheckedChange={setClearHistory}
+            aria-label={text("Browsing history", "浏览历史")}
+          />
+        </SettingsRow>
+        <SettingsRow label={text("Cookies", "Cookie")}>
+          <Switch
+            checked={clearCookies}
+            disabled={!canClear}
+            onCheckedChange={setClearCookies}
+            aria-label={text("Cookies", "Cookie")}
+          />
+        </SettingsRow>
+        <SettingsRow
+          label={text("Clear the selected data", "清除所选数据")}
+          description={
+            clearResult
+              ? <span role="status">{clearResult}</span>
+              : canClear
+                ? text("Bookmarks are not removed.", "不会删除书签。")
+                : text("Bookmarks are not removed. Clearing is available in the desktop app.", "不会删除书签。清除功能仅在桌面 App 中可用。")
+          }
+        >
+          <Button
+            variant="destructive"
+            disabled={clearing || !canClear || (!clearHistory && !clearCookies)}
+            onClick={() => void clearData()}
+          >
+            {clearing ? text("Clearing…", "正在清除…") : text("Clear data", "清除资料")}
+          </Button>
+        </SettingsRow>
+      </SettingsSection>
+    </SettingsPage>
   );
 }

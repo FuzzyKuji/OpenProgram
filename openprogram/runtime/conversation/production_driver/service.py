@@ -33,6 +33,7 @@ class AgentProductionDriver(ActivationOperations, ExecutionOperations, SafePoint
         event_sink: shared.Callable[[dict], None] | None = None,
         activation_observer: shared.Callable[[ActivationInput], None] | None = None,
         job_resume_resolver: shared.Callable[[str], str | None] | None = None,
+        run_ended: shared.Callable[[ExecutionStore, shared.Any, shared.Any], None] | None = None,
     ) -> None:
         self.executions = executions
         self.activation = shared.AgentActivationService(
@@ -44,24 +45,13 @@ class AgentProductionDriver(ActivationOperations, ExecutionOperations, SafePoint
         self.event_sink = event_sink
         self.activation_observer = activation_observer
         self.job_resume_resolver = job_resume_resolver
+        self.run_ended = run_ended
         self._handles: dict[tuple[str, str, int], shared.AgentDriverHandle] = {}
         self._handles_lock = shared.threading.RLock()
         self._continuation_start_gates: dict[tuple[str, str, int], shared.threading.Event] = {}
         self._continuation_committed: set[tuple[str, str, int]] = set()
         self._finished: set[tuple[str, str, int]] = set()
-        # Completion is an in-process durable outbox: releasing a driver
-        # handle must not discard a terminal write that failed transiently.
-        self._pending_finishes: dict[tuple[str, str, int], tuple[AttemptRecord, int, ExecutionStatus, str, str | None, str | None]] = {}
-        self._finish_retry_worker_active = False
-        self._finish_retry_timer: shared.threading.Timer | None = None
         self._cancel_commands: dict[tuple[str, str, int], str] = {}
-        self._finish_repair_stalled: set[tuple[str, str, int]] = set()
-        self._finish_repair_metrics = {
-            "persisted": 0,
-            "backpressure": 0,
-            "write_errors": 0,
-            "stalled": 0,
-        }
 
 
     @staticmethod
@@ -95,8 +85,7 @@ class AgentProductionDriver(ActivationOperations, ExecutionOperations, SafePoint
                 handle.attempt_id, generation=handle.generation, active=False,
             )
         except Exception:
-            # Local handle cleanup must still happen. If persistence is down,
-            # the stopped heartbeat bounds this marker by its attempt lease.
+            # Local handle cleanup must still happen.
             shared._log.exception("failed to release Agent process owner %s", handle.attempt_id)
         key = self._key(handle)
         with self._handles_lock:
@@ -105,7 +94,6 @@ class AgentProductionDriver(ActivationOperations, ExecutionOperations, SafePoint
             self._continuation_start_gates.pop(key, None)
             self._continuation_committed.discard(key)
             self._finished.discard(key)
-            self._finish_repair_stalled.discard(key)
             self._cancel_commands.pop(key, None)
 
 

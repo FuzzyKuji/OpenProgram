@@ -103,7 +103,8 @@ class WechatChannel(Channel):
                         },
                         timeout=LONG_POLL_TIMEOUT,
                     )
-                data = resp.json() if resp.is_success else {}
+                resp.raise_for_status()
+                data = resp.json()
             except Exception as e:  # noqa: BLE001
                 consecutive_errors += 1
                 wait = min(60, backoff * (2 ** min(consecutive_errors - 1, 4)))
@@ -202,11 +203,22 @@ def _load_cursor_for_account(account_id: str) -> str:
 
 def _save_cursor_for_account(account_id: str, cursor: str) -> None:
     from openprogram.interfaces.channels.accounts import account_dir
-    path = account_dir("wechat", account_id) / "cursor.json"
+    from openprogram.models.auth.credentials import (
+        PrivateAtomicWriteError,
+        _private_atomic_write,
+    )
+    from openprogram.state.paths import get_state_dir
+
+    payload = json.dumps({"get_updates_buf": cursor}).encode("utf-8")
     try:
-        path.write_text(json.dumps({"get_updates_buf": cursor}), encoding="utf-8")
-    except OSError:
-        pass
+        _private_atomic_write(
+            account_dir("wechat", account_id) / "cursor.json",
+            lambda handle: handle.write(payload),
+            root=get_state_dir(),
+        )
+    except (OSError, PrivateAtomicWriteError):
+        # The next poll carries the cursor in memory and saves it again.
+        _log.warning("[wechat:%s] could not save the poll cursor", account_id)
 
 
 # --- QR login flow — operates on one account ------------------------------
@@ -227,10 +239,27 @@ def login_account(account_id: str) -> dict[str, str] | None:
         return existing
     creds = _qr_login()
     if creds is not None:
-        _accounts.save_credentials("wechat", account_id, creds)
+        _save_login(account_id, creds)
         print(f"[wechat:{account_id}] saved credentials to "  # noqa: T201 - terminal prompt
               f"{_accounts.account_credentials_path('wechat', account_id)}")
     return creds
+
+
+def _save_login(account_id: str, creds: dict[str, str]) -> None:
+    """Save a confirmed QR login and let the person who scanned it in.
+
+    A WeChat bot is talked to by the WeChat user who scanned its QR code
+    (``ilink_user_id``, the ``from_user_id`` of their messages). They
+    already proved they own the account, so asking them for a pairing
+    code on their first message only drops what they wrote. Anyone else
+    still needs one.
+    """
+    from openprogram.interfaces.channels import _access
+    from openprogram.interfaces.channels import accounts as _accounts
+    _accounts.save_credentials("wechat", account_id, creds)
+    owner = str(creds.get("ilink_user_id") or "").strip()
+    if owner:
+        _access.approve_user("wechat", account_id, owner)
 
 
 def _qr_login() -> dict[str, str] | None:
@@ -420,7 +449,7 @@ def login_account_event_driven(
             on_event({"phase": "confirmed"})
             _acct.create("wechat", account_id) if not _acct.get(
                 "wechat", account_id) else None
-            _acct.save_credentials("wechat", account_id, creds)
+            _save_login(account_id, creds)
             on_event({"phase": "done", "credentials": creds,
                       "already_configured": False})
             return creds

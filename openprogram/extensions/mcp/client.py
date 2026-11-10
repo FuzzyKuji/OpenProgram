@@ -103,27 +103,6 @@ _log_subscribers: list = []
 _log_subscribers_lock = threading.Lock()
 
 
-def add_log_subscriber(fn) -> None:  # noqa: ANN001 — fn(server, level, logger, text)
-    """Register a synchronous subscriber to MCP server log lines.
-
-    Called with ``(server: str, level: str, logger: Optional[str],
-    text: str, raw_data: Any)`` whenever any connected server emits a
-    ``notifications/message``. Subscribers should be cheap and
-    non-raising — exceptions are caught and dropped so a misbehaving
-    handler can't take down the MCP supervisor.
-    """
-    with _log_subscribers_lock:
-        _log_subscribers.append(fn)
-
-
-def remove_log_subscriber(fn) -> None:  # noqa: ANN001
-    with _log_subscribers_lock:
-        try:
-            _log_subscribers.remove(fn)
-        except ValueError:
-            pass
-
-
 # Recent-history ring buffer so a webui that connects late still sees
 # something useful. 200 lines × N servers ≈ a few KB; small.
 _log_history: list[dict] = []
@@ -565,12 +544,14 @@ class MCPClient:
             from openprogram.host.backend.local import _invocation
 
             policy = sandbox.resolve_policy(required=True)
+            reason = sandbox.unavailable_reason()
+            if reason is not None:
+                raise sandbox.SandboxUnavailable(f"a one-shot MCP test runs only in the sandbox: {reason}")
             command = shlex.join(cmd)
             args, use_shell, env, _sandboxed = _invocation(
                 command,
                 cwd=self.sandbox_cwd,
                 policy=policy,
-                force_sandbox=True,
             )
             if use_shell or not isinstance(args, list) or not args:
                 raise RuntimeError("forced MCP sandbox did not return fixed argv")

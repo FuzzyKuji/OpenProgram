@@ -1,6 +1,7 @@
 """Run approved CLI and candidate checks with native isolation and identity receipts."""
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,8 +9,10 @@ import re
 import tempfile
 import time
 
+from ..types import DEFAULT_APP_PATH
 from ..delivery.package_protocol import _file
 from ..delivery.package_protocol import _read_or_hash
+from ..types import UpdatePhase
 
 CLI_ENTRIES = {"cli:version": ("--version",), "cli:help": ("--help",)}
 NATIVE_ENTRIES = CLI_ENTRIES.keys() | {"test:python"}
@@ -44,11 +47,47 @@ def runtime_identity(app: Path, *, expected_revision=None) -> dict:
         raise ValueError("installed CLI runtime identity is unavailable or changed") from None
 
 
+def version_identity(version_dir: Path, *, expected_revision=None) -> dict:
+    """The same receipt for a sealed version: identity comes from ``version.json``."""
+    from ..versions import layout as paths
+
+    try:
+        manifest_path = version_dir / "version.json"
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = json.loads(manifest_bytes)
+        revision = manifest["commit"]
+        if not re.fullmatch(r"[0-9a-f]{40}", revision) or expected_revision not in (None, revision):
+            raise ValueError
+        python = paths.venv_python(version_dir / "venv")
+        package = paths.site_packages(version_dir, manifest["base"]) / "openprogram"
+        return dict(python=str(python), prefix=str(python.parent.parent), revision=revision,
+                    python_sha256=hashlib.sha256(python.resolve().read_bytes()).hexdigest(),
+                    manifest_sha256=hashlib.sha256(manifest_bytes).hexdigest(),
+                    cli_sha256=hashlib.sha256((package / "__main__.py").read_bytes()).hexdigest())
+    except (OSError, ValueError, TypeError, KeyError):
+        raise ValueError("sealed version identity is unavailable or changed") from None
+
+
+def trial_version_dir(record) -> Path | None:
+    """The version being tried, when the update is in its trial."""
+    if record.state.phase is not UpdatePhase.TRIAL:
+        return None
+    return Path(record.state.detail["trial"]["version_dir"])
+
+
+def identity_for(record, *, expected_revision=None) -> dict:
+    version_dir = trial_version_dir(record)
+    if version_dir is not None:
+        return version_identity(version_dir, expected_revision=expected_revision)
+    return runtime_identity(Path(DEFAULT_APP_PATH), expected_revision=expected_revision)
+
+
 def admit_plan(plan, request) -> None:
-    if any(check["entry"] in NATIVE_ENTRIES for check in plan["checks"]):
+    # Under sealed versions the trial's own identity proves the runtime, at the time it runs.
+    if not request.controller_version and any(check["entry"] in NATIVE_ENTRIES for check in plan["checks"]):
         from ..control.supervisor import _sandbox_executable
         _sandbox_executable()
-        runtime_identity(Path(request.app_path))
+        runtime_identity(Path(DEFAULT_APP_PATH))
     for check in plan["checks"]:
         if check["entry"] == "test:python":
             candidate_identity(request, check)
@@ -60,7 +99,7 @@ def candidate_identity(request, check, *, frozen=None) -> dict:
 
     worktree = tool.get_manager().get_worktree(request.worktree_id)
     if (worktree is None or worktree.status is not WorktreeStatus.ACTIVE
-            or worktree.parent_session != request.session_id or worktree.source_repo != request.repo):
+            or worktree.source_repo != request.repo):
         raise ValueError("candidate test worktree ownership changed")
     source = tool._recorded_path(request.repo, "source repo")
     candidate = tool._recorded_path(worktree.worktree_path, "candidate worktree")
@@ -77,6 +116,7 @@ def candidate_identity(request, check, *, frozen=None) -> dict:
 def observe_native(store, record, check, deadline, revalidate) -> dict:
     from ..repair.repair_candidate import _test
     from .system_probe import _probe_system
+    from .system_probe import trial_target
 
     end = time.monotonic() + min(check["timeout_seconds"], deadline - time.time())
 
@@ -87,7 +127,8 @@ def observe_native(store, record, check, deadline, revalidate) -> dict:
             raise TimeoutError("native verification deadline expired")
         return value
 
-    identity = runtime_identity(Path(record.request.app_path), expected_revision=record.request.candidate_sha)
+    identity = identity_for(record, expected_revision=record.request.candidate_sha)
+    target = trial_target(record)
     candidate = frozen = None
     if check["entry"] == "test:python":
         from ..repair.source_repair import _config
@@ -98,7 +139,7 @@ def observe_native(store, record, check, deadline, revalidate) -> dict:
         argv = [identity["python"], "-I", "-B", str(Path(candidate["path"]) / candidate["script"]), *check["argv"][1:]]
     else:
         argv = [identity["python"], "-I", "-B", "-m", "openprogram", *CLI_ENTRIES[check["entry"]]]
-    before = _probe_system(record, record.request.candidate_sha, remaining())
+    before = _probe_system(record, record.request.candidate_sha, remaining(), target=target)
     directory = store.root / record.request.update_id
     with tempfile.TemporaryDirectory(prefix="native-check-", dir=directory) as temporary:
         scratch = Path(temporary)
@@ -109,11 +150,11 @@ def observe_native(store, record, check, deadline, revalidate) -> dict:
                              verification=True, output_limit=check["max_output_bytes"])
     # A receipt is emitted only after temporary resources and processes clean up.
     observed_at = time.time()
-    if runtime_identity(Path(record.request.app_path), expected_revision=record.request.candidate_sha) != identity:
+    if identity_for(record, expected_revision=record.request.candidate_sha) != identity:
         raise ValueError("installed runtime changed during verification")
     if candidate is not None and candidate_identity(record.request, check, frozen=frozen) != candidate:
         raise ValueError("candidate changed during verification")
-    after = _probe_system(record, record.request.candidate_sha, remaining())
+    after = _probe_system(record, record.request.candidate_sha, remaining(), target=target)
     if before["worker_pid"] != after["worker_pid"]:
         raise ValueError("worker changed during native verification")
     remaining()
@@ -128,7 +169,7 @@ def observe_native(store, record, check, deadline, revalidate) -> dict:
     }}
 
 
-def validate_execution(observation, check, request, *, passed, candidate_config=None) -> None:
+def validate_execution(observation, check, request, *, passed, candidate_config=None, runtime_root=None) -> None:
     execution = observation.get("execution")
     test = check["entry"] == "test:python"
     keys = {"origin", "argv", "cwd", "runtime", "cleanup_complete"} | ({"candidate"} if test else set())
@@ -145,7 +186,7 @@ def validate_execution(observation, check, request, *, passed, candidate_config=
                    for key in ("python_sha256", "manifest_sha256", "cli_sha256"))):
         raise ValueError("native runtime receipt does not match the candidate")
     python = Path(runtime["python"])
-    root = Path(request.app_path) / "Contents/Resources/runtime"
+    root = runtime_root if runtime_root is not None else Path(DEFAULT_APP_PATH) / "Contents/Resources/runtime"
     if test:
         candidate = execution["candidate"]
         if (candidate_config is None or not isinstance(candidate, dict)

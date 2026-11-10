@@ -39,7 +39,7 @@ ACTION_ARGS: dict[str, dict[str, tuple[str, ...]]] = {
         "stop_audio_recording": ("transcribe",),
     },
     "browser": {
-        "tabs": (),
+        "tabs": ("all",),
         "open": ("url", "visible"),
         "read": ("changes_only",),
         "click": ("ref", "role", "name", "x", "y", "mouse_button", "click_count", "modifiers"),

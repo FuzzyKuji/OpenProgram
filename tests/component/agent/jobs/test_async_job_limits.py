@@ -63,9 +63,7 @@ def test_queued_cancel_does_not_cancel_unrelated_session_runtime(
         execution = runner._execution_store.get_execution(queued)
         assert execution is not None
         assert execution.status.value == "cancelled"
-        assert runner._governor.ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (queued,),
-        ).fetchone()[0] == "released"
+        assert runner._governor.ledger.run_tables().handle.first("job_admissions", job_id=queued)["state"] == "released"
     finally:
         fake_worker[1].set()
         runner.shutdown()
@@ -122,17 +120,12 @@ def test_budget_reason_survives_cancel_intent_persistence_failure(
         # Canonical cancellation can become terminal before the resource
         # observer finishes releasing the worker's admission lease.
         def admission_released():
-            admission = runner._governor.ledger.connection().execute(
-                "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-            ).fetchone()
+            admission = runner._governor.ledger.run_tables().handle.first("job_admissions", job_id=job_id)
             return admission is not None and admission["state"] == "released"
 
         assert wait_until(admission_released, timeout=10.0)
-        row = runner._governor.ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
-        assert tuple(row) == ("released", "budget.runtime_exhausted")
+        row = runner._governor.ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert (row["state"], row["reason_code"]) == ("released", "budget.runtime_exhausted")
     finally:
         fake_worker[1].set()
         runner.shutdown()
@@ -271,7 +264,6 @@ def test_canonical_driver_termination_returns_exact_receipt(monkeypatch, tmp_pat
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker",
-        ttl_seconds=30,
         attempt_id="attempt-1",
     )
     active, _running = attempts.activate(
@@ -348,9 +340,7 @@ def test_runtime_budget_moves_live_job_to_stopping_until_worker_exits(
         assert entered.wait(WORKER_START_TIMEOUT)
         clock.advance(1.1)
         def admission_state():
-            return ledger.connection().execute(
-                "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-            ).fetchone()[0]
+            return ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"]
 
         assert wait_until(lambda: admission_state() == "stopping")
         state = admission_state()

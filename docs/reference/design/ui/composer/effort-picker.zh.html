@@ -1,1 +1,43 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>思考力度设置</title><style>body{font:16px/1.7 system-ui;max-width:850px;margin:40px auto;padding:0 24px;background:#f8f7f3;color:#292824}h1,h2{line-height:1.3}h2{margin-top:32px;font-size:20px}</style><main><h1>思考力度设置</h1><h2>设计与参考</h2><p>参照本机 Claude 2.31226.0 的实际布局和时序，采用中性刻度轨道、白色滑块、方向性文字过渡和最高档的紫色方格动画。实现独立编写；保留供应商真实档位，不新增 Ultracode 工作流。</p><h2>行为与动画</h2><p>选项和推荐标记来自当前模型。多个选项中的最高档触发效果，包括 xhigh、max 或 high。普通档位为灰色轨道；拖动滑块放大 12%，文字在 200ms 内位移并消除模糊。最高档以约 4px 间距排列 3px 圆角方格，从右侧随机反复扩散，700ms 进入，850ms 退出。使用完整 WebGL2 着色流程：八组叠加扩散、五档亮度、逐格亮度漂移、同步底色传播、深浅色独立混合。轨道采用裁切与反向位移，拖动有档位内弹性位移和 120ms 吸附，文字采用四层模糊过渡。拖动期间预览，释放时保存。Fast、帮助和参数保存逻辑保持原有行为。</p><h2>生命周期与验收</h2><p>关闭、卸载、页面隐藏和减少动态效果时停止动画。减少动态效果关闭装饰动画。主题颜色使用 CSS 变量，画布不可用时仍可操作滑块。验证键盘、指针、最高档持续动画、退出衰减、模型切换、Fast 独立性以及浅深色和窄布局，并另行验收默认安装 App。函数调用、对话生成和权限均不在范围内。</p><h2>实现证据</h2><p id="status">完整 WebGL2 动画、分层文字和离散滑块已实现，生产构建通过。遵照用户要求不再运行测试，直接安装。不声明已经完成原生界面的逐像素一致性验收。</p></main></html>
+<title>思考深度选择器</title>
+<meta name="description" content="输入框的思考深度弹层：选项、滑块动效、最高档动画及其生命周期。">
+<h1>思考深度选择器</h1>
+
+<p>布局和时序参照观察到的 Claude desktop 2.31226.0，独立实现。Claude 的 Ultracode 工作流模式没有对应物：OpenProgram 保留提供商的深度 id。选项和“推荐”来自所选模型；Radix 负责指针和键盘选择；状态走输入框设置。<a href="composer-fast-control.zh.html">Fast</a> 和帮助相互独立。</p>
+
+<h2>动效</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">元素</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">轨道</th><td>中性填充、离散刻度，裁剪填充内反向平移的全宽动画场</td></tr>
+<tr><th scope="row">手柄</th><td>白色；拖动时放大 12%；弹性的子级反馈；120ms 吸附</td></tr>
+<tr><th scope="row">选择</th><td>拖动时预览，松手提交。指针取消时清除拖动反馈。</td></tr>
+<tr><th scope="row">标签</th><td>四层过渡：垂直移动，200ms 内从模糊变清晰</td></tr>
+</tbody>
+</table>
+
+<h2>最高档动画场</h2>
+<p>在多个选项中的最高档运行（<code translate="no">xhigh</code>、<code translate="no">max</code> 或 <code translate="no">high</code>）。只有一个或没有选项时不动。</p>
+<dl class="pairs">
+<dt>单元</dt><dd>4px 网格上的 3px 圆角方块，淡紫色</dd>
+<dt>图案</dt><dd>WebGL2 八脉冲场从右侧传播，五级亮度，单元亮度漂移，按主题的预乘颜色</dd>
+<dt>时序</dt><dd>700ms 进入；离开时 850ms 淡出，画布保持轨道全宽</dd>
+<dt>分辨率</dt><dd>跟随设备像素比，上限 4,147,200 像素</dd>
+</dl>
+
+<h2>生命周期</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">情况</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">动画</th><td>一个动画回调，在关闭、卸载、文档隐藏或减少动态时取消。</td></tr>
+<tr><th scope="row">失败</th><td>减少动态时关闭动画场。Canvas 失败时滑块仍可用。</td></tr>
+<tr><th scope="row">无障碍</th><td>主题色来自 CSS token。具名值、键盘焦点和推荐刻度保持无障碍。</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>验收</summary>
+<p>在真实 <code translate="no">ThinkingEffortPill</code> 上：指针和键盘选择的深度 id 不变；<code translate="no">xhigh</code> 有动画；离开后淡出为空；重新打开和换模型正常；Fast 保持独立；减少动态时画面稳定；深色、浅色和窄布局清晰。</p>
+</details>
+
+<h2>实现状态</h2>
+<p>已实现。不声称与参考像素一致。</p>

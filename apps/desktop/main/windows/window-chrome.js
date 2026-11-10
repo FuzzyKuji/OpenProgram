@@ -37,7 +37,7 @@ function browserWindowChromeOptions(platform, chrome) {
       autoHideMenuBar: true,
     };
   }
-  return {};
+  return { autoHideMenuBar: true };
 }
 
 function applyNativeTitleBarChrome(win, platform, chrome) {
@@ -57,6 +57,10 @@ function applyNativeTitleBarChrome(win, platform, chrome) {
       symbolColor: chrome.text,
       height: WINDOWS_TITLEBAR_HEIGHT,
     });
+  }
+  if (platform === "linux") {
+    // Accelerators keep working from the hidden application menu.
+    win.setMenuBarVisibility?.(false);
   }
 }
 

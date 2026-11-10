@@ -360,7 +360,8 @@ def test_concurrent_meta_writers_never_publish_a_torn_file(db):
 
     db.create_session("s1", agent_id="a")
     _append(db, "s1", "n1")
-    meta_path = db._session_dir("s1") / "meta.json"
+    from openprogram.state.store.session.session_log import SessionLog
+    log = SessionLog(db._session_dir("s1"))
 
     errors: list[str] = []
     torn: list[str] = []
@@ -383,15 +384,12 @@ def test_concurrent_meta_writers_never_publish_a_torn_file(db):
                 errors.append(f"{type(e).__name__}: {e}")
 
     def reader():
-        from openprogram.state.store.session.git_session import read_text_with_retry
-
+        seen_branches = False
         while not stop.is_set():
-            try:
-                _json.loads(read_text_with_retry(meta_path))
-            except FileNotFoundError:
-                torn.append("meta.json missing")
-            except _json.JSONDecodeError as e:
-                torn.append(f"torn json: {e}")
+            has_branches = bool(log.read_meta().get("branches"))
+            if seen_branches and not has_branches:
+                torn.append("meta lost its branches")
+            seen_branches = seen_branches or has_branches
 
     threads = [threading.Thread(target=f)
                for f in (namer, archiver, reader)]
@@ -409,5 +407,5 @@ def test_concurrent_meta_writers_never_publish_a_torn_file(db):
     meta = db.get_branch_meta("s1", "n1")
     assert meta["archived"] is True
     assert meta["name"].startswith("auto-")
-    on_disk = _json.loads(meta_path.read_text(encoding="utf-8"))
+    on_disk = log.read_meta()
     assert on_disk["branches"]["n1"]["archived"] is True

@@ -1,85 +1,120 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Memory interface</title>
-<style>
-  :root{--bg:#151714;--panel:#1d201c;--line:#33382f;--text:#d7d9d2;--muted:#969b91;--accent:#75a76c;--warn:#d0a15a}
-  *{box-sizing:border-box}body{margin:0;padding:40px 24px 80px;background:var(--bg);color:var(--text);font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif}
-  main{max-width:1080px;margin:auto}h1{font-size:26px;margin:0 0 8px}h2{font-size:18px;margin:36px 0 10px;color:#a8c9a1}h3{font-size:14px;margin:0 0 6px}p{margin:6px 0 12px;color:var(--muted)}code{background:#10120f;padding:2px 5px;border-radius:4px;color:#c9dfc4}
-  .grid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.card{border:1px solid var(--line);background:var(--panel);border-radius:10px;padding:15px}.card p{margin:0}.flow{display:grid;grid-template-columns:repeat(5,1fr);gap:8px}.step{border:1px solid var(--line);background:#10120f;border-radius:9px;padding:12px;min-height:120px}.step b{display:block;margin-bottom:6px}.boundary{border-left:3px solid var(--warn)}table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{border:1px solid var(--line);padding:10px;text-align:left;vertical-align:top}th{background:#10120f}ul{padding-left:20px}@media(max-width:820px){.grid,.flow{grid-template-columns:1fr}}
-</style>
-</head>
-<body><main>
-<span id="commitments-migration"></span><span id="commitments-迁移"></span><h1>Memory interface</h1>
-<p>Scheduler owns timing, execution, status, and results; Memory owns long-term semantic facts. Stable references and existing Memory tools connect them, but they share neither state files nor write transactions. Agents can explicitly maintain associated Memory records while planning, executing, and closing tasks.</p>
+<meta name="description" content="How Scheduler tasks reference Memory records through stable IDs without shared state or transactions.">
+<meta name="covers" content="openprogram/runtime/scheduler/service.py openprogram/state/memory/scheduler.py openprogram/programs/tools/jobs/cron/">
+<span id="commitments-migration"></span>
+<h1>Memory interface</h1>
 
-<h2>1. Goals and boundaries</h2>
-<div class="grid">
-  <section class="card"><h3>One-time tasks</h3><p>Store a timezone-aware <code>run_at</code> and execute once when due. Migrate dated legacy Commitments to this type.</p></section>
-  <section class="card"><h3>Recurring tasks</h3><p>Reuse existing five-field cron parsing, owner signatures, frozen sandbox policies, and non-interactive execution boundaries.</p></section>
-  <section class="card"><h3>Monitoring tasks</h3><p>Periodically execute observation prompts with cron. The first version records execution logs and state without promising cross-channel exactly-once notifications.</p></section>
-</div>
-<section class="card boundary" style="margin-top:12px"><h3>Explicit exclusions</h3><p>The Memory writer does not infer tasks; Memory pages do not show Commitments; Scheduler service does not implicitly create or modify Memory. No cross-store Scheduler/Memory transactions, external-token permission model, placeholders or ID forwarding for deleted records, second executor, project management, task dependencies, or subtasks are introduced.</p></section>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 190" role="img" aria-label="Scheduler owns timing, execution, status and results. Memory owns long-term semantic facts in a Git repository. A MemoryRef of workspace_id and memory_id connects them: each execution reads the current content. A prompt task writes back only by calling the existing memory tools. They share no state files and no write transactions.">
+  <defs><marker id="mi-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <rect class="tile" x="0" y="10" width="190" height="124" rx="8"/>
+  <text class="t-big" x="16" y="48">Scheduler</text>
+  <text class="t-soft" x="16" y="76">timing, execution</text>
+  <text class="t-soft" x="16" y="96">status, results</text>
+  <rect class="tile" x="490" y="10" width="190" height="124" rx="8"/>
+  <text class="t-big" x="506" y="48">Memory</text>
+  <text class="t-soft" x="506" y="76">long-term facts</text>
+  <text class="t-soft" x="506" y="96">Git transactions</text>
+  <line class="ln" x1="478" y1="52" x2="202" y2="52" marker-end="url(#mi-a)"/>
+  <text class="t-cmd mid notranslate" translate="no" x="340" y="42">MemoryRef read at each run</text>
+  <line class="ln" x1="202" y1="104" x2="478" y2="104" marker-end="url(#mi-a)"/>
+  <text class="t-cmd mid notranslate" translate="no" x="340" y="94">memory_update, by the agent</text>
+  <text class="t-soft mid" x="340" y="170">No shared state files or write transactions</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>Scheduler</strong><small>timing, execution, status, results</small></li>
+  <li class="via"><code translate="no">MemoryRef</code> read at each run; <code translate="no">memory_update</code> by the agent</li>
+  <li class="flow-end"><strong>Memory</strong><small>long-term facts, Git transactions</small></li>
+</ol>
+</figure>
 
-<h2>2. Target data relationships</h2>
-<div class="flow">
-  <div class="step"><b>1 Create</b>Owner Web UI, an Agent tool, or an external API creates a Scheduler task.</div>
-  <div class="step"><b>2 Freeze</b>The runtime signs prompt/command, cwd, permissions, sandbox, and MemoryRef.</div>
-  <div class="step"><b>3 Wake</b>The persistent OpenProgram worker checks once/cron schedules every minute.</div>
-  <div class="step"><b>4 Resolve</b>Before execution, read current Memory content using <code>workspace_id + memory_id</code>.</div>
-  <div class="step"><b>5 Execute</b>Execute within frozen non-interactive permission boundaries and write Scheduler logs and state.</div>
-</div>
-<section class="card boundary" style="margin-top:12px"><h3>Worker tick exception boundary</h3><p>If the initial <code>@reboot</code> tick or subsequent ordinary ticks raise <code>Exception</code>, the daemon writes a warning and full traceback to stderr and continues at the next minute boundary. It neither immediately replays nor compensates. After initial failure, subsequent ticks use <code>reboot=False</code>. Redirected stderr from the persistent OpenProgram worker goes to the global worker log; standalone foreground <code>scheduler-worker</code> displays it in the current terminal. Neither is an individual task execution log.<code>run_once</code>, <code>KeyboardInterrupt</code>, <code>SystemExit</code> and other <code>BaseException</code> remain fail-fast.</p></section>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Task type</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">One-time</th><td>Timezone-aware <code translate="no">run_at</code>, runs once</td></tr>
+<tr><th scope="row">Recurring</th><td>Five-field cron, owner signatures, frozen sandbox policies, non-interactive execution</td></tr>
+<tr><th scope="row">Monitoring</th><td>Observation prompts on cron; records logs and state, no cross-channel exactly-once notification</td></tr>
+</tbody>
+</table>
+<p class="note">Excluded: the Memory writer inferring tasks, Commitments on Memory pages, the service implicitly changing Memory, cross-store transactions, an external-token permission model, placeholders or forwarding for deleted records, a second executor, project management, dependencies, subtasks.</p>
 
-<h2>3. Public MemoryRef contract</h2>
-<table><thead><tr><th>Field</th><th>Rule</th><th>Failure</th></tr></thead><tbody>
-  <tr><td><code>workspace_id</code></td><td>Must equal the stable ID of the current Memory workspace.</td><td>Reject implicit cross-workspace reads.</td></tr>
-  <tr><td><code>memory_id</code></td><td>Must resolve to a unique Topic block at creation and update; reread content on every execution.</td><td>Reject missing, duplicate, cross-workspace, or malformed references on write. An invalid reference before execution fails the task without falling back to an old snapshot.</td></tr>
-  <tr><td>Write capability</td><td>MemoryRef itself grants no editing authority. Prompt tasks created by the local owner may use <code>memory_search</code>, <code>memory_get</code> and <code>memory_update</code>; all changes still use existing citation checks, format validation, derived views, and Git transactions.</td><td>Uncitable sources, malformed Topics, or concurrent updates fail the Memory transaction independently; Scheduler state is not rolled back.</td></tr>
-</tbody></table>
-
-<h2>4. Agent lifecycle protocol</h2>
-<table><thead><tr><th>Phase</th><th>Agent behavior</th><th>Boundary</th></tr></thead><tbody>
-  <tr><td>Planning or creation</td><td>Only if the task itself merits long-term retention does the agent use <code>memory_update.create_record</code> to create a task record, then attach the returned <code>memory_id</code> as <code>memory_refs</code> to the Scheduler task. Ordinary temporary reminders need not write to Memory.</td><td>Execute the calls sequentially without treating them as one atomic transaction; explicitly report either failure to the agent.</td></tr>
-  <tr><td>Execution or state change</td><td>The prompt task receives current MemoryRef content at execution. If the record describes this task, the agent first reads the original record, then uses <code>update_record</code> to write current status, results, or information to retain for the next execution.</td><td>Scheduler cannot use other side-effect tools such as shell, file writing, or network sending; added write capability is limited to existing Memory transaction tools.</td></tr>
-  <tr><td>Closure</td><td>If long-term value remains, update the associated record as completed, closed, or with the final result; if no retention value remains, delete it using <code>delete_record</code>. An interactive agent may also disable or delete the Scheduler task.</td><td>After deletion, the current Memory API no longer resolves the old ID. A Scheduler task still referencing it fails on the next resolution; remove or close the task first.</td></tr>
-</tbody></table>
-<div class="card boundary" style="margin-top:12px"><h3>Git recovery boundary</h3><p>Commits preceding record deletion remain retrievable and recoverable from reachable history in the same Memory Git repository, provided changes were committed, the repository still exists, and history was not rewritten or pruned. Current <code>memory_get</code> queries only HEAD. Recoverability through Git history therefore does not mean an old <code>memory_id</code> can be queried directly through the current API, nor does it provide an absolute 100% guarantee.</p></div>
-
-<h2>5. Legacy Commitments migration</h2>
+<h2>Lifecycle of a run</h2>
+<ol>
+<li>Owner Web UI, an Agent tool or an external API creates the task.</li>
+<li>The runtime signs prompt or command, cwd, permissions, sandbox and MemoryRef.</li>
+<li>The persistent worker checks once and cron schedules every minute.</li>
+<li>Each run begins by loading the memory as it stands now, through <code translate="no">workspace_id + memory_id</code>.</li>
+<li>Execution stays in the frozen non-interactive boundary and writes Scheduler logs and state.</li>
+</ol>
+<details>
+<summary>Tick exceptions</summary>
 <ul>
-  <li>Migrate only <code>open</code> records. Dated records become enabled one-time tasks scheduled for 09:00 local time on that date.</li>
-  <li>Undated records become paused one-time drafts, retaining text and provenance until the owner sets a time.</li>
-  <li>After successful migration, move the original <code>commitments.jsonl</code> to the Scheduler migration archive. Repeated startups must not create duplicates.</li>
-  <li>Remove the <code>record_commitments</code> tool and prompts from the Memory writer. Retain the old runtime parser only for one-time migration compatibility.</li>
+<li>An <code translate="no">Exception</code> in the <code translate="no">@reboot</code> tick or an ordinary tick goes to stderr as a warning and full traceback; the daemon continues at the next minute boundary without replay. After an initial failure, later ticks use <code translate="no">reboot=False</code>.</li>
+<li>Persistent worker: stderr goes to the global worker log. Foreground <code translate="no">scheduler-worker</code>: the terminal. Neither is a task execution log.</li>
+<li><code translate="no">run_once</code>, <code translate="no">KeyboardInterrupt</code>, <code translate="no">SystemExit</code> and other <code translate="no">BaseException</code> stay fail-fast.</li>
+<li><code translate="no">scheduler-worker</code> and its alias <code translate="no">cron-worker</code>, with <code translate="no">--once</code> and <code translate="no">--list</code>, bypass the stdio redirection meant for Ink TUI startup.</li>
+</ul>
+</details>
+
+<h2>MemoryRef</h2>
+<table class="stack">
+<thead><tr><th scope="col">Field</th><th scope="col">Rule</th><th scope="col">Failure</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">workspace_id</code></th><td>Stable ID of the current Memory workspace</td><td>Implicit cross-workspace reads rejected</td></tr>
+<tr><th scope="row"><code translate="no">memory_id</code></th><td>Resolves to a unique Topic block at create and update; content reread at each execution</td><td>On write: missing, duplicate, cross-workspace or malformed rejected. Before execution: the task fails, with no fallback to an old snapshot. If several refs exceed the limit, all IDs and Topic paths stay, only content is cut and marked.</td></tr>
+<tr><th scope="row">Write capability</th><td>The ref grants none. Local-owner prompt tasks may use <code translate="no">memory_search</code>, <code translate="no">memory_get</code>, <code translate="no">memory_update</code>, through existing citation checks, format validation, derived views and Git transactions.</td><td>A failed Memory transaction leaves Scheduler state alone</td></tr>
+</tbody>
+</table>
+
+<h2>Agent protocol</h2>
+<table class="stack">
+<thead><tr><th scope="col">Phase</th><th scope="col">Agent</th><th scope="col">Boundary</th></tr></thead>
+<tbody>
+<tr><th scope="row">Planning</th><td>Only for a task worth keeping: <code translate="no">memory_update.create_record</code>, then attach the returned <code translate="no">memory_id</code> as <code translate="no">memory_refs</code></td><td>Sequential, not atomic; either failure is reported. Temporary reminders need no Memory.</td></tr>
+<tr><th scope="row">Execution</th><td>Reads the original record, then <code translate="no">update_record</code> with status, results or what the next run needs</td><td>Other tools follow the conversation's permission mode. Only Memory lifecycle tools are refused to a schedule not set up by the owner.</td></tr>
+<tr><th scope="row">Closure</th><td>Mark completed or closed, or <code translate="no">delete_record</code> when nothing is worth keeping. An interactive agent may disable or delete the task.</td><td>The old ID returns <code translate="no">NOT_FOUND</code>; a task still referencing it fails next time, so remove the task first.</td></tr>
+</tbody>
+</table>
+<p class="note">Deleted content stays recoverable from reachable Git history if it was committed, the repository exists and history was not rewritten. <code translate="no">memory_get</code> queries only HEAD, so an old ID is not queryable through the API.</p>
+
+<h2>Legacy Commitments</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Record</th><th scope="col">Becomes</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">open</code>, dated</th><td>Enabled one-time task at 09:00 local on that date</td></tr>
+<tr><th scope="row"><code translate="no">open</code>, undated</th><td>Paused one-time draft keeping text and provenance until the owner sets a time</td></tr>
+<tr><th scope="row">Original file</th><td><code translate="no">commitments.jsonl</code> moves to the Scheduler migration archive; repeated startups create no duplicates</td></tr>
+<tr><th scope="row">Memory writer</th><td>No <code translate="no">record_commitments</code> tool or prompts. The old parser stays only for migration.</td></tr>
+</tbody>
+</table>
+
+<h2>Scheduler page</h2>
+<ul>
+<li>Shared page header and theme tokens; <code translate="no">ManagePageHeader</code>, <code translate="no">ManageRow</code>. Search and the primary action share one row in the 64px topbar.</li>
+<li>Four compact filters in a row below the header, no sidebar; they wrap when narrow. Rows keep schedule, status and actions, numbered in visible order.</li>
+<li>Empty state: introduction and Create task centered; three suggestion cards in a centered grid up to 960px, one column when narrow, each with title, schedule, prompt and Use.</li>
+<li>Create and Use open the existing form without creating a task; Escape returns.</li>
 </ul>
 
-<h2>6. Scheduler layout</h2>
-<p>The Scheduler uses the shared page header and theme tokens. Four compact filters occupy a horizontal row below the header instead of a full-height sidebar. Filters wrap at narrow container widths. Task rows retain their schedule, status and actions.</p>
-<div class="card"><h3>Empty state</h3><p>The introduction and Create task action are centered within the available content area. Three suggestion cards share a centered, 960px maximum-width grid, with one column in narrow containers. Each card shows its title, schedule, prompt and a Use action that opens the existing form. Existing tasks remain a full-width list.</p></div>
-<p>Acceptance: /scheduler has no dedicated category column; all four filters remain accessible at 360px, 768px and 1440px container widths; suggestions wrap without horizontal overflow; Create and Use open the existing form without creating a task; loading, search and error states retain their behavior. No scheduler API, persistence, execution or terminal TUI changes.</p>
-<p>Implementation status: the layout passes specification and quality reviews, Web static checks, 152 unit tests, TypeScript checking, production build, and documentation link checks. Browser component previews at 360px, 768px and 1440px show no horizontal overflow; Create task and Use open the existing dialog. The default App also displays the layout correctly; Use opens the existing prefilled form and Escape returns to the Scheduler without creating a task.</p>
+<details>
+<summary>Choices</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Source</th><th scope="col">Handling</th></tr></thead>
+<tbody>
+<tr><th scope="row">Scheduled tasks product reference</th><td>Standalone page, Create, search, one-time, recurring and monitoring categories. No repeated hero title or large whitespace.</td></tr>
+<tr><th scope="row">Existing cron</th><td>Execution safety and cron-compatible entry points stay; named Scheduler, in the persistent worker</td></tr>
+<tr><th scope="row">Commitments, heartbeat</th><td>Not a Memory type; migration reads only, no tab, status field or special heartbeat</td></tr>
+<tr><th scope="row">Automatic dual writes</th><td>Rejected. Agents compose two existing tools.</td></tr>
+</tbody>
+</table>
+</details>
 
-<h2>7. Adoption, changes, and exclusions</h2>
-<table><thead><tr><th>Reference</th><th>Handling</th></tr></thead><tbody>
-  <tr><td>User-provided Scheduled tasks screenshot</td><td>Adopt a standalone page, Create, search, and one-time/recurring/monitoring product categories. Exclude a repeated hero title and large whitespace. Reuse OpenProgram’s <code>ManagePageHeader</code>, <code>ManageRow</code>, theme-consistent filter buttons, and theme tokens.</td></tr>
-  <tr><td>Existing OpenProgram cron</td><td>Retain execution safety and cron-compatible entry points, rename the product to Scheduler, and integrate it into the persistent worker.</td></tr>
-  <tr><td>Original Commitments/heartbeat</td><td>Do not retain it as a Memory type. Keep migration reads only, without the Memory tab, status field, or special heartbeat.</td></tr>
-  <tr><td>Automatic Scheduler writes to Memory</td><td>Reject implicit dual writes in the service layer. Let agents explicitly compose two existing tools and store the relationship in MemoryRef, avoiding new cross-store transactions and duplicate CRUD.</td></tr>
-</tbody></table>
+<h2>Acceptance</h2>
+<ul>
+<li>The three Memory tools execute from a Scheduler prompt worker, deny and ask rules still win, and a scripted run updates a Topic with a Memory Git commit.</li>
+<li>Regressions cover initial and ordinary ticks, waits, oversleep, logging, CLI entry points and both fail-fast boundaries.</li>
+<li>No horizontal overflow at 360, 768 and 1440 px container widths; all four filters reachable; loading, search and error states unchanged.</li>
+</ul>
 
-<h2>8. Implementation brief and acceptance</h2>
-<p>This change is limited to the internal Memory lifecycle of Scheduler prompt tasks: retain existing Scheduler service, REST, UI, and Memory data formats; permit Scheduler-origin calls to <code>memory_search</code>, <code>memory_get</code> and <code>memory_update</code>, and extend Agent tool descriptions and execution-context prompts. Public RED tests must prove these three tools execute while shell, ordinary file writes, network sending, and Scheduler self-modification remain strictly denied. Memory writes continue through existing authority, transaction, and Git paths. External API permissions are outside this implementation. After record deletion, current queries for the old <code>memory_id</code> return <code>NOT_FOUND</code>.</p>
-<p>The separate worker reliability change isolates complete tick exceptions in <code>run_forever</code> and lets <code>scheduler-worker</code> and <code>cron-worker</code> bypass stdio redirection intended only for Ink TUI startup. It does not change Scheduler service, REST, task state formats, claim, spawn, or <code>run_once</code>.</p>
-<table><thead><tr><th>Acceptance item</th><th>Current evidence</th></tr></thead><tbody>
-  <tr><td>Focused Python checks</td><td>Scheduler, permissions, cron CLI, and Memory routes/runtime total <code>133 passed</code>; Ruff passes.</td></tr>
-  <tr><td>Memory lifecycle</td><td>The actual Scheduler prompt worker loads merged permission rules; local-owner tasks may use <code>memory_search</code>, <code>memory_get</code> and <code>memory_update</code>; deny/ask still take precedence and other side effects remain denied. An actual ScriptedProvider flow updated a Topic and created a Memory Git commit. If multiple MemoryRefs exceed the limit, retain every ID and Topic path, truncate only content, and mark truncation explicitly. Both specification and quality re-reviews passed.</td></tr>
-  <tr><td>Daemon-loop fault isolation</td><td><code>run_forever</code> writes ordinary tick exceptions as warnings and full tracebacks to stderr (redirected to the global worker log for the persistent worker, displayed in the terminal for standalone foreground commands), waits for the original minute cadence, then continues with the next tick. Initial failure does not replay the <code>@reboot</code> tick. This output does not enter the task execution log.<code>run_once</code> still propagates exceptions immediately; <code>KeyboardInterrupt</code> and similar <code>BaseException</code> are not converted into retries. The canonical command, compatibility alias, and their <code>--once</code>/<code>--list</code> entry points all bypass TUI stdio redirection. Public regressions cover initial/ordinary ticks, normal waits, oversleep, the next tick, logging, CLI entry points, and both fail-fast boundaries.</td></tr>
-  <tr><td>Full Python checks</td><td><code>5316 passed, 15 skipped, 2 deselected, 1 xfailed</code>. The remaining four failures were individually reproduced on baseline commit <code>17db67dc</code> and concern existing channel HTTP inventory and agentic harness scanning.</td></tr>
-  <tr><td>Web</td><td>Full static checks, Scheduler checks, and <code>tsc --noEmit</code> pass. The standalone page includes initial-load errors, action errors, and accessible icon-button names. Visual acceptance requires one page title, a 64px management-page topbar, search and the primary action in one row, horizontal category filters below the topbar, task numbering in visible order, and centered responsive suggestion cards in the empty state, confirmed by screenshots in the default 18100 App.</td></tr>
-  <tr><td>Independent review</td><td>Specification review passed. All quality findings concerning permissions, state claims, concurrency, MemoryRef, compatibility entry points, and UI error handling were fixed and re-review passed. The separate management-page structural revision received specification PASS. Quality review requested narrow-column reflow, distinguishable action names, and executable view-logic checks; scoped re-review passed after repair.</td></tr>
-</tbody></table>
-<p><b>Implementation status for this change: </b>Internal-agent Scheduler–Memory lifecycle integration and ordinary daemon-tick exception isolation are implemented. Deleted records retain no placeholder or ID forwarding; current queries for the old <code>memory_id</code> return <code>NOT_FOUND</code>. The external-token permission model remains deferred as scoped.</p>
-</main></body></html>
+<h2>Implementation status</h2>
+<p>Implemented: internal-agent lifecycle, tick isolation, page layout. Deferred: the external-token permission model.</p>

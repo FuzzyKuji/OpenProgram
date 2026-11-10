@@ -114,7 +114,8 @@ def _upload(session_id: str, selector: str, path: str) -> str:
     from openprogram.host.sandbox import validate_read_path
     violation = validate_read_path(path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("browser upload", violation)
     if not os.path.isfile(path):
         return f"Error: file not found: {path}"
     try:

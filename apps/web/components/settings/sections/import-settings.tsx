@@ -8,6 +8,7 @@
  * Re-importing is safe server-side, so "Import new" just sends every
  * new or updated transcript.
  */
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useCallback, useEffect, useState } from "react";
 
 import { Badge } from "@/components/ui/badge";
@@ -81,13 +82,10 @@ export function ImportSettings() {
     if (!paths.length) return;
     setBusy((b) => new Set([...b, ...paths]));
     try {
-      const res = await fetch("/api/sessions/import", {
+      const { results } = await jsonFetch<{ results: ImportResult[] }>("/api/sessions/import", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paths }),
       });
-      if (!res.ok) throw new Error(String(res.status));
-      const { results } = (await res.json()) as { results: ImportResult[] };
       const count = (s: ImportResult["status"]) => results.filter((r) => r.status === s).length;
       const done = count("created") + count("appended");
       const errors = count("failed");

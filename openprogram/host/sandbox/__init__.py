@@ -19,6 +19,9 @@ approval layer. Callers that already hold a policy pass it explicitly to
 What the boundary is for every available platform backend:
 
 * writes are confined to the working directory plus configured roots
+* inside them, files that something outside the sandbox runs later (shell
+  startup files, the repository's git hooks and config, OpenProgram's own
+  state) stay read-only; see ``protected_writes``
 * reads are open EXCEPT the credential globs in ``deny_read``
 * the network is off unless ``sandbox.network`` is on
 * the child environment is an allowlist, so API keys do not reach it
@@ -40,9 +43,10 @@ import shutil
 import subprocess
 import sys
 from contextlib import contextmanager
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 
 from openprogram.host._platform import environment as platform_environment
+from openprogram.host.sandbox import protected_writes
 
 log = logging.getLogger(__name__)
 
@@ -77,14 +81,11 @@ DEFAULT_DENY_READ: tuple[str, ...] = (
     "**/.env",
 )
 
-# Writes that would let a sandboxed command escape by arranging for code
-# to run outside the sandbox later. Empty by default and not because the
-# engine is unloaded: the always-on entry is the agentics directory (see
-# ``_applications_dir``), which no config can remove. Git hooks and git config
-# are the other escape of this shape and are deliberately NOT default —
-# measured, `git init` and `git clone` both write `.git/hooks/`, so
-# denying it fails them outright. Blocking those needs the escalation path
-# (repair-order step 5) to be usable, and it is opt-in until then.
+# Extra write denials a user configures. Empty by default: the escapes of
+# this shape (code that runs outside the sandbox later) are covered by
+# ``protected_writes``, which no config can remove. Git hooks and config are
+# covered only for the repository the command starts in, because `git init` and
+# `git clone` write `.git/hooks/` of a new one.
 DEFAULT_DENY_WRITE: tuple[str, ...] = ()
 
 # The child keeps these and nothing else. A denylist of *KEY*/*TOKEN*
@@ -120,6 +121,14 @@ _MACOS_SYSCTL_NAMES = (
     "kern.ostype",
     "kern.version",
 )
+
+
+class SandboxPathDenied(PermissionError):
+    """A path the conversation's sandbox does not reach; the layers above word the refusal."""
+
+    def __init__(self, violation: str):
+        super().__init__(violation)
+        self.violation = violation
 
 
 class SandboxUnavailable(RuntimeError):
@@ -161,13 +170,26 @@ def unavailable_reason() -> str | None:
             return None
         return "macOS needs /usr/bin/sandbox-exec"
     if sys.platform.startswith("linux"):
-        executable = shutil.which("bwrap")
-        if not executable:
-            return "Linux needs bubblewrap (install the `bubblewrap` package)"
-        return _bwrap_unavailable_reason(executable)
+        return bubblewrap_unavailable_reason()
     if sys.platform == "win32":
         return platform_environment.windows_wsl_sandbox_reason()
     return f"no sandbox backend for platform {sys.platform!r}"
+
+
+def bubblewrap_unavailable_reason() -> str | None:
+    """Why bubblewrap cannot confine a process here, from really running it."""
+    executable = shutil.which("bwrap")
+    if not executable:
+        return "Linux needs bubblewrap (install the `bubblewrap` package)"
+    return _bwrap_unavailable_reason(executable)
+
+
+def _apparmor_restricts_namespaces() -> bool:
+    try:
+        with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="ascii") as stream:
+            return stream.read().strip() == "1"
+    except OSError:
+        return False
 
 
 @functools.cache
@@ -200,7 +222,11 @@ def _bwrap_unavailable_reason(executable: str) -> str | None:
         return None
     lines = (proc.stderr or proc.stdout).strip().splitlines()
     detail = f": {lines[-1]}" if lines else ""
-    return "Linux bubblewrap cannot create the required namespaces" + detail
+    remedy = ""
+    if _apparmor_restricts_namespaces():
+        remedy = (". AppArmor restricts these namespaces on this system, as Ubuntu 24.04 does by default; "
+                  "to allow them, run `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`")
+    return "Linux bubblewrap cannot create the required namespaces" + detail + remedy
 
 
 def is_available() -> bool:
@@ -217,14 +243,6 @@ def _config_section() -> dict:
         return {}
 
 
-def _with_hard_floor(policy: SandboxPolicy) -> SandboxPolicy:
-    from openprogram.host.sandbox.protected_paths import installed_program_roots, application_catalog_path
-    required = (_applications_dir(), *(os.path.join(root, "**") for root in installed_program_roots()),
-                application_catalog_path())
-    missing = tuple(value for value in required if value not in policy.deny_write)
-    return replace(policy, deny_write=policy.deny_write + missing) if missing else policy
-
-
 def _config_mode_on(sb: dict) -> bool:
     mode = str(sb.get("mode") or MODE_OFF).strip().lower()
     if mode == MODE_AUTO:
@@ -237,7 +255,7 @@ def _policy_from_section(sb: dict) -> SandboxPolicy:
     deny_r = sb.get("deny_read")
     deny_w = sb.get("deny_write")
     allow_r = sb.get("allow_read")
-    return _with_hard_floor(SandboxPolicy(
+    return SandboxPolicy(
         writable_roots=tuple(sb.get("writable_roots") or ()),
         deny_read=tuple(deny_r) if isinstance(deny_r, list) else DEFAULT_DENY_READ,
         deny_write=(tuple(deny_w) if isinstance(deny_w, list)
@@ -246,7 +264,7 @@ def _policy_from_section(sb: dict) -> SandboxPolicy:
         network_domains=parse_domains(sb.get("network_domains")),
         pass_env=tuple(sb.get("pass_env") or ()),
         allow_read=tuple(allow_r) if isinstance(allow_r, list) else (),
-    ))
+    )
 
 
 def _resolve_configured_policy(
@@ -281,11 +299,11 @@ def resolve_policy(
     execution_override = _execution_policy_override.get()
     if execution_override is not _NO_PROCESS_POLICY:
         if execution_override is None:
-            return _with_hard_floor(SandboxPolicy()) if required else None
+            return SandboxPolicy() if required else None
         return execution_override  # type: ignore[return-value]
     if _process_policy_override is not _NO_PROCESS_POLICY:
         if _process_policy_override is None:
-            return _with_hard_floor(SandboxPolicy()) if required else None
+            return SandboxPolicy() if required else None
         return _process_policy_override  # type: ignore[return-value]
     return _resolve_configured_policy(session_enabled, required=required)
 
@@ -328,21 +346,30 @@ def ui_state(session_enabled: bool | None = None) -> dict:
 
 
 @contextmanager
+def without_policy():
+    """Run a block with no sandbox, for work that uses one only where it can."""
+    token = _execution_policy_override.set(None)
+    try:
+        yield
+    finally:
+        _execution_policy_override.reset(token)
+
+
+@contextmanager
 def escalated_policy():
     """Relax configurable restrictions for one approved execution.
 
-    The OS sandbox remains active solely to enforce the non-configurable
-    applications write prohibition. Credentials also stay out of the child
-    environment; approval changes execution reach, not secret handling.
+    Credentials stay out of the child environment: leaving the sandbox
+    changes what a command can reach, not how secrets are handled.
     """
-    policy = _with_hard_floor(SandboxPolicy(
+    policy = SandboxPolicy(
         writable_roots=("/",),
         deny_read=(),
         deny_write=(),
         network=True,
         pass_env=(),
         host_process_info=True,
-    ))
+    )
     token = _execution_policy_override.set(policy)
     try:
         yield
@@ -408,7 +435,6 @@ def is_network_denial(
 
 
 def policy_to_dict(policy: SandboxPolicy) -> dict:
-    policy = _with_hard_floor(policy)
     return {
         "writable_roots": list(policy.writable_roots),
         "deny_read": list(policy.deny_read),
@@ -436,7 +462,7 @@ def policy_from_dict(data: dict) -> SandboxPolicy:
     network = data.get("network", False)
     if not isinstance(network, bool):
         raise ValueError("sandbox policy network must be a boolean")
-    return _with_hard_floor(SandboxPolicy(
+    return SandboxPolicy(
         writable_roots=_strings("writable_roots"),
         deny_read=_strings("deny_read"),
         deny_write=_strings("deny_write"),
@@ -444,7 +470,7 @@ def policy_from_dict(data: dict) -> SandboxPolicy:
         network_domains=parse_domains(data.get("network_domains")),
         pass_env=_strings("pass_env"),
         allow_read=_strings("allow_read"),
-    ))
+    )
 
 
 def policy_hash(policy: SandboxPolicy) -> str:
@@ -485,18 +511,6 @@ def install_policy_snapshot(snapshot: dict) -> None:
         _process_policy_override = policy_from_dict(snapshot.get("policy"))
     else:
         _process_policy_override = None
-
-
-def _applications_dir() -> str:
-    """Absolute glob for the directory the function watcher auto-imports.
-    Resolved rather than configured — it moves with the installation, and
-    a user editing the deny list must not be able to drop it."""
-    return os.path.join(_applications_root(), "**")
-
-
-def _applications_root() -> str:
-    from openprogram.host.sandbox.protected_paths import applications_root
-    return applications_root()
 
 
 def unavailable_policy() -> str:
@@ -590,8 +604,7 @@ def _regex_path(path: str) -> str:
 # published at the Agent safe point, ahead of any effect.
 ESCALATION_HINT = (
     'run it again through bash with sandbox_permissions="require_escalated" '
-    "and a one-sentence justification, so the user can approve running it "
-    "outside the sandbox"
+    "and a one-sentence justification to run it outside the sandbox"
 )
 
 SANDBOX_DENIAL_GUIDANCE = (
@@ -607,9 +620,7 @@ NETWORK_DENIAL_GUIDANCE = (
 
 def _hard_floor_read_globs() -> tuple[str, ...]:
     from openprogram.state.paths import get_state_dir
-    from openprogram.host.sandbox.protected_paths import installed_program_roots, application_catalog_path
-    globs = [str(get_state_dir() / "auth") + "/**", _applications_dir(),
-             *(os.path.join(root, "**") for root in installed_program_roots()), application_catalog_path()]
+    globs = [str(get_state_dir() / "auth") + "/**"]
     documented = os.path.expanduser("~/.openprogram/auth") + "/**"
     if documented not in globs:
         globs.append(documented)
@@ -617,7 +628,7 @@ def _hard_floor_read_globs() -> tuple[str, ...]:
 
 
 def is_hard_floor_read(path: str) -> bool:
-    """True for ~/.openprogram/auth/** and the agentics directory."""
+    """True for ~/.openprogram/auth/**, which holds credentials."""
     target = _regex_path(os.path.realpath(os.path.expanduser(os.fspath(path))))
     return any(re.match(rx, target) for rx in _regexes_for(_hard_floor_read_globs()))
 
@@ -707,7 +718,7 @@ def persist_allow_read(path: str | None) -> str | None:
     if is_hard_floor_read(path):
         return (
             f"{path} is a non-configurable hard floor "
-            "(~/.openprogram/auth or the agentics directory) "
+            "(~/.openprogram/auth) "
             "and cannot be added to sandbox.allow_read"
         )
     from openprogram.state.settings import set_setting
@@ -725,15 +736,6 @@ def persist_allow_read(path: str | None) -> str | None:
 def validate_write_path(path, *, cwd: str | None = None) -> str | None:
     """Return a sandbox-policy violation for a direct file write, if any."""
     target = os.path.realpath(os.path.expanduser(os.fspath(path)))
-    from openprogram.host.sandbox.protected_paths import installed_program_roots, application_catalog_path
-    target_key = target.casefold()
-    if any(target_key == os.path.realpath(root).casefold() or target_key.startswith(os.path.realpath(root).casefold() + os.sep)
-           for root in (_applications_root(), *installed_program_roots(), application_catalog_path())):
-        return "writes to auto-imported application Python are forbidden"
-    from openprogram.host.sandbox.protected_paths import program_sources_path
-    if target_key == os.path.realpath(program_sources_path()).casefold():
-        return "writes to the agentic source registry are forbidden"
-
     policy = resolve_policy()
     if policy is None:
         return None
@@ -751,6 +753,10 @@ def validate_write_path(path, *, cwd: str | None = None) -> str | None:
         regex = _glob_to_regex(pattern)
         if regex and re.match(regex, _regex_path(target)):
             return f"path is denied by sandbox policy: {target}"
+    if not protected_writes.lifted(policy.writable_roots):
+        reason = protected_writes.denial(target, base, roots)
+        if reason:
+            return reason
     return None
 
 
@@ -1017,9 +1023,24 @@ def _seatbelt_profile(cwd: str, policy: SandboxPolicy, *, private_tmp: bool = Fa
         # Otherwise a denied path is still probeable by unlinking it:
         # the error distinguishes "exists" from "no such file".
         lines.append(f'(deny file-write-unlink (regex #"{lit}"))')
+    protect = not protected_writes.lifted(policy.writable_roots)
+    if protect:
+        for rx in _regexes_for(tuple(tree + "/**" for tree in protected_writes.home_trees())):
+            lit = rx.replace('"', '\\"')
+            lines.append(f'(deny file-write* (regex #"{lit}"))')
+        # A session worktree lives under the state folder: its root stays
+        # writable, and the rules below still apply inside it.
+        for root in protected_writes.nested_roots(_writable_roots(cwd, policy)):
+            lines.append(f"(allow file-write* (subpath {_sbpl_str(root)}))")
     for rx in _regexes_for(policy.deny_write):
         lit = rx.replace('"', '\\"')
         lines.append(f'(deny file-write* (regex #"{lit}"))')
+    if protect:
+        globs = (*protected_writes.name_globs(),
+                 *(path + "/**" for path in protected_writes.repository_git_paths(cwd)))
+        for rx in _regexes_for(globs):
+            lit = rx.replace('"', '\\"')
+            lines.append(f'(deny file-write* (regex #"{lit}"))')
     # SBPL last-match-wins: re-open only allow_read paths that beat deny.
     for path in _concrete_paths(policy.allow_read):
         if not read_is_denied(path, policy):
@@ -1057,7 +1078,16 @@ def _bwrap_args(command: str, cwd: str, policy: SandboxPolicy, *,
     for root in read_only_roots:
         real = os.path.realpath(root)
         args += ["--ro-bind", real, real]
-    for root in _writable_roots(cwd, policy):
+    roots = _writable_roots(cwd, policy)
+    for root in roots:
+        args += ["--bind", root, root]
+    # Protected folders go before the read denials: a later bind of a
+    # folder would cover a denial mounted inside it.
+    protect = not protected_writes.lifted(policy.writable_roots)
+    trees, names = protected_writes.concrete_paths(cwd, roots) if protect else ([], [])
+    for tree in trees:
+        args += ["--ro-bind", tree, tree]
+    for root in protected_writes.nested_roots(roots) if protect else ():
         args += ["--bind", root, root]
     # Only paths that exist: the root is bound read-only, so bwrap cannot
     # create a mount point for a path that is not there, and the whole
@@ -1077,7 +1107,7 @@ def _bwrap_args(command: str, cwd: str, policy: SandboxPolicy, *,
         if read_is_denied(path, policy) or not os.path.exists(path):
             continue
         args += ["--ro-bind", path, path]
-    for path in _concrete_paths(policy.deny_write):
+    for path in (*_concrete_paths(policy.deny_write), *names):
         if os.path.exists(path):
             args += ["--ro-bind", path, path]
     args += ["--", "/bin/bash", "-c", command]
@@ -1127,9 +1157,16 @@ def _wsl_bwrap_args(
         args.append("--unshare-net")
 
     args += ["--tmpfs", "/tmp", "--dir", "/tmp/openprogram-home"]
-    for root in _writable_roots(cwd, policy):
+    roots = _writable_roots(cwd, policy)
+    for root in roots:
         wsl_root = translated(root)
         args += ["--bind", wsl_root, wsl_root]
+    protect = not protected_writes.lifted(policy.writable_roots)
+    trees, names = protected_writes.concrete_paths(cwd, roots) if protect else ([], [])
+    for tree in trees:
+        args += ["--ro-bind", translated(tree), translated(tree)]
+    for root in protected_writes.nested_roots(roots) if protect else ():
+        args += ["--bind", translated(root), translated(root)]
 
     for path in _concrete_paths(policy.deny_read):
         if not read_is_denied(path, policy) or not os.path.exists(path):
@@ -1144,7 +1181,7 @@ def _wsl_bwrap_args(
             continue
         wsl_path = translated(path)
         args += ["--ro-bind", wsl_path, wsl_path]
-    for path in _concrete_paths(policy.deny_write):
+    for path in (*_concrete_paths(policy.deny_write), *names):
         if not os.path.exists(path):
             continue
         wsl_path = translated(path)

@@ -59,8 +59,12 @@ codesign --verify --deep --strict "$stage"
 
 # Swap the bundle while the App is closed, and bring it back if it was open.
 was_running=0
+was_front=0
 if pgrep -f "^${dev_app}/Contents/MacOS/OpenProgram( |$)" >/dev/null 2>&1; then
   was_running=1
+  if lsappinfo info -only bundleid "$(lsappinfo front 2>/dev/null)" 2>/dev/null | grep -q "\"$dev_identifier\""; then
+    was_front=1
+  fi
   stamp "quitting the development App"
   osascript -e "tell application id \"$dev_identifier\" to quit" >/dev/null 2>&1 || true
   for _ in $(seq 1 100); do
@@ -77,6 +81,14 @@ rm -rf "$dev_app.previous"
 touch "$dev_app"
 /System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister -f "$dev_app" >/dev/null 2>&1 || true
 if test "$was_running" = 1; then
-  open -g -a "$dev_app" || true
+  if test "$was_front" = 1; then
+    open -a "$dev_app" || true
+  else
+    # It comes back behind what the user is doing: the App activates itself
+    # when its window is ready, and the front is handed straight back.
+    "$local_python" "$repo_root/openprogram/host/_platform/front.py" "$dev_app" 30 >/dev/null 2>&1 &
+    sleep 0.3
+    open -g -a "$dev_app" || true
+  fi
 fi
 printf 'installed %s from %s\n' "$dev_app" "$revision"

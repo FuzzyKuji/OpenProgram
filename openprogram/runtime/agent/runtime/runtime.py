@@ -153,9 +153,11 @@ class Runtime(HistoryOperations, QuestionsOperations, ExecutionOperations, Provi
 
             resolved = get_model(provider, model_id)
             if resolved is None:
+                from openprogram.models.providers.catalog.suggestions import unknown_model_message
+
                 raise ValueError(
-                    f"Unknown model {provider!r}:{model_id!r}. "
-                    f"Pass `call=`, subclass Runtime, or use a valid pi-ai model id."
+                    f"{unknown_model_message(provider, model_id)} "
+                    f"Pass `call=`, subclass Runtime, or use a registered model id."
                 )
             self.api_model = resolved
             self.provider_id = provider

@@ -20,8 +20,8 @@ import { useState } from "react";
 import { DocumentWindow } from "@/components/files/surfaces/lazy-document-window";
 import { useTranslation } from "@/lib/i18n";
 import { useModalA11y } from "@/lib/hooks/use-modal-a11y";
-import { useSessionStore } from "@/lib/session-store";
 import { absRawFileUrl } from "@/lib/files/files-shared";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 export function AttachmentPreview({
   path,
@@ -35,7 +35,7 @@ export function AttachmentPreview({
   onClose: () => void;
 }) {
   const { text } = useTranslation();
-  const sessionId = useSessionStore((s) => s.currentSessionId);
+  const sessionId = useRowSessionId();
   const [capturedSessionId] = useState(ownerSessionId === undefined ? sessionId : ownerSessionId);
 
   // Replaces the old window-level Escape listener: same Escape, plus

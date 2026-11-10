@@ -17,10 +17,12 @@ from typing import Any, Iterator, Mapping
 
 from openprogram.host._platform import filesystem
 from openprogram.host._platform import locking
-from openprogram.state.store.session.git_session import atomic_write_text
+from openprogram.state.store.session.atomic_file import atomic_write_text
 
 from .types import (
+    PROTOCOL_VERSION,
     SCHEMA_VERSION,
+    VERIFIER_PHASES,
     ActiveUpdateError,
     ConcurrentUpdateError,
     CorruptUpdateStateError,
@@ -35,12 +37,15 @@ from .types import (
     VerifierDispatch,
     can_transition,
     is_terminal,
+    known_keys,
+    parse_phase,
     _validate_update_id,
 )
 
 
 _process_lock = threading.RLock()
 READ_SCAN_LIMIT = 10_000
+RETIRED_NOTE = "started under the previous update system"
 
 # Staged payloads a finished update no longer needs: the built App, the
 # controller's copy of the runtime, and the build's HOME and TMPDIR.
@@ -48,6 +53,15 @@ PAYLOAD_DIRECTORIES = ("artifact", "controller", "build-home", "build-tmp")
 PAYLOADS_KEPT = 2
 PAYLOAD_MIN_AGE_SECONDS = 7 * 86400
 PRUNABLE_PHASES = frozenset({UpdatePhase.SUCCEEDED, UpdatePhase.ABORTED, UpdatePhase.ROLLED_BACK})
+
+
+def _rebound(value: Any, previous: str, commit: str) -> Any:
+    """``value`` with every mention of the commit ``previous`` changed to ``commit``."""
+    if isinstance(value, dict):
+        return {key: _rebound(item, previous, commit) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_rebound(item, previous, commit) for item in value]
+    return commit if value == previous else value
 
 
 class SelfUpdateStore:
@@ -70,11 +84,26 @@ class SelfUpdateStore:
                 diagnosis_config=diagnosis_config, source_repair_config=source_repair_config,
                 iteration_config=iteration_config, continuation_config=continuation_config)
 
+    def _maintenance_in_force_unlocked(self) -> bool:
+        """Whether a marker holds the slot. One a finished switch left behind does not."""
+        marker = self.root / "maintenance.json"
+        if not marker.exists() and not marker.is_symlink():
+            return False
+        try:
+            value = self._read_json(marker)
+            finished = "deadline" in value and is_terminal(self._load_unlocked(value["update_id"]).state.phase)
+        except (SelfUpdateError, KeyError, OSError, ValueError):
+            return True
+        if not finished:
+            return True
+        marker.unlink()
+        self._fsync_directory(self.root)
+        return False
+
     def _create_unlocked(self, request, *, verifier_config=None, diagnosis_config=None,
                          source_repair_config=None, iteration_config=None, continuation_config=None):
         """Caller holds the process/file lock, including child reservation."""
-        maintenance = self.root / "maintenance.json"
-        if maintenance.exists() or maintenance.is_symlink():
+        if self._maintenance_in_force_unlocked():
             raise ActiveUpdateError("self-update maintenance has not been cleared")
         current = self._load_active_unlocked()
         if current is not None and not is_terminal(current.state.phase):
@@ -178,6 +207,8 @@ class SelfUpdateStore:
         """Caller holds the process/file lock."""
         record = self._load_unlocked(update_id)
         current = record.state
+        if is_candidate_worker(record):
+            raise InvalidTransitionError("the candidate's worker reports and never moves its own update")
         if expected_phase is not None and current.phase is not expected_phase:
             raise ConcurrentUpdateError(
                 f"expected {expected_phase.value}, found {current.phase.value}"
@@ -211,6 +242,33 @@ class SelfUpdateStore:
             self._clear_active_unlocked(update_id)
         return updated
 
+    def record_detail(self, update_id: str, phase: UpdatePhase, *, detail: Mapping[str, Any]) -> UpdateState:
+        """Replace the details of a phase without leaving it.
+
+        Only ``trial`` uses this: its verifier needs a receipt from the
+        trial's worker, which does not exist when the phase begins.
+        """
+        if phase is not UpdatePhase.TRIAL:
+            raise ValueError("only the trial phase records detail in place")
+        with self._locked():
+            current = self._load_unlocked(update_id).state
+            if current.phase is not phase:
+                raise ConcurrentUpdateError(f"expected {phase.value}, found {current.phase.value}")
+            now = time.time()
+            event = {
+                "schema": SCHEMA_VERSION,
+                "at": now,
+                "type": "detail_recorded",
+                "update_id": update_id,
+                "phase": phase.value,
+                "revision": current.revision + 1,
+                "detail": dict(detail),
+            }
+            updated = replace(current, revision=current.revision + 1, updated_at=now, detail=dict(detail), last_event=event)
+            self._write_json(self._state_path(update_id), updated.to_dict())
+            self._write_events(self._events_path(update_id), event)
+            return updated
+
     def claim_verifier(
         self,
         update_id: str,
@@ -241,9 +299,9 @@ class SelfUpdateStore:
             raise ValueError("now must be a finite non-negative timestamp")
         with self._locked():
             state = self._load_unlocked(update_id).state
-            if state.phase is not UpdatePhase.VERIFYING:
+            if state.phase not in VERIFIER_PHASES:
                 raise InvalidTransitionError(
-                    f"verifier can only be claimed in verifying, found {state.phase.value}"
+                    f"verifier can only be claimed in trial or verifying, found {state.phase.value}"
                 )
             dispatch = state.dispatch
             job_id = (
@@ -350,6 +408,120 @@ class SelfUpdateStore:
                 referenced.add(update_id)
         return referenced
 
+    # The queue. A request that finds the slot held waits here in order, with
+    # no update directory, because at most one update may be non-terminal.
+
+    def _queue_path(self) -> Path:
+        return self.root / "queue.json"
+
+    def _read_queue_unlocked(self) -> list[dict[str, Any]]:
+        path = self._queue_path()
+        if not path.exists() and not path.is_symlink():
+            return []
+        data = known_keys(self._read_json(path), {"schema", "protocol", "entries"})
+        entries = data.get("entries")
+        if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
+            raise CorruptUpdateStateError("malformed update queue")
+        return entries
+
+    def _write_queue_unlocked(self, entries: list[dict[str, Any]]) -> None:
+        if entries:
+            self._write_json(self._queue_path(), {"schema": 1, "protocol": PROTOCOL_VERSION, "entries": entries})
+        else:
+            self._queue_path().unlink(missing_ok=True)
+
+    def enqueue(self, request: UpdateRequest, configs: Mapping[str, Any]) -> int:
+        """Save a validated request to run after the current one; its queue position."""
+        with self._locked():
+            entries = self._read_queue_unlocked()
+            entries.append({"request": request.to_dict(), "configs": dict(configs), "queued_at": time.time()})
+            self._write_queue_unlocked(entries)
+            return len(entries)
+
+    def queued(self, *, read_only: bool = False) -> list[dict[str, Any]]:
+        """The waiting requests, oldest first."""
+        if not self.root.exists():
+            return []
+        with self._locked(read_only=read_only):
+            return [
+                {"update_id": entry["request"]["update_id"], "session_id": entry["request"]["session_id"],
+                 "goal": entry["request"]["acceptance"]["goal"], "queued_at": entry.get("queued_at"),
+                 "position": index + 1}
+                for index, entry in enumerate(self._read_queue_unlocked())
+            ]
+
+    def remove_queued(self, update_id: str) -> bool:
+        with self._locked():
+            entries = self._read_queue_unlocked()
+            remaining = [entry for entry in entries if entry["request"]["update_id"] != update_id]
+            if len(remaining) == len(entries):
+                return False
+            self._write_queue_unlocked(remaining)
+            return True
+
+    def take_queued(self, *, durable=lambda request: True, local_tip=None) -> UpdateState | None:
+        """Give the slot to the head of the queue; ``None`` when it stays empty.
+
+        A queued request's origin turn has ended, so it starts at ``building``,
+        or at ``trial`` when it names a retained version and has nothing to
+        build. ``local_tip`` then says what ``local`` is now, because the update
+        ahead of it may have moved it. ``durable`` says whether that turn was
+        committed; one that was not is dropped, as a prepared update is when its
+        turn never commits.
+        """
+        with self._locked():
+            if self._load_active_unlocked() is not None or self._maintenance_in_force_unlocked():
+                return None
+            while True:
+                entries = self._read_queue_unlocked()
+                if not entries:
+                    return None
+                head = entries[0]
+                request = UpdateRequest.from_dict(head["request"])
+                if not durable(request):
+                    self._write_queue_unlocked(entries[1:])
+                    continue
+                self._create_unlocked(request, **head["configs"])
+                self._write_queue_unlocked(entries[1:])
+                detail: dict[str, Any] = {"turn_released": True, "queued": True}
+                if request.candidate_version and local_tip is not None:
+                    detail["base_sha"] = local_tip()
+                return self._transition_unlocked(
+                    request.update_id,
+                    UpdatePhase.TRIAL if request.candidate_version else UpdatePhase.BUILDING,
+                    expected_phase=UpdatePhase.PREPARING, detail=detail,
+                )
+
+    def rebind_candidate(self, update_id: str, commit: str) -> UpdateRecord:
+        """A rebase gave the change a new commit; everything checked from here names it.
+
+        The frozen configurations name the commit too, and the request holds
+        their digests. Each step can be repeated, so a controller that dies
+        halfway through does this again.
+        """
+        from .repair.diagnosis import config_evidence as diagnosis_evidence
+        from .repair.source_repair import config_evidence as repair_evidence
+        from .verification.verifier_config import config_evidence as verifier_evidence
+
+        with self._locked():
+            directory = self._update_dir(update_id)
+            raw = self._read_json(directory / "request.json")
+            previous = raw["candidate_sha"]
+            UpdateRequest.from_dict({**raw, "candidate_sha": commit})  # Refuses a malformed commit.
+            evidence = list(raw.get("pre_update_evidence") or ())
+            for name, digest in (("verifier-config.json", verifier_evidence), ("diagnosis-config.json", diagnosis_evidence),
+                                 ("source-repair-config.json", repair_evidence)):
+                path = directory / name
+                if not path.is_file():
+                    continue
+                config = _rebound(self._read_json(path), previous, commit)
+                self._write_json(path, config)
+                current = digest(config)
+                kind = current.partition(":")[0]
+                evidence = [current if item.partition(":")[0] == kind else item for item in evidence]
+            self._write_json(directory / "request.json", {**raw, "candidate_sha": commit, "pre_update_evidence": evidence})
+            return self._load_unlocked(update_id)
+
     def _update_dir(self, update_id: str) -> Path:
         return self.root / _validate_update_id(update_id)
 
@@ -365,13 +537,59 @@ class SelfUpdateStore:
             raise UpdateNotFoundError(f"update {update_id} does not exist")
         if read_only:
             self._private_directory(directory)
-        request = UpdateRequest.from_dict(self._read_json(directory / "request.json", read_only=read_only))
+        raw_request = self._read_json(directory / "request.json", read_only=read_only)
+        request = UpdateRequest.from_dict(raw_request)
         state = UpdateState.from_dict(self._read_json(directory / "state.json", read_only=read_only))
         if request.update_id != update_id or state.update_id != update_id:
             raise CorruptUpdateStateError("update id does not match its directory")
         record = UpdateRecord(request, state)
         self._reconcile_events_unlocked(record, read_only=read_only)
+        if raw_request.get("schema") == 1 and self._retires_unlocked(record):
+            record = self._retire_unlocked(record, read_only=read_only)
         return record
+
+    @staticmethod
+    def _retires_unlocked(record: UpdateRecord) -> bool:
+        """Whether an unfinished schema 1 update ends now.
+
+        A dev_stable update keeps going: its controller is a frozen private
+        copy that finishes the update with the code it started with.
+        """
+        from .control.dev_stable import owns
+
+        return not is_terminal(record.state.phase) and not owns(record)
+
+    def _retire_unlocked(self, record: UpdateRecord, *, read_only: bool) -> UpdateRecord:
+        """End an update whose controller belongs to the previous update system."""
+        update_id = record.request.update_id
+        now = time.time()
+        event = {
+            "schema": SCHEMA_VERSION,
+            "at": now,
+            "type": "retired",
+            "update_id": update_id,
+            "from": record.state.phase.value,
+            "phase": UpdatePhase.ABORTED.value,
+            "revision": record.state.revision + 1,
+            "detail": {"note": RETIRED_NOTE},
+        }
+        state = replace(
+            record.state, phase=UpdatePhase.ABORTED, revision=record.state.revision + 1,
+            updated_at=now, detail={**record.state.detail, "note": RETIRED_NOTE}, last_event=event,
+        )
+        if not read_only:
+            self._write_json(self._state_path(update_id), state.to_dict())
+            self._write_events(self._events_path(update_id), event)
+            self._clear_active_unlocked(update_id)
+            marker = self.root / "maintenance.json"
+            try:
+                owner = self._read_json(marker).get("update_id") if marker.exists() else None
+            except CorruptUpdateStateError:
+                owner = None
+            if owner == update_id:
+                marker.unlink()
+                self._fsync_directory(self.root)
+        return UpdateRecord(record.request, state)
 
     def _load_active_unlocked(self, *, read_only: bool = False) -> UpdateRecord | None:
         path = self.root / "active.json"
@@ -386,7 +604,7 @@ class SelfUpdateStore:
                 )
             return discovered
         data = self._read_json(path, read_only=read_only)
-        if set(data) != {"schema", "update_id"} or data.get("schema") != SCHEMA_VERSION:
+        if set(data) != {"schema", "update_id"} or data.get("schema") not in (1, SCHEMA_VERSION):
             raise CorruptUpdateStateError("unsupported or malformed active schema")
         update_id = data.get("update_id")
         if not isinstance(update_id, str):
@@ -503,6 +721,7 @@ class SelfUpdateStore:
                 "revision",
                 "detail",
             },
+            "detail_recorded": {"schema", "at", "type", "update_id", "phase", "revision", "detail"},
             "verifier_claimed": {
                 "schema",
                 "at",
@@ -515,9 +734,19 @@ class SelfUpdateStore:
                 "generation",
                 "lease_until",
             },
+            "retired": {
+                "schema",
+                "at",
+                "type",
+                "update_id",
+                "from",
+                "phase",
+                "revision",
+                "detail",
+            },
         }
         if (
-            event.get("schema") != SCHEMA_VERSION
+            event.get("schema") not in (1, SCHEMA_VERSION)
             or event.get("update_id") != update_id
             or event.get("revision") != revision
             or event_type not in expected_fields
@@ -525,7 +754,7 @@ class SelfUpdateStore:
         ):
             raise CorruptUpdateStateError("event schema or revision is invalid")
         try:
-            phase = UpdatePhase(event["phase"])
+            phase = parse_phase(event["phase"])
             at = event["at"]
             if (
                 isinstance(at, bool)
@@ -543,9 +772,19 @@ class SelfUpdateStore:
                 raise CorruptUpdateStateError(
                     "created event is not the first preparing state"
                 )
+        elif event_type == "detail_recorded":
+            if (
+                phase is not UpdatePhase.TRIAL
+                or previous_phase is not UpdatePhase.TRIAL
+                or not isinstance(event["detail"], dict)
+            ):
+                raise CorruptUpdateStateError("detail event is invalid")
+        elif event_type == "retired":
+            if phase is not UpdatePhase.ABORTED or previous_phase is None or not isinstance(event["detail"], dict):
+                raise CorruptUpdateStateError("event contains an illegal retirement")
         elif event_type == "transition":
             try:
-                source = UpdatePhase(event["from"])
+                source = parse_phase(event["from"])
             except (TypeError, ValueError) as exc:
                 raise CorruptUpdateStateError(
                     "transition source phase is invalid"
@@ -561,8 +800,8 @@ class SelfUpdateStore:
             generation = event["generation"]
             lease_until = event["lease_until"]
             if (
-                previous_phase is not UpdatePhase.VERIFYING
-                or phase is not UpdatePhase.VERIFYING
+                previous_phase not in VERIFIER_PHASES
+                or phase is not previous_phase
                 or not isinstance(event["job_id"], str)
                 or not event["job_id"]
                 or not isinstance(event["owner"], str)
@@ -691,4 +930,22 @@ class SelfUpdateStore:
             os.close(descriptor)
 
 
-__all__ = ["SelfUpdateStore"]
+def is_candidate_worker(record: UpdateRecord) -> bool:
+    """Whether this process is the worker of the version this update switches to.
+
+    Activation and rollback belong to the old version's controller, so a broken
+    candidate cannot mark its own switch as good. The controller runs from
+    ``controller_version``, which is never the candidate.
+    """
+    if record.state.phase not in (UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING):
+        return False
+    candidate = record.request.candidate_version or record.state.detail.get("candidate_version")
+    if not candidate:
+        return False
+    from .versions.layout import current_runtime
+
+    runtime = current_runtime()
+    return runtime is not None and runtime.version == candidate
+
+
+__all__ = ["SelfUpdateStore", "is_candidate_worker"]

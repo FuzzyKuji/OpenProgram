@@ -268,7 +268,8 @@ def test_outbound_url_security_update_preserves_mode_and_unrelated_config(
                         "consumer": "provider.configured_api",
                         "cidr": "10.20.0.0/16",
                     }
-                ]
+                ],
+                "model_tools": "open",
             }
         },
     }

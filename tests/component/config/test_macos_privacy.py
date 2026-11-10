@@ -42,3 +42,12 @@ def test_outer_and_runtime_consent_descriptions_agree():
         package['build']['mac']['extendInfo'],
         {key for key, value in entitlements.items() if value is True and key.startswith('com.apple.')},
     )
+
+
+def test_signed_bundles_can_reach_the_declared_camera_and_calendars():
+    from openprogram.host.system_access import package_entitlements
+    declared = package_entitlements()
+    assert {'com.apple.security.device.camera', 'com.apple.security.personal-information.calendars'} <= declared
+    for name in ('entitlements.mac.plist', 'entitlements.mac.helper.plist'):
+        entitlements = plistlib.loads((ROOT / 'apps/desktop/build' / name).read_bytes())
+        assert declared <= {key for key, value in entitlements.items() if value is True}, name

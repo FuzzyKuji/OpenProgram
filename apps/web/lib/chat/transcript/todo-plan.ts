@@ -1,11 +1,12 @@
 // The agent's task list in the transcript. The backend records, for each
 // turn that changed the session's todo board, the plan as that turn left it
 // (openprogram/programs/tools/planning/todo/shared.py place_plan). Each of
-// those placed plans is drawn under the reply of its turn: open and live
-// while the turn runs, one line once it has ended.
+// those placed plans is drawn under the reply of its turn while the turn
+// runs; see planShown for what stays afterwards.
 
 import { create } from "zustand";
 import type { ChatMsg } from "@/lib/session-store";
+import { isAgentRunning, isLive, isStopped } from "./row-status.ts";
 
 export type TodoStatus = "pending" | "in_progress" | "completed";
 
@@ -25,6 +26,8 @@ export interface PlacedPlan {
   scope: string;
   updatedAt: number;
   todos: TodoItem[];
+  /** Carried under a later running turn that has no plan of its own. */
+  stale?: boolean;
 }
 
 function normalizeTodo(raw: unknown): TodoItem | null {
@@ -61,12 +64,12 @@ export function normalizePlans(raw: unknown): PlacedPlan[] {
 
 /** A reply a worker restart cut off is drawn by the reply that carries it
  *  on, so its plan goes there too. */
-export function placedAnchor(anchorId: string, messagesById: Readonly<Record<string, ChatMsg | undefined>>): string {
+export function placedAnchor(anchorId: string, rowsById: Readonly<Record<string, ChatMsg | undefined>>): string {
   let id = anchorId;
   const seen = new Set<string>();
   for (;;) {
-    const next = messagesById[id]?.continuedBy;
-    if (!next || seen.has(next) || !messagesById[next]) return id;
+    const next = rowsById[id]?.continuedBy;
+    if (!next || seen.has(next) || !rowsById[next]) return id;
     seen.add(id);
     id = next;
   }
@@ -78,12 +81,12 @@ export function placedAnchor(anchorId: string, messagesById: Readonly<Record<str
 export function plansByRow(
   plans: readonly PlacedPlan[],
   rowIds: readonly string[],
-  messagesById: Readonly<Record<string, ChatMsg | undefined>>,
+  rowsById: Readonly<Record<string, ChatMsg | undefined>>,
 ): Map<string, PlacedPlan[]> {
   const rows = new Set(rowIds);
   const out = new Map<string, PlacedPlan[]>();
   for (const plan of plans) {
-    const row = placedAnchor(plan.anchorId, messagesById);
+    const row = placedAnchor(plan.anchorId, rowsById);
     if (!rows.has(row)) continue;
     const list = out.get(row);
     if (list) list.push(plan);
@@ -95,31 +98,66 @@ export function plansByRow(
 /** How the turn that placed a plan stands. */
 export type TurnState = "running" | "ended" | "stopped" | "failed";
 
-// The same statuses the reply bubble draws as streaming.
-const LIVE = new Set(["pending", "streaming", "running", "cancelling"]);
-
 /** `settled`: the turn's execution is already terminal although the reply
  *  has not caught up (the bubble reads it the same way). */
 export function turnState(msg: ChatMsg | undefined, settled: boolean): TurnState {
   const status = msg?.status;
-  if (status === "cancelled" || status === "interrupted" || status === "paused") return "stopped";
+  if (isStopped(status) || status === "paused") return "stopped";
   if (status === "error") return "failed";
-  if (status && LIVE.has(status) && !settled) return "running";
+  if (isLive(status) && !settled) return "running";
   return "ended";
 }
 
-export interface PlanSummary {
-  done: number;
-  total: number;
-  /** Shown after the count on the one-line form, if anything. */
-  outcome: "done" | "stopped" | "failed" | null;
+/** Sub-agents the reply started that have not finished. */
+export function runningAgentCount(msg: ChatMsg | undefined): number {
+  return (msg?.attachCards ?? []).filter((card) => isAgentRunning(card.attach?.status)).length;
 }
 
-export function planSummary(plan: PlacedPlan, state: TurnState): PlanSummary {
-  const done = plan.todos.filter((todo) => todo.status === "completed").length;
-  const total = plan.todos.length;
-  const outcome = done === total ? "done" : state === "stopped" ? "stopped" : state === "failed" ? "failed" : null;
-  return { done, total, outcome };
+/** A running turn's list shows, and so does one whose sub-agents still run.
+ *  Otherwise only a turn cut short keeps its unfinished work, and only until
+ *  the user writes again; a turn that simply ended clears its list. */
+export function planShown(plan: PlacedPlan, state: TurnState, latest: boolean, agents = 0): boolean {
+  if (state === "running" || agents > 0) return true;
+  if (state === "ended" || !latest) return false;
+  return plan.todos.some((todo) => todo.status !== "completed");
+}
+
+/** A new turn with no plan of its own shows the unfinished plan from before
+ *  it, marked as such. */
+export function carryUnfinishedPlan(
+  byRow: Map<string, PlacedPlan[]>,
+  plans: readonly PlacedPlan[],
+  rowIds: readonly string[],
+  rowsById: Readonly<Record<string, ChatMsg | undefined>>,
+): void {
+  const last = rowIds.at(-1);
+  const reply = last ? rowsById[last] : undefined;
+  if (!last || reply?.role !== "assistant" || !isLive(reply.status) || byRow.has(last)) return;
+  const plan = plans.filter((item) => item.scope === "").at(-1);
+  if (plan?.todos.some((todo) => todo.status !== "completed")) byRow.set(last, [{ ...plan, stale: true }]);
+}
+
+const MAX_VISIBLE_STEPS = 12;
+
+export interface PlanWindow {
+  visible: TodoItem[];
+  hiddenBefore: number;
+  /** Steps past the window still to do. */
+  openAfter: number;
+}
+
+/** At most twelve steps, starting one before the current step. */
+export function planWindow(todos: readonly TodoItem[]): PlanWindow {
+  const running = todos.findIndex((todo) => todo.status === "in_progress");
+  const current = running >= 0 ? running : todos.findIndex((todo) => todo.status !== "completed");
+  const anchor = current >= 0 ? current : todos.length;
+  const start = Math.max(0, Math.min(anchor - 1, todos.length - MAX_VISIBLE_STEPS));
+  const after = todos.slice(start + MAX_VISIBLE_STEPS);
+  return {
+    visible: todos.slice(start, start + MAX_VISIBLE_STEPS),
+    hiddenBefore: start,
+    openAfter: after.filter((todo) => todo.status !== "completed").length,
+  };
 }
 
 interface TodoState {

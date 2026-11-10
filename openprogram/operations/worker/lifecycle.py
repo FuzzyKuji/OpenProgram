@@ -21,7 +21,7 @@ import subprocess
 import sys
 import time
 from pathlib import Path
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from typing import Optional
 
 from openprogram.host._platform.process_ownership import no_window_creation_flags
@@ -77,7 +77,7 @@ def read_worker_port() -> Optional[int]:
 
 
 def resolve_worker_port() -> int:
-    """Single-port resolution (docs/reference/design/cli/single-port.md).
+    """Single-port resolution (docs/reference/design/cli/single-port.html).
 
     Priority: ``OPENPROGRAM_WEB_PORT`` → UI pref ``web_port`` → 18100.
 
@@ -220,7 +220,9 @@ def _looks_like_worker_process(pid: int) -> bool:
 
 def worker_executable() -> str:
     """Use the named macOS runtime declared by this managed installation."""
-    if sys.platform != "darwin":
+    from openprogram.operations.self_update.versions.layout import managed
+
+    if sys.platform != "darwin" or managed():
         return sys.executable
     import json
     executable = Path(sys.executable).resolve()
@@ -283,6 +285,12 @@ def use_named_runtime_for_cli() -> None:
 
 def _detached_worker_command(flags=None) -> list[str]:
     """Preserve isolation and bytecode policy across the worker re-exec."""
+    from openprogram.operations.self_update.versions.layout import current_runtime
+
+    runtime = current_runtime()
+    if runtime is not None:
+        # The launcher adds -I -B itself and applies the version guard.
+        return [str(runtime.layout.launcher()), "-u", "-m", "openprogram", "worker", "run"]
     active_flags = sys.flags if flags is None else flags
     command = [worker_executable()]
     if active_flags.isolated:
@@ -336,13 +344,15 @@ def spawn_detached(
     *,
     prefer_service: bool = True,
     on_spawn: Callable[[int], None] | None = None,
+    environment: Mapping[str, str] | None = None,
 ) -> int:
     """Start the worker through its installed service or as a detached child.
 
     ``on_spawn`` runs immediately after ``Popen`` returns, before readiness is
     polled.  Release installers use it to durably record the detached session
     leader so cleanup can terminate the whole process group even before the
-    worker has written its ordinary lock and PID files.
+    worker has written its ordinary lock and PID files.  ``environment`` applies
+    to a detached child only; a service has its own.
     """
     if prefer_service:
         from openprogram.operations.worker import services
@@ -377,6 +387,7 @@ def spawn_detached(
             start_new_session=True,
             creationflags=no_window_creation_flags(),
             cwd=Path.home(),
+            env=environment,
         )
     except Exception as e:  # noqa: BLE001
         log.close()
@@ -423,6 +434,33 @@ def spawn_detached(
     return 0
 
 
+def _starting_worker_pid(timeout: float = 30.0) -> Optional[int]:
+    """The PID of a worker that holds the lock but has not named itself yet.
+
+    A worker takes its lock first and writes its PID file a few seconds
+    later, once its startup work is done (much later on a slow Windows
+    start). A stop in that window must wait for the PID rather than report
+    "not running" and leave the worker up.
+    """
+    from .lock import WorkerLock
+
+    probe = WorkerLock()
+    if probe.try_acquire():
+        probe.release()
+        return None
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        time.sleep(0.2)
+        pid = current_worker_pid()
+        if pid is not None:
+            return pid
+        probe = WorkerLock()
+        if probe.try_acquire():
+            probe.release()
+            return None
+    return None
+
+
 def stop_worker(*, prefer_service: bool = True) -> int:
     """Stop the service-owned or detached worker, escalating when required."""
     if prefer_service:
@@ -433,6 +471,8 @@ def stop_worker(*, prefer_service: bool = True) -> int:
             return service_result
 
     pid = current_worker_pid()
+    if pid is None:
+        pid = _starting_worker_pid()
     if pid is None:
         print("openprogram: not running.")
         return 0

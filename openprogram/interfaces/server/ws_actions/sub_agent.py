@@ -5,6 +5,10 @@ import logging
 import asyncio
 import json
 
+from openprogram.interfaces.server.transcript import publisher
+from openprogram.interfaces.server.transcript.turn_index import sub_agent_view_key
+from openprogram.interfaces.server.ws_actions.session.load import _park_read
+
 _log = logging.getLogger(__name__)
 
 
@@ -108,63 +112,27 @@ async def _run_and_reply(ws, session_id: str, parent_msg_id: str | None, prompt:
             "spawn_agent_result not delivered for session %s", session_id, exc_info=True)
 
 
-def _branch_tip(messages: list[dict], head_id: str) -> str:
-    """Follow a sub-agent branch to its newest turn.
-
-    Later messages to the same agent continue its branch from its last
-    reply, so the branch tip moves past the head its spawn recorded.
-    """
-    turns: dict[str, list[dict]] = {}
-    for message in messages:
-        parent = message.get("predecessor")
-        if (
-            parent
-            and message.get("role") in ("user", "assistant")
-            and message.get("display") != "runtime"
-            and message.get("function") != "attach"
-        ):
-            turns.setdefault(parent, []).append(message)
-    tip, seen = head_id, set()
-    while tip in turns and tip not in seen:
-        seen.add(tip)
-        tip = max(
-            turns[tip],
-            key=lambda message: message.get("created_at") or message.get("timestamp") or 0,
-        )["id"]
-    return tip
-
-
-def _transcript(session_id: str, job_id: str, head_id: str) -> tuple[str, list[dict]]:
+def _transcript(session_id: str, job_id: str, head_id: str) -> tuple[str, list[dict], dict | None]:
+    """The agent's tip and its whole branch, as whole turns and their window."""
+    from openprogram.interfaces.server.transcript import reader
+    from openprogram.interfaces.server.transcript.turn_index import get_sub_agent_view
     from openprogram.runtime.context.session_db import default_db
-    from openprogram.runtime.context.git import active_branch_chain
-    from openprogram.interfaces.server.persistence import aggregate_tool_messages
 
+    agent_key = job_id or head_id
     if not head_id and job_id:
         from openprogram.runtime.execution import default_store
 
         record = default_store().get_execution_input(job_id)
         if record is not None and record.session_id == session_id:
             head_id = record.assistant_message_id or ""
+    if not head_id:
+        return head_id, [], None
     db = default_db()
-    messages = aggregate_tool_messages(db.get_messages(session_id) or [])
-    if not head_id or head_id not in {message.get("id") for message in messages}:
-        return head_id, []
-    tip = _branch_tip(messages, head_id)
-    # get_branch walks root-first; a reply placeholder can be written before
-    # its prompt, so the branch order, not storage order, places each turn.
-    order = {
-        message.get("id"): index
-        for index, message in enumerate(db.get_branch(session_id, tip) or [])
-    }
-    chain = active_branch_chain(messages, set(order), tip)
-    return tip, sorted(
-        (
-            message for message in chain
-            if message.get("role") in ("user", "assistant")
-            and message.get("function") != "attach"
-        ),
-        key=lambda message: order.get(message.get("id"), len(order)),
-    )
+    view = get_sub_agent_view(db, session_id, agent_key, head_id)
+    if not view.turns:
+        return head_id, [], None
+    turns, window = reader.whole_read(db, view)
+    return window["head_id"] or head_id, turns, window
 
 
 async def handle_load_sub_agent_transcript(ws, cmd: dict) -> None:
@@ -175,24 +143,32 @@ async def handle_load_sub_agent_transcript(ws, cmd: dict) -> None:
     data = {
         "session_id": session_id,
         "job_id": job_id,
+        "view": sub_agent_view_key(session_id, job_id or head_id),
         "head_id": head_id,
-        "messages": [],
+        "turns": [],
+        "window": None,
         "request_id": cmd.get("request_id"),
         "action": "load_sub_agent_transcript",
     }
-    if session_id and (job_id or head_id):
-        try:
-            data["head_id"], data["messages"] = await asyncio.to_thread(
-                _transcript, session_id, job_id, head_id,
-            )
-        except Exception as exc:
-            data["error"] = f"{type(exc).__name__}: {exc}"
-    else:
-        data["error"] = "session_id and job_id or head_id are required"
-    await ws.send_text(json.dumps(
-        {"type": "sub_agent_transcript", "data": data},
-        ensure_ascii=False, default=str,
-    ))
+    end_parking = _park_read(ws, session_id)
+    try:
+        if session_id and (job_id or head_id):
+            if getattr(ws, "_history_protocol", 0) == 3:
+                publisher.hold(ws, session_id, data["view"])
+            try:
+                data["head_id"], data["turns"], data["window"] = await asyncio.to_thread(
+                    _transcript, session_id, job_id, head_id,
+                )
+            except Exception as exc:
+                data["error"] = f"{type(exc).__name__}: {exc}"
+        else:
+            data["error"] = "session_id and job_id or head_id are required"
+        await ws.send_text(json.dumps(
+            {"type": "sub_agent_transcript", "data": data},
+            ensure_ascii=False, default=str,
+        ))
+    finally:
+        end_parking()
 
 
 ACTIONS = {

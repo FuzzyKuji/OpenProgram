@@ -80,8 +80,17 @@ def _pointer(store):
     return _validate_update_id(value["update_id"])
 
 
+def _failed_before_switch(record) -> bool:
+    return record.state.phase is UpdatePhase.ABORTED and record.state.detail.get("diagnose") is True
+
+
 def _evidence(store, record):
     from ..control.rollback_intent import load_rollback_intent
+    if _failed_before_switch(record):
+        nothing = {"note": "the update failed before the pointer moved, so the live version was never changed"}
+        return dict(failure={"error": record.state.detail.get("error", ""), "verifier_verdict": None,
+                             "verifier_result": None},
+                    rollback=nothing, restored_system=nothing)
     from ..control.recovery import SYSTEM_CHECKS
     intent = load_rollback_intent(store, record)
     gate = record.state.detail.get("restored_system_gate")
@@ -166,7 +175,7 @@ def cancel_pending(store, *, reason="superseded by a new update"):
 
 def prepare_after_rollback(store, record):
     """Publish before maintenance release, without changing its success/failure."""
-    if record.state.phase is not UpdatePhase.ROLLED_BACK or _config(store, record) is None:
+    if (record.state.phase is not UpdatePhase.ROLLED_BACK and not _failed_before_switch(record)) or _config(store, record) is None:
         return
     path = _path(store, record, "request")
     if path.exists() or path.is_symlink():

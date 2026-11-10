@@ -74,10 +74,11 @@ export function progressLook(progress: ProcessProgress | null | undefined): Prog
 }
 
 /** A thin bar; with no fraction it sweeps to show work without an amount. */
-export function ProgressBar({ fraction, tone, size = "sm", note }: {
+export function ProgressBar({ fraction, tone, size = "sm", note, noteClassName }: {
   fraction: number | null; tone: "run" | "ok" | "err" | "muted"; size?: "sm" | "md";
   /** A short figure at the bar's right end, such as the time left. */
   note?: string | null;
+  noteClassName?: string;
 }) {
   const bar = <span className={styles.bar} data-size={size} data-tone={tone} data-indeterminate={fraction == null ? "1" : undefined}
     data-program-bar="" role="progressbar" aria-valuemin={0} aria-valuemax={100}
@@ -85,7 +86,7 @@ export function ProgressBar({ fraction, tone, size = "sm", note }: {
     <span className={styles.fill} style={fraction == null ? undefined : { width: `${fraction * 100}%` }} />
   </span>;
   if (!note) return bar;
-  return <span className={styles.withNote}>{bar}<span className={styles.note}>{note}</span></span>;
+  return <span className={styles.withNote}>{bar}<span className={noteClassName ?? styles.note}>{note}</span></span>;
 }
 
 // ---- output ------------------------------------------------------------------

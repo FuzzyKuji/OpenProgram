@@ -302,10 +302,16 @@ def _application_of(relative: str) -> _Application | None:
 
 @request_memo
 def _package_states() -> dict[str, dict]:
-    """Load state of each user package, keyed by name."""
+    """Load state of each user package, keyed by name, and of anything else
+    that failed in the latest load pass, under its Program's name."""
     from openprogram.programs._host.packages import package_statuses
+    from openprogram.programs._host.registry import load_errors
 
-    return {row["name"]: row for row in package_statuses()}
+    states = {row["name"]: row for row in package_statuses()}
+    for row in load_errors():
+        name = row["name"].split(":", 1)[-1]
+        states.setdefault(name, {"name": name, "state": "error", "error": row["error"], "note": ""})
+    return states
 
 
 # ---------------------------------------------------------------------------
@@ -663,6 +669,8 @@ def _registered_agent_methods() -> dict[str, list[dict]]:
     """
     from openprogram.programs._host.runtime import _registry
 
+    from openprogram.programs._host.packages import working_copy_path
+
     indexed: dict[str, list[dict]] = {}
     in_builtin_package = _builtin_module_matcher()
     for name, registered in _registry.copy().items():
@@ -673,7 +681,8 @@ def _registered_agent_methods() -> dict[str, list[dict]]:
             continue
         try:
             raw_source = inspect.getsourcefile(fn)
-            source = Path(raw_source).resolve() if raw_source else None
+            # A user package runs from its checked copy; the tree shows its directory.
+            source = working_copy_path(Path(raw_source).resolve()) if raw_source else None
         except (OSError, TypeError):
             source = None
         if source is not None:
@@ -1084,8 +1093,8 @@ def _application_entry(app: _Application) -> dict:
     entry["agent_entries"] = rows
     if app.enabled is not None:
         entry["enabled"] = app.enabled
-    state = _package_states().get(app.name) if app.form == "package" and app.origin == "installed" else None
-    if state is not None:
+    state = _package_states().get(app.name)
+    if state is not None and (state["state"] == "error" or (app.form == "package" and app.origin == "installed")):
         entry.update({
             "load_state": state["state"], "load_error": state["error"],
             "load_note": state["note"],
@@ -1727,10 +1736,12 @@ def _cache_identity() -> tuple:
     from openprogram.programs._host.runtime import _registry as tools
     from openprogram.programs._host.sources import owner_controlled_program_sources
     from openprogram.programs._host.packages import package_statuses
+    from openprogram.programs._host.registry import load_errors
     return (
         str(PROGRAMS_ROOT),
         repr(owner_controlled_program_sources()),
         repr(package_statuses()),
+        repr(load_errors()),
         tuple((name, id(tool), getattr(tool, "description", "")) for name, tool in tools.copy().items()),
     )
 

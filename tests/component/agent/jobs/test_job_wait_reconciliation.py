@@ -32,7 +32,6 @@ def _active_execution(tmp_path):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="job-worker",
-        ttl_seconds=30,
         attempt_id="job-attempt",
     )
     attempt, execution = attempts.activate(
@@ -73,10 +72,7 @@ def test_job_reconciler_expires_unanswered_wait_and_applies_timeout_policy(
         wait_id="job-expiring-wait",
     )
     with executions._transaction() as connection:
-        connection.execute(
-            "UPDATE execution_waits SET expires_at = 1 WHERE wait_id = ?",
-            (suspended.wait.wait_id,),
-        )
+        connection.update("execution_waits", {"expires_at": 1}, wait_id=suspended.wait.wait_id)
 
     runner = JobRunner.__new__(JobRunner)
     runner._execution_store = executions

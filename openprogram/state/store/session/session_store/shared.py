@@ -1,4 +1,4 @@
-"""SessionStore — git-backed replacement for the old ``DagSessionDB``.
+"""SessionStore — sessions as append-only logs.
 
 Public surface matches the 22 methods callers expect (dispatcher /
 webui / channels / memory subsystems all import via
@@ -8,9 +8,9 @@ webui / channels / memory subsystems all import via
 Storage layout per session: see ``store/__init__.py`` module docstring.
 
 Internal model:
-  * one ``GitSession`` per session on disk
+  * one ``SessionLog`` per session on disk
   * one ``SessionMemoryIndex`` per session in memory (lazy-loaded)
-  * branch names live in ``meta.json`` under ``branches: {head_id: name}``
+  * branch names live in the session fields under ``branches: {head_id: name}``
   * context commits are owned by the commit subsystem; this class only
     persists raw nodes + meta.
 
@@ -51,12 +51,15 @@ class SessionPlacementError(RuntimeError):
 _REWIND_RECOVERY_SESSIONS: ContextVar[frozenset[tuple[object, str]]] = ContextVar(
     "openprogram_rewind_recovery_sessions", default=frozenset(),
 )
+_READING_CACHED_INDEX: ContextVar[bool] = ContextVar("openprogram_reading_cached_index", default=False)
 
 
 from openprogram.state.store.session.nodes import Call, ROLE_CODE, ROLE_USER, ROLE_LLM  # noqa: F401
 from openprogram.host._platform.filesystem import remove_tree  # noqa: F401
 from .._msg_adapter import _msg_to_node, _node_to_msg, _row_to_session  # noqa: F401
-from ..git_session import GitSession, atomic_write_text, read_text_with_retry  # noqa: F401
+from ..atomic_file import atomic_write_text, read_text_with_retry  # noqa: F401
+from ..session_log import RUN_ROWS_RECORD, SessionLog, report_foreign_change  # noqa: F401
+from ..session_state_file import SessionStateFile  # noqa: F401
 from ..memory_index import SessionMemoryIndex  # noqa: F401
 from ..placement import (  # noqa: F401
     INDEX_FILE,

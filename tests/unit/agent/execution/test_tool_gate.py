@@ -156,6 +156,6 @@ def test_gate_blocks_tool_end_to_end():
     text = "".join(
         c.text for c in tool_results[0].content if hasattr(c, "text")
     )
-    assert "Tool call blocked" in text and "测试拦截" in text
+    assert text.startswith("[blocked by hook]") and "测试拦截" in text
     assert tool_results[0].is_error
     assert "is_error" not in (tool_results[0].details or {})

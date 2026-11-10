@@ -10,7 +10,7 @@ shape, simplified — we keep:
   id, name, description, revision, default, model (provider+id), thinking_effort, system_prompt,
   skills {disabled: []}, tools {disabled: []}, identity {name, mention_patterns},
   always_on {enabled, goal, wake_minutes, research, autonomy, channels,
-             quiet_hours, wake_days},
+             quiet_hours, wake_days, check_in_model, notify, daily_budget_usd},
   avatar {kind, shape, color, style, seed, file, letter, bg},
   created_at, updated_at.
 
@@ -123,12 +123,53 @@ def validate_memory_config(raw: object, *, partial: bool = False) -> dict[str, A
 
 
 ALWAYS_ON_FIELDS = ("enabled", "goal", "wake_minutes", "research", "autonomy", "channels",
-                    "quiet_hours", "wake_days")
+                    "quiet_hours", "wake_days", "check_in_model", "notify", "daily_budget_usd")
 ALWAYS_ON_GOAL_MAX = 4000
 ALWAYS_ON_WAKE_RANGE = (5, 10080)
 ALWAYS_ON_CHANNELS = ("telegram", "slack", "discord", "wechat")
 ALWAYS_ON_CHANNELS_MAX = 10
 ALWAYS_ON_DAYS = (0, 1, 2, 3, 4, 5, 6)  # Monday is 0, as datetime.weekday() counts
+# Report kinds and where each may reach the user beyond the conversation.
+ALWAYS_ON_REPORT_KINDS = ("finding", "approval", "done")
+ALWAYS_ON_NOTIFY_ROUTES = ("desktop", "channels")
+ALWAYS_ON_MODEL_MAX = 300
+
+
+def default_notify() -> dict[str, dict[str, bool]]:
+    return {kind: {route: True for route in ALWAYS_ON_NOTIFY_ROUTES} for kind in ALWAYS_ON_REPORT_KINDS}
+
+
+def _notify(raw: object) -> dict[str, dict[str, bool]]:
+    """Per report kind, whether it raises a desktop notification and goes to channels.
+
+    Kinds and routes left out stay on."""
+    if not isinstance(raw, dict) or set(raw) - set(ALWAYS_ON_REPORT_KINDS):
+        raise ValueError("always_on.notify must map finding, approval and done to {desktop, channels}")
+    out = default_notify()
+    for kind, routes in raw.items():
+        if (not isinstance(routes, dict) or set(routes) - set(ALWAYS_ON_NOTIFY_ROUTES)
+                or any(not isinstance(value, bool) for value in routes.values())):
+            raise ValueError(f"always_on.notify.{kind} must be {{desktop, channels}} booleans")
+        out[kind].update(routes)
+    return out
+
+
+def _check_in_model(raw: object) -> str:
+    """``""`` (the conversation's model) or ``"provider/model"``."""
+    if not isinstance(raw, str) or len(raw) > ALWAYS_ON_MODEL_MAX:
+        raise ValueError('always_on.check_in_model must be "" or "provider/model"')
+    value = raw.strip()
+    if value and ("/" not in value or not all(part.strip() for part in value.split("/", 1))):
+        raise ValueError('always_on.check_in_model must be "" or "provider/model"')
+    return value
+
+
+def _daily_budget(raw: object) -> float | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool) or not isinstance(raw, (int, float)) or not math.isfinite(raw) or raw <= 0:
+        raise ValueError("always_on.daily_budget_usd must be a number above 0, or null")
+    return float(raw)
 
 
 def _clock(value: object) -> str:
@@ -192,9 +233,10 @@ def validate_always_on(raw: object, *, partial: bool = False) -> dict[str, Any]:
     if set(raw) - set(ALWAYS_ON_FIELDS):
         raise ValueError("always_on contains unsupported fields")
     out: dict[str, Any] = {} if partial else {
-        "enabled": False, "goal": "", "wake_minutes": 60,
+        "enabled": False, "goal": "", "wake_minutes": None,
         "research": True, "autonomy": "report", "channels": [],
         "quiet_hours": None, "wake_days": list(ALWAYS_ON_DAYS),
+        "check_in_model": "", "notify": default_notify(), "daily_budget_usd": None,
     }
     for key in ("enabled", "research"):
         if key in raw:
@@ -207,10 +249,12 @@ def validate_always_on(raw: object, *, partial: bool = False) -> dict[str, Any]:
             raise ValueError(f"always_on.goal must be text of at most {ALWAYS_ON_GOAL_MAX} characters")
         out["goal"] = goal.strip()
     if "wake_minutes" in raw:
+        # null: no fixed interval; the agent schedules its own wakes.
         minutes = raw["wake_minutes"]
         low, high = ALWAYS_ON_WAKE_RANGE
-        if isinstance(minutes, bool) or not isinstance(minutes, int) or not low <= minutes <= high:
-            raise ValueError(f"always_on.wake_minutes must be between {low} and {high}")
+        if minutes is not None and (isinstance(minutes, bool) or not isinstance(minutes, int)
+                                    or not low <= minutes <= high):
+            raise ValueError(f"always_on.wake_minutes must be null or between {low} and {high}")
         out["wake_minutes"] = minutes
     if "autonomy" in raw:
         if raw["autonomy"] not in {"report", "act"}:
@@ -222,6 +266,12 @@ def validate_always_on(raw: object, *, partial: bool = False) -> dict[str, Any]:
         out["quiet_hours"] = _quiet_hours(raw["quiet_hours"])
     if "wake_days" in raw:
         out["wake_days"] = _wake_days(raw["wake_days"])
+    if "check_in_model" in raw:
+        out["check_in_model"] = _check_in_model(raw["check_in_model"])
+    if "notify" in raw:
+        out["notify"] = _notify(raw["notify"])
+    if "daily_budget_usd" in raw:
+        out["daily_budget_usd"] = _daily_budget(raw["daily_budget_usd"])
     return out
 
 
@@ -336,7 +386,7 @@ class AgentSpec:
     # Hold what the Agent sends for the user (an email, a message, a post
     # through a connected service) as a draft the user approves, one call at
     # a time, in every permission mode. See permissions/policy.py.
-    hold_outbound: bool = True
+    hold_outbound: bool = False
     # How the interface pictures this Agent; empty means the picture derived
     # from its id. See validate_avatar.
     avatar: dict[str, str] = field(default_factory=dict)
@@ -364,7 +414,7 @@ class AgentSpec:
             memory=memory,
             memory_policy_epoch=memory_epoch,
             always_on=validate_always_on(raw.get("always_on") or {}),
-            hold_outbound=raw.get("hold_outbound") is not False,
+            hold_outbound=raw.get("hold_outbound") is True,
             avatar=_stored_avatar(raw.get("avatar")),
             default=bool(raw.get("default") or False),
             model=AgentModelRef(
@@ -564,24 +614,22 @@ def list_all() -> list[AgentSpec]:
     — e.g. if a user copies an agent folder in by hand).
     """
     with _lock:
-        idx = _read_index()
-        known = list(idx.get("order") or [])
-        agents: list[AgentSpec] = []
-        for aid in known:
-            spec = _read_agent(aid)
-            if spec is not None:
-                agents.append(spec)
-        # Disk scan for stragglers
+        specs = (_read_agent(agent_id) for agent_id in list_ids())
+        return [spec for spec in specs if spec is not None]
+
+
+def list_ids() -> list[str]:
+    """Every agent's id, in ``list_all`` order, without opening its file.
+
+    For a loop that must go on past one agent whose file cannot be read:
+    it loads each with ``get`` and handles that agent's failure itself.
+    """
+    with _lock:
+        known = list(_read_index().get("order") or [])
         agents_root = _state_root() / "agents"
-        for entry in agents_root.iterdir() if agents_root.is_dir() else []:
-            if not entry.is_dir():
-                continue
-            if entry.name in known:
-                continue
-            spec = _read_agent(entry.name)
-            if spec is not None:
-                agents.append(spec)
-        return agents
+        entries = agents_root.iterdir() if agents_root.is_dir() else []
+        return known + [entry.name for entry in entries
+                        if entry.is_dir() and entry.name not in known]
 
 
 def get(agent_id: str) -> Optional[AgentSpec]:
@@ -609,6 +657,11 @@ def get_default() -> Optional[AgentSpec]:
         return any_list[0] if any_list else None
 
 
+def new_record(agent_id: str, **fields: Any) -> AgentSpec:
+    """The record ``create`` starts from, built in memory and saved nowhere."""
+    return AgentSpec(id=agent_id, skills={"disabled": []}, tools={"mode": "automatic"}, **fields)
+
+
 def create(
     agent_id: str,
     *,
@@ -620,10 +673,15 @@ def create(
     identity_name: str = "",
     mention_patterns: Optional[list[str]] = None,
     make_default: bool = False,
+    configuration: Optional[dict[str, Any]] = None,
 ) -> AgentSpec:
     """Create a new agent. ``agent_id`` must match
     ``^[a-z][a-z0-9_-]{0,39}$``. Raises ``ValueError`` on bad id or
     if one already exists with that id.
+
+    ``configuration`` is an ``update`` patch, with a complete tool policy,
+    that is part of the first save: nothing is written if it is invalid,
+    and no half-configured record can be left behind.
     """
     if not _VALID_ID.match(agent_id):
         raise ValueError(
@@ -635,15 +693,13 @@ def create(
             raise ValueError(f"Agent {agent_id!r} already exists.")
         idx = _read_index()
         now = time.time()
-        spec = AgentSpec(
-            id=agent_id,
+        spec = new_record(
+            agent_id,
             name=name or agent_id.replace("_", " ").replace("-", " ").title(),
             default=make_default or not idx.get("default_id"),
             model=AgentModelRef(provider=provider, id=model_id),
             thinking_effort=thinking_effort if thinking_effort is not None else "medium",
             system_prompt=system_prompt,
-            skills={"disabled": []},
-            tools={"mode": "automatic"},
             identity=AgentIdentity(
                 name=identity_name or name or agent_id,
                 mention_patterns=list(mention_patterns or []),
@@ -651,6 +707,8 @@ def create(
             created_at=now,
             updated_at=now,
         )
+        if configuration:
+            spec = merge_patch(spec, configuration, replace_tool_policy=True)
         agent_dir(agent_id).mkdir(parents=True, exist_ok=True)
         sessions_dir(agent_id)
         _write_agent(spec)
@@ -756,6 +814,20 @@ def duplicate(agent_id: str, *, target_id: str = "", name: str = "") -> AgentSpe
         return spec
 
 
+def merge_patch(spec: AgentSpec, patch: dict[str, Any], *, replace_tool_policy: bool = False) -> AgentSpec:
+    """``spec`` with ``patch`` merged in and validated; nothing is saved."""
+    raw = spec.to_dict()
+    _deep_merge(raw, patch)
+    if replace_tool_policy and "tools" in patch:
+        raw["tools"] = dict(patch["tools"])
+    if "avatar" in patch:
+        # One picture replaces another whole: a character keeps nothing
+        # of the uploaded image it replaced.
+        raw["avatar"] = validate_avatar(patch["avatar"])
+    raw["id"] = spec.id  # can't rename via update
+    return AgentSpec.from_dict(raw)
+
+
 def update(
     agent_id: str,
     patch: dict[str, Any],
@@ -788,24 +860,10 @@ def update(
             raise AgentRevisionConflict(spec)
         if not patch:
             return spec
-        raw = spec.to_dict()
-        _deep_merge(raw, patch)
-        if replace_tool_policy and "tools" in patch:
-            raw["tools"] = dict(patch["tools"])
-        if "avatar" in patch:
-            # One picture replaces another whole: a character keeps nothing
-            # of the uploaded image it replaced.
-            raw["avatar"] = validate_avatar(patch["avatar"])
-        raw["id"] = agent_id  # can't rename via update
-        new_spec = AgentSpec.from_dict(raw)
+        new_spec = merge_patch(spec, patch, replace_tool_policy=replace_tool_policy)
         new_spec.memory_policy_epoch = spec.memory_policy_epoch + (new_spec.memory != spec.memory)
         _write_agent(new_spec)
         return new_spec
-
-
-def replace_tools(agent_id: str, tools: dict[str, Any]) -> AgentSpec:
-    """Replace one Agent's complete tool-access policy atomically."""
-    return update(agent_id, {"tools": tools}, replace_tool_policy=True)
 
 
 def delete(agent_id: str) -> None:

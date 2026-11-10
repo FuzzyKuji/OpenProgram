@@ -412,8 +412,8 @@ def _release_session_occupancy_for_execution(execution: dict) -> bool:
 class ServerRunSlot:
     """The server's run reservation as the runtime's run-slot port.
 
-    A turn the runtime starts on its own (a reminder wake, an always-on
-    check-in) reserves the same slot a typed message does, shows as the
+    A turn the runtime starts on its own (a reminder wake, a handed-over
+    message) reserves the same slot a typed message does, shows as the
     conversation's running task while it runs and frees the slot when it
     ends, so neither kind of turn can start on top of the other.
     """

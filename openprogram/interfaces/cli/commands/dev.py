@@ -42,7 +42,7 @@ def _cmd_dev(args) -> int:
             print(instances.auth_url())
             return 0
         if args.dev_verb == "promote":
-            revision = instances.promote(args.revision)
+            revision = instances.promote(args.revision, on_wait=lambda text: print(text, file=sys.stderr, flush=True))
             print(f"stable now runs {_short(revision)}")
             return 0
         value = instances.status()

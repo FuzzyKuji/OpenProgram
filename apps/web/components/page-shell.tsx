@@ -8,6 +8,7 @@ import { usePendingRunFunction } from "@/lib/execution/use-pending-run-function"
 import { useWS } from "@/lib/net/ws/use-ws";
 import { reopenActiveSessionRoute } from "@/lib/tabs/navigation/open-session";
 import { runtimeState, getSocket } from "@/lib/runtime-bridge/state";
+import { holdsHistoryWindow, useSessionHistory } from "@/lib/chat/history/session-history";
 import { useSessionStore } from "@/lib/session-store";
 import {
   newSession,
@@ -268,28 +269,18 @@ export function PageShell({ page }: { page: Page }) {
       return;
     }
 
-    // Optimistic render from cache — snaps the UI instantly; the WS
-    // reply below still overwrites with the authoritative capture.
-    // TODO(store-migration): reads the legacy heavy conv (messages/graph)
-    // for the legacy renderSessionMessages DOM path — stays on
-    // runtimeState.conversations until that renderer moves into the store.
-    //
-    // Only render when the cache holds a FULL capture (messages
-    // present). Sidebar entries are lightweight (no messages) — feeding
-    // one to renderSessionMessages wipes the transcript and flashes the
-    // welcome screen for a frame. In that case flip to the skeleton
-    // state instead and let loadSessionData clear it when the WS reply
-    // lands.
-    const cached = runtimeState.conversations[target] as
-      | { messages?: unknown[] }
-      | undefined;
+    // A chat this tab already read draws at once from its view; the WS
+    // reply below still brings it up to date. A chat with no read view
+    // (a sidebar entry only) shows the skeleton until loadSessionData
+    // clears it, instead of flashing the welcome screen for a frame.
+    const cached = runtimeState.conversations[target];
     const store = useSessionStore;
     if (
       cached
-      && Array.isArray(cached.messages)
-      && cached.messages.length > 0
+      && holdsHistoryWindow(useSessionHistory.getState().pages[target])
+      && (store.getState().messageOrder[target]?.length ?? 0) > 0
     ) {
-      try { renderSessionMessages(cached as never, { preserveStore: true }); } catch {}
+      try { renderSessionMessages(cached as never); } catch {}
       try { store.getState().setTranscriptLoading(null); } catch {}
       // A split pane already shows this session through its own live,
       // windowed read, so focusing it moves only the focus bookkeeping.

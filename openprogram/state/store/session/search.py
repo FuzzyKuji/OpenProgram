@@ -1,16 +1,17 @@
 """Cross-session message search backed by ``ripgrep``.
 
 Replaces SQLite FTS5. ``ripgrep`` is invoked as a subprocess against
-the ``~/.openprogram/projects/*/chats/*/history/*.json`` tree. Matches are
+the ``~/.openprogram/projects/*/chats/*/main.jsonl`` logs. Matches are
 parsed, mapped back to ``{session_id, node_id}`` tuples, and rendered
 into the same message-dict shape the old ``DagSessionDB.search_messages``
 returned.
 
 If ripgrep is not on PATH, falls back to a pure-Python scan (slower
-but functional). Both paths cap at ``limit`` results.
+but functional). Both paths return the newest ``limit`` results.
 """
 from __future__ import annotations
 
+import json
 import re
 import shutil
 import subprocess
@@ -20,27 +21,12 @@ from typing import Any, Optional, TYPE_CHECKING
 if TYPE_CHECKING:
     from .session_store import SessionStore
 
+# ``openprogram.runtime.permissions.identity.CHECK_IN_SPEAKER``; state does not import runtime.
+_CHECK_IN_SPEAKER = "runtime/always_on"
+
 
 def _have_rg() -> bool:
     return shutil.which("rg") is not None
-
-
-def _parse_history_path(p: Path) -> Optional[tuple[str, str]]:
-    """Path → (session_id, node_id) or None.
-
-    Expected shape: ``<chats>/<session_id>/history/<NNNN>-<role>-<id>.json``.
-    """
-    try:
-        if p.parent.name != "history":
-            return None
-        sid = p.parent.parent.name
-        # Filename: NNNN-r-nodeid.json
-        m = re.match(r"\d+-\w-(.+)\.json$", p.name)
-        if not m:
-            return None
-        return sid, m.group(1)
-    except (AttributeError, IndexError):
-        return None
 
 
 def search_messages(
@@ -51,7 +37,11 @@ def search_messages(
     agent_id: Optional[str] = None,
     limit: int = 50,
 ) -> list[dict[str, Any]]:
-    """Return up to ``limit`` message dicts matching ``query``.
+    """Return the ``limit`` newest messages whose text matches ``query``.
+
+    A message matches on its own content, not on its stored metadata. Prompts
+    the chat does not draw, scheduled runs, always-on check-ins and merged
+    branches are left out.
 
     Scoped to one session if ``session_id`` given. ``agent_id`` further
     filters by the owning agent (applied via per-session meta lookup).
@@ -61,57 +51,121 @@ def search_messages(
         return []
     # Where to search: one session's history or every project's chats.
     if session_id:
-        targets = [store._session_dir(session_id) / "history"]
+        targets = [store._session_dir(session_id)]
     else:
         targets = sorted(d for d in root.glob("*/chats") if d.is_dir())
     targets = [t for t in targets if t.is_dir()]
     if not targets:
         return []
 
-    hits: list[tuple[str, str]] = []
-    if _have_rg():
-        hits = _rg_search(targets, query, limit * 5)
-    else:
-        hits = _python_search(targets, query, limit * 5)
+    sessions = _rg_search(targets, query) if _have_rg() else _python_search(targets, query)
+    try:
+        matcher = re.compile(query, re.IGNORECASE)
+    except re.error:
+        matcher = re.compile(re.escape(query), re.IGNORECASE)
 
-    # Filter by agent_id if requested; enrich each result like the
-    # old DagSessionDB.search_messages did.
-    out: list[dict[str, Any]] = []
-    sess_cache: dict[str, dict] = {}
-
-    def _sess_for(sid: str) -> Optional[dict]:
-        if sid not in sess_cache:
-            sess_cache[sid] = store.get_session(sid) or {}
-        return sess_cache[sid]
-
-    for sid, nid in hits:
-        if agent_id is not None:
-            sess = _sess_for(sid)
-            if (sess or {}).get("agent_id") != agent_id:
-                continue
-        # Pull the node back through the store so we get the canonical
-        # message-dict shape (with extra fields, session_title, etc.).
-        msgs = store.get_messages(sid)
-        node = next((m for m in msgs if m.get("id") == nid), None)
-        if node is None:
+    hits: list[dict[str, Any]] = []
+    for sid in sessions:
+        sess = store.get_session(sid) or {}
+        if agent_id is not None and sess.get("agent_id") != agent_id:
             continue
-        sess = _sess_for(sid)
-        node = dict(node)  # don't mutate cache
-        node["session_title"] = sess.get("title") or ""
-        node["session_source"] = sess.get("source") or ""
-        node["session_agent_id"] = sess.get("agent_id") or ""
-        out.append(node)
-        if len(out) >= limit:
-            break
-    return out
+        for node in _shown_matches(store, sid, matcher):
+            node["session_title"] = sess.get("title") or ""
+            node["session_source"] = sess.get("source") or ""
+            node["session_agent_id"] = sess.get("agent_id") or ""
+            hits.append(node)
+    hits.sort(key=lambda node: _time_of(node.get("timestamp")), reverse=True)
+    return hits[:limit]
 
 
-def _rg_search(targets: list[Path], query: str, max_hits: int) -> list[tuple[str, str]]:
-    """Run ``rg --files-with-matches`` and parse paths into (sid, nid)."""
+def _time_of(value: Any) -> float:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _text_of(message: dict[str, Any]) -> str:
+    content = message.get("content")
+    if isinstance(content, str):
+        return content
+    return "" if content is None else json.dumps(content, ensure_ascii=False, default=str)
+
+
+def _shown_matches(store: "SessionStore", session_id: str, matcher: re.Pattern) -> list[dict[str, Any]]:
+    """The session's messages whose own text matches and that a person can read."""
+    rows = store.get_messages(session_id)
+    matches = [row for row in rows if matcher.search(_text_of(row))]
+    if not matches:
+        return []
+    hidden = _hidden_branch_nodes(store, session_id, rows)
+    return [dict(row) for row in matches  # don't mutate cache
+            if row.get("display") != "runtime" and row.get("id") not in hidden]
+
+
+def _automatic_prompt(row: dict[str, Any]) -> bool:
+    """The prompt of a scheduled run or an always-on check-in."""
+    return row.get("source") == "scheduler" or row.get("speaker_id") == _CHECK_IN_SPEAKER
+
+
+def _typed_message(row: dict[str, Any]) -> bool:
+    return row.get("role") == "user" and row.get("display") != "runtime" and row.get("speaker_kind") != "runtime"
+
+
+def _hidden_branch_nodes(store: "SessionStore", session_id: str, rows: list[dict[str, Any]]) -> set[Any]:
+    """Nodes of automatic runs, and nodes only on a merged branch.
+
+    A check-in or scheduled run is hidden from its own prompt on, finished or
+    not, so it says nothing about the line it left. Where a person replied on
+    such a branch, that reply and what follows are an ordinary chat.
+    """
+    by_id = {row.get("id"): row for row in rows}
+
+    def ancestors(tips: Any) -> set[Any]:
+        seen: set[Any] = set()
+        stack = list(tips)
+        while stack:
+            node_id = stack.pop()
+            if node_id in by_id and node_id not in seen:
+                seen.add(node_id)
+                stack.append(by_id[node_id].get("predecessor"))
+        return seen
+
+    def spread(nodes: set[Any]) -> set[Any]:
+        for row in rows:  # The log is in write order: a parent comes before its children.
+            if (_automatic_prompt(row) or row.get("caller") in nodes
+                    or (row.get("predecessor") in nodes and not _typed_message(row))):
+                nodes.add(row.get("id"))
+        return nodes
+
+    hidden = spread(set())
+    merged = store.merged_heads(session_id) - hidden
+    if not merged:
+        return hidden
+    # The line the conversation is on counts even when a merged branch is its tip.
+    head = (store.get_session(session_id) or {}).get("head_id")
+    tips = {branch["head_msg_id"] for branch in store.list_branches(session_id)} | {head}
+    return spread(hidden | (ancestors(merged) - ancestors(tips - hidden)))
+
+
+def _log_files(target: Path) -> list[Path]:
+    """The log files of one session directory or of a project's chats."""
+    if (target / "main.jsonl").exists() or (target / "agents").is_dir():
+        return [*target.glob("main.jsonl"), *target.glob("agents/*.jsonl")]
+    return [*target.glob("*/main.jsonl"), *target.glob("*/agents/*.jsonl")]
+
+
+def _session_of(log_file: Path) -> str:
+    parent = log_file.parent
+    return parent.parent.name if parent.name == "agents" else parent.name
+
+
+def _rg_search(targets: list[Path], query: str) -> list[str]:
+    """Session ids whose logs mention ``query``."""
     try:
         cp = subprocess.run(
             ["rg", "--files-with-matches", "--no-messages",
-             "--glob", "*.json", "--max-count", "1",
+             "--glob", "*.jsonl", "--max-count", "1",
              "-i", "--", query, *map(str, targets)],
             capture_output=True, text=True, timeout=10,
         )
@@ -119,37 +173,23 @@ def _rg_search(targets: list[Path], query: str, max_hits: int) -> list[tuple[str
         return []
     if cp.returncode not in (0, 1):  # 1 = no match (not an error)
         return []
-    out: list[tuple[str, str]] = []
-    for line in cp.stdout.splitlines():
-        if not line.strip():
-            continue
-        ref = _parse_history_path(Path(line))
-        if ref:
-            out.append(ref)
-        if len(out) >= max_hits:
-            break
-    return out
+    found = [Path(line) for line in cp.stdout.splitlines() if line.strip()]
+    return list(dict.fromkeys(
+        _session_of(path) for path in found
+        if path.name == "main.jsonl" or path.parent.name == "agents"
+    ))
 
 
-def _python_search(targets: list[Path], query: str, max_hits: int) -> list[tuple[str, str]]:
+def _python_search(targets: list[Path], query: str) -> list[str]:
     """Slow fallback when ripgrep isn't installed. Linear scan."""
     needle = query.lower()
-    out: list[tuple[str, str]] = []
-    # A session's history dir is searched directly; a project's chats dir
-    # through each of its sessions.
-    paths: list[Path] = []
+    out: dict[str, None] = {}
     for target in targets:
-        pattern = "*.json" if target.name == "history" else "*/history/*.json"
-        paths.extend(target.glob(pattern))
-    for p in paths:
-        try:
-            content = p.read_text(errors="ignore", encoding="utf-8")
-        except OSError:
-            continue
-        if needle in content.lower():
-            ref = _parse_history_path(p)
-            if ref:
-                out.append(ref)
-                if len(out) >= max_hits:
-                    break
-    return out
+        for path in _log_files(target):
+            try:
+                content = path.read_text(errors="ignore", encoding="utf-8")
+            except OSError:
+                continue
+            if needle in content.lower():
+                out[_session_of(path)] = None
+    return list(out)

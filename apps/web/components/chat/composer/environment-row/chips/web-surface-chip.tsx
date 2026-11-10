@@ -52,7 +52,7 @@ export function WebSurfaceChip({ sessionId }: { sessionId: string | null }) {
     `${cn(buttonVariants({ variant: "elevated", size: "sm" }))} status-badge ${styles.surfaceChip}`;
   const body = (
     <>
-      <SolarIcon name="earth" size={14} aria-hidden="true" />
+      <SolarIcon name="earth" size={16} fit="fill" aria-hidden="true" />
       <span className={styles.surfaceChipLabel}>{title}</span>
     </>
   );

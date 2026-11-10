@@ -49,7 +49,7 @@ def environment(tmp_path, monkeypatch, store_fixture):
     request = replace(request, pre_update_evidence=(*request.pre_update_evidence, config_evidence(config)))
     store = SelfUpdateStore()
     store.create(request, verifier_config=config)
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(request.update_id, phase)
     def release(**changes):
         gate = dict(schema=1, candidate_sha=request.candidate_sha, attempt=1,
@@ -207,8 +207,8 @@ def test_persisted_queue_checks_gate_before_model_execution(environment, monkeyp
     )
     runner.shutdown()
     # Simulate process loss after durable ready publication, before pickup.
-    with runner._governor.ledger.immediate() as conn:
-        conn.execute("UPDATE job_admissions SET dispatch_ready = 1 WHERE job_id = ?", (claim.job_id,))
+    with runner._governor.ledger.run_tables().transaction() as conn:
+        conn.update("job_admissions", {"dispatch_ready": 1}, job_id=claim.job_id)
     if gate == "rolled_back":
         store.transition(request.update_id, UpdatePhase.ROLLED_BACK)
     if gate == "rolling_back":
@@ -325,7 +325,7 @@ def test_expired_update_and_candidate_error_do_not_block_restored_startup(enviro
     store.transition(original.update_id, UpdatePhase.ROLLED_BACK)
     request = replace(original, update_id="su_expired", created_at=time.time() - 3600, timeout_seconds=1)
     store.create(request)
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING):
         store.transition(request.update_id, phase, detail={"previous_system_gate": {"candidate_sha": "3" * 40}})
     intent = begin_rollback(store, request.update_id, "update timed out")
     assert begin_rollback(store, request.update_id, "retry") == intent

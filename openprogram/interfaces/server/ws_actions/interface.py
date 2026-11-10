@@ -3,7 +3,7 @@ from openprogram.programs._host.framework.interface import register_window, resu
 
 
 async def reminder_shown(ws, cmd: dict):
-    """The desktop App showed a reminder's system notification itself."""
+    """The desktop App showed a reminder's or report's system notification itself."""
     from openprogram.runtime.scheduler import reminders
 
     reminders.shown(str(cmd.get("id") or ""))

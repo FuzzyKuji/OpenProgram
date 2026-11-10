@@ -34,8 +34,7 @@ export interface SlashContext {
   setThinkingEffort?: (effort: ThinkingEffort) => void;
   /** Current permission tier shown on the bottom bar and sent with chat turns. */
   currentPermissionMode?: PermissionMode;
-  /** Set the permission tier. handleSlash routes bypass through the
-   *  confirm picker instead of calling this directly. */
+  /** Set the permission tier. */
   setPermissionMode?: (mode: PermissionMode) => void;
   /** Toggle the terminal-bell-on-long-turn-complete flag. */
   toggleBell: () => boolean;
@@ -181,11 +180,13 @@ const normalizeThinkingEffort = (raw: string): ThinkingEffort | null => {
   return null;
 };
 
-const PERMISSION_MODES: PermissionMode[] = ['ask', 'acceptEdits', 'plan', 'auto', 'bypass'];
+const PERMISSION_MODE_NAMES = ['bypass', 'auto', 'manual', 'plan'];
 
 const normalizePermissionMode = (raw: string): PermissionMode | null => {
   const v = raw.toLowerCase();
   if (v === 'acceptedits' || v === 'accept-edits' || v === 'accept' || v === 'edits') return 'acceptEdits';
+  if (v === 'unrestricted') return 'bypass';
+  if (v === 'manual') return 'ask';
   if (v === 'ask' || v === 'plan' || v === 'auto' || v === 'bypass') return v;
   return null;
 };
@@ -451,13 +452,7 @@ export function handleSlash(line: string, ctx: SlashContext): boolean {
       }
       const mode = normalizePermissionMode(args[0]!);
       if (!mode) {
-        ctx.pushSystem(`Unknown permission mode '${args[0]}'. Use one of: ${PERMISSION_MODES.join(', ')}`);
-        return true;
-      }
-      if (mode === 'bypass') {
-        // bypass never lands silently — route through the same confirm
-        // the picker uses.
-        ctx.openPicker('permission_bypass_confirm');
+        ctx.pushSystem(`Unknown permission mode '${args[0]}'. Use one of: ${PERMISSION_MODE_NAMES.join(', ')}`);
         return true;
       }
       ctx.setPermissionMode(mode);
@@ -791,13 +786,6 @@ export function handleSlash(line: string, ctx: SlashContext): boolean {
     case 'sandbox': {
       const conv = ctx.currentConversation;
       ctx.client.send({ action: 'sandbox', session_id: conv ?? '' });
-      return true;
-    }
-
-    case 'rewind': {
-      const conv = ctx.currentConversation;
-      if (!conv) { ctx.pushSystem('No active session to rewind.'); return true; }
-      ctx.client.send({ action: 'rewind', session_id: conv });
       return true;
     }
 

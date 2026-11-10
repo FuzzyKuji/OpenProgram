@@ -5,7 +5,7 @@ daily stretch without scheduled wakes; it may cross midnight. ``wake_days``
 lists the weekdays (Monday is 0) wakes may happen on. Wake now and
 messages from other conversations are not scheduled wakes and ignore both.
 
-Design: docs/reference/design/runtime/always-on-agents.md
+Design: docs/reference/design/runtime/always-on-agents.html
 """
 from __future__ import annotations
 

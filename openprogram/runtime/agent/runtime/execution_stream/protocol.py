@@ -72,32 +72,6 @@ def is_terminal_phase(phase: str | None) -> bool:
     return (phase or "") in TERMINAL_PHASES
 
 
-def version_tuple(generation: int, revision: int) -> tuple[int, int]:
-    return (int(generation), int(revision))
-
-
-def compare_version(
-    a_gen: int, a_rev: int, b_gen: int, b_rev: int
-) -> int:
-    """Return -1 / 0 / 1 for a ? b. Generation dominates revision."""
-    if a_gen != b_gen:
-        return -1 if a_gen < b_gen else 1
-    if a_rev != b_rev:
-        return -1 if a_rev < b_rev else 1
-    return 0
-
-
-def envelope_identity_fields(data: Mapping[str, Any]) -> dict[str, Any]:
-    """Extract required identity fields for validation / logging."""
-    return {
-        "session_id": data.get("session_id"),
-        "execution_id": data.get("execution_id"),
-        "node_id": data.get("node_id"),
-        "generation": data.get("generation"),
-        "display_msg_id": data.get("display_msg_id"),
-    }
-
-
 def build_chat_response_envelope(
     data: Mapping[str, Any],
 ) -> dict[str, Any]:

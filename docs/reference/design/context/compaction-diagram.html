@@ -1,594 +1,132 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Compaction illustrated</title>
-<style>
-  :root {
-    --blue: #3b82f6;
-    --green: #15803d;
-    --yellow: #a16207;
-    --red: #ef4444;
-    --blue-bg: #eff6ff;
-    --green-bg: #f0fdf4;
-    --yellow-bg: #fefce8;
-    --red-bg: #fef2f2;
-    --gray-50: #f9fafb;
-    --gray-100: #f3f4f6;
-    --gray-200: #e5e7eb;
-    --gray-600: #4b5563;
-    --gray-800: #1f2937;
-    --gray-900: #111827;
-  }
+<title>Compaction tiers</title>
+<meta name="description" content="What OpenProgram does to keep requests inside the context window, in the order it happens, with status.">
+<h1>Compaction tiers</h1>
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+<table class="stack" id="s1">
+<thead><tr><th scope="col">When</th><th scope="col">Step</th><th scope="col">Action</th><th scope="col">LLM</th><th scope="col">Breaks cache</th><th scope="col">Status</th></tr></thead>
+<tbody>
+<tr><th scope="row">Every render</th><td>Budget Reduction</td><td>Truncates one tool result over 4000 characters</td><td>No</td><td>No</td><td>Built</td></tr>
+<tr><th scope="row">Every render</th><td>Tool aging</td><td>Tool calls older than the latest 3 assistant turns become one-line stubs</td><td>No</td><td>At the boundary</td><td>Built</td></tr>
+<tr><th scope="row">50 tool calls, then every 25</th><td>Cache-aware Microcompact</td><td>Server clears old tool uses, keeps the latest 5</td><td>No</td><td>No</td><td>Built, Anthropic 1M-context models</td></tr>
+<tr><th scope="row">Before a turn, at the auto-compact share; or <code translate="no">/compact</code></th><td>Auto-Compact</td><td>One rolling summary</td><td>Once</td><td>Yes</td><td>Built</td></tr>
+<tr><th scope="row">Each provider request, over budget</th><td>Request compaction</td><td>Summarizes tool results, then a checkpoint, in that request only</td><td>Bounded</td><td>Yes</td><td>Built</td></tr>
+<tr><th scope="row">Provider reports overflow</th><td>Reactive</td><td>Auto-Compact, retry; once per turn</td><td>Yes</td><td>Yes</td><td>Built</td></tr>
+<tr><th scope="row">Still over, about 90%</th><td>Context Collapse</td><td>Segment summaries, originals kept</td><td>Per segment</td><td>Yes</td><td>Not built</td></tr>
+</tbody>
+</table>
+<p class="note">Summary semantics: <a href="compaction.html">Compaction</a>. Claude Code's version of this ladder: <a href="claude-code-compaction.html">Claude Code compaction</a>. <code translate="no">/context</code> shows the token distribution.</p>
 
-  body {
-    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
-    color: var(--gray-800);
-    background: var(--gray-50);
-    line-height: 1.7;
-    padding: 2rem 1rem;
-  }
-
-  .container { max-width: 900px; margin: 0 auto; }
-
-  h1 {
-    font-size: 1.8rem;
-    color: var(--gray-900);
-    border-bottom: 3px solid var(--gray-200);
-    padding-bottom: .5rem;
-    margin-bottom: 1.5rem;
-  }
-
-  h2 {
-    font-size: 1.35rem;
-    color: var(--gray-900);
-    margin-top: 2.5rem;
-    margin-bottom: .75rem;
-    border-left: 4px solid var(--blue);
-    padding-left: .75rem;
-  }
-
-  h3 {
-    font-size: 1.1rem;
-    color: var(--gray-800);
-    margin-top: 1.5rem;
-    margin-bottom: .5rem;
-  }
-
-  h4 {
-    font-size: 1rem;
-    color: var(--gray-800);
-    margin-top: 1.25rem;
-    margin-bottom: .4rem;
-  }
-
-  p, li { margin-bottom: .4rem; }
-  ul { padding-left: 1.5rem; }
-
-  .node-chat, .node-func, .node-tool {
-    display: inline-block;
-    font-size: .85rem;
-    font-weight: 600;
-    padding: 2px 10px;
-    border-radius: 12px;
-    margin: 0 2px;
-    vertical-align: middle;
-  }
-  .node-chat { background: var(--blue-bg); color: var(--blue); }
-  .node-func { background: var(--green-bg); color: var(--green); }
-  .node-tool { background: var(--yellow-bg); color: var(--yellow); }
-
-  .legend {
-    background: white;
-    border: 1px solid var(--gray-200);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 1.5rem;
-    display: flex;
-    gap: 1.5rem;
-    align-items: center;
-    flex-wrap: wrap;
-  }
-  .legend-title { font-weight: 700; color: var(--gray-600); font-size: .9rem; }
-
-  .done {
-    display: inline-block;
-    background: #d1fae5;
-    color: #065f46;
-    font-size: .8rem;
-    font-weight: 600;
-    padding: 2px 10px;
-    border-radius: 12px;
-  }
-
-  .pending {
-    display: inline-block;
-    background: #fef3c7;
-    color: #92400e;
-    font-size: .8rem;
-    font-weight: 600;
-    padding: 2px 8px;
-    border-radius: 10px;
-  }
-
-  .meta {
-    color: var(--gray-600);
-    font-size: .9rem;
-    margin-bottom: 1.5rem;
-    line-height: 1.6;
-  }
-  .meta code {
-    background: var(--gray-100);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: .85rem;
-  }
-  .meta a { color: var(--blue); text-decoration: none; }
-  .meta a:hover { text-decoration: underline; }
-
-  details {
-    background: white;
-    border: 1px solid var(--gray-200);
-    border-radius: 8px;
-    margin-bottom: 1rem;
-    overflow: hidden;
-  }
-  details[open] { border-color: var(--blue); }
-  summary {
-    cursor: pointer;
-    padding: .75rem 1rem;
-    font-weight: 700;
-    font-size: 1.1rem;
-    color: var(--gray-900);
-    background: white;
-    user-select: none;
-    list-style: none;
-  }
-  summary::before {
-    content: "▸ ";
-    color: var(--gray-600);
-  }
-  details[open] > summary::before { content: "▾ "; }
-  summary::-webkit-details-marker { display: none; }
-  .section-body { padding: .5rem 1rem 1rem; }
-
-  .spec {
-    background: white;
-    border: 1px solid var(--gray-200);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    margin: .75rem 0;
-  }
-  .spec dt {
-    font-weight: 700;
-    font-size: .85rem;
-    color: var(--gray-600);
-    text-transform: uppercase;
-    letter-spacing: .04em;
-    margin-top: .6rem;
-  }
-  .spec dt:first-child { margin-top: 0; }
-  .spec dd { margin-left: 0; margin-bottom: .2rem; }
-
-  code {
-    background: var(--gray-100);
-    padding: 1px 5px;
-    border-radius: 4px;
-    font-size: .9em;
-    font-family: "SF Mono", Menlo, Consolas, monospace;
-  }
-  pre {
-    background: var(--gray-900);
-    color: #e5e7eb;
-    padding: 1rem;
-    border-radius: 8px;
-    overflow-x: auto;
-    font-size: .85rem;
-    line-height: 1.5;
-    margin: .75rem 0;
-  }
-  pre code { background: none; padding: 0; color: inherit; }
-
-  table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: .75rem 0;
-    font-size: .9rem;
-  }
-  th, td {
-    text-align: left;
-    padding: .5rem .75rem;
-    border: 1px solid var(--gray-200);
-  }
-  th {
-    background: var(--gray-100);
-    font-weight: 700;
-    color: var(--gray-800);
-  }
-  tr:nth-child(even) { background: var(--gray-50); }
-
-  .timeline { position: relative; padding-left: 2rem; margin: 1rem 0; }
-  .timeline::before {
-    content: "";
-    position: absolute;
-    left: .6rem;
-    top: 0;
-    bottom: 0;
-    width: 3px;
-    background: var(--gray-200);
-    border-radius: 2px;
-  }
-  .tl-item {
-    position: relative;
-    margin-bottom: 1.25rem;
-    padding: .75rem 1rem;
-    background: white;
-    border: 1px solid var(--gray-200);
-    border-radius: 8px;
-  }
-  .tl-item::before {
-    content: "";
-    position: absolute;
-    left: -1.65rem;
-    top: 1rem;
-    width: 12px;
-    height: 12px;
-    border-radius: 50%;
-    border: 3px solid white;
-  }
-  .tl-item.phase1::before { background: var(--blue); }
-  .tl-item.phase2::before { background: var(--green); }
-  .tl-item.phase3::before { background: var(--green); }
-  .tl-item.phase4::before { background: var(--blue); }
-  .tl-item.phase5::before { background: var(--red); }
-  .tl-item.phase6::before { background: var(--gray-600); }
-  .tl-title { font-weight: 700; margin-bottom: .25rem; }
-  .tl-ref { font-size: .8rem; color: var(--gray-600); }
-
-  .xref {
-    color: var(--blue);
-    font-size: .85rem;
-    font-weight: 600;
-  }
-
-  .toc {
-    background: white;
-    border: 1px solid var(--gray-200);
-    border-radius: 8px;
-    padding: 1rem 1.25rem;
-    margin-bottom: 2rem;
-  }
-  .toc-title { font-weight: 700; margin-bottom: .5rem; color: var(--gray-800); }
-  .toc a {
-    color: var(--gray-800);
-    text-decoration: none;
-    display: block;
-    padding: 2px 0;
-    font-size: .9rem;
-  }
-  .toc a:hover { color: var(--blue); }
-  .toc .indent { padding-left: 1.25rem; }
-#request-checkpoints th:first-child, #request-checkpoints td:first-child { min-width: 7rem; overflow-wrap: normal; }
-</style>
-</head>
-<body>
-<div class="container">
-
-<h1>Compaction illustrated</h1>
-
-<div class="meta">
-  <span class="done">Budget Reduction + Microcompact + Snip implemented</span>
-  <span class="pending">Context Collapse / Reactive pending</span><br>
-  Code: <code>context/engine.py</code>, <code>context/budget.py</code>, <code>context/microcompact.py</code>, <code>context/tool_aging/</code>, <code>context/snip.py</code><br>
-  Reference: <a href="claude-code-compaction.html">Claude Code compaction reference</a>(five-tier cascade, based on reverse engineering)
-</div>
-
-<section id="rolling-summary-contract">
-<h2>Current rolling-summary constraints</h2>
-<p>Compaction uses the same DAG visibility, tool-result rendering and aging rules as model requests. Top-level conversation defines only the replaceable range; each range's budget includes actually visible subcalls. Always retain the latest complete user turn, and retain the latest two by default; the token budget may allow fewer than twenty top-level messages. Short history already below the retention budget does not invoke the summary model.</p>
-<p>When keeping two turns leaves more than the requested token budget, select the next complete user-turn boundary and retain the latest turn. This avoids a large completed tool-heavy turn making compaction ineffective. Never split an active user turn or discard its tool evidence without including it in the summary. The completion event reports both token counts and whether a summary was actually applied.</p>
-<p>Summary input starts at the first message of the selected range and includes original user requests, the prior summary and visible tool results. Summary input and covers_ids describe the same range; no removed prefix is omitted from model input. The previous summary comes only from records applicable to the current branch, not a session cache from another branch.</p>
-<p>After generation, perform the same replacement and rendering in the in-memory graph and persist only if estimated tokens strictly decrease. Estimates include summary markers and tool results; compaction markers and the context panel use the same message rendering. Failure, cancellation, empty summary, no gain or content changes during generation neither commit a summary nor increment compaction count. Failures do not substitute a structural summary that discards content.</p>
-<p>Storage retains one rolling summary and existing covers_ids without migrating or deleting history. Repeated compaction incorporates the currently applicable summary; existing DAG rendering rules preserve branch isolation, unchanged HEAD and tool-call/result pairing. Historical incorrect summaries are not automatically rewritten.</p>
-<h3>Acceptance and boundaries</h3>
-<ul><li>With large tool results among sixteen top-level messages, summary coverage includes complete older turns and actual context shrinks.</li><li>The summary receives every replaced user request and visible tool result; recent turns stay unchanged.</li><li>Equal-length or longer summaries, cancellation, provider errors and edits during asynchronous work do not write.</li><li>Repeated compaction, branch switching, occupancy statistics and final requests render consistently.</li></ul>
-<p>Reference sources remain those already compared on this page; this change adds no external implementation or changes to other multi-tier compaction policies.</p>
-<h3>Implementation status</h3><p id="rolling-summary-status">These corrections are implemented. Regression tests cover complete summary input, retaining the latest two turns, rejecting no-gain summaries, cancellation/concurrent changes, repeated compaction and statistics consistency. Session-graph compaction scope uses the same message snapshot, avoiding inconsistent summary state if compaction repeats during loading.</p>
-</section>
-
-<div class="legend">
-  <span class="legend-title">Node types</span>
-  <span class="node-chat">🔵 Conversation node</span>
-  <span class="node-func">🟢 Function node</span>
-  <span class="node-tool">🟡 Tool node</span>
-</div>
-
-<nav class="toc">
-  <div class="toc-title">Contents</div>
-  <a href="#s1">1. Overview: routine operation + five-tier cascade</a>
-  <a href="#s2">2. Our addition: function-call node lifecycle</a>
-  <a href="#s2-1" class="indent">2.1 While a function runs</a>
-  <a href="#s2-2" class="indent">2.2 Function completes → expose=io, then normal cascade</a>
-  <a href="#s3">3. Routine operation: Budget Reduction</a>
-  <a href="#s4">4. Cascading compaction</a>
-  <a href="#s4-1" class="indent">Tier 1: Microcompact</a>
-  <a href="#s4-2" class="indent">Tier 2: Snip</a>
-  <a href="#s4-3" class="indent">Tier 3: Context Collapse</a>
-  <a href="#s4-4" class="indent">Tier 4: Auto-Compact / /compact</a>
-  <a href="#s4-5" class="indent">Tier 5: Reactive</a>
-  <a href="#s5">5. Execution flow</a>
-  <a href="#s6">6. Complete example</a>
-  <a href="#s7">7. Mapping to Claude Code</a>
-  <a href="#s8">8. Implementation plan</a>
-</nav>
-
-<!-- S1 -->
-<details open id="s1">
-  <summary>1. Overview: routine operation + five-tier cascade</summary>
-  <div class="section-body">
-    <p>Aligned with Claude Code, with two categories:</p>
-    <p><strong>Routine operation</strong>(before every LLM call, regardless of context length): Budget Reduction</p>
-    <p><strong>Cascading compaction</strong>(escalate through Tiers 1→2→3→4→5, cheapest first, advancing only if the previous tier is insufficient):</p>
-
-    <table>
-      <thead><tr><th></th><th>Name</th><th>Action</th><th>Trigger</th><th>Calls LLM</th><th>Invalidates cache</th><th>Status</th></tr></thead>
-      <tbody>
-        <tr><td>Routine</td><td>Budget Reduction</td><td>Truncate oversized individual outputs</td><td>Individual tool_result &gt; <strong>4000 characters</strong></td><td>No</td><td>No</td><td><span class="done">✅</span></td></tr>
-        <tr><td>Tier 1</td><td>Microcompact</td><td>Clean up old tool outputs</td><td>Tool calls ≥ <strong>50 calls</strong>(then every <strong>25 calls</strong>) / idle for <strong>90 minutes</strong></td><td>No</td><td>Cache-aware preserves cache</td><td><span class="done">✅</span></td></tr>
-        <tr><td>Tier 2</td><td>Snip</td><td>Remove the oldest turns</td><td>Still over budget after Tier 1</td><td>No</td><td>Yes</td><td><span class="done">✅</span></td></tr>
-        <tr><td>Tier 3</td><td>Context Collapse</td><td>Segment summaries</td><td>Still over after Tier 2, ~<strong>90%</strong></td><td>Yes (once per segment)</td><td>Yes</td><td><span class="pending">⏳</span></td></tr>
-        <tr><td>Tier 4</td><td>Auto-Compact</td><td>Full summary</td><td>Still over after Tier 3 / user <code>/compact</code></td><td>Yes (once)</td><td>Yes</td><td><span class="done">✅</span></td></tr>
-        <tr><td>Tier 5</td><td>Reactive</td><td>Emergency compaction</td><td>API returns <strong>413</strong></td><td>Yes</td><td>Yes</td><td><span class="pending">⏳</span></td></tr>
-      </tbody>
-    </table>
-
-    <p><strong>Cascade logic</strong>: before every LLM call, check from Tier 1. Execute when conditions match, then recheck the budget. Advance to the next tier if still over.</p>
-    <p style="color:var(--gray-600);font-size:.9rem">Note: reverse engineering describes Claude Code Tiers 3 and 4 as overlapping strategies, not necessarily a strict cascade.<code>/compact</code> The manual command directly triggers Tier 4, skipping Tiers 1–3.</p>
-  </div>
+<details id="s3">
+<summary>Budget Reduction</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Scope</th><td>Tool results only, not user or assistant messages</td></tr>
+<tr><th scope="row">Threshold</th><td><code translate="no">MAX_TOOL_RESULT_CHARS</code> = 4000 characters, about 1000 tokens (env <code translate="no">OPENPROGRAM_TOOL_AGING_MAX_RESULT_CHARS</code>)</td></tr>
+<tr><th scope="row">Method</th><td>Keeps head and tail about 60/40, discards the middle, marks how much was dropped</td></tr>
+<tr><th scope="row">Code</th><td><code translate="no">context/tool_aging/truncate.py</code> <code translate="no">middle_truncate</code>, <code translate="no">context/tool_aging/policy.py</code></td></tr>
+</tbody>
+</table>
 </details>
 
-<!-- S2 -->
-<details open id="s2">
-  <summary>2. Our addition: function-call node lifecycle</summary>
-  <div class="section-body">
-    <p>Claude Code uses linear conversations without a DAG and does not need this layer. Our function-call nodes (<span class="node-func">🟢</span>) require additional handling.</p>
-
-    <h3 id="s2-1">2.1 While a function runs</h3>
-    <dl class="spec">
-      <dt>Trigger</dt>
-      <dd>Function called, status="running"</dd>
-      <dt>Action</dt>
-      <dd>Internal subtree fully expanded in context</dd>
-      <dt>Visibility</dt>
-      <dd>Controlled by <code>render_context</code>  callers/subcalls/expose</dd>
-      <dt>Node state</dt>
-      <dd><strong>Internal view</strong>: full children.<strong>External view</strong>: expose=io by default; callers see input and output only</dd>
-      <dt>Relationship to compaction</dt>
-      <dd>While the function runs, internal <span class="node-tool">🟡 tool outputs</span> still undergo Budget Reduction (<span class="xref">§3</span>) and Microcompact (<span class="xref">Tier 1</span>). They do not participate in Snip because active content cannot be deleted.</dd>
-    </dl>
-
-    <h3 id="s2-2">2.2 Function completes → expose=io, then normal cascade</h3>
-    <dl class="spec">
-      <dt>Trigger</dt>
-      <dd>Function returns, status="completed"/"error"</dd>
-      <dt>Action</dt>
-      <dd>Expose=io naturally hides the internal subtree with no extra operation. Children remain inspectable in the DAG.</dd>
-      <dt>Afterward</dt>
-      <dd>The function node (input + output) enters the normal cascade of <span class="xref">§3-§4</span> , treated the same as <span class="node-chat">🔵 Conversation node</span> . No separate policy is needed.</dd>
-    </dl>
-  </div>
+<details id="s4-1">
+<summary>Tool aging and Microcompact</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Aging</th><td><code translate="no">TAIL_TURNS</code> = 3; arguments cut to 200 characters; <code translate="no">todo_create</code>, <code translate="no">todo_update</code>, <code translate="no">todo_list</code>, <code translate="no">open_work</code> and <code translate="no">web_search</code> are never aged. Boundary is fixed per turn (<code translate="no">context/aging.py</code>)</td></tr>
+<tr><th scope="row">Microcompact</th><td><code translate="no">context_management</code> edit <code translate="no">clear_tool_uses_20250919</code>, sent through <code translate="no">extra_body</code> with beta <code translate="no">context-management-2025-06-27</code>. Client messages stay unchanged, so the cache stays valid</td></tr>
+<tr><th scope="row">Code</th><td><code translate="no">context/compaction/cache_aware_microcompact.py</code>, <code translate="no">models/cache_edits.py</code></td></tr>
+</tbody>
+</table>
 </details>
 
-<!-- S3 -->
-<details open id="s3">
-  <summary>3. Routine operation: Budget Reduction <span class="done">✅ Implemented</span></summary>
-  <div class="section-body">
-    <p>Matches Claude Code: runs before every LLM call, regardless of context length.</p>
-    <dl class="spec">
-      <dt>Action</dt>
-      <dd>Truncate oversized individual <span class="node-tool">🟡 tool outputs</span>. Does not process <span class="node-chat">🔵 user/assistant messages</span></dd>
-      <dt>Threshold</dt>
-      <dd><strong>4000 characters</strong>(about 1000 tokens)</dd>
-      <dt>Truncation method</dt>
-      <dd>Retain the first <strong>2400 characters</strong>(60%) and last <strong>1600 characters</strong>(40%), discarding the middle</dd>
-      <dt>Code</dt>
-      <dd><code>context/tool_aging/truncate.py: middle_truncate</code>, <code>context/tool_aging/policy.py: MAX_TOOL_RESULT_CHARS = 4000</code></dd>
-    </dl>
-  </div>
+<details id="s4-4">
+<summary>Auto-Compact and Reactive</summary>
+<p>Auto-Compact is the pipeline in <a href="compaction.html">Compaction</a>. <code translate="no">/compact [tokens]</code> takes how many recent tokens to keep. Reactive: <code translate="no">context/compaction/reactive.py</code>; stops if every attempt fails.</p>
 </details>
 
-<!-- S4 -->
-<details open id="s4">
-  <summary>4. Cascading compaction (Tiers 1→5)</summary>
-  <div class="section-body">
-    <p>After Budget Reduction, check tiers in order. Advance only if the preceding tier leaves context over threshold.</p>
-
-    <h3 id="s4-1">Tier 1: Microcompact <span class="done">✅ Implemented</span></h3>
-    <p>Matches Claude Code: clean up old <span class="node-tool">🟡 tool outputs</span>.</p>
-    <dl class="spec">
-      <dt>Trigger</dt>
-      <dd>Cache-aware: <strong>50 tool calls</strong> trigger the first pass, then every <strong>25 calls</strong>. Time-based: idle for <strong>~90 minutes</strong></dd>
-      <dt>Processes only</dt>
-      <dd>FileRead, Shell, Grep, Glob, WebSearch, WebFetch, FileEdit, FileWrite</dd>
-      <dt>Two paths</dt>
-      <dd>
-        <strong>Cache-aware</strong>(Anthropic provider): clear old tool_result on the server through the Context Editing API (<code>cache_edits</code>, beta header <code>context-management-2025-06-27</code>). Client messages stay unchanged,<strong>cache remains valid</strong>. Sentinel bytes are normalized for byte stability; repeated operations do not change cached content.<br>
-        <strong>Time-based</strong>(other providers / 90-minute idle): replace client-side content with placeholder text (~20 tokens).<strong>Invalidates cache</strong>
-      </dd>
-      <dt>Compaction effect</dt>
-      <dd>Each tool output: original size → 0 tokens (cache-aware) or ~20 tokens (time-based)</dd>
-      <dt>Code</dt>
-      <dd><code>context/microcompact.py</code>, <code>context/rules/microcompact.py</code></dd>
-    </dl>
-
-    <h3 id="s4-2">Tier 2: Snip <span class="done">✅ Implemented</span></h3>
-    <p>Matches Claude Code: directly remove the oldest turns without summaries or LLM calls.</p>
-    <dl class="spec">
-      <dt>Trigger</dt>
-      <dd>Still over budget after Tier 1</dd>
-      <dt>Removal unit</dt>
-      <dd><strong>Complete turns</strong>(user + assistant + all tool calls in the turn removed together)</dd>
-      <dt>How much to remove</dt>
-      <dd>Remove turns oldest first and recalculate tokens after each until below threshold; no fixed N-turn count</dd>
-      <dt>Cost</dt>
-      <dd>Information is completely lost and the cache prefix is invalidated, but no LLM call is needed.</dd>
-      <dt>Function nodes</dt>
-      <dd>Completed <span class="node-func">🟢 Function node</span> participate in Snip chronologically. Running nodes are retained.</dd>
-      <dt>Code</dt>
-      <dd><code>context/snip.py</code></dd>
-    </dl>
-
-    <h3 id="s4-3">Tier 3: Context Collapse <span class="pending">⏳ Pending</span></h3>
-    <p>Matches Claude Code: segmented LLM summaries, retaining original messages for rollback.</p>
-    <dl class="spec">
-      <dt>Trigger</dt>
-      <dd>Still over after Tier 2 Snip (about 90%; mandatory blocking at 95%)</dd>
-      <dt>Segmentation</dt>
-      <dd><strong>5–10 turns</strong> per segment, independently summarized by the LLM (about 100–300 tokens each)</dd>
-      <dt>LLM calls</dt>
-      <dd>Count = number of segments, e.g. 30 turns in 3 segments = 3 LLM calls</dd>
-      <dt>Reversible</dt>
-      <dd>Original messages remain in the collapse store through read-time projection</dd>
-    </dl>
-
-    <h3 id="s4-4">Tier 4: Auto-Compact <span class="done">✅ Implemented</span></h3>
-    <p>Matches Claude Code: full LLM summary replacing all old messages, without rollback.</p>
-    <dl class="spec">
-      <dt>Trigger</dt>
-      <dd>Still over after Tier 3, or the user manually invokes <code>/compact</code> (jump directly here)</dd>
-      <dt>LLM calls</dt>
-      <dd><strong>1 call</strong>(full summary)</dd>
-      <dt>Summary size</dt>
-      <dd>About <strong>2000-5000 tokens</strong></dd>
-      <dt>Retain</dt>
-      <dd>The latest <strong>1–2 turns</strong> in full. Reload the system prompt from configuration rather than relying on the summary.</dd>
-      <dt>/compact command</dt>
-      <dd><code>/compact</code> or <code>/compact retain the database-migration discussion</code>. Manual use is recommended at <strong>60%</strong> .</dd>
-      <dt>Chained compaction</dt>
-      <dd>Continue after compaction; when context fills again, summarize using the previous summary. Information degrades over successive summaries.</dd>
-      <dt>Code</dt>
-      <dd><code>context/engine.py: compact()</code></dd>
-    </dl>
-
-    <h3 id="s4-5">Tier 5: Reactive <span class="pending">⏳ Pending</span></h3>
-    <p>Emergency compaction when the API returns 413 (prompt too long), at most once per turn. Stop if all attempts fail.</p>
-  </div>
+<details id="s4-3">
+<summary>Context Collapse (design)</summary>
+<ul>
+<li>Trigger: still over, about 90%; blocking at 95%.</li>
+<li>5–10 turns per segment, each summarized in about 100–300 tokens; LLM calls equal segments (30 turns in 3 segments: 3 calls).</li>
+<li>Originals stay in a collapse store through read-time projection.</li>
+</ul>
 </details>
 
-<!-- S5 -->
-<details open id="s5">
-  <summary>5. Execution flow</summary>
-  <div class="section-body">
-<pre><code>Before every LLM call:
+<h2 id="s2">Function-call nodes</h2>
+<p>A DAG addition with no Claude Code counterpart.</p>
+<table class="stack">
+<thead><tr><th scope="col">Node state</th><th scope="col">Context</th><th scope="col">Compaction</th></tr></thead>
+<tbody>
+<tr id="s2-1"><th scope="row">Running</th><td>Inside: subtree fully expanded. Callers: <code translate="no">expose=io</code> by default, input and output only. Controlled by <code translate="no">render_context</code> callers, subcalls and expose</td><td>Inner tool outputs get Budget Reduction and aging.</td></tr>
+<tr id="s2-2"><th scope="row">Completed or error</th><td><code translate="no">expose=io</code> hides the subtree with no extra step; children stay inspectable in the DAG and readable through tools</td><td>Input and output are treated like a conversation node</td></tr>
+</tbody>
+</table>
 
-1. Budget Reduction → truncate oversized tool outputs (every turn)
-
-2. Cascade checks (tier order):
-   Tier 1: Microcompact condition met? → clean old tool outputs
-   Tier 2: Still over threshold? → Snip older turns
-   Tier 3: Still over? → Context Collapse segment summaries
-   Tier 4: Still over? → Auto-Compact full summary
-
-3. Call the LLM
-
-4. If the API returns 413:
-   Tier 5: Reactive → emergency compaction → retry
-   → stop on failure</code></pre>
-  </div>
+<h2 id="rolling-summary-contract">Rolling summary</h2>
+<p class="note">Beyond <a href="compaction.html">Compaction</a>:</p>
+<ul>
+<li>Always retain the latest complete user turn, and by default the latest two; the token budget may allow fewer than twenty top-level messages.</li>
+<li>A posted report is a boundary too, so a run of reports can be folded even with no user message between them; only the tail that fits stays.</li>
+<li>A large completed tool-heavy turn must not make compaction ineffective, so the cut moves to the next complete user boundary. An active user turn is never split, and its tool evidence is not discarded without entering the summary.</li>
+<li>Summary input and <code translate="no">covers_ids</code> describe the same range.</li>
+<li>Estimates include summary markers and tool results. The completion event reports both token counts and whether a summary was applied.</li>
+<li>Historical incorrect summaries are not rewritten; nothing is migrated or deleted.</li>
+<li>Session-graph compaction scope uses the same message snapshot, so a repeat during loading stays consistent.</li>
+</ul>
+<details>
+<summary>Acceptance</summary>
+<ul id="rolling-summary-status">
+<li>With large tool results among sixteen top-level messages, coverage includes complete older turns and context shrinks.</li>
+<li>The summary receives every replaced user request and visible tool result; recent turns are unchanged.</li>
+<li>Equal or longer summaries, cancellation, provider errors and edits during the call write nothing.</li>
+<li>Repeated compaction, branch switching, occupancy statistics and final requests render consistently.</li>
+</ul>
 </details>
 
-<!-- S6 -->
+<h2 id="intra-turn-request">Request compaction</h2>
+<p class="note">Rules: <a href="compaction.html#inside-one-message">Compaction inside one user message</a>. Beyond those:</p>
+<ul>
+<li>Measured after message conversion, memory injection and actual-tool resolution; rechecked on every send and for fallback models.</li>
+<li>Older results first; the latest tool group is retained, though a completed latest group may be processed when necessary.</li>
+<li>Cache belongs to the current AgentContext and never spans function views.</li>
+<li>Scope is tool accumulation within one turn. It does not replace DAG summaries or promise lossless semantics or exact agreement with provider counts.</li>
+</ul>
+
+<h2 id="request-checkpoints">Request checkpoints</h2>
+<table class="stack">
+<thead><tr><th scope="col">Stage</th><th scope="col">Behaviour</th><th scope="col">Boundary</th></tr></thead>
+<tbody>
+<tr><th scope="row">Budget</th><td>Counts system prompt, tools, response schema, output reserve, history</td><td>Recalculated for fallback models</td></tr>
+<tr><th scope="row">Tool evidence</th><td>Complete text-only results first</td><td>Keeps call identifiers and error flags</td></tr>
+<tr><th scope="row">Checkpoint</th><td>Older complete text-only prefix becomes a task summary</td><td>Never splits tool groups or discards multimodal or unresolved content</td></tr>
+<tr><th scope="row">Summary request</th><td>All source text in budgeted chunks with rolling summaries</td><td>Cancellation, errors and exhausted budgets keep the original</td></tr>
+<tr><th scope="row">Continue</th><td>Sends only a verified smaller request</td><td>Raw messages and DAG nodes unchanged</td></tr>
+</tbody>
+</table>
+<p>Adapted from <a href="https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs">Codex local compaction</a>, which keeps user messages and replaces execution history. OpenProgram copies no Rust source, truncates no user instructions, adopts no remote encrypted compaction and keeps the DAG. Summary text remains assistant data, never system instructions.</p>
+<details>
+<summary>Acceptance</summary>
+<ul id="request-checkpoint-status">
+<li>AgentLoop continues after long assistant text and tool arguments exceed a model window.</li>
+<li>Every retained tool call has its result; the latest execution and user messages are exact.</li>
+<li>Summary calls fit the window, cover the full source and recover from provider overflow without dropping input.</li>
+<li>Cancellation, changed prefixes, model switches and non-text evidence do not reuse incompatible summaries.</li>
+<li>Open: installed-App acceptance.</li>
+</ul>
+</details>
+
 <details id="s6">
-  <summary>6. Complete example</summary>
-  <div class="section-body">
-    <p>Scenario: 200K context, several hours of work, with paper_agent invoked midway.</p>
-    <div class="timeline">
-      <div class="tl-item phase1">
-        <div class="tl-title">Stage 1 (0–30%): normal conversation</div>
-        <p><span class="node-chat">🔵 user</span> → <span class="node-chat">🔵 assistant</span>; Budget Reduction checks tool outputs and skips those within limits. No cascade tier triggers.</p>
-      </div>
-      <div class="tl-item phase2">
-        <div class="tl-title">Stage 2 (30–50%): Tier 1 Microcompact begins</div>
-        <p>Tool calls exceed 50. Cache-aware Microcompact triggers for the first time, cleaning old outputs and freeing about 15K tokens. It repeats every 25 calls. Tiers 2–5 do not trigger.</p>
-      </div>
-      <div class="tl-item phase3">
-        <div class="tl-title">Stage 3: invoke <span class="node-func">🟢 paper_agent</span></div>
-        <p>While the function runs, internal <span class="node-tool">🟡 tool calls</span> expand. Budget Reduction truncates oversized outputs. On completion, expose=io hides the internal subtree and the node enters normal cascading.</p>
-      </div>
-      <div class="tl-item phase4">
-        <div class="tl-title">Stage 4 (over threshold): Tier 2 Snip triggers</div>
-        <p>Microcompact leaves context over budget. Snip removes the oldest five turns, including completed function nodes, bringing it below threshold. Tiers 3–5 do not trigger.</p>
-      </div>
-      <div class="tl-item phase5">
-        <div class="tl-title">Stage 5 (extreme): Tier 3/4 trigger</div>
-        <p>After repeated Snip, little removable content remains. Context Collapse summarizes segments; if insufficient, Auto-Compact summarizes everything. This is rare.</p>
-      </div>
-      <div class="tl-item phase6">
-        <div class="tl-title">Stage 6: continue using the system</div>
-        <p>Conversation continues normally after compaction. Repeat the cascade when over threshold again. The model can inspect old function internals by reading DAG children through tools.</p>
-      </div>
-    </div>
-  </div>
+<summary>A long session, 200K context</summary>
+<ol>
+<li>0–30%: Budget Reduction and aging only.</li>
+<li>Tool-call threshold: Microcompact.</li>
+<li><code translate="no">paper_agent</code> runs: its tool calls expand inside, oversized outputs are truncated; on completion <code translate="no">expose=io</code> hides them.</li>
+<li>The share is reached: Auto-Compact replaces older turns with one summary.</li>
+<li>A long tool run inside one message: request compaction.</li>
+<li>Summary fails or is too small: the turn is sent as is, and an overflow goes to Reactive.</li>
+<li>The provider overflows: Reactive.</li>
+</ol>
 </details>
-
-<!-- S7 -->
-<details id="s7">
-  <summary>7. Mapping to Claude Code</summary>
-  <div class="section-body">
-    <table>
-      <thead><tr><th>Ours</th><th>Claude Code</th><th>Description</th></tr></thead>
-      <tbody>
-        <tr><td>§2 Function-node lifecycle</td><td>None</td><td>Our addition (DAG + expose=io)</td></tr>
-        <tr><td>§3 Budget Reduction</td><td>Budget Reduction</td><td>Matches (4000-character threshold, 60/40 truncation)</td></tr>
-        <tr><td>Tier 1 Microcompact</td><td>Tier 1 Microcompact</td><td>Matches; Anthropic uses the cache-aware path</td></tr>
-        <tr><td>Tier 2 Snip</td><td>Tier 2 Snip</td><td>Matches (remove whole turns)</td></tr>
-        <tr><td>Tier 3 Context Collapse</td><td>Tier 3 Context Collapse</td><td>Matches (segment summaries with rollback)</td></tr>
-        <tr><td>Tier 4 Auto-Compact / /compact</td><td>Tier 4 Auto-Compact / /compact</td><td>Matches (full summary)</td></tr>
-        <tr><td>Tier 5 Reactive</td><td>Tier 5 Reactive</td><td>Matches (413 emergency compaction)</td></tr>
-      </tbody>
-    </table>
-    <p style="margin-top:.5rem;color:var(--gray-600);font-size:.85rem">
-      Source:<a href="claude-code-compaction.html" style="color:var(--blue)">Claude Code compaction reference</a>(based on reverse engineering, not official documentation)
-    </p>
-  </div>
-</details>
-
-<!-- S8 -->
-<details id="s8">
-  <summary>8. Implementation plan</summary>
-  <div class="section-body">
-    <table>
-      <thead><tr><th>Step</th><th>Action</th><th>Status</th><th>Code</th></tr></thead>
-      <tbody>
-        <tr><td>1</td><td>Budget Reduction — truncate oversized outputs (§3)</td><td><span class="done">✅</span></td><td><code>context/tool_aging/truncate.py</code></td></tr>
-        <tr><td>2</td><td>Tier 1 Microcompact — clean old tool outputs</td><td><span class="done">✅</span></td><td><code>context/microcompact.py</code></td></tr>
-        <tr><td>3</td><td>Tier 2 Snip — remove oldest turns</td><td><span class="done">✅</span></td><td><code>context/snip.py</code></td></tr>
-        <tr><td>4</td><td>Tier 3 Context Collapse — segmented LLM summaries</td><td><span class="pending">⏳</span></td><td></td></tr>
-        <tr><td>5</td><td>Tier 4 Auto-Compact — full LLM summary</td><td><span class="done">✅</span></td><td><code>context/engine.py</code></td></tr>
-        <tr><td>6</td><td>Tier 5 Reactive — 413 emergency compaction</td><td><span class="pending">⏳</span></td><td></td></tr>
-        <tr><td>7</td><td>/compact command</td><td><span class="pending">⏳</span></td><td></td></tr>
-        <tr><td>8</td><td>/context command (token distribution)</td><td><span class="done">✅</span></td><td><code>cli/repl/handlers.py</code></td></tr>
-        <tr><td>9</td><td>Anthropic Context Editing API integration</td><td><span class="pending">⏳</span></td><td></td></tr>
-      </tbody>
-    </table>
-  </div>
-</details>
-
-</div>
-<section id="intra-turn-request"><h2>Request compaction within one message</h2><p>Chat and internal function execution share AgentLoop's pre-send processing: measure the request after message conversion, memory injection and actual-tool resolution. Compaction replaces only completed tool-group result text in the current request view, preserving call arguments, result IDs, error states, original user text and multimodal content. Original execution records are not rewritten.</p><p>Summaries use independently budgeted chunks with bounded calls and total duration; summary requests do not reenter AgentLoop. Cache belongs only to the current AgentContext and matches original result content and model configuration, never spanning function views. Older results are preferred and the latest tool group is retained; completed latest groups may also be processed when necessary. Recheck actual tools and system content on every send.</p><p>Without an explicit output cap, use the minimum of model capability, default output reserve and one quarter of the context window; measurement and provider requests use the same value. Never silently reduce explicit caps; reject sending if protected content plus that cap exceeds budget.</p><p>Scope: request compaction for tool accumulation within one turn. It does not replace existing cross-turn DAG summaries or promise lossless semantics or exact agreement between local estimates and provider counts. Do not send a known over-budget request when uncompressible protected content exceeds budget.</p><p>Implementation status: connected to the shared AgentLoop request entry and passed independent specification and quality reviews. Regression tests cover consecutive calls within a turn, internal function entry, original-text retention, summary budgets, cancellation and credential propagation. This processing creates no persistent DAG summary node.</p></section><section id="request-checkpoints" style="max-width:900px;margin:2rem auto;padding:1rem;overflow-wrap:anywhere"><h2>Request checkpoints and bounded summaries</h2>
-<p>This implementation plan extends request-local compaction without changing DAG storage. It is intended for maintainers reviewing model-request safety.</p>
-<table style="display:block;overflow-x:auto"><thead><tr><th>Stage</th><th>Behavior</th><th>Boundary</th></tr></thead><tbody>
-<tr><td>Budget</td><td>Count system prompt, tools, response schema, output reserve and history before every model request.</td><td>Recalculate for fallback models.</td></tr>
-<tr><td>Tool evidence</td><td>Summarize complete text-only tool results first.</td><td>Preserve call identifiers and error flags.</td></tr>
-<tr><td>Checkpoint</td><td>When still over budget, replace an older complete text-only execution prefix with a task summary; retain every user message verbatim and the latest assistant segment.</td><td>Never split tool groups or discard multimodal or unresolved content.</td></tr>
-<tr><td>Summary request</td><td>Process all source text in budgeted chunks with rolling summaries. Retry a provider overflow using a smaller chunk.</td><td>Bound calls and time; cancellation, errors and exhausted budgets preserve original history.</td></tr>
-<tr><td>Continue</td><td>Reuse checkpoints only for an identical source prefix and model. Send only a verified smaller request.</td><td>Keep raw execution messages and DAG nodes unchanged.</td></tr>
-</tbody></table>
-<p>Reference: <a href="https://github.com/openai/codex/blob/main/codex-rs/core/src/compact.rs">Codex local compaction</a> retains user messages and replaces execution history. OpenProgram adapts this behavior to request views. It does not copy Rust source, truncate user instructions, adopt remote encrypted compaction, or replace the DAG. Summary text remains assistant data, never system instructions.</p>
-<h3>Acceptance and implementation status</h3><p id="request-checkpoint-status">Review-passed; full-gate-failed. Focused tests and independent specification and quality reviews pass. Four unrelated repository checks also fail at the unchanged base. This feature is not marked complete; mainline integration and installed-App acceptance remain pending.</p>
-<ul><li>AgentLoop continues after long assistant text and tool arguments exceed a model window.</li><li>Every retained tool call has its matching result; latest execution and user messages remain exact.</li><li>Summary calls fit the model window, cover the full source, and recover from provider overflow without silently dropping input.</li><li>Cancellation, changed prefixes, model switches and non-text evidence do not reuse incompatible summaries.</li></ul></section>
-</body>
-</html>

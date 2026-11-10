@@ -6,7 +6,7 @@ message got answered twice. The runner now leaves ``branch_from`` at
 ``INHERIT_PARENT`` (the dispatcher resolves it to the session's current
 HEAD) and serialises follow-ups per delivery session.
 
-See docs/reference/design/runtime/dag/overview.md §4.
+See docs/reference/design/runtime/dag/overview.html §4.
 """
 from __future__ import annotations
 
@@ -38,7 +38,7 @@ def _runner_lifecycle(monkeypatch, tmp_path):
     runner_mod.shutdown_runner()
     isolated_store = SessionStore(tmp_path / "sessions")
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "executions.db",
     )
     monkeypatch.setattr(session_db_mod, "default_store", lambda: isolated_store)

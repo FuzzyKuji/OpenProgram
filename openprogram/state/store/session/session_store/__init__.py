@@ -1,4 +1,4 @@
-"""SessionStore — git-backed replacement for the old ``DagSessionDB``."""
+"""SessionStore — the conversation store over per-session logs."""
 from .service import SessionStore
 from .shared import (
     BrokenPredecessorChainError,

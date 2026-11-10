@@ -1,4 +1,5 @@
 "use client";
+import { isLive } from "@/lib/chat/transcript/row-status";
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowUpRight, Download, Folder } from "lucide-react";
 import { useTranslation } from "@/lib/i18n";
@@ -149,9 +150,9 @@ export function AssistantFileCards({ msg, sessionId, attachments, only, skip }: 
   };
   const openAutomatically = useEffectEvent((file: FileOutput) => open(file, true));
   useEffect(() => {
-    if (only || !sessionId || !msg.autoPreviewFiles || project === undefined) return;
+    if (only || !sessionId || !msg.autoPreviewFiles || project === undefined || isLive(msg.status)) return;
     // Consume before attempting: switching back, hydration and remount cannot replay the request.
-    useSessionStore.getState().updateMessage(sessionId, msg.id, { autoPreviewFiles: false });
+    useSessionStore.getState().applyLocalChange(sessionId, { kind: "local_patch", rowId: msg.id, fields: { autoPreviewFiles: false } });
     if (sessionId !== focusedSessionId || msg.status !== "done") return;
     // Media already plays in the reply; only open what is not shown here.
     const file = allFiles.find(item => fileCapabilities(item.path).preview !== "download" && !inlineMediaKind(item, attachments));

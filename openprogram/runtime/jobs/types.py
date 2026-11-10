@@ -213,6 +213,9 @@ class Job:
     source: str = "agent_spawn"
     profile_snapshot: Optional[dict[str, Any]] = None
     response_format: Optional[dict[str, Any]] = None
+    # Who wrote this job's prompt, recorded on its user row. Set only for a
+    # message another agent delivered to an existing branch.
+    message_origin: Optional[str] = None
 
     def __post_init__(self) -> None:
         # These execution inputs must survive jobs.json and must not retain

@@ -18,6 +18,8 @@ from __future__ import annotations
 import time
 from typing import Any
 
+from .probe_log import KIND_CONNECTIVITY, probe
+
 
 # Providers whose ``test`` flow needs the Codex Responses body shape (no
 # auth-only endpoint exists for them). Currently just ``openai-codex`` —
@@ -26,6 +28,7 @@ from typing import Any
 _CODEX_RESPONSES_PROVIDERS = frozenset({"openai-codex"})
 
 
+@probe(KIND_CONNECTIVITY)
 def test_provider(
     provider_id: str,
     model: str | None = None,

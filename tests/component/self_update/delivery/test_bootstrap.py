@@ -317,7 +317,7 @@ def test_status_preserves_interrupted_store_evidence(bootstrap_request, interrup
     journal = v.directory / "events.jsonl"
     if interruption == "journal":
         before_transition = journal.read_bytes()
-        v.store.transition(v.directory.name, UpdatePhase.STAGING)
+        v.store.transition(v.directory.name, UpdatePhase.BUILDING)
         journal.write_bytes(before_transition)
     else:
         (v.store.root / "active.json").unlink()

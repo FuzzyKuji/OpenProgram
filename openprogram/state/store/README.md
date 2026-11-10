@@ -1,13 +1,12 @@
 # `openprogram/state/store/`
 
-> Git-backed storage: **session memory**, the **project entity layer**,
+> Durable storage: **session memory**, the **project entity layer**,
 > and the **file revert/record** machinery.
 
 This directory is the on-disk truth for everything an agent does that
 should persist: the conversation DAG, the agent's file edits, and the
-ability to undo them. Git is the storage substrate throughout — commits
-are the audit trail, and the in-memory structures are just rebuildable
-caches over git.
+ability to undo them. Sessions are append-only logs, projects use git, and
+the in-memory structures are rebuildable caches over those.
 
 > **Hand-written README** (not auto-generated — the doc-gen script skips
 > any README without the auto-gen footer). Keep it in sync by hand when
@@ -28,19 +27,19 @@ store/
 │                         the process-wide one (resolver registered by the
 │                         runtime when it loads)
 │
-├─ session/   ─ ① SESSION STORAGE — one git repo per conversation
-│    session_store.py       SessionStore: the 22-method public API (CRUD,
-│                           branches, messages) over per-session git repos
-│    git_session.py         GitSession: thin wrapper over the `git` CLI for
-│                           one session repo (init / write / commit / log /
-│                           checkout). UTF-8 forced so CJK commits work.
+├─ session/   ─ ① SESSION STORAGE — one append-only log per conversation
+│    session_store/         SessionStore: the public API (CRUD, branches,
+│                           messages) over per-session logs
+│    session_log.py         SessionLog: one session's records (`main.jsonl`,
+│                           `agents/*.jsonl`), each line checked by a CRC,
+│                           folded into the session's state
 │    memory_index.py        SessionMemoryIndex: in-memory DAG index, rebuilt
-│                           from git on cache miss
+│                           from the log on cache miss
 │    nodes.py               the persisted DAG node schema: Call, Graph, the
 │                           role constants (render_context and other context
 │                           computations stay in runtime/context/nodes.py)
 │    session_node_writer.py   SessionNodeWriter: by-node DAG writes (append /
-│                           update / load) onto one session repo
+│                           update / load) onto one session log
 │    _msg_adapter.py        message-dict ⇄ Call-node translation
 │    search.py              cross-session message search (ripgrep)
 │    external_import/       import Claude Code / Codex transcripts as
@@ -83,30 +82,30 @@ store/
 > module lives under its sub-package — there are no flat top-level module
 > aliases.
 
-Designs: [`git-as-entity-memory.md`](../../docs/reference/design/memory/entity-memory-proposal.md)
-(why git), [`overview.md`](../../docs/reference/design/memory/overview.md) (entity layer),
+Designs: [`git-as-entity-memory.md`](../../docs/reference/design/memory/entity-memory-proposal.html)
+(why git), [`overview.md`](../../docs/reference/design/memory/overview.html) (entity layer),
 [`file-management.html`](../../docs/reference/design/runtime/operations/file-management.html) (snapshot / commit
 / worktree / read-before-edit — how they combine).
 
 ## ① Session storage — on-disk layout
 
-Every session is its own git repo at `~/.openprogram/sessions/<id>/`
-(ad-hoc chats) — or, for a project-bound session, inside the project at
-`<project>/.openprogram/sessions/<id>/` (the home root's
-`sessions/locations.json` indexes the out-of-tree ones).
+Every session is a directory at
+`~/.openprogram/projects/<project>/chats/<id>/` (chats with no project belong
+to the home project, `default`); `projects/.chats-locations.json` records the
+ones kept elsewhere.
 
 ```
-<session repo>/
-├── .git/                          one commit per turn
-├── meta.json                      title / agent_id / project_id / head_id / branches
-├── history/NNNN-{u|a|t|s}-<id>.json   append-only DAG nodes (user/llm/code)
+<session>/
+├── main.jsonl                     the append-only log, written by the worker
+├── agents/<id>.jsonl              one more log per other writing process
 ├── context/commits/<id>.json      per-turn ContextCommit (immutable LLM view)
-├── workdir/                       per-session scratch workspace
-└── file_backups/<turn>/           ③ pre-edit file snapshots (see below)
+├── large_nodes/                   full text of over-cap nodes
+├── events.jsonl                   runtime event log
+└── workdir/                       per-session scratch workspace
 ```
 
-Git is the source of truth; `SessionMemoryIndex` is a query cache, fully
-rebuildable from the `history/` files. Entry point:
+The log is the source of truth; `SessionMemoryIndex` is a query cache, fully
+rebuildable from it. Entry point:
 `from openprogram.state.store.current import current_store` → a `SessionStore`
 (the runtime's `runtime.context.session_db.default_db` is the same lookup).
 
@@ -148,7 +147,8 @@ Two cooperating layers feed the transactional history operation:
   operation and bounded stats after success. Ordinary Bash and external
   writes are excluded from turn attribution. Recovery data lives in the
   session-root sibling `.file-recovery/`, outside session Git;
-  `evict_old` caps retained turns.
+  `prompt_checkpoints` holds one recovery point per prompt with shared
+  blobs, and `evict_old` caps retained turns and checkpoints.
 - **`read_tracking.py`** — the concurrency guard. `read` records a file's
   fingerprint; `edit`/`write`/`apply_patch` refuse to write if the file
   was never read (`NEVER_READ`) or changed on disk since (`STALE`). Keeps

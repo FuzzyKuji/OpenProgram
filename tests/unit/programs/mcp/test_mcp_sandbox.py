@@ -16,9 +16,8 @@ def test_forced_local_mcp_uses_shared_sandbox_invocation(tmp_path, monkeypatch):
     policy = sandbox.SandboxPolicy(pass_env=("MCP_MODE",))
     monkeypatch.setattr(sandbox, "resolve_policy", lambda required=False: policy)
 
-    def fake_invocation(command, cwd=None, *, policy=None, force_sandbox=False):
-        captured.update(command=command, cwd=cwd, policy=policy,
-                        force_sandbox=force_sandbox)
+    def fake_invocation(command, cwd=None, *, policy=None):
+        captured.update(command=command, cwd=cwd, policy=policy)
         return ["sandbox-wrapper", "--", command], False, {"PATH": "/bin"}, True
 
     monkeypatch.setattr(local, "_invocation", fake_invocation)
@@ -31,7 +30,7 @@ def test_forced_local_mcp_uses_shared_sandbox_invocation(tmp_path, monkeypatch):
 
     params = client._local_parameters()
 
-    assert captured["force_sandbox"] is True
+    assert captured["policy"] is policy
     assert captured["cwd"] == str(tmp_path)
     assert captured["command"] == "python -m 'server with space'"
     assert params.command == "sandbox-wrapper"

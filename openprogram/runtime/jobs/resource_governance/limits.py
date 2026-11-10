@@ -32,7 +32,7 @@ MEANINGFUL_ACTIVITY_KINDS = frozenset({
 })
 
 
-SQLITE_INT64_MAX = 9_223_372_036_854_775_807
+INT64_MAX = 9_223_372_036_854_775_807
 
 
 TERMINAL_FIELD_NAMES = frozenset({
@@ -41,6 +41,15 @@ TERMINAL_FIELD_NAMES = frozenset({
 
 
 _CANONICAL_PROJECTION_OWNER = "canonical-projection"
+
+
+_NO_TERMINAL_BLOCK = {
+    "terminal_blocked": 0,
+    "terminal_block_command_id": None,
+    "terminal_block_phase": None,
+    "terminal_block_expires_at": None,
+    "terminal_block_prior_dispatch_ready": None,
+}
 
 
 _RETRYABLE_RESOURCE_REASONS = frozenset({
@@ -126,7 +135,7 @@ class ResourceLimits:
             item = raw.get(name)
             if item is not None:
                 if (isinstance(item, bool) or not isinstance(item, int)
-                        or item <= 0 or item > SQLITE_INT64_MAX):
+                        or item <= 0 or item > INT64_MAX):
                     raise ResourceLimitError(f"{name} must be a positive integer or null")
             clean[name] = item
         cost = raw.get(COST_LIMIT)

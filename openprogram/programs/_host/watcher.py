@@ -69,7 +69,7 @@ def _emit_changed(added: list[str]) -> None:
 
 def _catalog_fingerprint(base: str) -> tuple:
     from openprogram.programs._host.sources import owner_controlled_program_sources
-    from openprogram.host.sandbox.protected_paths import program_sources_path
+    from openprogram.state.paths import program_sources_path
     roots = {base}
     roots.update(os.path.dirname(row["path"]) for row in owner_controlled_program_sources())
     try:
@@ -131,7 +131,7 @@ def start_in_worker(
                 logger.info("programs watcher: catalog changed, added %s", added)
                 _emit_changed(added)
             except Exception as e:  # noqa: BLE001
-                logger.debug("programs watcher pass failed: %s", e)
+                logger.warning("programs watcher pass failed: %s", e)
 
     t = threading.Thread(target=_loop, name="programs-watcher", daemon=True)
     t.start()

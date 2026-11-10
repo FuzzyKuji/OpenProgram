@@ -20,8 +20,6 @@
 .statusDot { width: 6px; height: 6px; flex-shrink: 0; border-radius: 50%; background: currentColor; }
 .executionName, .executionMeta { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .executionMeta, .version { font-size: var(--right-panel-meta-size, var(--fs-xs)); color: var(--text-secondary); }
-.embedded .hero { padding: 8px 0 0; }
-.embedded .eventList { max-height: none; }
 .hero { padding: 0 0 16px; }
 .heroTop > div { min-width: 0; overflow-wrap: anywhere; }
 .hero h3, .card h4 { margin: 0; font: inherit; font-weight: var(--right-panel-font-weight, 500); }

@@ -1,10 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import {
   availableExecutionActions,
-  buildExecutionCommand,
-  newCommandId,
   type CommandResult,
   type CursorHealth,
   type DurableWait,
@@ -14,18 +12,16 @@ import {
   type ExecutionSnapshot,
   type RevisionDraft,
 } from "@/lib/execution/execution-debugger";
-import { buildWaitAnswer } from "@/lib/execution/execution-wait";
 import type { PersistedExecutionEvent, UnresolvedEffect } from "@/lib/net/execution/execution-client";
 import { SidebarNotice } from "../sidebar-notice";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { SimpleSelect } from "@/components/ui/select";
-import { Textarea } from "@/components/ui/textarea";
 import { SectionHeader } from "../../sidebar/sessions/section-header";
 import { useTranslation } from "@/lib/i18n";
 import { ExecutionStrip } from "../../chat/messages/execution/execution-strip";
-import { executionTitle, executionRequest, executionGuidance, executionNeedsAttention, executionStatusLabel, activityRows, shortTime, updatedTime } from "./debugger-presentation";
+import { executionTitle, executionRequest, executionStatusLabel, activityRows, shortTime, updatedTime } from "./debugger-presentation";
+import { ExecutionActionButton, ExecutionBranchDialog, ExecutionCommandNotice, ExecutionSteerDialog } from "./execution-dialogs";
+import { ExecutionCodePolicySelect, ExecutionStandingNote, ExecutionTechnicalDetails } from "./execution-technical-details";
+import { ExecutionWaitForms } from "./execution-wait-forms";
 import styles from "./debugger-panel.module.css";
 
 export type DebuggerConnection = {
@@ -50,10 +46,6 @@ export type CheckpointInspector = {
 
 export type DebuggerPanelProps = {
   detailOnly?: boolean;
-  /** Rendered inside a run's Activity page, which already names the run
-   *  and its state: progress first, then the controls, then the raw
-   *  details fold, with no header and no scroller of its own. */
-  embedded?: boolean;
   executions: ExecutionSnapshot[];
   sessionId?: string | null;
   events?: PersistedExecutionEvent[];
@@ -85,22 +77,6 @@ export type DebuggerPanelProps = {
   ) => Promise<void> | void;
 };
 
-const ACTION_LABELS: Record<ExecutionCommandAction, string> = {
-  pause: "Pause",
-  continue: "Continue",
-  step: "Step",
-  steer: "Steer",
-  fork: "Fork",
-  retry: "Retry",
-  cancel: "Cancel",
-};
-
-
-function shortId(value: string | null | undefined): string {
-  if (!value) return "—";
-  return value.length > 16 ? `${value.slice(0, 8)}…${value.slice(-6)}` : value;
-}
-
 function statusClass(status: string): string {
   if (status === "running" || status === "pausing") return styles.active;
   if (status === "paused") return styles.paused;
@@ -115,41 +91,6 @@ function connectionCopy(connection: DebuggerConnection): { label: string; detail
   if (connection.state === "gap") return { label: "Event gap", detail: connection.message || "Automatically reloading before applying more events" };
   if (connection.state === "stale") return { label: "Stale", detail: connection.message || "This view is behind the canonical snapshot" };
   return { label: "Conflict", detail: connection.message || "The server rejected an optimistic version" };
-}
-
-function formatUnknown(value: unknown): string {
-  if (value == null || value === "") return "—";
-  if (typeof value === "object") return JSON.stringify(value);
-  return String(value);
-}
-
-function eventSummary(event: PersistedExecutionEvent): string {
-  const payload = event.payload || {};
-  const values: string[] = [];
-  if (event.kind === "function.incompatible" && typeof payload.reason === "string") values.push(payload.reason);
-  for (const key of ["record", "attempt", "command"]) {
-    const value = payload[key];
-    if (!value || typeof value !== "object") continue;
-    const row = value as Record<string, unknown>;
-    for (const field of ["action", "status", "outcome", "reason_code"]) {
-      if (typeof row[field] === "string" && !values.includes(row[field] as string)) values.push(row[field] as string);
-    }
-  }
-  return values.join(" · ");
-}
-
-function ResourceSummary({ resource }: { resource: Record<string, unknown> | null }) {
-  if (!resource) return <div className={styles.empty}>No resource snapshot published.</div>;
-  const queueWait = resource.queue_wait as Record<string, unknown> | null | undefined;
-  const usage = resource.usage as Record<string, unknown> | null | undefined;
-  return (
-    <div className={styles.resourceGrid}>
-      <div><span>State</span><strong>{formatUnknown(resource.resource_state)}</strong></div>
-      <div><span>Lease</span><strong>{formatUnknown(resource.resource_lease_generation)}</strong></div>
-      <div><span>Queue</span><strong>{queueWait ? formatUnknown(queueWait.position ?? queueWait.state) : "Not waiting"}</strong></div>
-      <div><span>Usage</span><strong>{usage ? formatUnknown(usage) : "—"}</strong></div>
-    </div>
-  );
 }
 
 function ExecutionTree({
@@ -197,61 +138,6 @@ function ExecutionTree({
   return <div className={styles.executionTree}>{renderBranch(null)}</div>;
 }
 
-function ActionButton({
-  action,
-  snapshot,
-  pending,
-  payload = {},
-  ready = true,
-  onCommand,
-}: {
-  action: ExecutionCommandAction;
-  snapshot: ExecutionSnapshot;
-  pending: boolean;
-  payload?: Record<string, unknown>;
-  ready?: boolean;
-  onCommand?: (command: ExecutionCommand) => Promise<CommandResult | void> | CommandResult | void;
-}) {
-  const available = availableExecutionActions(snapshot).includes(action);
-  const disabled = !available || !ready || !onCommand || pending;
-  async function submit() {
-    if (disabled) return;
-    const command = buildExecutionCommand(snapshot, action, newCommandId(), payload);
-    await onCommand?.(command);
-  }
-  return (
-    <Button variant="ghost"
-      type="button"
-      className={action === "cancel" ? styles.cancelButton : undefined}
-      onClick={() => void submit()}
-      disabled={disabled}
-      title={!onCommand ? "Waiting for the latest execution status" : !ready ? action === "steer" ? "Enter the next instruction" : "Create and publish an instruction branch first" : undefined}
-    >
-      {pending ? "Submitting…" : ACTION_LABELS[action]}
-    </Button>
-  );
-}
-
-function CommandNotice({ result }: { result: CommandResult | null }) {
-  const { text } = useTranslation();
-  if (!result) return null;
-  const errors: Record<string, [string, string]> = {
-    continuation_contract_mismatch: ["The saved runtime differs from the current tools or settings. Restore the matching runtime before resuming.", "保存时的运行环境与当前工具或设置不一致。恢复对应环境后才能继续。"],
-    version_conflict: ["The task changed before this request arrived. Its status updates automatically; try again once it is available.", "提交请求前任务状态已改变。状态将自动更新，恢复后可重试。"],
-    stale_version: ["The task changed before this request arrived. Its status updates automatically; try again once it is available.", "提交请求前任务状态已改变。状态将自动更新，恢复后可重试。"],
-    permission_denied: ["Your current permissions do not allow this action.", "当前权限不允许此操作。"],
-    checkpoint_not_found: ["The saved point is unavailable. Wait for the task status to update before choosing another action.", "保存点不可用。请等待任务状态自动更新后选择其他操作。"],
-  };
-  const message = result.status === "rejected"
-    ? text(...(errors[result.rejection_code || ""] || ["The request was rejected. Task status updates automatically; Technical details contains the recorded reason.", "请求被拒绝。任务状态会自动更新；技术详情中保留了具体原因。"] as [string, string]))
-    : text(...({ accepted: ["Request accepted; waiting for a safe boundary.", "请求已接受，等待安全执行边界。"], applying: ["Applying request…", "正在应用请求…"], applied: ["Request applied.", "请求已应用。"] }[result.status] as [string, string]));
-  return (
-    <div className={`${styles.commandNotice} ${result.status === "rejected" ? styles.noticeDanger : ""}`} role="status">
-      <span>{message}</span>
-    </div>
-  );
-}
-
 export function DebuggerPanel({
   executions,
   sessionId,
@@ -259,7 +145,6 @@ export function DebuggerPanel({
   unresolvedEffects = [],
   fetchedAt,
   detailOnly = false,
-  embedded = false,
   selectedExecutionId,
   connection,
   checkpoints = [],
@@ -277,22 +162,7 @@ export function DebuggerPanel({
   const [codePolicies, setCodePolicies] = useState<Record<string, string>>({});
   const [commandResults, setCommandResults] = useState<Record<string, CommandResult>>({});
   const [pendingActions, setPendingActions] = useState<Set<string>>(new Set());
-  const [waitValues, setWaitValues] = useState<Record<string, string>>({});
-  const [approvalScopes, setApprovalScopes] = useState<Record<string, string>>({});
-  const [pendingWaits, setPendingWaits] = useState<Set<string>>(new Set());
-  const waitKey = (wait: DurableWait) => `${wait.wait_id}:${wait.claim_generation}`;
-  const [waitError, setWaitError] = useState<string | null>(null);
-  const [steerValue, setSteerValue] = useState("");
   const [editor, setEditor] = useState<"steer" | "branch" | null>(null);
-  const editorEpoch = useRef(0);
-  const steerRevision = useRef(0);
-  function openEditor(next: "steer" | "branch" | null) {
-    editorEpoch.current += 1;
-    setEditor(next);
-  }
-  const [draftText, setDraftText] = useState<string | null>(null);
-  const [draftPending, setDraftPending] = useState(false);
-  const [draftError, setDraftError] = useState<string | null>(null);
   const selectedId = selectedExecutionId !== undefined
     ? selectedExecutionId
     : localSelectedId ?? executions[0]?.execution_id ?? null;
@@ -307,9 +177,6 @@ export function DebuggerPanel({
   // Reopening the inspector must keep the newest revision editable.
   const selectedDraft = snapshot ? drafts.slice().reverse().find((draft) => draft.source_execution_id === snapshot.execution_id) : undefined;
   const connectionInfo = connectionCopy(connection);
-  useEffect(() => { setDraftText(null); setDraftError(null); }, [selectedDraft?.draft_id]);
-
-
 
   useEffect(() => {
     setCommandResults((current) => {
@@ -359,47 +226,7 @@ export function DebuggerPanel({
     }
   }
 
-  async function respondWait(wait: DurableWait, outcome: "answer" | "decline") {
-    if (!onRespondWait) return;
-    if (pendingWaits.has(waitKey(wait))) return;
-    setWaitError(null);
-    setPendingWaits((current) => new Set(current).add(waitKey(wait)));
-    try {
-      const waitValue = waitValues[waitKey(wait)] || "";
-      const approvalScope = approvalScopes[waitKey(wait)] || "";
-      let answer: unknown = waitValue.trim();
-      if (outcome === "answer") {
-        if (wait.kind === "form" || wait.kind === "ask_many" || wait.request?.multi) {
-          try {
-            answer = JSON.parse(waitValue);
-          } catch {
-            throw new Error("Enter a valid JSON object or array.");
-          }
-        }
-        answer = buildWaitAnswer(wait, answer, approvalScope);
-      }
-      await onRespondWait({
-        wait_id: wait.wait_id,
-        execution_id: wait.execution_id,
-        claim_generation: wait.claim_generation,
-        outcome,
-        value: outcome === "answer" ? answer : undefined,
-      });
-      setWaitValues((current) => ({ ...current, [waitKey(wait)]: "" }));
-      setApprovalScopes((current) => ({ ...current, [waitKey(wait)]: "" }));
-    } catch (error) {
-      setWaitError(error instanceof Error ? error.message : "Wait response failed.");
-    } finally {
-      setPendingWaits((current) => { const next = new Set(current); next.delete(waitKey(wait)); return next; });
-    }
-  }
-
   if (!snapshot) {
-    if (embedded) {
-      return <p className={styles.muted}>{connection.state === "stale"
-        ? text("Could not load this run's record. Retrying automatically.", "读不到这次运行的记录，正在自动重试。")
-        : text("Loading the run's record…", "正在读取这次运行的记录…")}</p>;
-    }
     return (
       <section className={styles.panel} aria-label="Execution details">
         <SidebarNotice>
@@ -412,7 +239,6 @@ export function DebuggerPanel({
   }
 
   const actionPayloads: Partial<Record<ExecutionCommandAction, Record<string, unknown>>> = {
-    steer: steerValue.trim() ? { message: steerValue.trim() } : undefined,
     retry: snapshot.checkpoint_head_id ? { checkpoint_id: snapshot.checkpoint_head_id } : undefined,
     fork: selectedDraft?.status === "published" && selectedDraft.manifest?.manifest_id && selectedDraft.manifest.proof_hash && selectedDraft.manifest.compatible_checkpoint_id
       ? {
@@ -429,174 +255,26 @@ export function DebuggerPanel({
 
   // The pieces both layouts share: the standing's reason and controls, the
   // open waits, the progress rows, the raw details fold and the editors.
-  const heroBody = <>{snapshot.status === "reconciliation_required" && executionNeedsAttention(snapshot) ? <div className={styles.reason}>
-              {unresolvedEffects.some((effect) => effect.kind === "provider.before")
-                ? text("The model request has no confirmed response. This run is waiting for its result to be resolved.", "模型请求尚无已确认的响应，本次执行正在等待结果核对。")
-                : unresolvedEffects.some((effect) => effect.kind === "tool.before")
-                  ? text("A tool result is unconfirmed. Verify the external action before starting it again.", "工具结果尚未确认。再次执行前需要核对外部操作的实际结果。")
-                  : text("An external action has an unconfirmed outcome. This run needs attention before it can continue.", "外部操作结果尚未确认，需要处理后才能继续执行。")}
-              {unresolvedEffects.filter((effect) => effect.tool_name).map((effect) => <div key={effect.effect_id}>{effect.tool_name}</div>)}
-            </div> : executionGuidance(snapshot, text) && <p className={styles.muted}>{executionGuidance(snapshot, text)}</p>}
-
-            {snapshot.status === "paused" && <label>
-              {text("Function code after restart", "重启后函数代码")}
-              <SimpleSelect aria-label={text("Function code after restart", "重启后函数代码")} value={codePolicies[snapshot.execution_id] || ""} onValueChange={(value) => setCodePolicies((previous) => ({ ...previous, [snapshot.execution_id]: value }))} options={[
-                { value: "", label: text("Keep task policy", "沿用任务设置") },
-                { value: "keep_original", label: text("Continue original code", "继续原代码") },
-                { value: "use_latest", label: text("Use new code with saved results", "保留已有结果，使用新代码") },
-              ]} />
-            </label>}
+  const connectedCommand = onCommand && connection.state === "connected" ? submitAction : undefined;
+  const heroBody = <><ExecutionStandingNote snapshot={snapshot} unresolvedEffects={unresolvedEffects} />
+            {snapshot.status === "paused" && <ExecutionCodePolicySelect value={codePolicies[snapshot.execution_id] || ""} onChange={(value) => setCodePolicies((previous) => ({ ...previous, [snapshot.execution_id]: value }))} />}
             <div className={styles.actions}>
               {(["pause", "continue", "step", "retry", "cancel"] as ExecutionCommandAction[]).filter((action) => availableExecutionActions(snapshot).includes(action)).map((action) => (
-                <ActionButton key={action} action={action} snapshot={snapshot} pending={pendingActions.has(`execution.${action}`)} payload={action === "continue" && codePolicies[snapshot.execution_id] ? { code_change_policy: codePolicies[snapshot.execution_id] } : actionPayloads[action]} onCommand={onCommand && connection.state === "connected" ? submitAction : undefined} />
+                <ExecutionActionButton key={action} action={action} snapshot={snapshot} pending={pendingActions.has(`execution.${action}`)} payload={action === "continue" && codePolicies[snapshot.execution_id] ? { code_change_policy: codePolicies[snapshot.execution_id] } : actionPayloads[action]} onCommand={connectedCommand} />
               ))}
-              {availableExecutionActions(snapshot).includes("steer") && <Button variant="ghost" onClick={() => openEditor("steer")}>{text("Add instruction", "补充指令")}</Button>}
-              {(selectedDraft || (snapshot.capabilities.fork && snapshot.checkpoint_head_id)) && <Button variant="ghost" onClick={() => openEditor("branch")}>{text("Create branch", "创建分支")}</Button>}
+              {availableExecutionActions(snapshot).includes("steer") && <Button variant="ghost" onClick={() => setEditor("steer")}>{text("Add instruction", "补充指令")}</Button>}
+              {(selectedDraft || (snapshot.capabilities.fork && snapshot.checkpoint_head_id)) && <Button variant="ghost" onClick={() => setEditor("branch")}>{text("Create branch", "创建分支")}</Button>}
             </div>
             <div className="grid gap-[6px]">
-              {Object.values(commandResults).map((result) => <CommandNotice key={result.command_id} result={result} />)}
+              {Object.values(commandResults).map((result) => <ExecutionCommandNotice key={result.command_id} result={result} />)}
             </div></>;
-  const waitsCard = selectedWaits.length > 0 && <section className={styles.card}>
-            <div className={`${styles.cardHeader} flex flex-wrap items-baseline justify-between gap-[8px] mb-[8px]`}><h4>Question and approval waits</h4><span>{selectedWaits.length} open</span></div>
-            {selectedWaits.length ? selectedWaits.map((wait) => (
-              <div className={styles.waitRow} key={wait.wait_id}>
-                <div><strong>{wait.kind === "approval" ? text("Approval needed", "需要授权") : text("Answer needed", "需要回答")}</strong><p>{wait.request?.prompt || text("This execution is waiting for your response.", "此执行正在等待你的回复。")}</p></div>
-                <div className={styles.waitControls}>
-                  {wait.kind === "approval" ? (
-                    <SimpleSelect aria-label="Approval scope" placeholder="Choose approval scope" value={approvalScopes[waitKey(wait)] || ""} onValueChange={(value) => setApprovalScopes((current) => ({ ...current, [waitKey(wait)]: value }))} disabled={!onRespondWait || pendingWaits.has(waitKey(wait))} options={(wait.policy_snapshot?.allowed_scopes ?? ["once"]).map((scope) => ({ value: scope, label: scope }))} />
-                  ) : wait.kind === "form" ? (
-                    <Textarea aria-label="Form answer" value={waitValues[waitKey(wait)] || ""} onChange={(event) => setWaitValues((current) => ({ ...current, [waitKey(wait)]: event.target.value }))} placeholder={JSON.stringify(Object.fromEntries(Object.entries(wait.request?.schema || {}).map(([name, field]) => [name, field.default ?? ""])), null, 2)} disabled={!onRespondWait || pendingWaits.has(waitKey(wait))} />
-                  ) : wait.kind === "ask_many" || wait.request?.multi ? (
-                    <Textarea aria-label={`${wait.kind} answer`} value={waitValues[waitKey(wait)] || ""} onChange={(event) => setWaitValues((current) => ({ ...current, [waitKey(wait)]: event.target.value }))} placeholder={'["answer 1", ["answer 2"]]'} disabled={!onRespondWait || pendingWaits.has(waitKey(wait))} />
-                  ) : wait.request?.options?.length ? (
-                    <SimpleSelect aria-label={`${wait.kind} answer`} placeholder="Choose an answer" value={waitValues[waitKey(wait)] || ""} onValueChange={(value) => setWaitValues((current) => ({ ...current, [waitKey(wait)]: value }))} disabled={!onRespondWait || pendingWaits.has(waitKey(wait))} options={wait.request.options.map((option) => ({ value: option, label: option }))} />
-                  ) : (
-                    <Input aria-label={`${wait.kind} answer`} value={waitValues[waitKey(wait)] || ""} onChange={(event) => setWaitValues((current) => ({ ...current, [waitKey(wait)]: event.target.value }))} placeholder="Answer" disabled={!onRespondWait || pendingWaits.has(waitKey(wait))} />
-                  )}
-                  <Button variant="ghost" type="button" onClick={() => void respondWait(wait, "answer")} disabled={!onRespondWait || pendingWaits.has(waitKey(wait)) || (wait.kind === "approval" && !approvalScopes[waitKey(wait)])}>Answer</Button><Button variant="ghost" type="button" onClick={() => void respondWait(wait, "decline")} disabled={!onRespondWait || pendingWaits.has(waitKey(wait))}>Decline</Button>
-                </div>
-              </div>
-            )) : <div className={styles.empty}>No unresolved execution-owned waits.</div>}
-            {waitError && <div className={styles.formError} role="alert">{waitError}</div>}
-          </section>;
+  const waitsCard = <ExecutionWaitForms waits={selectedWaits} onRespond={onRespondWait} />;
   const progressRows = activityRows(events, text);
   const techStrip = <ExecutionStrip label={text("Technical details", "技术详情")}>
-            {Object.values(commandResults).map((result) => <p key={result.command_id}>{result.command_id} · {result.status}{result.rejection_code ? ` · ${result.rejection_code}` : ""}</p>)}
-            <dl className={`${styles.definitionList} grid gap-[6px] m-[0]`}>
-              <div><dt>Execution ID</dt><dd>{snapshot.execution_id}</dd></div>
-              <div><dt>Run ID</dt><dd>{snapshot.run_id}</dd></div>
-              <div><dt>Revision</dt><dd>{snapshot.revision_id}</dd></div>
-              <div><dt>State version</dt><dd>{snapshot.status_version}</dd></div>
-              {connection.cursor && <div><dt>Event cursor</dt><dd>{connection.cursor.next_sequence}</dd></div>}
-              {snapshot.reason_code && <div><dt>Reason code</dt><dd>{snapshot.reason_code}</dd></div>}
-            </dl>
-            <ol className={styles.eventList}>{events.slice(-50).reverse().map((event) => (
-              <li key={event.sequence}><span>#{event.sequence}</span><span>{event.kind}<small className={styles.eventDetail}>{eventSummary(event)}</small></span>{event.execution_version != null && <span>v{event.execution_version}</span>}</li>
-            ))}</ol>
-          {selectedCheckpoint && <section className={styles.card}>
-            <div className={`${styles.cardHeader} flex flex-wrap items-baseline justify-between gap-[8px] mb-[8px]`}><h4>Checkpoint inspector</h4><span>{selectedCheckpoint ? "Published" : "Not selected"}</span></div>
-            {selectedCheckpoint ? (
-              <div className={styles.inspectorGrid}>
-                <div><span>ID</span><code>{selectedCheckpoint.checkpoint_id}</code></div>
-                <div><span>Revision</span><code>{selectedCheckpoint.revision_id}</code></div>
-                <div><span>Status version</span><code>{selectedCheckpoint.status_version}</code></div>
-                <div><span>Parent</span><code>{shortId(selectedCheckpoint.parent_checkpoint_id)}</code></div>
-                <div className={styles.inspectorWide}><span>Frontier</span><div className={styles.frontier}>{(selectedCheckpoint.frontier || []).map((item) => <span key={item.step_id} className={styles.frontierItem}>{item.step_id}<small>{item.status}</small></span>)}</div></div>
-                <div className={styles.inspectorWide}><span>Effect receipts</span><div className={styles.receipts}>{(selectedCheckpoint.effect_receipts || []).map((item) => <span key={item.effect_id}>{item.effect_id} · {item.status}</span>)}</div></div>
-              </div>
-            ) : <div className={styles.empty}>Only published checkpoint snapshots can be inspected.</div>}
-          </section>}
-
-          {(snapshot.resource || Object.keys(snapshot.effect_summary).length > 0) && <div className={`${styles.twoColumn} grid grid-cols-[repeat(2,_minmax(0,_1fr))] gap-[16px]`}>
-            {snapshot.resource && <section className={styles.card}>
-              <div className={`${styles.cardHeader} flex flex-wrap items-baseline justify-between gap-[8px] mb-[8px]`}><h4>Resource wait</h4><span>{snapshot.resource?.resource_state ? String(snapshot.resource.resource_state) : "unavailable"}</span></div>
-              <ResourceSummary resource={snapshot.resource} />
-            </section>}
-            {Object.keys(snapshot.effect_summary).length > 0 && <section className={styles.card}>
-              <div className={`${styles.cardHeader} flex flex-wrap items-baseline justify-between gap-[8px] mb-[8px]`}><h4>Effects</h4><span>{formatUnknown(snapshot.effect_summary.unresolved)} unresolved</span></div>
-              <dl className={`${styles.definitionList} grid gap-[6px] m-[0]`}>
-                {Object.entries(snapshot.effect_summary).map(([key, value]) => <div key={key}><dt>{key.replaceAll("_", " ")}</dt><dd>{formatUnknown(value)}</dd></div>)}
-              </dl>
-            </section>}
-          </div>}
-
+            <ExecutionTechnicalDetails snapshot={snapshot} events={events} connection={connection} commandResults={commandResults} checkpoint={selectedCheckpoint} />
           </ExecutionStrip>;
-  const dialogs = <><Dialog open={editor === "steer"} onOpenChange={open => openEditor(open ? "steer" : null)}>
-            <DialogContent>
-              <DialogHeader><DialogTitle>{text("Add instruction", "补充指令")}</DialogTitle>
-                <DialogDescription>{text("Applied at the next safe execution boundary. Work already completed is retained.", "在下一个安全执行边界应用，已经完成的操作保持不变。")}</DialogDescription></DialogHeader>
-              <label className={styles.editorLabel}>{text("Instruction", "指令")}<Textarea maxLength={4096} value={steerValue} onChange={event => { steerRevision.current += 1; setSteerValue(event.target.value); }} placeholder={text("Describe the change", "描述需要调整的内容")} /></label>
-              <CommandNotice result={commandResults["execution.steer"] || null} />
-              <DialogFooter><ActionButton action="steer" snapshot={snapshot} pending={pendingActions.has("execution.steer")} payload={actionPayloads.steer} ready={Boolean(steerValue.trim())}
-                onCommand={onCommand && connection.state === "connected" ? async command => {
-                  const submittedEditor = editorEpoch.current;
-                  const submittedRevision = steerRevision.current;
-                  const result = await submitAction(command);
-                  if (result && result.status !== "rejected" && steerRevision.current === submittedRevision) {
-                    setSteerValue("");
-                    if (editorEpoch.current === submittedEditor) openEditor(null);
-                  }
-                  return result;
-                } : undefined} /></DialogFooter>
-            </DialogContent>
-          </Dialog>
-          <Dialog open={editor === "branch"} onOpenChange={open => openEditor(open ? "branch" : null)}>
-            <DialogContent className={styles.editorDialog}>
-              <DialogHeader><DialogTitle>{text("Create branch", "创建分支")}</DialogTitle>
-                <DialogDescription>{text("Continue from this saved point with new instructions. The original execution stays unchanged.", "从此保存点按新指令继续，原执行保持不变。")}</DialogDescription></DialogHeader>
-            {(!selectedDraft || selectedDraft.editor) ? <label className={styles.editorLabel}>
-              {text("Instructions for the new branch", "新分支的指令")}
-              <Textarea maxLength={4096} value={draftText ?? selectedDraft?.editor?.instructions ?? ""} onChange={(event) => setDraftText(event.target.value)} disabled={draftPending} readOnly={Boolean(selectedDraft && ["published", "discarded"].includes(selectedDraft.status))} />
-            </label> : <p className={styles.muted}>{text("This revision was prepared by another client.", "此修订由其他客户端准备。")}</p>}
-            {selectedDraft && <p className={styles.muted}>{({ draft: "Draft", validated: "Validated", approved: "Approved", published: "Ready to create branch", discarded: "Discarded", rejected: "Needs changes" })[selectedDraft.status]}</p>}
-            <DialogFooter>
-              {selectedDraft?.editor && ["published", "discarded"].includes(selectedDraft.status) && snapshot.checkpoint_head_id && <Button variant="ghost" disabled={draftPending || !onCreateDraft} onClick={async () => {
-                setDraftError(null); setDraftPending(true);
-                try { await onCreateDraft?.({ execution_id: snapshot.execution_id, source_checkpoint_id: snapshot.checkpoint_head_id!, preparation: { instructions: selectedDraft.editor!.instructions } }); }
-                catch (error) { setDraftError(error instanceof Error ? error.message : "Could not prepare new instructions."); }
-                finally { setDraftPending(false); }
-              }}>{text("Edit as new draft", "编辑为新草稿")}</Button>}
-              {(!selectedDraft || (!["published", "discarded"].includes(selectedDraft.status) && selectedDraft.editor)) && <Button variant={selectedDraft ? "ghost" : "default"} disabled={draftPending || (selectedDraft ? !onUpdateDraft : !onCreateDraft) || !(draftText ?? selectedDraft?.editor?.instructions ?? "").trim() || Boolean(selectedDraft && (draftText === null || draftText === selectedDraft.editor?.instructions))} onClick={async () => {
-                setDraftError(null); setDraftPending(true);
-                try {
-                  const preparation = { instructions: (draftText ?? selectedDraft?.editor?.instructions ?? "").trim() };
-                  if (selectedDraft) await onUpdateDraft?.(selectedDraft, preparation);
-                  else await onCreateDraft?.({ execution_id: snapshot.execution_id, source_checkpoint_id: snapshot.checkpoint_head_id!, preparation });
-                  setDraftText(null);
-                } catch (error) { setDraftError(error instanceof Error ? error.message : "Could not save instructions."); }
-                finally { setDraftPending(false); }
-              }}>{selectedDraft ? text("Save instructions", "保存指令") : text("Prepare branch", "准备分支")}</Button>}
-              {selectedDraft && (["validate", "approve", "publish", "fork"] as const).filter((action) => ({ validate: "draft", approve: "validated", publish: "approved", fork: "published" })[action] === selectedDraft.status).map((action) => <Button variant="default" key={action} disabled={draftPending || !onDraftAction || (draftText !== null && draftText !== selectedDraft.editor?.instructions)} onClick={async () => {
-                setDraftError(null); setDraftPending(true);
-                try { await onDraftAction?.(selectedDraft, action); }
-                catch (error) { setDraftError(error instanceof Error ? error.message : "Could not apply revision action."); }
-                finally { setDraftPending(false); }
-              }}>{({ validate: "Check compatibility", approve: "Approve revision", publish: "Publish revision", fork: "Create branch" })[action]}</Button>)}
-            </DialogFooter>
-            {draftError && <div className={styles.formError} role="alert">{draftError}</div>}
-            </DialogContent>
-          </Dialog></>;
-
-  if (embedded) {
-    return (
-      <div className={`${styles.embedded} min-w-0 p-[0_8px]`}>
-        {connection.state !== "connected" && <div className={styles.connectionLine} data-health={health}>
-        <span data-tip={connectionInfo.detail}>{connectionInfo.label}{fetchedAt ? ` · ${shortTime(fetchedAt)}` : ""}</span>
-      </div>}
-        {progressRows.length > 0
-          ? <ol className={styles.eventList}>{activityRows(events, text).slice(0, 8).map((event) => (
-              <li key={event.sequence}><span>{event.title}</span>{event.time && <time>{shortTime(event.time * 1000)}</time>}</li>
-            ))}</ol>
-          : <p className={styles.muted}>{text("No progress recorded yet.", "还没有进展记录。")}</p>}
-        <section className={styles.hero}>
-          {heroBody}
-        </section>
-        {waitsCard}
-        {techStrip}
-        {dialogs}
-      </div>
-    );
-  }
+  const dialogs = <><ExecutionSteerDialog open={editor === "steer"} onOpenChange={open => setEditor(open ? "steer" : null)} snapshot={snapshot} pending={pendingActions.has("execution.steer")} result={commandResults["execution.steer"] || null} onCommand={connectedCommand} />
+          <ExecutionBranchDialog open={editor === "branch"} onOpenChange={open => setEditor(open ? "branch" : null)} snapshot={snapshot} draft={selectedDraft} onCreateDraft={onCreateDraft} onUpdateDraft={onUpdateDraft} onDraftAction={onDraftAction} /></>;
 
   return (
     <section className={styles.panel} aria-label="Execution details">

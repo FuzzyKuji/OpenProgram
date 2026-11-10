@@ -104,5 +104,5 @@ def test_surfaces_send_execution_cancel_and_use_cancel_copy():
     assert '"status_version": task.get("status_version")' in read_server_source(ROOT)
     assert "cancelling: true" not in composer
     stop_body = composer.split("export function stopSession", 1)[1]
-    assert 'status: "cancelled"' in stop_body
+    assert "stopOverlay" in stop_body
     assert 'setRunningTaskFor(targetSessionId, null, "always")' in stop_body

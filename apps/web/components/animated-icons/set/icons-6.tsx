@@ -1182,3 +1182,65 @@ export const CalendarDaysIcon = forwardRef<AnimatedNavIconHandle, AnimatedNavIco
 );
 
 CalendarDaysIcon.displayName = "CalendarDaysIcon";
+
+// ─── inbox (Pending: reports waiting for the user) ───────────────────────────
+// Lucide's inbox; on hover the tray's notch dips like something dropping in.
+const INBOX_NOTCH_VARIANTS: Variants = {
+  normal: { y: 0, transition: { duration: 0.2 } },
+  animate: { y: [0, 1.5, 0], transition: { duration: 0.45, times: [0, 0.45, 1] } },
+};
+
+export const InboxIcon = forwardRef<AnimatedNavIconHandle, AnimatedNavIconProps>(
+  ({ onMouseEnter, onMouseLeave, className, size = 28, ...props }, ref) => {
+    const controls = useAnimation();
+    const isControlledRef = useRef(false);
+
+    useImperativeHandle(ref, () => {
+      isControlledRef.current = true;
+      return {
+        startAnimation: () => controls.start("animate"),
+        stopAnimation: () => controls.start("normal"),
+      };
+    });
+
+    const handleMouseEnter = useCallback(
+      (e: React.MouseEvent<HTMLDivElement>) => {
+        if (isControlledRef.current) onMouseEnter?.(e);
+        else controls.start("animate");
+      },
+      [controls, onMouseEnter],
+    );
+    const handleMouseLeave = useCallback(
+      (e: React.MouseEvent<HTMLDivElement>) => {
+        if (isControlledRef.current) onMouseLeave?.(e);
+        else controls.start("normal");
+      },
+      [controls, onMouseLeave],
+    );
+
+    return (
+      <div
+        className={cn("inline-flex", className)}
+        onMouseEnter={handleMouseEnter}
+        onMouseLeave={handleMouseLeave}
+        {...props}
+      >
+        <svg
+          fill="none"
+          height={size}
+          stroke="currentColor"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          strokeWidth="2"
+          viewBox="0 0 24 24"
+          width={size}
+          xmlns="http://www.w3.org/2000/svg"
+        >
+          <motion.polyline animate={controls} initial="normal" points="22 12 16 12 14 15 10 15 8 12 2 12" variants={INBOX_NOTCH_VARIANTS} />
+          <path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z" />
+        </svg>
+      </div>
+    );
+  },
+);
+InboxIcon.displayName = "InboxIcon";

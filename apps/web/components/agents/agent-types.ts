@@ -1,5 +1,5 @@
 import type { AvatarConfig } from "@/components/avatar/types";
-import { ALWAYS_ON_DEFAULTS, type AlwaysOnConfig } from "@/lib/agents/always-on";
+import { normalizeAlwaysOn, type AlwaysOnConfig } from "@/lib/agents/always-on";
 
 export type ToolPolicy = {
   mode: "automatic" | "selected" | "none";
@@ -32,6 +32,7 @@ export type AgentConfigDTO = {
   session_scope: string;
   session_idle_minutes: number;
   session_daily_reset: string;
+  hold_outbound: boolean;
   always_on: AlwaysOnConfig;
   /** How the Agent is pictured; empty means the character derived from
    *  its id (lib/agents/agent-avatar.ts). */
@@ -63,7 +64,8 @@ export function normalizeAgent(raw: Agent): Agent {
     memory: raw.memory ?? { mode: "read_write", read_spaces: ["legacy_global"], write_space: "legacy_global", required: false },
     skills: { ...raw.skills, allowed: raw.skills?.allowed ?? [], disabled: raw.skills?.disabled ?? [], categories: raw.skills?.categories ?? [] },
     mcp: { ...raw.mcp, allowed: raw.mcp?.allowed ?? [], disabled: raw.mcp?.disabled ?? [], required: raw.mcp?.required ?? [] },
-    always_on: { ...ALWAYS_ON_DEFAULTS, ...raw.always_on },
+    hold_outbound: raw.hold_outbound === true,
+    always_on: normalizeAlwaysOn(raw.always_on),
     avatar: raw.avatar ?? {},
   };
 }
@@ -75,6 +77,7 @@ export function configuration(agent: Agent): AgentConfigDTO {
     identity: agent.identity, session_scope: agent.session_scope,
     session_idle_minutes: agent.session_idle_minutes,
     session_daily_reset: agent.session_daily_reset,
+    hold_outbound: agent.hold_outbound,
     always_on: agent.always_on,
     avatar: agent.avatar ?? {},
   });

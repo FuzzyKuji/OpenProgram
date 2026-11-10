@@ -1,0 +1,72 @@
+<title>Web UI port</title>
+<meta name="description" content="How OpenProgram chooses, configures and defends the single port its web UI runs on.">
+<h1>Web UI port</h1>
+
+<dl class="pairs">
+<dt>Default</dt><dd><code translate="no">18100</code></dd>
+<dt>Serves</dt><dd>FastAPI <code translate="no">/api/*</code>, <code translate="no">/ws</code>, <code translate="no">/healthz</code>, the static web UI export, to browser, TUI and CLI alike. <a href="single-port.html">Single-port architecture</a></dd>
+</dl>
+
+<h2 id="configuration-surface">Setting it</h2>
+<p>Highest first:</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Source</th><th scope="col">Scope</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram web --web-port &lt;p&gt;</code></th><td>That run, not persisted; <code translate="no">openprogram web</code> only</td></tr>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_WEB_PORT</code></th><td>That process, not persisted</td></tr>
+<tr><th scope="row"><code translate="no">ui.web_port</code> in <code translate="no">~/.openprogram/config.json</code></th><td>Persisted, read at the next <code translate="no">openprogram web</code> or <code translate="no">openprogram worker</code> start. Nothing live is rebound</td></tr>
+<tr><th scope="row">Built-in</th><td><code translate="no">18100</code></td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Command</th><th scope="col">Effect</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram ports</code></th><td>Shows the current port</td></tr>
+<tr><th scope="row"><code translate="no">openprogram ports --port 9100</code></th><td>Sets and persists</td></tr>
+<tr><th scope="row"><code translate="no">openprogram setup ui</code></th><td>Wizard: port (<code translate="no">1–65535</code>) and auto-open-browser</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">resolve_worker_port()</code> in <code translate="no">operations/worker/lifecycle.py</code> is the one resolution path; <code translate="no">read_ui_prefs()</code> and <code translate="no">set_ui_ports()</code> in <code translate="no">state/preferences.py</code> are the one read and write path.</p>
+
+<h2 id="conflict-handling">When the port is taken</h2>
+<table class="stack">
+<thead><tr><th scope="col">The port is</th><th scope="col"><code translate="no">openprogram web</code></th><th scope="col"><code translate="no">openprogram worker</code></th></tr></thead>
+<tbody>
+<tr><th scope="row">Free</th><td>Binds, starts</td><td>Binds, starts</td></tr>
+<tr><th scope="row">Held by our instance</th><td>Reuses it, points the browser at the UI</td><td>The worker lock already prevents a second worker</td></tr>
+<tr><th scope="row">Held by a foreign program</th><td>Refuses. Prints holder (PID, command line) and how to free it or change the port. Opens no browser.</td><td>Names the holder, falls back to a free port and reports it; the UI URL tracks it. It also hosts channels, so it must come up.</td></tr>
+<tr><th scope="row">Recently exited (TIME_WAIT)</th><td>uvicorn's <code translate="no">SO_REUSEADDR</code> rebinds it</td><td><code translate="no">_port_available</code> uses <code translate="no">SO_REUSEADDR</code>, so a quick restart does not drift</td></tr>
+</tbody>
+</table>
+<p class="note">Never kills the holder.</p>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Check in operations/worker/ports.py</th><th scope="col">How</th></tr></thead>
+<tbody>
+<tr><th scope="row">Liveness: <code translate="no">port_in_use(port)</code></th><td>Bare TCP connect</td></tr>
+<tr><th scope="row">Identity: <code translate="no">backend_is_ours(port)</code></th><td>Checks the managed worker PID and port files and the profile's owner-only <code translate="no">web/access.json</code>, sends a random nonce to <code translate="no">/api/auth/challenge</code>, verifies the token-HMAC proof locally. Never sends the owner token or a Bearer header, so a foreign listener cannot obtain the credential. Optional <code translate="no">expected_revision</code> binds the proof to an upgrade target's revision.</td></tr>
+<tr><th scope="row">Ownership: <code translate="no">describe_port_owner(port)</code>, <code translate="no">port_owner_hint(port)</code></th><td><code translate="no">lsof</code> or <code translate="no">netstat</code> + <code translate="no">/proc</code>, <code translate="no">ps</code>, Windows CIM: PID and command line, ours or foreign</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Why 18100</summary>
+<ul>
+<li>Below 49152, so never in the OS ephemeral range handed to outbound sockets.</li>
+<li>The <code translate="no">18xxx</code> block is rarely used by dev tooling, unlike 3000, 5173, 8000, 8080.</li>
+<li>Fixed: a bookmarkable URL, and browser state (localStorage, service worker scope) that survives restarts.</li>
+</ul>
+</details>
+
+<details>
+<summary>Compared with OpenClaw</summary>
+<p>OpenClaw pins its gateway to <code translate="no">18789</code>.</p>
+<table class="stack">
+<thead><tr><th scope="col">OpenClaw layer</th><th scope="col">Source</th><th scope="col">OpenProgram</th></tr></thead>
+<tbody>
+<tr><th scope="row">Single-instance lock (pid, start time, argv)</th><td><code translate="no">src/infra/gateway-lock.ts</code></td><td><code translate="no">worker.lock</code> (fcntl), <code translate="no">worker.pid</code> with start time, <code translate="no">_process_alive</code></td></tr>
+<tr><th scope="row">EADDRINUSE retry for TIME_WAIT</th><td><code translate="no">src/gateway/server/http-listen.ts</code></td><td><code translate="no">SO_REUSEADDR</code>, no retry loop</td></tr>
+<tr><th scope="row">Names the holder via <code translate="no">lsof</code></th><td><code translate="no">src/infra/ports.ts</code>, SSH-tunnel path only</td><td><code translate="no">describe_port_owner</code>, <code translate="no">port_owner_hint</code>, in every "port in use" message on the start path</td></tr>
+</tbody>
+</table>
+</details>

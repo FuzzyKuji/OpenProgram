@@ -16,7 +16,7 @@ environment = _test_recovery.environment
 store_fixture = _async_job_support.store_fixture
 
 
-@pytest.mark.parametrize("phase", [UpdatePhase.PREPARING, UpdatePhase.STAGING, UpdatePhase.READY])
+@pytest.mark.parametrize("phase", [UpdatePhase.PREPARING, UpdatePhase.BUILDING, UpdatePhase.READY])
 def test_startup_redispatches_original_controller_after_installed_app_changes(tmp_path, monkeypatch, phase):
     from openprogram.state import paths
     from openprogram.operations.self_update.delivery import launcher
@@ -37,7 +37,7 @@ def test_startup_redispatches_original_controller_after_installed_app_changes(tm
     monkeypatch.setattr(launcher, "_launchctl", launchctl)
     launch_supervisor("su_launch")
     if phase is not UpdatePhase.PREPARING:
-        store.transition("su_launch", UpdatePhase.STAGING)
+        store.transition("su_launch", UpdatePhase.BUILDING)
     if phase is UpdatePhase.READY:
         store.transition("su_launch", UpdatePhase.READY)
     installed.write_text("replacement installer")
@@ -125,7 +125,7 @@ def test_terminal_update_is_not_relaunched(tmp_path, monkeypatch):
     assert not result.submitted and not result.already_running
 
 
-@pytest.mark.parametrize("phase", [UpdatePhase.PREPARING, UpdatePhase.STAGING, UpdatePhase.READY])
+@pytest.mark.parametrize("phase", [UpdatePhase.PREPARING, UpdatePhase.BUILDING, UpdatePhase.READY])
 def test_successful_redispatch_cannot_clear_durable_startup_failure(tmp_path, monkeypatch, phase):
     from openprogram.state import paths
     from openprogram.operations.self_update.delivery import launcher
@@ -145,7 +145,7 @@ def test_successful_redispatch_cannot_clear_durable_startup_failure(tmp_path, mo
     monkeypatch.setattr(launcher, "_launchctl", launchctl)
     launch_supervisor("su_launch")
     if phase is not UpdatePhase.PREPARING:
-        store.transition("su_launch", UpdatePhase.STAGING)
+        store.transition("su_launch", UpdatePhase.BUILDING)
     if phase is UpdatePhase.READY:
         store.transition("su_launch", phase)
     fail = True

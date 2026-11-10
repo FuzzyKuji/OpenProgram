@@ -1,6 +1,6 @@
 """Provenance read-layer — the seam memory maps from.
 
-The entity layer (git-backed session DAG + per-turn commits + the
+The entity layer (session log DAG + per-turn commits + the
 project working-dir repo) is the ground truth that memory distills into
 its virtual layer. This module is the thin, **LLM-free** read surface
 that exposes the entity layer as *coordinates* memory can map onto:
@@ -8,8 +8,6 @@ that exposes the entity layer as *coordinates* memory can map onto:
   * ``iter_nodes_since`` — incremental node cursor (only what's new
     since the last ingest pass);
   * ``node_provenance``  — a node → ``Provenance`` coordinate;
-  * ``session_commits``  — the session repo's per-turn commit history
-    (delegates to ``SessionStore.session_commits``);
   * ``project_commits``  — the project working-dir repo's
     agent-attributed commit history.
 
@@ -62,11 +60,11 @@ class Provenance:
 
 def session_project_id(store: "SessionStore", session_id: str) -> str:
     """The project this session belongs to, read straight from the
-    session repo's ``meta.json`` (``""`` if unknown / no such session)."""
+    session's fields (``""`` if unknown / no such session)."""
     pair = store._open(session_id)
     if pair is None:
         return ""
-    _git, idx = pair
+    _session_log, idx = pair
     return (idx.meta or {}).get("project_id") or ""
 
 
@@ -105,8 +103,7 @@ def node_provenance(
 
     ``ingestion_time`` defaults to now (when memory is recording this);
     pass an explicit value to keep a whole ingest batch on one timestamp.
-    ``commit`` is optional — the caller passes the session-git turn sha
-    if it has resolved it (see ``session_commits``).
+    ``commit`` is optional — the project commit the caller resolved.
     """
     return Provenance(
         project_id=session_project_id(store, session_id),
@@ -116,12 +113,6 @@ def node_provenance(
         event_time=float(node.created_at or 0),
         ingestion_time=float(ingestion_time if ingestion_time is not None else time.time()),
     )
-
-
-def session_commits(store: "SessionStore", session_id: str, *, limit: int = 100) -> list:
-    """The session repo's per-turn git commits, newest first
-    (delegates to ``SessionStore.session_commits``)."""
-    return store.session_commits(session_id, limit=limit)
 
 
 def project_commits(project_id: str, *, limit: int = 100) -> list[dict]:

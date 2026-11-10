@@ -49,14 +49,16 @@ export function ProjectConfigSection({ projectId }: { projectId: string }) {
     {
       key: "permission_mode",
       label: text("Default permission mode", "默认权限模式"),
-      // 无 "Not set"——没设就是内置默认档 Auto mode。
-      fallback: "auto",
+      // 无 "Not set"——没设就是内置默认档 Bypass。
+      fallback: "bypass",
       opts: [
-        { v: "ask", label: text("Ask permissions", "逐次确认") },
-        { v: "acceptEdits", label: text("Accept edits", "接受编辑") },
-        { v: "plan", label: text("Plan mode", "计划模式") },
-        { v: "auto", label: text("Auto mode", "自动判定") },
-        { v: "bypass", label: text("Bypass permissions", "绕过权限") },
+        { v: "bypass", label: "Bypass permissions" },
+        { v: "auto", label: "Auto" },
+        { v: "ask", label: "Manual" },
+        { v: "plan", label: "Plan" },
+        ...(cfg.permission_mode === "acceptEdits"
+          ? [{ v: "acceptEdits", label: "Accept edits" }]
+          : []),
       ],
     },
     {

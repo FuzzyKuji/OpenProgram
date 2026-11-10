@@ -122,7 +122,20 @@ def test_thinking_only_mid_stream_error_retries(monkeypatch):
     )
     assert thinking == "fresh thought"  # discarded prefix is gone
     assert text == "answer"
-    assert any(event.type == "retry" and event.reason == "transport" for event in events)
+    retry = next(event for event in events if event.type == "retry")
+    assert retry.reason == "transport"
+    # The chat's retry row shows what failed.
+    assert retry.error == "APIError: Internal error during token generation"
+
+
+def test_retry_error_text_is_one_short_line():
+    from openprogram.models.providers.utils.stream_retry import RETRY_ERROR_MAX_CHARS, retry_error_text
+
+    assert retry_error_text(None) is None
+    assert retry_error_text(TimeoutError()) == "TimeoutError"
+    assert retry_error_text(ConnectionError("reset\n  by peer")) == "ConnectionError: reset by peer"
+    long = retry_error_text(RuntimeError("x" * 1000))
+    assert len(long) == RETRY_ERROR_MAX_CHARS and long.endswith("…")
 
 
 def test_goal_request_does_not_hide_an_extra_paid_attempt(monkeypatch):

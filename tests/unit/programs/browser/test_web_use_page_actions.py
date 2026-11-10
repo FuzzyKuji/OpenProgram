@@ -13,6 +13,10 @@ from openprogram.programs.applications.browser.contract import normalize_web_use
 
 # ----------------------------------------------------------------- arguments
 
+def _decided(decision):
+    return decision.outcome, decision.code
+
+
 def test_modifiers_accept_mac_and_pc_names_once_each():
     assert pa.modifiers("cmd+shift") == ["Meta", "Shift"]
     assert pa.modifiers("Ctrl, alt, ctrl") == ["Control", "Alt"]
@@ -187,15 +191,16 @@ def test_select_text_spans_inline_elements_and_honours_prefix(fresh):
 
 # ----------------------------------------------------------------- evaluate
 
-@pytest.mark.parametrize("script, source", [
-    ("document.title", "() => (document.title)"),
-    ("({a: 1})", "() => (({a: 1}))"),
-    ("() => location.href", "() => location.href"),
-    ("async () => 2", "async () => 2"),
-    ("function () { return 3 }", "function () { return 3 }"),
+@pytest.mark.parametrize("script, part", [
+    ("document.title", 'const s = "document.title";'),
+    ("a.click(); 'done'", 'const s = "a.click(); \'done\'";'),
+    ("() => location.href", "const run = (() => location.href\n);"),
+    ("async () => 2", "const run = (async () => 2\n);"),
+    ("function () { return 3 }", "const run = (function () { return 3 }\n);"),
 ])
-def test_evaluate_takes_an_expression_or_a_function(script, source):
-    assert pa.evaluate_source({"script": script}) == source
+def test_evaluate_calls_a_function_and_runs_anything_else_as_a_console_would(script, part):
+    source = pa.evaluate_source({"script": script})
+    assert source.startswith("() => {") and part in source and "30 * 1000" in source
 
 
 def test_evaluate_needs_a_bounded_script_and_bounds_its_result():
@@ -233,20 +238,19 @@ def test_mcp_backends_evaluate_through_the_controller_so_the_result_is_redacted(
 def decide(monkeypatch):
     """permission_decision for web_use with authority and recovery stubbed out."""
     from openprogram.runtime.permissions import tool_authority
-    from openprogram.runtime.permissions import policy, recovery
+    from openprogram.runtime.permissions import identity, policy
     from openprogram.programs._host.runtime import get
-
-    monkeypatch.setattr(policy, "_hard_constraint_violation", lambda *a, **k: None)
+    monkeypatch.setattr(identity, "scope_violation", lambda *a, **k: None)
+    monkeypatch.setattr(policy, "can_approve", lambda req: True)
     monkeypatch.setattr(tool_authority, "decide_tool_authority",
                         lambda *a, **k: SimpleNamespace(allowed=True, reason_code="", capability=""))
-    monkeypatch.setattr(recovery, "approval_context", lambda *a, **k: None)
     agent_tool = get("web_use")
 
     def run(args, *, mode="bypass", allow=(), source="web"):
         rules = SimpleNamespace(allow=list(allow), ask=[], deny=[])
         req = SimpleNamespace(permission_mode=mode, permission_rules=rules, session_id="s-test",
-                              source=source, surface_context=None)
-        return policy.permission_decision(agent_tool, req, args)[:2]
+                              source=source, surface_context=None, authority_tier="owner", principal_id="owner")
+        return _decided(policy.permission_decision(agent_tool, req, args))
     return run
 
 
@@ -254,21 +258,24 @@ def decide(monkeypatch):
     {"command": "act", "arguments": {"action": "evaluate", "script": "document.cookie"}},
     {"command": "act", "action": "Evaluate", "script": "document.cookie"},
 ])
-def test_evaluate_runs_in_bypass_and_asks_elsewhere_unless_allowed(decide, args):
-    assert decide(args) == ("allow", "BYPASS")
-    assert decide(args, mode="default") == ("ask", "PAGE_SCRIPT_APPROVAL")
-    assert decide(args, mode="default", allow=["web_use"]) == ("allow", "PERMISSION_RULE_ALLOW")
-    assert decide(args, source="cron")[0] == "deny"
-    assert decide({"command": "act", "arguments": {"action": "click", "ref": "e1"}}, allow=["web_use"])[0] == "allow"
+def test_evaluate_is_decided_like_any_other_page_action_and_refused_where_nobody_attends(decide, args):
+    click = {"command": "act", "arguments": {"action": "click", "ref": "e1"}}
+    assert decide(args) == ("allow", "MODE_UNRESTRICTED")
+    for mode in ("default", "acceptEdits", "auto"):
+        assert decide(args, mode=mode) == decide(click, mode=mode)
+    assert decide(args, mode="default", allow=["web_use"]) == ("allow", "RULE_ALLOW")
+    assert decide(args, source="cron") == ("allow", "MODE_UNRESTRICTED")
+    assert decide(args, source="mcp") == ("deny", "IDENTITY_PAGE_SCRIPT")
+    assert decide(click, allow=["web_use"])[0] == "allow"
 
 
-def test_an_evaluate_approval_is_never_one_shot_but_never_project_wide():
-    from openprogram.runtime.permissions.policy import one_shot_approval, page_script
+def test_an_evaluate_approval_is_never_one_shot():
+    from openprogram.runtime.permissions.identity import page_script
+    from openprogram.runtime.permissions.policy import one_shot_approval
     assert page_script("web_use", {"command": "act", "arguments": {"action": "evaluate"}})
     assert not page_script("web_use", {"command": "act", "arguments": {"action": "click"}})
     assert not one_shot_approval("web_use", {"command": "act", "arguments": {"action": "evaluate"}})
-    assert one_shot_approval("self_update", {"action": "prepare"})
-    assert not one_shot_approval("self_update", {})
+    assert not one_shot_approval("self_update", {"action": "prepare"})
 
 
 # ----------------------------------------------------------------- console and network

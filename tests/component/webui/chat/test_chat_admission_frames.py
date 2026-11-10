@@ -28,6 +28,13 @@ def _clear_slot(session_id: str) -> None:
         _s._running_tasks.pop(session_id, None)
 
 
+def test_an_ack_to_a_socket_already_holding_the_chat_adds_nothing():
+    from openprogram.interfaces.server.ws_actions.chat.turn import _join_and_read
+
+    ws = types.SimpleNamespace(_history_protocol=3, _transcript_views={"held"})
+    assert asyncio.run(_join_and_read(ws, "held"))[0] == {}
+
+
 def test_invalid_response_format_error_names_session_and_message():
     from openprogram.interfaces.server.ws_actions.chat import handle_chat
 

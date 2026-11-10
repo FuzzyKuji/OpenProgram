@@ -350,7 +350,7 @@ def test_attach_branch_invalidates_message_cache(store, srv):
     assert store.get_session("s1")["head_id"] == ids[-1]
     # The attach row itself hangs off HEAD as a child (it is not on the
     # HEAD->root path, so get_branch correctly omits it); the chat panel
-    # picks it up via the session_reload broadcast.
+    # gets it from the transcript publisher.
     assert any(m.get("id") == res["attach_node_id"]
                for m in store.get_messages("s1"))
 
@@ -461,8 +461,9 @@ def test_rewind_refuses_while_run_active(store, srv, monkeypatch):
     ids = _two_turns(store)
     monkeypatch.setattr(srv, "_is_run_active", lambda sid: True)
     ws = FakeWS()
+    monkeypatch.setattr(srv, "_try_reserve_run", lambda *args, **kwargs: False)
     _run(chat_actions.handle_rewind(
-        ws, {"session_id": "s1", "target_msg_id": ids[2]}))
+        ws, {"session_id": "s1", "target_msg_id": ids[2], "phase": "apply"}))
     data = ws.of_type("rewind_result")[0]
     assert data.get("code") == "run_active"
     # HEAD untouched.
@@ -487,7 +488,7 @@ def test_branch_actions_still_work_when_no_run_active(store, srv, monkeypatch):
 @pytest.mark.parametrize("evt_type", [
     "compaction_started", "compaction_failed", "compaction_finished",
     "reactive_compact_started", "reactive_compact_done",
-    "reactive_compact_failed", "reactive_snip",
+    "reactive_compact_failed",
     "some_future_event_nobody_whitelisted",
 ])
 def test_chat_event_chain_forwards_every_envelope(monkeypatch, evt_type):

@@ -11,66 +11,21 @@ consistent runtime state.
 """
 from __future__ import annotations
 
-import json
 import sys
 import urllib.error
 import urllib.parse
 import urllib.request
 from typing import Any, Optional
 
+from openprogram.interfaces.cli import worker_client
 
-def _require_backend_endpoint():
-    """Resolve the challenge-verified backend endpoint, or exit.
 
-    The endpoint carries the owner token, so it is only produced after the
-    listener proves — via the nonce/HMAC challenge — that it belongs to this
-    profile (see ``backend_endpoint.resolve_backend_endpoint``).
-    """
-    from openprogram.host.security.backend_endpoint import (
-        OwnerAuthError,
-        resolve_backend_endpoint,
-    )
-
-    try:
-        return resolve_backend_endpoint()
-    except OwnerAuthError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        print("Start it with: openprogram worker start", file=sys.stderr)
-        sys.exit(1)
+_require_backend_endpoint = worker_client.require_backend_endpoint
 
 
 def _request(method: str, path: str,
-              body: Optional[dict] = None) -> tuple[int, Any]:
-    endpoint = _require_backend_endpoint()
-    url = endpoint.base_url + path
-    data: Optional[bytes] = None
-    headers = {
-        "Accept": "application/json",
-        "Authorization": endpoint.authorization_header,
-        "Host": endpoint.host,
-        "X-Forwarded-Proto": endpoint.scheme,
-    }
-    if body is not None:
-        data = json.dumps(body).encode("utf-8")
-        headers["Content-Type"] = "application/json"
-    req = urllib.request.Request(url, data=data, method=method,
-                                  headers=headers)
-    opener = urllib.request.build_opener(urllib.request.ProxyHandler({}))
-    try:
-        with opener.open(req, timeout=120) as resp:
-            text = resp.read().decode("utf-8")
-            payload = json.loads(text) if text else None
-            return resp.status, payload
-    except urllib.error.HTTPError as e:
-        text = e.read().decode("utf-8", errors="replace")
-        try:
-            payload = json.loads(text)
-        except Exception:
-            payload = {"detail": text}
-        return e.code, payload
-    except urllib.error.URLError as e:
-        print(f"Error contacting worker at {url}: {e}", file=sys.stderr)
-        sys.exit(1)
+             body: Optional[dict] = None) -> tuple[int, Any]:
+    return worker_client.request(_require_backend_endpoint(), method, path, body)
 
 
 # ---------------------------------------------------------------------------

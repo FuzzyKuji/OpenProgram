@@ -69,6 +69,23 @@ def _managed_runtime_root() -> Path | None:
     return None
 
 
+def _sealed_version_tui() -> tuple[Path, Path] | None:
+    """``(bundle, node)`` when running from a sealed version.
+
+    A version carries its terminal UI inside its frontend bundle, and Node
+    comes from the base it shares with other versions.
+    """
+    from openprogram.operations.self_update.versions import layout, store
+
+    runtime = layout.current_runtime()
+    if runtime is None:
+        return None
+    base = str(store.read_manifest(runtime.layout, runtime.version)["base"])
+    site = layout.site_packages(runtime.layout.version(runtime.version), base)
+    node = runtime.layout.base(base) / "bin" / ("node.exe" if sys.platform == "win32" else "node")
+    return layout.frontend_bundle(site) / "tui" / "index.cjs", node
+
+
 def _resolve_cli_entry() -> Path:
     """Return path to the built Ink TUI bundle, building it if needed.
 
@@ -89,6 +106,11 @@ def _resolve_cli_entry() -> Path:
     bundle without npm or a source checkout. Missing release assets or a
     failed source build raise ``FileNotFoundError``.
     """
+    sealed = _sealed_version_tui()
+    if sealed is not None:
+        if sealed[0].is_file():
+            return sealed[0]
+        raise FileNotFoundError(f"This version's terminal UI is missing: {sealed[0]}.")
     runtime_root = _managed_runtime_root()
     if runtime_root is not None:
         bundled = runtime_root / "assets" / "tui" / "index.cjs"
@@ -189,6 +211,11 @@ def _build_ink_bundle(cli_dir: Path, expected_bundle: Path) -> None:
 
 
 def _resolve_node() -> str:
+    sealed = _sealed_version_tui()
+    if sealed is not None:
+        if sealed[1].is_file():
+            return str(sealed[1])
+        raise RuntimeError(f"This version's Node.js runtime is missing: {sealed[1]}.")
     runtime_root = _managed_runtime_root()
     if runtime_root is not None:
         names = (

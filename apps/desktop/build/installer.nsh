@@ -4,8 +4,9 @@
 ; authoritative for both default and user-selected installation directories.
 ;
 ; The visible Electron process remains handled by electron-builder's default
-; CHECK_APP_RUNNING implementation. This hook only owns embedded Python
-; processes, which otherwise keep resources\runtime DLLs open on Windows.
+; CHECK_APP_RUNNING implementation. This hook only owns processes that run from
+; the installation root. A thin install runs its worker from the version store
+; in the user's state directory, which an upgrade of the shell does not touch.
 !macro customInit
   DetailPrint "Stopping OpenProgram background processes..."
   InitPluginsDir

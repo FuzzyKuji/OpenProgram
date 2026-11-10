@@ -224,6 +224,11 @@ def node_policy(message: dict) -> dict | None:
 def eligible(message: dict) -> bool:
     raw = node_policy(message)
     if raw is None:
+        # A posted report records what the Agent already told the owner. It
+        # has no execution of its own to carry a policy, and must not turn
+        # the owner's next turn into one memory may not learn from.
+        if message.get('always_on_report'):
+            return True
         agent_id = message.get('agent_id')
         if not agent_id:
             return True

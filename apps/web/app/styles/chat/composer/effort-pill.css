@@ -94,10 +94,14 @@
   opacity: 1;
 }
 
+/* The fire fills a 16 px box (SolarIcon fit="fill") and grows to 18 px on
+   hover, like every icon in the composer. With the row's 8 px padding it
+   is centred in the 32 px chip (8 + 16 + 8) and fills the 48 px hover
+   width with the caret (8 + 16 + 4 + 12 + 8). */
 .effort-pill-compact-icon {
   display: inline-flex;
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
   flex-shrink: 0;
 }
 

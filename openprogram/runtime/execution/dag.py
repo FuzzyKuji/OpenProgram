@@ -192,6 +192,24 @@ def build_exec_dag_by_id(session_id: str,
     return _exec_tnode(root, kids)
 
 
+def build_exec_dags_by_id(session_id: str, root_node_ids: list[str]) -> dict[str, dict]:
+    """:func:`build_exec_dag_by_id` for several roots, over one pass of the session."""
+    if not root_node_ids:
+        return {}
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        nodes_list = _without_control_subtrees(default_db().get_nodes(session_id))
+    except Exception:
+        return {}
+    nodes = sorted(nodes_list, key=lambda n: n.seq)
+    by_id = {n.id: n for n in nodes}
+    kids: dict[str, list] = {}
+    for n in nodes:
+        if n.caller:
+            kids.setdefault(n.caller, []).append(n)
+    return {root: _exec_tnode(by_id[root], kids) for root in root_node_ids if root in by_id}
+
+
 def build_exec_dag(session_id: str, func_name: str,
                     user_turn_id: str) -> Optional[dict]:
     """Reconstruct a run's execution DAG from its DAG nodes.
@@ -576,11 +594,39 @@ def _repair_canonical_node(node, execution, shim) -> bool:
     reason = getattr(execution, "reason_code", None)
     if target == "paused" and isinstance(reason, str) and reason and meta.get("pause_reason") != reason:
         patch["pause_reason"] = reason
+    elif target != "paused" and meta.get("pause_reason"):
+        patch["pause_reason"] = None
     if not patch and not synthetic_output:
         return False
     fields = {"metadata": patch} if patch else {}
     if synthetic_output:
         fields["output"] = ""
+    try:
+        shim.update(node.id, **fields)
+    except Exception:
+        return False
+    return True
+
+
+def _close_stale_attach(node, session_id: str, shim) -> bool:
+    """Close a running attach row whose job can no longer end it."""
+    meta = node.metadata or {}
+    attach = meta.get("attach")
+    if (meta.get("function") != "attach" or not isinstance(attach, dict)
+            or attach.get("status") not in {"pending", "queued", "running"}):
+        return False
+    job_id = attach.get("job_id")
+    records = hooks.job_records()
+    job = records.load(attach.get("session_id") or session_id, job_id) if job_id else None
+    if job is not None and not records.is_terminal(job):
+        return False
+    status = job.status.value if job is not None else "errored"
+    closed = {**attach, "status": status}
+    if job is not None and job.head_id:
+        closed["head_id"] = job.head_id
+    fields = {"metadata": {"attach": closed, "is_error": status != "completed"}}
+    if node.output == "(running)":
+        fields["output"] = (job.result_text or job.error if job is not None else None) or _RESTART_OUTPUT
     try:
         shim.update(node.id, **fields)
     except Exception:
@@ -679,6 +725,11 @@ def reconcile_interrupted_runs() -> int:
             for node in store.get_nodes(sid):
                 meta = node.metadata or {}
                 status = meta.get("status")
+                try:
+                    fixed += int(_close_stale_attach(node, sid, shim))
+                except Exception:
+                    # The job store could not answer; the next start retries.
+                    _log.warning("attach row %s not reconciled", node.id, exc_info=True)
                 canonical = canonical_anchors.get(node.id)
                 if canonical is not None:
                     repaired = _repair_canonical_node(node, canonical, shim)

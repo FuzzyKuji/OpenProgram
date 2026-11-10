@@ -40,43 +40,48 @@ globalThis.localStorage = {
 };
 globalThis.requestAnimationFrame = undefined;
 
-const { useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { useSessionStore, selectRow } = await import("../../../lib/session-store/index.ts");
+const { flushTextFrames } = await import("../../../lib/net/ws/text-frames.ts");
+const { transcriptRows } = await import("../../_support/transcript-rows.mjs");
+const rows = transcriptRows(useSessionStore, selectRow);
+
 const { applyChatWsMessage } = await import("../../../lib/net/ws/chat-stream.ts");
 
 const frame = (data) => applyChatWsMessage({ type: "chat_response", data });
 
 test("a frame without session_id goes to the run that owns its msg_id", () => {
   const store = useSessionStore.getState();
-  store.setMessages("s_run", [{ id: "m1", role: "user", content: "apply", status: "done" }]);
-  store.setMessages("s_open", [{ id: "o1", role: "user", content: "hello", status: "done" }]);
+  rows.putRows("s_run", [
+    { id: "m1", role: "user", rowKind: "user", content: "apply", status: "done" },
+    { id: "m1_reply", role: "assistant", rowKind: "assistant", content: "", status: "running", blocks: [] },
+  ]);
+  rows.putRow("s_open", { id: "o1", role: "user", rowKind: "user", content: "hello", status: "done" });
   store.setRunningTaskFor("s_run", { session_id: "s_run", msg_id: "m1" }, "never");
   store.setCurrentConv("s_open");
 
-  frame({ type: "stream_event", msg_id: "m1", event: { type: "text", text: "Applying" } });
+  frame({ type: "stream_event", msg_id: "m1", row_id: "m1_reply", item_id: "b0", item_index: 0, offset: 0, event: { type: "text", text: "Applying" } });
+  flushTextFrames();
 
   const s = useSessionStore.getState();
   assert.deepEqual(s.messageOrder.s_open, ["o1"], "the open conversation gains no rows");
-  assert.ok(s.messageOrder.s_run.includes("m1_reply"));
+  assert.equal(rows.readRow("s_run", "m1_reply").content, "Applying");
 });
 
 test("a frame no run owns is dropped instead of landing in a new chat", () => {
   const store = useSessionStore.getState();
   store.setCurrentDraft("draft_new");
-  frame({ type: "stream_event", msg_id: "lost", event: { type: "text", text: "stray" } });
+  frame({ type: "stream_event", msg_id: "lost", row_id: "lost_reply", item_id: "b0", item_index: 0, offset: 0, event: { type: "text", text: "stray" } });
+  frame({ type: "result", msg_id: "lost", content: "stray" });
+  flushTextFrames();
   const s = useSessionStore.getState();
   assert.equal(s.messageOrder.draft_new, undefined);
-  assert.equal(s.messagesById.lost_reply, undefined);
 });
 
 test("a first message starting with Fix/Run is a chat turn, not a function run", async () => {
   const { setPendingUserText } = await import("../../../lib/chat/send/pending-user-text.ts");
-  const store = useSessionStore.getState();
-  store.setMessages("s_fix", []);
   setPendingUserText("s_fix", "Fix the date bug in app.js");
   applyChatWsMessage({ type: "chat_ack", data: { session_id: "s_fix", msg_id: "f1" } });
-  const s = useSessionStore.getState();
-  assert.equal(s.messagesById.f1.role, "user");
-  assert.equal(s.messagesById.f1.display, undefined);
-  assert.equal(s.messagesById.f1_reply.role, "assistant");
-  assert.equal(s.messagesById.f1_reply.display, undefined);
+  assert.equal(rows.readRow("s_fix", "f1").role, "user");
+  assert.equal(rows.readRow("s_fix", "f1").display, undefined);
+  assert.deepEqual(useSessionStore.getState().messageOrder.s_fix, ["f1"]);
 });

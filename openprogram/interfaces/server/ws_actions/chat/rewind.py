@@ -1,7 +1,9 @@
 """Rewind actions: list points, plan and apply."""
 from __future__ import annotations
 
+import asyncio
 import json
+import uuid
 
 
 async def handle_rewind_list(ws, cmd: dict):
@@ -14,12 +16,15 @@ async def handle_rewind_list(ws, cmd: dict):
                      "error": "No session_id provided"},
         }))
         return
+    limit = cmd.get("limit", 10)
     try:
+        from openprogram.interfaces.server import server as _s
         from openprogram.runtime.conversation.rewind import list_rewind_points
-        import asyncio
         loop = asyncio.get_event_loop()
         points = await loop.run_in_executor(
-            None, lambda: list_rewind_points(session_id),
+            None, lambda: list_rewind_points(
+                session_id, limit, recover=not _s._is_run_active(session_id),
+            ),
         )
         await ws.send_text(json.dumps({
             "type": "rewind_points",
@@ -45,12 +50,12 @@ async def handle_rewind(ws, cmd: dict):
         }))
         return
     from openprogram.interfaces.server import server as _s
-    if _s._is_run_active(session_id):
-        await ws.send_text(json.dumps({
-            "type": "rewind_result",
-            "data": {"session_id": session_id, "error": _s.RUN_ACTIVE_ERROR,
-                     "code": "run_active"},
-        }))
+    phase = (cmd.get("phase") or "plan").strip().lower()
+    reservation = f"rewind_{uuid.uuid4().hex}"
+    if phase == "apply" and not await asyncio.to_thread(
+        _s._try_reserve_run, session_id, reservation,
+    ):
+        await _send_run_active(ws, _s, session_id)
         return
     try:
         from openprogram.runtime.conversation.rewind import (
@@ -58,7 +63,6 @@ async def handle_rewind(ws, cmd: dict):
             plan_rewind,
             rewind_to,
         )
-        import asyncio
         loop = asyncio.get_event_loop()
         if target_msg_id.startswith("__by_index__"):
             idx = int(target_msg_id.removeprefix("__by_index__"))
@@ -73,11 +77,13 @@ async def handle_rewind(ws, cmd: dict):
                 }))
                 return
             target_msg_id = points[idx - 1]["msg_id"]
-        phase = (cmd.get("phase") or "plan").strip().lower()
         mode = (cmd.get("mode") or "code_and_conversation").strip()
         if phase == "plan":
+            recover = not _s._is_run_active(session_id)
             result = await loop.run_in_executor(
-                None, lambda: plan_rewind(session_id, target_msg_id, mode=mode),
+                None, lambda: plan_rewind(
+                    session_id, target_msg_id, mode=mode, recover=recover,
+                ),
             )
         elif phase == "apply":
             idempotency_key = (cmd.get("idempotency_key") or "").strip()
@@ -126,3 +132,50 @@ async def handle_rewind(ws, cmd: dict):
             "data": {"session_id": session_id,
                      "error": f"{type(e).__name__}: {e}"},
         }))
+    finally:
+        if phase == "apply":
+            _s._release_run_reservation(session_id, reservation)
+
+
+async def _send_run_active(ws, _s, session_id: str) -> None:
+    await ws.send_text(json.dumps({
+        "type": "rewind_result",
+        "data": {"session_id": session_id, "error": _s.RUN_ACTIVE_ERROR,
+                 "code": "run_active"},
+    }))
+
+
+async def handle_rewind_marks(ws, cmd: dict):
+    """Send the Undo and Redo marks for the transcript at the current HEAD."""
+    from openprogram.runtime.conversation.rewind_marks import list_rewind_marks
+
+    session_id = (cmd.get("session_id") or "").strip()
+    marks = await asyncio.to_thread(list_rewind_marks, session_id) if session_id else []
+    await ws.send_text(json.dumps({
+        "type": "rewind_marks",
+        "data": {"session_id": session_id or None, "marks": marks},
+    }, default=str))
+
+
+async def _handle_switch(ws, cmd: dict, *, undo: bool) -> None:
+    from openprogram.interfaces.server.routes.chat_branches import _switch_rewind
+
+    session_id = (cmd.get("session_id") or "").strip()
+    result = await asyncio.to_thread(
+        _switch_rewind, session_id, cmd.get("edge_id"), cmd.get("expected_head_id"), undo,
+    )
+    if "__error__" in result:
+        message, _code = result["__error__"]
+        result = {"status": "refused", "code": "run_active", "error": message}
+    await ws.send_text(json.dumps({
+        "type": "rewind_switch_result",
+        "data": {**result, "session_id": session_id, "action": "undo" if undo else "redo"},
+    }, default=str))
+
+
+async def handle_rewind_undo(ws, cmd: dict):
+    await _handle_switch(ws, cmd, undo=True)
+
+
+async def handle_rewind_redo(ws, cmd: dict):
+    await _handle_switch(ws, cmd, undo=False)

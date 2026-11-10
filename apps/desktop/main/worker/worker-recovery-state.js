@@ -8,7 +8,20 @@ function createRecoveryCoordinator() {
     startRejected: false,
     restartIssued: false,
     unreachableProbes: 0,
+    workerVersionChecked: false,
   };
+}
+
+/**
+ * Whether the worker already running belongs to another version of this App,
+ * as after an App update, when the old background process keeps serving. Asked
+ * once per App launch, so a version that never matches cannot cause a loop.
+ */
+function workerVersionAction(coordinator, runningVersion, expectedVersion) {
+  if (coordinator.workerVersionChecked || !expectedVersion) return null;
+  if (!/^\d+\.\d+/.test(String(runningVersion || ""))) return null;
+  coordinator.workerVersionChecked = true;
+  return runningVersion === expectedVersion ? null : "restart";
 }
 
 function recordWorkerCommandExit(coordinator, action, exitCode) {
@@ -101,4 +114,5 @@ module.exports = {
   startRecoveryCycle,
   beginRecoveryProbe,
   finishRecoveryProbe,
+  workerVersionAction,
 };

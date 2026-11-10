@@ -58,7 +58,7 @@ def _running_execution(tmp_path):
     attempts = AttemptStore(executions)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="worker_1", ttl_seconds=30, attempt_id="attempt_live",
+        owner_id="worker_1", attempt_id="attempt_live",
     )
     active, running = attempts.activate(
         leased.attempt_id, generation=leased.generation,

@@ -13,6 +13,7 @@ import sys
 from pathlib import Path
 from typing import Callable
 
+from openprogram.operations.self_update.versions.layout import immutable_runtime
 from openprogram.state.paths import get_state_dir
 
 
@@ -22,19 +23,19 @@ def _check_python_version() -> tuple[bool, str, str]:
 
 
 def _check_node() -> tuple[bool, str, str]:
-    if os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME") == "1":
+    if immutable_runtime():
         return True, "node available", "not required in immutable product runtime"
     n = shutil.which("node")
-    if n is None and os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME") == "1":
+    if n is None and immutable_runtime():
         return True, "node available", "not required by managed runtime"
     return (n is not None), "node available", n or "not on PATH"
 
 
 def _check_npm() -> tuple[bool, str, str]:
-    if os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME") == "1":
+    if immutable_runtime():
         return True, "npm available", "not required in immutable product runtime"
     n = shutil.which("npm")
-    if n is None and os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME") == "1":
+    if n is None and immutable_runtime():
         return True, "npm available", "not required by managed runtime"
     return (n is not None), "npm available", n or "not on PATH"
 
@@ -118,10 +119,10 @@ def _check_mcp() -> tuple[bool, str, str]:
 
 
 def _check_disk_cache() -> tuple[bool, str, str]:
-    home = Path.home()
+    state = get_state_dir()
     sizes: dict[str, int] = {}
     for sub in ("skills", "plugins", "cache"):
-        p = home / ".openprogram" / sub
+        p = state / sub
         if not p.exists():
             continue
         total = 0
@@ -263,26 +264,6 @@ def runtime_http_checks(
 
 def _runtime_http_check(index: int) -> tuple[bool, str, str]:
     return runtime_http_checks()[index]
-
-
-def _check_runtime_http_registry() -> tuple[bool, str, str]:
-    return _runtime_http_check(0)
-
-
-def _check_runtime_http_owner_exceptions() -> tuple[bool, str, str]:
-    return _runtime_http_check(1)
-
-
-def _check_runtime_http_policy_proxy() -> tuple[bool, str, str]:
-    return _runtime_http_check(2)
-
-
-def _check_runtime_http_recent_denials() -> tuple[bool, str, str]:
-    return _runtime_http_check(3)
-
-
-def _check_runtime_http_unmanaged_transport() -> tuple[bool, str, str]:
-    return _runtime_http_check(4)
 
 
 CHECKS: tuple[Callable[[], tuple[bool, str, str]], ...] = (

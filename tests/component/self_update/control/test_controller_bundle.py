@@ -26,7 +26,7 @@ def _release_native_workspace(root: Path) -> None:
     """Drain process-local singletons redirected into the eager runtime copy."""
     from openprogram.runtime.jobs import runner as runner_mod
     from openprogram.runtime.jobs.runner import shutdown_runner
-    from openprogram.runtime.execution.projections import stop_projection_worker
+    from openprogram.runtime.execution.event_effects import stop_event_effects
     from openprogram.runtime.execution.store import _store_for_path
     from openprogram.state.store.session import session_store as ss_mod
     from openprogram.models.usage.ledger import default_ledger
@@ -45,8 +45,8 @@ def _release_native_workspace(root: Path) -> None:
                 "not clearing the singleton or deleting the workspace"
             )
         shutdown_runner()
-    if not stop_projection_worker():
-        raise RuntimeError("execution projection worker did not stop before native workspace cleanup")
+    if not stop_event_effects():
+        raise RuntimeError("execution event effects did not stop before native workspace cleanup")
     cached = ss_mod.shared._default_store
     if cached is not None and _is_under(getattr(cached, "root_path", None), root):
         cached.close()
@@ -84,7 +84,6 @@ def _start_redirected_state_writers(root: Path, monkeypatch: pytest.MonkeyPatch)
     get_runner()
     assert db.root_path.resolve().is_relative_to(root.resolve())
     assert (state / "projects").is_dir()
-    assert (state / "usage.db").is_file() or (state / "executions.db").is_file()
 
 
 @pytest.fixture

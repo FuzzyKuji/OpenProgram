@@ -123,7 +123,7 @@ async function setup(tabs, activeId, windowId = "main") {
       if (init.method === "POST") {
         ackRequests.push(JSON.parse(init.body));
         // Observe the actual reducer state at the outgoing ACK boundary.
-        assert.equal(useSessionStore.getState().messagesById["restored-message"]?.content, "restored transcript");
+        assert.equal(useSessionStore.getState().rowsByView.origin?.["restored-message"]?.content, "restored transcript");
         assert.deepEqual(useSessionStore.getState().messageOrder.origin, ["restored-message"]);
       }
       return Response.json({ ...intent, status: init.method === "POST" ? "acknowledged" : "pending" });
@@ -135,14 +135,15 @@ async function setup(tabs, activeId, windowId = "main") {
   } };
   localStorage.setItem(`centerTabs:${windowId}`, JSON.stringify({ version: 2, tabs, activeId, groups: [], splitWebTabId: null, splitRatio: .5 }));
   useCenterTabs.setState(persistedState(readCenterTabsPayload()));
-  useSessionStore.setState({ currentSessionId: null, activeChatKey: null, conversations: {}, messagesById: {}, messageOrder: {} });
+  useSessionStore.setState({ currentSessionId: null, activeChatKey: null, conversations: {}, rowsByView: {}, overlaysByView: {}, messageOrder: {} });
   runtimeState.conversations = {};
   runtimeState.currentSessionId = null;
 }
 function transcript(socket, id = "origin") {
-  socket.message("session_loaded", { id, request_id: socket.sent.findLast(request => request.action === "load_session" && request.session_id === id)?.request_id, title: "Original conversation", messages: [
-    { id: "restored-message", role: "user", content: "restored transcript", timestamp: 100 },
-  ], graph: [], settings: {}, head_id: "restored-message" });
+  socket.message("session_loaded", { id, request_id: socket.sent.findLast(request => request.action === "load_session" && request.session_id === id)?.request_id, title: "Original conversation", turns: [{ id: "restored-message", rows: [
+    { id: "restored-message", role: "user", rowKind: "user", content: "restored transcript", timestamp: 100 },
+  ] }], window: { head_id: "restored-message", revision: 1, before: null, after: null, start: 0, end: 1, total: 1 },
+  graph: [], settings: {}, head_id: "restored-message" });
 }
 async function mounted(check) {
   const host = document.createElement("div"); document.body.append(host);

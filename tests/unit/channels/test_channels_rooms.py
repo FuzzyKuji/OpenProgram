@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import threading
+from dataclasses import replace
 
 import pytest
 
@@ -273,6 +274,31 @@ def test_typing_gives_up_quietly_where_unsupported(
     _TypingIndicator("slack", "acct1", "C1").start()
 
 
+def test_typing_follows_the_thread_the_message_came_from(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[tuple] = []
+    started = threading.Event()
+
+    def send(platform, account_id, target, **kw):
+        seen.append((target, kw))
+        started.set()
+        return SendResult.fail("not_supported", "stop after one")
+
+    def dispatch(**kw):
+        assert started.wait(30)
+
+    monkeypatch.setattr("openprogram.interfaces.channels._transport.send_typing", send)
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._conversation.dispatch_inbound", dispatch)
+
+    class _Tg(_FakeChannel):
+        platform_id = "telegram"
+
+    _Tg()._dispatch_and_reply(replace(_group("hello", mid="30"), thread_id="42"))
+    assert seen == [("room-1", {"thread_id": "42"})]
+
+
 def test_ack_reaction_follows_the_account_setting(
     dispatched, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -359,3 +385,32 @@ def test_memory_command_narrows_the_room(dispatched) -> None:
         text="/memory off", chat_id="701", user_id="701", chat_type="direct"))
     assert "私聊" in ch.sent[-1][1]
     assert len(dispatched) == 2
+
+
+def test_restored_pending_goes_ahead_of_newer_messages() -> None:
+    key = ("faketg", "acct1", "room-restore")
+    _room.clear_pending(key)
+    first = _room.PendingEntry(speaker_id="a", speaker_display="A", text="first", ts=1.0)
+    newer = _room.PendingEntry(speaker_id="b", speaker_display="B", text="newer", ts=2.0)
+    _room.record_pending(key, newer)
+    _room.restore_pending(key, [first])
+    assert [entry.text for entry in _room.take_pending(key)] == ["first", "newer"]
+
+
+def test_busy_ambient_event_stays_as_room_history(
+    monkeypatch: pytest.MonkeyPatch, dispatched,
+) -> None:
+    def busy(**kwargs):
+        kwargs["on_busy"]()
+        return None
+
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._conversation.dispatch_inbound", busy)
+    key = ("faketg", "acct1", "room-1")
+    _room.clear_pending(key)
+    _room.set_activation("faketg", "acct1", "room-1", "ambient")
+    older = _room.PendingEntry(speaker_id="a", speaker_display="A", text="older", ts=1.0)
+    _room.record_pending(key, older)
+    ch = _FakeChannel()
+    ch._dispatch_and_reply(_group("unaddressed"))
+    assert [entry.text for entry in _room.take_pending(key)] == ["older", "unaddressed"]

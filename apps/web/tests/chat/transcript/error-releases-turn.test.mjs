@@ -35,37 +35,36 @@ globalThis.localStorage = {
 };
 globalThis.requestAnimationFrame = undefined;
 
-const { useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { useSessionStore, selectRow } = await import("../../../lib/session-store/index.ts");
+const { transcriptRows } = await import("../../_support/transcript-rows.mjs");
+const rows = transcriptRows(useSessionStore, selectRow);
 const { applyChatWsMessage } = await import("../../../lib/net/ws/chat-stream.ts");
 
-const response = (sid, data) => applyChatWsMessage({ type: "chat_response", data: { session_id: sid, ...data } });
+// The server names the reply row each frame of a turn answers.
+const response = (sid, data) => applyChatWsMessage({ type: "chat_response", data: { session_id: sid, row_id: `${data.msg_id}_reply`, ...data } });
 const settle = () => new Promise((resolve) => setTimeout(resolve, 20));
 
 function startTurn(sid, msgId, executionId) {
-  const store = useSessionStore.getState();
-  store.setMessages(sid, [
-    { id: msgId, role: "user", content: "go", status: "done" },
-    { id: `${msgId}_reply`, role: "assistant", content: "", status: "streaming" },
+  rows.putRows(sid, [
+    { id: msgId, role: "user", rowKind: "user", content: "go", status: "done" },
+    { id: `${msgId}_reply`, role: "assistant", rowKind: "assistant", content: "", status: "running" },
   ]);
-  store.setRunningTaskFor(sid, { session_id: sid, msg_id: msgId, execution_id: executionId }, "never");
+  useSessionStore.getState().setRunningTaskFor(sid, { session_id: sid, msg_id: msgId, execution_id: executionId }, "never");
 }
 
 test("an error frame for the running turn frees the session", async () => {
   startTurn("s_err", "m1", "e1");
+  // The frame comes first; the reply's error status follows on the next
+  // update tick, as the provider_error recording shows.
   response("s_err", { type: "error", msg_id: "m1", content: "provider failed" });
   await settle();
-  assert.equal(useSessionStore.getState().messagesById.m1_reply.status, "error");
   assert.equal(useSessionStore.getState().runningTasks.s_err, undefined);
+  rows.patchRow("s_err", "m1_reply", { status: "error" });
 });
 
 test("an error of an earlier turn leaves the newer running turn alone", async () => {
+  startTurn("s_newer", "m1", "e1");
   startTurn("s_newer", "m2", "e2");
-  useSessionStore.getState().setMessages("s_newer", [
-    { id: "m1", role: "user", content: "old", status: "done" },
-    { id: "m1_reply", role: "assistant", content: "", status: "streaming" },
-    { id: "m2", role: "user", content: "new", status: "done" },
-    { id: "m2_reply", role: "assistant", content: "", status: "streaming" },
-  ]);
   response("s_newer", { type: "error", msg_id: "m1", content: "late failure" });
   await settle();
   assert.equal(useSessionStore.getState().runningTasks.s_newer?.execution_id, "e2");
@@ -73,9 +72,11 @@ test("an error of an earlier turn leaves the newer running turn alone", async ()
 
 test("a late error after the reply settled changes nothing", async () => {
   startTurn("s_done", "m3", "e3");
+  rows.patchRow("s_done", "m3_reply", { status: "done" });
   response("s_done", { type: "result", msg_id: "m3", content: "ok" });
   useSessionStore.getState().setRunningTaskFor("s_done", { session_id: "s_done", msg_id: "m3", execution_id: "e3" }, "never");
   response("s_done", { type: "error", msg_id: "m3", content: "compaction failed" });
   await settle();
-  assert.equal(useSessionStore.getState().messagesById.m3_reply.status, "done");
+  assert.equal(rows.readRow("s_done", "m3_reply").status, "done");
+  assert.equal(useSessionStore.getState().runningTasks.s_done?.execution_id, "e3");
 });

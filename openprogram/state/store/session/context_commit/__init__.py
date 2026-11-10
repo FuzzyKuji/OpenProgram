@@ -1,7 +1,7 @@
 """Context commits as stored records: the item and commit types and their files.
 
 A context commit is an immutable record of what the model saw at one turn,
-one JSON file per commit in the session repo (``context/commits/<id>.json``).
+one JSON file per commit in the session directory (``context/commits/<id>.json``).
 Generating a commit applies the runtime's context rules and lives in
 ``openprogram.runtime.context.commit``; this package defines the record and
 reads and writes it.

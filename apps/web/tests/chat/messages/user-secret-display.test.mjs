@@ -17,8 +17,10 @@ const mocks={
  './use-avatar-align':'export const useAvatarAlign=()=>({containerRef:{current:null},avatarTop:0});',
  '../attachments/user-attachments':'export const AttachmentChips=()=>null;export const parseAttachments=text=>({attachments:[],text,recordings:[]});',
  '../../recording/recording-card':'export const RecordingCard=()=>null;',
+ '../../rewind/rewind-context-menu':'export const RewindContextMenu=({children})=>children;',
  '../editing/message-editor':'export const MessageEditor=()=>null;',
  '@/components/ui/button':'export const buttonVariants=()=>"btn";',
+ '../list/transcript-view-scope':'export const useRowSessionId=own=>own??"A";',
  './markdown':'export const renderUserMarkdown=s=>s.replaceAll("&","&amp;").replaceAll("<","&lt;").replaceAll(">","&gt;");',
 };
 registerHooks({resolve(s,c,next){

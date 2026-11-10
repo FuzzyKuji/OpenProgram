@@ -2,7 +2,7 @@
 
 Persistent, machine-wide memory for OpenProgram agents.
 
-**Design doc:** [`docs/reference/design/memory/overview.md`](../../docs/reference/design/memory/overview.md).
+**Design doc:** [`docs/reference/design/memory/overview.html`](../../docs/reference/design/memory/overview.html).
 Read that first — this README is a navigation aid for working in the
 directory, not a substitute.
 

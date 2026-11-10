@@ -30,10 +30,6 @@ def meta_path(agent_id: str, session_key: str) -> Path:
     return session_path(agent_id, session_key) / "meta.json"
 
 
-def messages_path(agent_id: str, session_key: str) -> Path:
-    return session_path(agent_id, session_key) / "messages.json"
-
-
 # ---------------------------------------------------------------------------
 # 创建 / 加载
 # ---------------------------------------------------------------------------
@@ -121,40 +117,3 @@ def load_or_init_session(
 # ---------------------------------------------------------------------------
 # 保存
 # ---------------------------------------------------------------------------
-
-def save_session(
-    agent_id: str,
-    session_key: str,
-    meta: dict[str, Any],
-    messages: list[dict[str, Any]],
-    *,
-    new_messages: list[dict[str, Any]] | None = None,
-) -> None:
-    """Persist meta updates and append any new messages.
-
-    ``new_messages`` lets the caller skip re-writing the entire history
-    on every turn (the old JSON-file path had no choice). Pass the
-    just-ingested rows; if omitted we fall back to inferring "what's
-    new" by id-diff against the DB, which is slower but still correct.
-    """
-    from openprogram.runtime.context.session_db import default_db
-    db = default_db()
-
-    # Always touch the legacy dir so other code that drops sub-paths
-    # there (webui's ``trees/``) stays happy.
-    session_path(agent_id, session_key).mkdir(parents=True, exist_ok=True)
-
-    db.update_session(
-        session_key,
-        agent_id=agent_id,
-        title=meta.get("title"),
-        head_id=meta.get("head_id"),
-        peer_display=meta.get("peer_display"),
-        provider_name=meta.get("provider_name"),
-        model=meta.get("model"),
-    )
-    if new_messages is None:
-        existing_ids = {m["id"] for m in db.get_messages(session_key)}
-        new_messages = [m for m in messages if m.get("id") not in existing_ids]
-    if new_messages:
-        db.append_messages(session_key, new_messages)

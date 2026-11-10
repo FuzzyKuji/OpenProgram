@@ -103,8 +103,10 @@ def _managed_release_status() -> dict[str, Any]:
     if release is None:
         raise UpgradeError(
             "release-unavailable",
-            "cannot read the latest stable GitHub Release",
+            "cannot read the latest stable GitHub Release. Check your connection "
+            "(behind a proxy, set HTTPS_PROXY) and run `openprogram upgrade` again.",
         )
+    moved = github.moved_repository(release)
     target = release["tag_name"][1:]
     _version_parts(target)
     archive, checksum = _platform_runtime_names(target)
@@ -127,7 +129,7 @@ def _managed_release_status() -> dict[str, Any]:
             "latest Release lacks the complete runtime asset(s): "
             + ", ".join(missing),
         )
-    manifest = github.release_manifest(target)
+    manifest = github.release_manifest(target, *moved)
     if (
         not isinstance(manifest, dict)
         or manifest.get("schema") != 1
@@ -160,6 +162,7 @@ def _managed_release_status() -> dict[str, Any]:
         "latest_version": target,
         "update_available": _version_parts(target) > _version_parts(current),
         "archive": archive,
+        "repository": "/".join(moved) or PRODUCT_REPOSITORY,
     }
 
 
@@ -212,10 +215,12 @@ def run_managed_release_upgrade(
             if status["archive"].endswith(".zip")
             else "install-release.sh"
         )
+        repository = status.get("repository", PRODUCT_REPOSITORY)
+        moved = tuple(repository.split("/")) if repository != PRODUCT_REPOSITORY else ()
         installer = (
-            github.release_installer(target, script_name=installer_name)
+            github.release_installer(target, *moved, script_name=installer_name)
             if installer_name.endswith(".ps1")
-            else github.release_installer(target)
+            else github.release_installer(target, *moved)
         )
         if installer is None:
             raise UpgradeError(
@@ -249,7 +254,7 @@ def run_managed_release_upgrade(
                 if key in allowed_environment
             }
             env["OPENPROGRAM_VERSION"] = target
-            env["OPENPROGRAM_REPOSITORY"] = PRODUCT_REPOSITORY
+            env["OPENPROGRAM_REPOSITORY"] = repository
             command = environment.release_installer_command(installer_path)
             try:
                 completed = subprocess.run(
@@ -714,16 +719,74 @@ def run_status(*, channel: Optional[str] = None, as_json: bool = False) -> int:
     return 0
 
 
+def _print_store_status(status: dict, *, as_json: bool, dry_run: bool) -> int:
+    if as_json:
+        print(json.dumps({"ok": True, "dry_run": dry_run, **status}, indent=2))
+        return 0
+    print(f"  current        {status['current_version'] or 'unknown'}")
+    print(f"  latest         {status['latest_version']}")
+    print("  update         " + ("available" if status["update_available"] else "up to date"))
+    if status["update_available"] and status["can_apply"]:
+        print(f"  download       {status['download_bytes'] / (1024 ** 2):.1f} MB")
+    elif status["update_available"]:
+        print(f"  cannot apply   {status['detail']}")
+    if dry_run:
+        print("  dry run        no files or processes changed")
+    return 0
+
+
+def _upgrade_version_store(
+    directory: Optional[str], *, as_json: bool, check_only: bool = False, dry_run: bool = False,
+) -> int:
+    """An official release on a version-store install: fetched or from files, then through a switch."""
+    from openprogram.operations.self_update.control.official_update import apply_release
+    from openprogram.operations.self_update.official import fetch
+    from openprogram.operations.self_update.official.assets import ReleaseError
+    from openprogram.operations.self_update.official.replay import ACTIVATED, UP_TO_DATE
+
+    def say(ok: bool, reason: str, detail: str, **extra: Any) -> int:
+        print(json.dumps({"ok": ok, "reason": reason, "detail": detail, **extra}) if as_json else detail)
+        return 0 if ok else 1
+
+    try:
+        if directory:
+            result = apply_release(Path(directory).expanduser())
+        elif check_only or dry_run:
+            return _print_store_status(fetch.check(), as_json=as_json, dry_run=dry_run)
+        else:
+            result = fetch.update(say=None if as_json else print)
+    except ReleaseError as exc:
+        return say(False, "release-refused", str(exc))
+    return say(result.outcome in (ACTIVATED, UP_TO_DATE), result.outcome, result.message, result=result.to_dict())
+
+
 def _cmd_upgrade(args) -> int:
-    from openprogram.operations.self_update.github_release.detect import InstallMethod, detect_install_method
+    from openprogram.operations.self_update.github_release.detect import (
+        UPDATE_GUIDANCE, InstallMethod, UpdateRoute, detect_install_method, update_route,
+    )
+    from openprogram.operations.self_update.versions.layout import current_runtime
 
     channel = getattr(args, "channel", None)
     as_json = bool(getattr(args, "json", False))
-    method = detect_install_method()
     check_only = bool(
         getattr(args, "check", False)
         or getattr(args, "upgrade_verb", None) == "status"
     )
+    if current_runtime() is not None:
+        return _upgrade_version_store(
+            getattr(args, "release_directory", None), as_json=as_json,
+            check_only=check_only, dry_run=bool(getattr(args, "dry_run", False)),
+        )
+    if getattr(args, "release_directory", None):
+        print(json.dumps({"ok": False, "reason": "not-version-store", "detail": "--from needs a version-store install"})
+              if as_json else "--from needs a version-store install")
+        return 1
+    route = update_route()
+    if route is UpdateRoute.DESKTOP_APP and not check_only:
+        detail = UPDATE_GUIDANCE[route]
+        print(json.dumps({"ok": False, "reason": "use-desktop-update", "detail": detail}) if as_json else detail)
+        return 1
+    method = detect_install_method()
     if method is InstallMethod.MANAGED_RELEASE:
         if channel not in (None, "stable"):
             detail = f"managed releases only support 'stable', not {channel!r}"
@@ -735,7 +798,7 @@ def _cmd_upgrade(args) -> int:
             dry_run=getattr(args, "dry_run", False),
         )
     if method is InstallMethod.UNKNOWN:
-        detail = "no supported product update path for this installation"
+        detail = UPDATE_GUIDANCE[UpdateRoute.REINSTALL]
         print(json.dumps({"ok": False, "reason": "unknown-install", "detail": detail}) if as_json else f"unknown-install: {detail}")
         return 1
 

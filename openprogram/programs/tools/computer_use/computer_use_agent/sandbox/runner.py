@@ -13,6 +13,7 @@ import struct
 import threading
 import time
 
+from openprogram.runtime.permissions.refusal import Refused
 from .isolation import spawn_gui_python
 
 _MAX_TEXT = 256 * 1024
@@ -31,6 +32,8 @@ class GuiPythonResult:
     stderr: str
     error: str | None
     images: tuple[bytes, ...] = ()
+    # Printed text past the limit was dropped; the code itself ran on.
+    truncated: bool = False
 
 
 class GuiPythonRunner:
@@ -38,6 +41,8 @@ class GuiPythonRunner:
 
     Results are untrusted script output, never evidence of a GUI side effect.
     All protocol faults, deadlines and cancellation destroy this interpreter.
+    Printing more than the output limit does not: the rest is dropped and the
+    result says so, while the transport limit still stops a runaway loop.
     """
 
     def __init__(self, *, broker=None):
@@ -123,11 +128,20 @@ class GuiPythonRunner:
         rpc_id = None
         stderr_decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
 
+        truncated = False
+
         def append(stream, text):
-            nonlocal text_size
-            text_size += len(text.encode("utf-8"))
-            if text_size > _MAX_TEXT:
-                raise GuiRunnerError("output limit exceeded")
+            nonlocal text_size, truncated
+            size = len(text.encode("utf-8"))
+            if truncated or text_size + size > _MAX_TEXT:
+                # Keep what fits of this piece, then nothing more.
+                if not truncated:
+                    kept = text.encode("utf-8")[:max(0, _MAX_TEXT - text_size)].decode("utf-8", errors="ignore")
+                    output[stream].append(kept)
+                    text_size = _MAX_TEXT
+                truncated = True
+                return
+            text_size += size
             output[stream].append(text)
 
         with selectors.DefaultSelector() as selector:
@@ -156,11 +170,12 @@ class GuiPythonRunner:
                         response = {"value": None, "error": f"{type(exc).__name__}: {exc}"}
                     body = json.dumps({"id": self._sequence, "request_id": rpc_id, **response},
                                       allow_nan=False).encode()
-                    if len(body) > _MAX_TEXT:
-                        raise GuiRunnerError("broker reply exceeds output limit")
-                    text_size += len(body)
-                    if text_size > _MAX_TEXT:
-                        raise GuiRunnerError("output limit exceeded")
+                    if len(body) > _MAX_FRAME:
+                        # What a step returns goes to the code, not to the model: it is
+                        # bounded per step, and too large a one is an error of that step.
+                        body = json.dumps({"id": self._sequence, "request_id": rpc_id, "value": None,
+                                           "error": f"the result of this step is too large ({len(body)} bytes); "
+                                                    "read a smaller part"}).encode()
                     pending = memoryview(struct.pack("!I", len(body)) + body)
                     selector.register(process.stdin, selectors.EVENT_WRITE, "input")
                     rpc = None
@@ -219,6 +234,8 @@ class GuiPythonRunner:
                             self._last_rpc_id = rpc_id
                             try:
                                 rpc = self._broker.submit(message.get("request"), deadline=deadline, cancel=cancel)
+                            except Refused as exc:
+                                raise GuiRunnerError(exc.text) from exc
                             except (ValueError, PermissionError) as exc:
                                 raise GuiRunnerError(f"invalid GUI broker request: {exc}") from exc
                         elif message.get("type") == "done":
@@ -227,10 +244,8 @@ class GuiPythonRunner:
                             error = message.get("error")
                             if error is not None and not isinstance(error, str):
                                 raise GuiRunnerError("invalid protocol error")
-                            if error is not None:
-                                text_size += len(error.encode("utf-8"))
-                                if text_size > _MAX_TEXT:
-                                    raise GuiRunnerError("output limit exceeded")
+                            if error is not None and len(error.encode("utf-8")) > _MAX_TEXT:
+                                error = error.encode("utf-8")[:_MAX_TEXT].decode("utf-8", errors="ignore")
                             if incoming or pending:
                                 raise GuiRunnerError("unexpected protocol data at completion")
                             self._stop(deadline)
@@ -248,6 +263,7 @@ class GuiPythonRunner:
                                         raise GuiRunnerError("unexpected protocol data at completion")
                                     append("stderr", stderr_decoder.decode(tail))
                             append("stderr", stderr_decoder.decode(b"", final=True))
-                            return GuiPythonResult("".join(output["stdout"]), "".join(output["stderr"]), error, tuple(images))
+                            return GuiPythonResult("".join(output["stdout"]), "".join(output["stderr"]), error,
+                                                   tuple(images), truncated)
                         else:
                             raise GuiRunnerError("unknown protocol message")

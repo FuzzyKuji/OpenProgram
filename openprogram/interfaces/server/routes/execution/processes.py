@@ -28,10 +28,12 @@ def _authorize(request, session_id, record=None, *, stop=False):
     action = "execution.cancel" if stop else "execution.snapshot"
     if bound_session is not None and bound_session != session_id:
         raise ExecutionAuthorizationError("not_found")
-    if record and record.get("execution_id"):
-        store = default_store()
-        execution = store.get_execution(record["execution_id"])
-        if execution is None or execution.session_id != record["session_id"]:
+    # A program can outlive the execution that started it; the conversation
+    # that owns the program still decides below.
+    store = default_store()
+    execution = store.get_execution(record["execution_id"]) if record and record.get("execution_id") else None
+    if execution is not None:
+        if execution.session_id != record["session_id"]:
             raise ExecutionAuthorizationError("not_found")
         return authorize_conversation_execution(actor or {}, action, execution,
             store=store, session_id=session_id, bound_session=bound_session)
@@ -203,9 +205,9 @@ def register(app):
             records = store.list(session_id, scope)
             items = []
             for record in records:
-                if record.get("execution_id"):
-                    execution = scope.get(record["execution_id"])
-                    if execution is None or execution.session_id != record["session_id"]:
+                execution = scope.get(record.get("execution_id"))
+                if execution is not None:
+                    if execution.session_id != record["session_id"]:
                         raise ExecutionAuthorizationError("not_found")
                 elif record["session_id"] != session_id:
                     raise ExecutionAuthorizationError("not_found")

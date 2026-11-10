@@ -5,7 +5,7 @@ import {
   getPendingUserRequestId,
   hasPendingUserText,
 } from "@/lib/chat/send/pending-user-text";
-import { useSessionStore } from "@/lib/session-store";
+import { selectRow, useSessionStore } from "@/lib/session-store";
 
 /** Whether a frame answers the send waiting for its ACK in `sid`. A frame
  *  echoing a `client_request_id` answers only that request; one naming none
@@ -22,8 +22,8 @@ export function frameNamesPendingSend(
 /** The optimistic row of a send that never reached the backend says so. */
 export function markSendNotSent(sid: string, rowId: string | undefined, reason = "not_sent"): void {
   const store = useSessionStore.getState();
-  if (!rowId || store.messagesById[rowId]?.status !== "pending") return;
-  store.updateMessage(sid, rowId, { status: "error", rawType: "error", errorReason: reason });
+  if (!rowId || selectRow(sid, rowId)(store)?.status !== "pending") return;
+  store.applyLocalChange(sid, { kind: "local_patch", rowId, fields: { status: "error", rawType: "error", errorReason: reason } });
 }
 
 /** A closed socket ends every send still waiting for its ACK: the ACK can
@@ -33,7 +33,7 @@ export function settleSendsOnDisconnect(): void {
   const store = useSessionStore.getState();
   for (const [sid, ids] of Object.entries(store.messageOrder)) {
     const pending = ids.filter((id) => {
-      const row = store.messagesById[id];
+      const row = selectRow(sid, id)(store);
       return row?.role === "user" && row.status === "pending";
     });
     if (!pending.length && !hasPendingUserText(sid)) continue;

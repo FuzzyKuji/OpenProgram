@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 import pytest
 
-from openprogram.interfaces.server import context_git_routes as routes
+from openprogram.interfaces.server.routes import chat_branches as routes
 from openprogram.runtime.agent import turn_request as agent_turn_request
 from openprogram.runtime.context.git import sibling_navigation_index
 from openprogram.runtime.conversation import turn_runtime as D

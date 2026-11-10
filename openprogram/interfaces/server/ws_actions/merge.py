@@ -167,21 +167,16 @@ async def handle_merge_branches(ws, cmd: dict) -> None:
             _s._set_active_head(
                 target_session_id, payload["target_assistant_id"])
         except Exception:
-            # Reload below still runs; the next save may revert the merge head.
+            # The publisher notice below still runs; the next save may revert the merge head.
             _log.warning(
                 "merge head not mirrored for session %s", target_session_id, exc_info=True)
         try:
-            _s._broadcast(json.dumps({
-                "type": "session_reload",
-                "data": {
-                    "session_id": target_session_id,
-                    "reason": "merge",
-                },
-            }, default=str))
+            from openprogram.interfaces.server.transcript import publisher
+            publisher.notice_merged(target_session_id)
         except Exception:
             # Peers see the merge on their next load.
             _log.warning(
-                "merge reload not broadcast for session %s", target_session_id, exc_info=True)
+                "merge not announced for session %s", target_session_id, exc_info=True)
     elif payload.get("failed"):
         # Defect 6: the result frame was the only failure signal and had
         # no consumer, so a failed merge was silent. Log server-side so

@@ -156,7 +156,7 @@ def test_write_outside_worktree_is_blocked_when_the_sandbox_is_on(worktree_root,
     target = tmp_path / "elsewhere.txt"
     with turn_policy(session_enabled=True):
         out = _exec_tool(write_tool, file_path=str(target), content="x")
-    assert "Error: sandbox policy: path is outside writable roots" in out
+    assert "Sandbox is on and path is outside writable roots" in out
     assert not target.exists()
 
 

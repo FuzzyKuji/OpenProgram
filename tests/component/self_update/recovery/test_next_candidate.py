@@ -129,7 +129,7 @@ def test_the_retry_approval_card_shows_the_candidate(diagnosis_environment, monk
     _turn(diagnosis_environment, monkeypatch)
     _start()
     repaired = _result(diagnosis_environment)
-    req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="bypass")
+    req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="default")
     args = dict(action="retry", update_id=update_id, candidate_sha=repaired["candidate"]["candidate_sha"])
     wrapped = _approval.wrap_with_approval(tools.self_update, req, lambda _: None)
 
@@ -169,18 +169,18 @@ def test_the_owner_answer_on_the_retry_card_reaches_the_retry(diagnosis_environm
     _turn(diagnosis_environment, monkeypatch)
     _start()
     repaired = _result(diagnosis_environment)
-    req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="bypass")
+    req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="default")
     monkeypatch.setattr(tools, "_turn_context", lambda: (req, "retry_reply"))
     launched = []
     monkeypatch.setattr("openprogram.operations.self_update.delivery.launcher.launch_supervisor", lambda uid, **kw: launched.append(uid))
-    executions = ExecutionStore(tmp_path / "executions.db")
+    executions = ExecutionStore(tmp_path / "run-state")
     monkeypatch.setattr("openprogram.runtime.execution.default_store", lambda: executions)
     revision = executions.create_revision(manifest={"entrypoint": "test"})
     execution = executions.create_execution(execution_id="exec_retry", run_id="run", session_id="p1",
         revision_id=revision.revision_id, capabilities=CapabilitySet(pause=True))
     attempts = AttemptStore(executions)
     leased, reserved = attempts.lease(execution.execution_id, expected_version=execution.status_version,
-                                      owner_id="test", ttl_seconds=30)
+                                      owner_id="test")
     active, _ = attempts.activate(leased.attempt_id, generation=leased.generation,
                                   expected_execution_version=reserved.status_version)
     args = dict(action="retry", update_id=update_id, candidate_sha=repaired["candidate"]["candidate_sha"])
@@ -220,7 +220,7 @@ def test_the_owner_answer_on_the_retry_card_reaches_the_retry(diagnosis_environm
 @pytest.mark.parametrize("diagnosis_environment", [{"required_tests": ["python -c 'assert True'"]}], indirect=True)
 @pytest.mark.parametrize("decision", ["allow", "deny", "dirty", "log", "log_link_race"])
 @native_sandbox
-def test_default_retry_requires_fresh_exact_one_shot_approval(diagnosis_environment, monkeypatch, decision):
+def test_a_retry_in_an_asking_mode_goes_through_the_card(diagnosis_environment, monkeypatch, decision):
     from openprogram.runtime.permissions import approval as _approval
     from openprogram.programs.tools.system import self_update as tools
     from openprogram.operations.self_update.control.handoff import release_prepared_update
@@ -231,7 +231,7 @@ def test_default_retry_requires_fresh_exact_one_shot_approval(diagnosis_environm
     repaired = _result(diagnosis_environment)
     assert repaired["status"] == "candidate_ready"
     assert store.load_active() is None
-    req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="bypass")
+    req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="default")
     monkeypatch.setattr(tools, "_turn_context", lambda: (req, "retry_reply"))
     launched = []
     monkeypatch.setattr("openprogram.operations.self_update.delivery.launcher.launch_supervisor", lambda uid, **kw: launched.append(uid))
@@ -259,12 +259,12 @@ def test_default_retry_requires_fresh_exact_one_shot_approval(diagnosis_environm
                     log.symlink_to(replacement)
                 return result
             monkeypatch.setattr(Path, "resolve", swap_after_resolve)
-        return decision != "deny", None, "always"
+        return decision != "deny", None, "once"
     monkeypatch.setattr(_approval, "await_user_approval", approve)
     wrapped = _approval.wrap_with_approval(tools.self_update, req, lambda _: None)
     args = dict(action="retry", update_id=update_id, candidate_sha=repaired["candidate"]["candidate_sha"])
     outcome = asyncio.run(wrapped.execute("retry", args, None, None))
-    assert len(approvals) == 1 and not persisted
+    assert len(approvals) == 1
     assert approvals[0]["candidate"]["candidate_sha"] == args["candidate_sha"]
     assert approvals[0]["candidate"]["changed_paths"] == ["feature.txt"]
     if decision == "allow":
@@ -272,7 +272,7 @@ def test_default_retry_requires_fresh_exact_one_shot_approval(diagnosis_environm
         child = store.load_active()
         assert child.state.phase.value == "preparing" and child.request.update_id in launched
         assert release_prepared_update("p1", "a1", store=store) is None
-        assert release_prepared_update("p1", "retry_reply", store=store).phase.value == "staging"
+        assert release_prepared_update("p1", "retry_reply", store=store).phase.value == "building"
     else:
         assert outcome.is_error, outcome
         assert store.load_active() is None and not launched
@@ -352,7 +352,7 @@ def test_startup_resumes_one_reserved_child_without_refreshing_budget(diagnosis_
         from openprogram.operations.self_update.control.handoff import release_prepared_update
         assert store.load_active().state.phase.value == "preparing"
         assert release_prepared_update("p1", "another_reply", store=store) is None
-        assert release_prepared_update("p1", "retry_reply", store=store).phase.value == "staging"
+        assert release_prepared_update("p1", "retry_reply", store=store).phase.value == "building"
 
 
 @pytest.mark.parametrize("diagnosis_environment", [{
@@ -472,19 +472,18 @@ def test_same_failure_on_child_stops_before_another_repair_job(diagnosis_environ
 
 @pytest.mark.parametrize("diagnosis_environment", [{"required_tests": ["python -c 'assert True'"]}], indirect=True)
 @native_sandbox
-def test_other_session_cannot_approve_or_cancel_iteration(diagnosis_environment, monkeypatch):
+def test_another_conversation_of_the_owner_can_review_and_cancel_iteration(diagnosis_environment, monkeypatch):
     from openprogram.operations.self_update.repair import next_candidate
     from tests.component.programs.tools.test_self_update_tools import _request
     store, _, _, update_id = diagnosis_environment
     _turn(diagnosis_environment, monkeypatch)
     _start()
     repaired = _result(diagnosis_environment)
-    for action in (
-        lambda: next_candidate.approval_preview(update_id, repaired["candidate"]["candidate_sha"], _request(session_id="other")),
-        lambda: next_candidate.cancel(update_id, _request(session_id="other")),
-    ):
-        with pytest.raises(ValueError, match="another session"):
-            action()
+    other = _request(session_id="other")
+    assert next_candidate.approval_preview(update_id, repaired["candidate"]["candidate_sha"], other)
+    next_candidate.cancel(update_id, other)
+    with pytest.raises(ValueError, match="cancelled"):
+        next_candidate.approval_preview(update_id, repaired["candidate"]["candidate_sha"], other)
     assert store.load_active() is None
 
 
@@ -687,7 +686,7 @@ def test_system_failure_identity_and_total_attempt_budget(tmp_path, monkeypatch,
             record = current[0]
             uid = record.request.update_id
             if record.state.phase is UpdatePhase.PREPARING:
-                store.transition(uid, UpdatePhase.STAGING)
+                store.transition(uid, UpdatePhase.BUILDING)
             store.transition(uid, UpdatePhase.READY)
             store.transition(uid, UpdatePhase.ACTIVATING, detail={"previous_system_gate": {"candidate_sha": "3" * 40}})
             begin_rollback(store, uid, error)
@@ -909,7 +908,7 @@ def test_first_startup_resumes_durable_repair_result_without_retesting(diagnosis
     if root.request.iteration_policy.mode.value == "approve_each_activation":
         assert store.load_active() is None and not launches
         assert next_candidate.status(store, root)["status"] == "awaiting_approval"
-        req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="bypass")
+        req = _request(session_id="p1", user_msg_id="retry_user", permission_mode="default")
         monkeypatch.setattr(tools, "_turn_context", lambda: (req, "retry_reply"))
         approvals = []
         async def approve(**kwargs):
@@ -922,7 +921,7 @@ def test_first_startup_resumes_durable_repair_result_without_retesting(diagnosis
         assert not outcome.is_error and len(approvals) == 1, outcome
         assert store.load_active().state.phase.value == "preparing"
         assert release_prepared_update("p1", "another_reply", store=store) is None
-        assert release_prepared_update("p1", "retry_reply", store=store).phase.value == "staging"
+        assert release_prepared_update("p1", "retry_reply", store=store).phase.value == "building"
     child = store.load_active()
     assert child is not None, next_candidate.status(store, root)
     assert child.state.attempt == 2 and child.request.candidate_sha == result["candidate"]["candidate_sha"]
@@ -935,3 +934,46 @@ def test_first_startup_resumes_durable_repair_result_without_retesting(diagnosis
     assert {job.id for job in runner.list_jobs("p1")} == jobs
     assert result_path.read_bytes() == result_before
     assert (log.read_bytes(), log.stat().st_mtime_ns) == log_before
+
+
+def _chain_with_older_parent(tmp_path, monkeypatch, recorded_digest):
+    from types import SimpleNamespace
+    from openprogram.operations.self_update.repair import next_candidate
+
+    parent_id, child_id = "su_" + "a" * 32, "su_" + "b" * 32
+    written = {"update_id": parent_id, "goal": "older request"}
+    (tmp_path / parent_id).mkdir()
+    (tmp_path / parent_id / "request.json").write_text(json.dumps(written))
+    (tmp_path / parent_id / "request.json").chmod(0o600)
+    fields = dict(session_id="s", agent_id="a", repo="/r", base_sha="b", goal="g", assertions=(), iteration_policy=None)
+    parent = SimpleNamespace(
+        request=SimpleNamespace(update_id=parent_id, **fields, to_dict=lambda: {**written, "kind": "change"}),
+        state=SimpleNamespace(attempt=1),
+    )
+    child = SimpleNamespace(request=SimpleNamespace(update_id=child_id, **fields), state=SimpleNamespace(attempt=2))
+    config = dict(root_id=parent_id, parent_id=parent_id, parent_sha256=recorded_digest(written))
+    monkeypatch.setattr(next_candidate, "_config", lambda _store, record: config if record is child else None)
+    monkeypatch.setattr(next_candidate, "load_verifier_config", lambda *_args: {})
+    store = SimpleNamespace(root=tmp_path, _load_unlocked=lambda *_args, **_kwargs: parent)
+    return next_candidate.chain(store, child, read_only=True), parent, child
+
+
+def test_chain_accepts_a_parent_written_before_newer_request_fields(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification.verification_channel import _digest
+
+    records, parent, child = _chain_with_older_parent(tmp_path, monkeypatch, _digest)
+    assert records == [parent, child]
+
+
+def test_chain_accepts_a_child_that_recorded_the_current_request_format(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification.verification_channel import _digest
+
+    records, parent, child = _chain_with_older_parent(
+        tmp_path, monkeypatch, lambda written: _digest({**written, "kind": "change"}),
+    )
+    assert records == [parent, child]
+
+
+def test_chain_still_refuses_a_parent_whose_request_changed(tmp_path, monkeypatch):
+    with pytest.raises(ValueError, match="iteration parent changed"):
+        _chain_with_older_parent(tmp_path, monkeypatch, lambda _written: "0" * 64)

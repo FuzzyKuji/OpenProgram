@@ -1,1 +1,28 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>侧栏会话状态</title><style>body{max-width:850px;margin:48px auto;font:16px/1.65 system-ui;color:#243044}h1,h2{line-height:1.25}code{background:#eef1f5;padding:2px 5px}</style><h1>侧栏会话状态</h1><p>运行中且未等待用户输入的会话显示三个脉动圆点，置顶会话也相同。只有选中的运行中会话行显示背景扫描动画。选中状态由 <code>aria-current="true"</code>.</p><h2>渲染</h2><p>ConvItem 按 needs-input、running、unread 的优先级选择状态。StatusMarker 优先显示该状态，再考虑置顶和空闲标记。等待输入时保留琥珀色标记。CSS 隐藏未选中行的 running 和 finishing 伪元素。后端状态、任务执行、导航和会话持久化保持不变。</p><h2>安装与恢复</h2><p>TSX 和 CSS 源码通过常规发布资源流程构建。已提交的 checkout 通过 <code>scripts/refresh-local-app.sh</code> 安装，同时替换默认 App 的 runtime 与前端。禁止手工修改已安装的压缩 JavaScript 或生成资源名称。工作区根 package manifest 保留 workspace 定义，与桌面端 package manifest 分开维护。</p><h2>验收</h2><ul><li>Web 测试、Web 检查、生产构建、Desktop 检查、仓库合同和文档链接检查通过。</li><li>全部已安装的前端 JavaScript chunk 均可成功解析。</li><li>默认 App 渲染受影响会话及另一会话时均不出现客户端异常。</li><li>默认 worker 的健康端点与已安装源码版本均对应验收过的 checkout。</li></ul><h2>实现状态</h2><p>源码行为已实现并通过独立审查。Web 测试、Web 与 Desktop 检查、仓库合同和文档链接检查通过。安装使用生产构建，并执行上述验收；仅源码检查通过不能证明已安装 App 正常。</p></html>
+<title>侧栏会话状态</title>
+<meta name="description" content="侧栏会话行显示哪种标记，以及运行扫光何时出现。">
+<h1>侧栏会话状态</h1>
+
+<table class="stack">
+<thead><tr><th scope="col">优先级</th><th scope="col">状态</th><th scope="col">标记</th><th scope="col">背景</th></tr></thead>
+<tbody>
+<tr><th scope="row">1</th><td>等待输入</td><td>琥珀色</td><td>无</td></tr>
+<tr><th scope="row">2</th><td>运行中</td><td>三个跳动的点，置顶时也一样</td><td>仅选中行有扫光</td></tr>
+<tr><th scope="row">3</th><td>未读</td><td>未读圆点</td><td>无</td></tr>
+<tr><th scope="row">4</th><td>置顶、空闲</td><td>置顶或空闲标记</td><td>无</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">ConvItem</code> 决定状态，<code translate="no">StatusMarker</code> 绘制。选中用 <code translate="no">aria-current="true"</code> 表示。CSS 在未选中行屏蔽运行和结束的伪元素。不涉及后端状态、任务执行、导航和对话持久化。</p>
+
+<details>
+<summary>安装和验收</summary>
+<p>TSX 和 CSS 走正常的发布资源流程，绝不手改已安装的压缩 JavaScript 和生成的资源名。工作区根目录的包清单保存工作区定义，与桌面端清单分开。</p>
+<ul>
+<li>Web 测试和检查、生产构建、桌面端检查、仓库契约和文档链接通过。</li>
+<li>每个已安装的前端 JavaScript 分块都能解析。</li>
+<li>App 打开受影响的对话和另一个对话都没有客户端异常。</li>
+<li>Worker 健康状态和已安装的源码版本与验证过的检出一致。只有源码检查不能说明已安装 App 健康。</li>
+</ul>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<p>已实现。</p>

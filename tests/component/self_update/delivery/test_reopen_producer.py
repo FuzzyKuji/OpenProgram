@@ -40,7 +40,7 @@ def producer(package_factory, tmp_path, monkeypatch):
     request = replace(request, pre_update_evidence=(*request.pre_update_evidence, config_evidence(config)))
     store = SelfUpdateStore(profile / "self-updates")
     store.create(request, verifier_config=config)
-    store.transition(request.update_id, UpdatePhase.STAGING)
+    store.transition(request.update_id, UpdatePhase.BUILDING)
     directory = store.root / request.update_id
     installer = directory / "controller/install-app.sh"
     installer.parent.mkdir()

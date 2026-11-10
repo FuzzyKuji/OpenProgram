@@ -8,6 +8,7 @@
 
 import { translateText } from "@/lib/i18n";
 import { showToast } from "@/lib/format-utils/toast";
+import { openRewindPicker } from "@/lib/chat/rewind/rewind-actions";
 
 export interface SlashContext {
   sessionId: string | null;
@@ -34,6 +35,8 @@ export interface SlashCommand {
   description: string;
   /** Changes the conversation's history, so it waits for an idle chat. */
   needsIdle?: boolean;
+  /** While a turn runs the command does nothing and says nothing. */
+  ignoredWhileBusy?: boolean;
   /** False when the command could not be carried out (the socket refused
    *  its frame); the draft then stays for a retry. */
   run: (rest: string, ctx: SlashContext) => boolean;
@@ -176,24 +179,19 @@ export const SLASH_COMMANDS: SlashCommand[] = [
   },
   {
     name: "/rewind",
-    args: "[N]",
-    description:
-      "Roll back to a previous point. No arg = list points; N = rewind to the Nth point",
-    needsIdle: true,
-    run(rest, { sessionId, send }) {
+    description: "Go back to an earlier message: pick it from a list",
+    ignoredWhileBusy: true,
+    run(rest, { sessionId }) {
       if (!sessionId) {
         startFirst();
         return true;
       }
-      const n = parseInt(rest.trim(), 10);
-      if (Number.isFinite(n) && n > 0) {
-        return send({
-          action: "rewind",
-          session_id: sessionId,
-          target_msg_id: `__by_index__${n}`,
-        });
+      if (rest.trim()) {
+        showToast(translateText("/rewind takes no arguments. Send it alone and pick a message.", "/rewind 不带参数，直接发送后选择消息。"), { tone: "warn" });
+        return true;
       }
-      return send({ action: "rewind_list", session_id: sessionId });
+      void openRewindPicker(sessionId);
+      return true;
     },
   },
   {

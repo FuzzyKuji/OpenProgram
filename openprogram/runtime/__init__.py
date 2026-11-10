@@ -15,7 +15,7 @@ from openprogram.runtime.lower_layers import register as _register_lower_layer_p
 
 def _cache_edits():
     """Context edits for one provider request, by this run's tool-call count."""
-    from openprogram.runtime.context.cache_aware_microcompact import build_cache_edits
+    from openprogram.runtime.context.compaction.cache_aware_microcompact import build_cache_edits
 
     return build_cache_edits()
 

@@ -47,7 +47,6 @@ def owner(tmp_path, monkeypatch):
         initial.execution_id,
         expected_version=initial.status_version,
         owner_id="test",
-        ttl_seconds=120,
     )
     attempt, running = attempts.activate(
         leased.attempt_id,
@@ -218,16 +217,13 @@ def test_live_owner_loss_rejects_answer_and_cleans_only_live_wait(owner):
         expires_at=0,
     )
     with store._transaction() as connection:
-        connection.execute(
-            "UPDATE attempts SET lease_expires_at = 0 WHERE attempt_id = ?",
-            (attempt.attempt_id,),
-        )
+        connection.update("attempts", {"status": "ended"}, attempt_id=attempt.attempt_id)
     with pytest.raises(ExecutionConflict, match="owner has ended"):
         answer(owner, {"id": question.id, "wait_generation": 0}, "late")
     assert waits.cancel_live_waits() == (question.id,)
     assert waits.get_wait(durable.wait_id).status.value == "open"
     with bound_runtime(owner, lambda frame: None):
-        with pytest.raises(ExecutionConflict, match="leased owner"):
+        with pytest.raises(ExecutionConflict, match="no longer active"):
             ask_user("Cannot open")
 
 

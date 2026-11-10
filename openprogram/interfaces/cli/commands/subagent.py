@@ -19,21 +19,6 @@ import sys
 from typing import Any
 
 
-def _remaining(limit: Any, *used: Any) -> Any:
-    if limit is None:
-        return None
-    if any(value is None for value in used):
-        return "Unknown"
-    return max(0, limit - sum(used))
-
-
-def _least_remaining(local: Any, shared: Any) -> str:
-    if local == "Unknown":
-        return local
-    bounded = [value for value in (local, shared) if value is not None]
-    return format(min(bounded), "g") if bounded else "Unlimited"
-
-
 def _print_resource(payload: dict[str, Any]) -> None:
     resource = payload.get("resource") or {}
     print(f"Execution: {payload.get('execution_id', payload.get('job_id', '-'))}")

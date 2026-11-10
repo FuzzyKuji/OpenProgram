@@ -48,7 +48,8 @@ def read_b64(path: str) -> tuple[str, str]:
     from openprogram.host.sandbox import validate_read_path
     violation = validate_read_path(path)
     if violation:
-        raise PermissionError(f"sandbox policy: {violation}")
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("image_analyze", violation)
     p = Path(path).expanduser()
     if not p.is_absolute():
         p = p.resolve()

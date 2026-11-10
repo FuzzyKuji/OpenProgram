@@ -12,7 +12,7 @@
 // Sizes are pinned in px through the --ui-button-h* tokens (styles/design/controls.css):
 // xs 24px (row / card / message actions), sm 28px (menus, toolbars,
 // chips), default 30px (the sidebar chat row), lg 32px (the composer's
-// corner buttons); docs/reference/design/ui/visual-system/surface-system.md lists
+// corner buttons); docs/reference/design/ui/visual-system/surface-system.html lists
 // which component takes which. Nova's rem
 // sizes rendered at 7/8 on the 14px root and full size inside the old
 // docs-scale containers, so one size looked different on different pages. Pick a size at the

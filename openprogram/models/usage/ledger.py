@@ -1,9 +1,15 @@
 """UsageLedger — append-only SQLite store of UsageEvents.
 
 One global file (``~/.openprogram/usage.db``, profile-aware) with immutable
-``usage_events``, request receipts and resource reservations. Indexed by time,
-by model+time, by session, by kind+time. WAL mode so the Agent method
-subprocesses can append concurrently with the main worker.
+``usage_events`` and request receipts. Indexed by time, by model+time, by
+session, by kind+time. WAL mode so the Agent method subprocesses can append
+concurrently with the main worker.
+
+Job admissions, budgets and reservations are run state. The runtime hands the
+ledger their tables through :func:`use_run_tables`. A step that changes both
+kinds of row commits the event here first and the reservation after, so a stop
+in between leaves exposure held and an event to recognise it by, never spend
+without a record of it.
 
 Append is idempotent on ``event_id`` (INSERT OR IGNORE) so a retried write
 never double-counts. ``query()`` does the grouping/time-bucketing in SQL.
@@ -15,13 +21,15 @@ from __future__ import annotations
 
 import atexit
 import json
+import os
+import re
 import sqlite3
 import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Any, Callable, Iterable, Optional
 
 from .event import UsageEvent
 
@@ -33,6 +41,7 @@ _COLUMNS = [
     "cost_cache_read", "cost_cache_write", "cost_source", "token_source",
     "schema_version", "job_id", "budget_scope_id", "reservation_id",
     "request_id", "goal_id", "goal_revision", "goal_session_id", "execution_id", "tokens_known",
+    "first_token_ms", "first_text_ms",
 ]
 
 _BOOTSTRAP_BUSY_TIMEOUT_MS = 2_000
@@ -73,6 +82,8 @@ CREATE TABLE IF NOT EXISTS usage_events (
     ,goal_session_id TEXT
     ,execution_id TEXT
     ,tokens_known INTEGER NOT NULL DEFAULT 1
+    ,first_token_ms INTEGER
+    ,first_text_ms INTEGER
 );
 CREATE INDEX IF NOT EXISTS ix_usage_ts       ON usage_events(ts);
 CREATE INDEX IF NOT EXISTS ix_usage_model_ts ON usage_events(model_id, ts);
@@ -81,6 +92,8 @@ CREATE INDEX IF NOT EXISTS ix_usage_kind_ts  ON usage_events(call_kind, ts);
 CREATE INDEX IF NOT EXISTS ix_usage_job     ON usage_events(job_id);
 CREATE INDEX IF NOT EXISTS ix_usage_goal ON usage_events(goal_session_id, goal_id);
 CREATE UNIQUE INDEX IF NOT EXISTS ix_usage_request ON usage_events(request_id) WHERE request_id IS NOT NULL;
+CREATE INDEX IF NOT EXISTS ix_usage_reservation ON usage_events(reservation_id);
+CREATE INDEX IF NOT EXISTS ix_usage_budget_scope ON usage_events(budget_scope_id);
 
 CREATE TABLE IF NOT EXISTS usage_requests (
     request_id TEXT PRIMARY KEY,
@@ -94,86 +107,6 @@ CREATE TABLE IF NOT EXISTS usage_requests (
     created_at REAL NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_requests_goal ON usage_requests(goal_session_id, goal_id);
-
-CREATE TABLE IF NOT EXISTS job_admissions (
-    admission_id TEXT PRIMARY KEY,
-    job_id TEXT UNIQUE NOT NULL,
-    session_id TEXT NOT NULL,
-    parent_job_id TEXT,
-    caller_session_id TEXT,
-    caller_turn_id TEXT,
-    creates_agent INTEGER NOT NULL CHECK (creates_agent IN (0, 1)),
-    request_fingerprint TEXT NOT NULL,
-    budget_scope_id TEXT NOT NULL,
-    dispatch_ready INTEGER NOT NULL DEFAULT 1
-        CHECK (dispatch_ready IN (0, 1)),
-    terminal_blocked INTEGER NOT NULL DEFAULT 0
-        CHECK (terminal_blocked IN (0, 1)),
-    terminal_block_command_id TEXT,
-    terminal_block_phase TEXT,
-    terminal_block_expires_at REAL,
-    terminal_block_prior_dispatch_ready INTEGER
-        CHECK (terminal_block_prior_dispatch_ready IN (0, 1)),
-    borrowed_parent_job_id TEXT,
-    resume_parent_msg_id TEXT,
-    state TEXT NOT NULL CHECK (state IN ('preparing','queued','live','stopping','released')),
-    queue_state TEXT NOT NULL DEFAULT 'queued',
-    resume_command_id TEXT,
-    admitted_seq INTEGER NOT NULL,
-    owner_instance_id TEXT,
-    lease_generation INTEGER NOT NULL DEFAULT 0,
-    lease_expires_at REAL,
-    created_at REAL NOT NULL,
-    started_at REAL,
-    last_activity_at REAL,
-    released_at REAL,
-    reason_code TEXT
-);
-CREATE INDEX IF NOT EXISTS ix_admissions_session_state
-    ON job_admissions(session_id, state, admitted_seq);
-
-CREATE TABLE IF NOT EXISTS job_finalizations (
-    job_id TEXT PRIMARY KEY,
-    session_id TEXT NOT NULL,
-    owner_instance_id TEXT NOT NULL,
-    lease_generation INTEGER NOT NULL,
-    fields_json TEXT NOT NULL,
-    state TEXT NOT NULL CHECK (state IN ('pending','completed')),
-    created_at REAL NOT NULL,
-    completed_at REAL
-);
-CREATE INDEX IF NOT EXISTS ix_finalizations_state
-    ON job_finalizations(state);
-
-CREATE TABLE IF NOT EXISTS budget_scopes (
-    budget_scope_id TEXT PRIMARY KEY,
-    scope_kind TEXT NOT NULL CHECK (scope_kind IN ('session','job')),
-    session_id TEXT NOT NULL,
-    job_id TEXT UNIQUE,
-    parent_scope_id TEXT,
-    max_total_tokens INTEGER,
-    max_cost_microusd INTEGER,
-    max_runtime_seconds INTEGER,
-    idle_timeout_seconds INTEGER,
-    created_at REAL NOT NULL
-);
-CREATE UNIQUE INDEX IF NOT EXISTS ix_budget_session_scope
-    ON budget_scopes(session_id) WHERE scope_kind = 'session';
-
-CREATE TABLE IF NOT EXISTS usage_reservations (
-    reservation_id TEXT PRIMARY KEY,
-    job_id TEXT NOT NULL,
-    budget_scope_id TEXT NOT NULL,
-    kind TEXT NOT NULL CHECK (kind IN ('token','cost')),
-    state TEXT NOT NULL CHECK (state IN ('reserved','started','settled','released')),
-    reserved_tokens INTEGER,
-    reserved_cost_microusd INTEGER,
-    request_started_at REAL,
-    settled_event_id TEXT,
-    expires_at REAL
-);
-CREATE INDEX IF NOT EXISTS ix_reservations_scope_state
-    ON usage_reservations(budget_scope_id, state);
 
 -- One row per model switch the failover chain made: ``from`` failed before
 -- any content streamed and ``to`` was tried next. The routing overview
@@ -190,6 +123,22 @@ CREATE TABLE IF NOT EXISTS route_events (
     reason TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS ix_route_events_ts ON route_events(ts);
+
+-- One row per request OpenProgram sent a provider on its own behalf (a
+-- connectivity test, a credential check, a failed model list): never
+-- usage, so no total reads it. See models/listing/probe_log.py.
+CREATE TABLE IF NOT EXISTS probe_events (
+    event_id TEXT PRIMARY KEY,
+    ts REAL NOT NULL,
+    provider TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    method TEXT NOT NULL,
+    url TEXT NOT NULL,
+    status INTEGER,
+    elapsed_ms INTEGER NOT NULL,
+    error TEXT
+);
+CREATE INDEX IF NOT EXISTS ix_probe_events_ts ON probe_events(ts);
 """
 
 # group_by token → SQL expression. ``day``/``hour`` are time buckets.
@@ -203,6 +152,17 @@ _GROUP_EXPR = {
     "day": "CAST(ts / 86400 AS INTEGER)",
     "hour": "CAST(ts / 3600 AS INTEGER)",
 }
+
+
+MOVED_TABLES = ("budget_scopes", "job_admissions", "job_finalizations", "usage_reservations")
+
+_run_tables_for_path: Optional[Callable[[Path], Any]] = None
+
+
+def use_run_tables(resolve: Callable[[Path], Any]) -> None:
+    """The runtime names the run tables that belong beside a usage file."""
+    global _run_tables_for_path
+    _run_tables_for_path = resolve
 
 
 def _is_sqlite_busy(error: sqlite3.Error) -> bool:
@@ -232,12 +192,23 @@ class AggregateRow:
     unknown_cost_events: int
 
 
+# How long probe_events rows are kept.
+PROBE_EVENTS_KEPT_S = 30 * 24 * 3600
+
+
 class UsageLedger:
     def __init__(self, db_path: Optional[Path] = None) -> None:
         self._explicit_path = db_path
         self._lock = threading.RLock()
         self._conn: Optional[sqlite3.Connection] = None
         self._conn_pid: Optional[int] = None
+        self._after_commit: list[Callable[[], Any]] = []
+        self._run_tables: Any = None
+        # The reader answers for accounting while the run tables are held, so
+        # its lock is never held while waiting for any other.
+        self._reader_lock = threading.Lock()
+        self._reader: Optional[sqlite3.Connection] = None
+        self._reader_pid: Optional[int] = None
 
     # connection (per-process; reopened after fork)
 
@@ -248,7 +219,6 @@ class UsageLedger:
         return get_usage_db_path()
 
     def _connect(self) -> sqlite3.Connection:
-        import os
         # A connection can't cross a fork; reopen if the pid changed so a
         # Agent method subprocess gets its own handle to the shared db.
         if self._conn is not None and self._conn_pid == os.getpid():
@@ -271,7 +241,6 @@ class UsageLedger:
                 self._migrate_legacy_job_schema(conn)
                 self._migrate_usage_columns(conn)
                 conn.executescript(_SCHEMA)
-                self._migrate_job_admission_columns(conn)
             except sqlite3.Error as exc:
                 try:
                     conn.rollback()
@@ -399,7 +368,8 @@ class UsageLedger:
             columns = {name: "TEXT" for name in (
                 "job_id", "budget_scope_id", "reservation_id", "request_id", "goal_id",
                 "goal_session_id", "execution_id")}
-            columns.update(goal_revision="INTEGER", tokens_known="INTEGER NOT NULL DEFAULT 1")
+            columns.update(goal_revision="INTEGER", tokens_known="INTEGER NOT NULL DEFAULT 1",
+                           first_token_ms="INTEGER", first_text_ms="INTEGER")
             for name, definition in columns.items():
                 if existing and name not in existing:
                     conn.execute(f"ALTER TABLE usage_events ADD COLUMN {name} {definition}")
@@ -407,71 +377,6 @@ class UsageLedger:
             if request_columns and "observed_json" not in request_columns:
                 conn.execute("ALTER TABLE usage_requests ADD COLUMN observed_json TEXT")
             conn.commit()
-        except Exception:
-            conn.rollback()
-            raise
-
-    @staticmethod
-    def _migrate_job_admission_columns(conn: sqlite3.Connection) -> None:
-        conn.execute("BEGIN IMMEDIATE")
-        try:
-            existing = {
-                str(row[1])
-                for row in conn.execute("PRAGMA table_info(job_admissions)")
-            }
-            changed = False
-
-            def add_column(name: str, definition: str) -> None:
-                nonlocal changed
-                columns = {
-                    str(row[1])
-                    for row in conn.execute("PRAGMA table_info(job_admissions)")
-                }
-                if columns and name not in columns:
-                    conn.execute(
-                        f"ALTER TABLE job_admissions ADD COLUMN {name} {definition}"
-                    )
-                    changed = True
-
-            if existing:
-                add_column("caller_session_id", "TEXT")
-                add_column(
-                    "dispatch_ready", "INTEGER NOT NULL DEFAULT 1"
-                )
-                add_column(
-                    "terminal_blocked", "INTEGER NOT NULL DEFAULT 0"
-                )
-                for name, definition in (
-                    ("terminal_block_command_id", "TEXT"),
-                    ("terminal_block_phase", "TEXT"),
-                    ("terminal_block_expires_at", "REAL"),
-                    (
-                        "terminal_block_prior_dispatch_ready",
-                        "INTEGER CHECK (terminal_block_prior_dispatch_ready IN (0, 1))",
-                    ),
-                ):
-                    add_column(name, definition)
-                add_column("borrowed_parent_job_id", "TEXT")
-                add_column("resume_parent_msg_id", "TEXT")
-                add_column("queue_state", "TEXT NOT NULL DEFAULT 'queued'")
-                add_column("resume_command_id", "TEXT")
-                add_column(
-                    "lease_generation", "INTEGER NOT NULL DEFAULT 0"
-                )
-                migrated = conn.execute(
-                    """UPDATE job_admissions
-                       SET terminal_block_phase = 'recovery',
-                           terminal_block_expires_at = ?,
-                           terminal_block_prior_dispatch_ready = COALESCE(
-                               terminal_block_prior_dispatch_ready, 0
-                           )
-                       WHERE terminal_blocked = 1
-                         AND terminal_block_phase IS NULL""",
-                    (time.time() + 30.0,),
-                )
-                changed = changed or migrated.rowcount > 0
-            if changed or existing:
-                conn.commit()
         except Exception:
             conn.rollback()
             raise
@@ -489,17 +394,110 @@ class UsageLedger:
 
     @contextmanager
     def immediate(self):
-        """Serialize one short cross-process accounting transaction."""
+        """Serialize one short cross-process accounting transaction.
+
+        Work given to :meth:`after_commit` runs once the transaction is durable.
+        """
         with self._lock:
             conn = self._connect()
             conn.execute("BEGIN IMMEDIATE")
+            self._after_commit = []
             try:
                 yield conn
             except Exception:
                 conn.rollback()
+                self._after_commit = []
                 raise
             else:
                 conn.commit()
+                work, self._after_commit = self._after_commit, []
+                for step in work:
+                    step()
+
+    def after_commit(self, step: Callable[[], Any]) -> None:
+        """Run ``step`` after the open :meth:`immediate` transaction commits."""
+        self._after_commit.append(step)
+
+    def run_tables(self) -> Any:
+        """The run tables beside this usage file."""
+        if self._run_tables is None:
+            if _run_tables_for_path is None:
+                raise RuntimeError("no run tables are registered for the usage ledger")
+            self._run_tables = _run_tables_for_path(self._path())
+        return self._run_tables
+
+    @staticmethod
+    def ensure_job_session(tables, job_id: str) -> None:
+        """Bring a Job's session into memory; its budget scope says which it is."""
+        scope = tables.first("budget_scopes", job_id=job_id)
+        if scope is not None:
+            tables.tables.ensure_session(scope["session_id"])
+
+    def open_accounting_reader(self) -> None:
+        """Make sure the file exists before anything reads it under the run tables."""
+        with self._lock:
+            self._connect()
+
+    def _accounting_rows(self, sql: str, parameters: tuple) -> list[sqlite3.Row]:
+        with self._reader_lock:
+            if self._reader is None or self._reader_pid != os.getpid():
+                self._reader = sqlite3.connect(
+                    str(self._path()), timeout=_BOOTSTRAP_BUSY_TIMEOUT_MS / 1000,
+                    check_same_thread=False,
+                )
+                self._reader.row_factory = sqlite3.Row
+                self._reader_pid = os.getpid()
+            return self._reader.execute(sql, parameters).fetchall()
+
+    def scope_usage_events(self, scope_ids: Iterable[str]) -> list[sqlite3.Row]:
+        """Tokens and cost of every event charged to these budget scopes."""
+        ids = tuple(scope_ids)
+        if not ids:
+            return []
+        marks = ", ".join("?" for _ in ids)
+        return self._accounting_rows(
+            "SELECT total_tokens, cost_total, cost_source FROM usage_events "
+            f"WHERE budget_scope_id IN ({marks})", ids,
+        )
+
+    def reservation_events(self, reservation_ids: Iterable[str]) -> list[sqlite3.Row]:
+        """Events already recorded against these reservations."""
+        ids = tuple(reservation_ids)
+        if not ids:
+            return []
+        marks = ", ".join("?" for _ in ids)
+        return self._accounting_rows(
+            "SELECT event_id, reservation_id, tokens_known, cost_source FROM usage_events "
+            f"WHERE reservation_id IN ({marks})", ids,
+        )
+
+    def stored_run_table_rows(self) -> Optional[dict[str, list[dict]]]:
+        """Run-table rows still in this file, by table; None once they are gone."""
+        with self._lock:
+            conn = self._connect()
+            marks = ", ".join("?" for _ in MOVED_TABLES)
+            present = {str(row[0]) for row in sqlite3.Connection.execute(
+                conn, f"SELECT name FROM sqlite_master WHERE type = 'table' AND name IN ({marks})",
+                MOVED_TABLES,
+            )}
+            if not present:
+                return None
+            return {
+                table: [dict(row) for row in conn.execute(f"SELECT * FROM {table}")]
+                for table in MOVED_TABLES if table in present
+            }
+
+    def drop_stored_run_tables(self) -> None:
+        with self._lock:
+            conn = self._connect()
+            conn.execute("BEGIN IMMEDIATE")
+            try:
+                for table in MOVED_TABLES:
+                    conn.execute(f"DROP TABLE IF EXISTS {table}")
+            except Exception:
+                conn.rollback()
+                raise
+            conn.commit()
 
     # write
 
@@ -518,25 +516,44 @@ class UsageLedger:
         conn.execute(sql, row)
 
     @staticmethod
-    def start_provider_reservation(conn, reservation_id: str) -> None:
-        if conn.execute("""SELECT 1 FROM usage_reservations
-                WHERE reservation_id IN (?, ?) AND state = 'reserved'
-                  AND expires_at IS NOT NULL AND expires_at <= ?""",
-                (reservation_id + ":token", reservation_id + ":cost", time.time())).fetchone():
+    def check_reservation_startable(tables, reservation_id: str) -> None:
+        ids = [reservation_id + ":token", reservation_id + ":cost"]
+        now = time.time()
+        if tables.exists(
+            "usage_reservations", reservation_id=ids, state="reserved",
+            where=lambda row: row["expires_at"] is not None and row["expires_at"] <= now,
+        ):
             raise RuntimeError("Provider reservation expired before dispatch")
-        changed = conn.execute("""UPDATE usage_reservations
-            SET state = 'started', request_started_at = ?
-            WHERE reservation_id IN (?, ?) AND state = 'reserved'""",
-            (time.time(), reservation_id + ":token", reservation_id + ":cost")).rowcount
-        if not changed and conn.execute("""SELECT 1 FROM usage_reservations
-                WHERE reservation_id IN (?, ?) AND state IN ('started','settled')""",
-                (reservation_id + ":token", reservation_id + ":cost")).fetchone() is None:
+        if not tables.exists("usage_reservations", reservation_id=ids, state=("reserved", "started", "settled")):
             raise KeyError(reservation_id)
 
     @staticmethod
-    def attribute_provider_event(conn, reservation_id: str, event: UsageEvent) -> UsageEvent:
-        rows = conn.execute("""SELECT job_id, budget_scope_id, state FROM usage_reservations
-            WHERE reservation_id IN (?, ?)""", (reservation_id + ":token", reservation_id + ":cost")).fetchall()
+    def mark_reservation_started(tables, reservation_id: str) -> None:
+        tables.update(
+            "usage_reservations", {"state": "started", "request_started_at": time.time()},
+            reservation_id=[reservation_id + ":token", reservation_id + ":cost"], state="reserved",
+        )
+
+    def start_provider_reservation(self, conn, reservation_id: str) -> None:
+        """Refuse now; mark the reservation started once the caller's transaction commits.
+
+        Stopping between the two leaves a reservation that expires and is
+        released: no provider has been called yet.
+        """
+        del conn
+        run_tables = self.run_tables()
+        self.check_reservation_startable(run_tables.handle, reservation_id)
+
+        def mark_started() -> None:
+            with run_tables.transaction() as tables:
+                self.mark_reservation_started(tables, reservation_id)
+
+        self.after_commit(mark_started)
+
+    def attribute_provider_event(self, reservation_id: str, event: UsageEvent) -> UsageEvent:
+        rows = self.run_tables().handle.rows(
+            "usage_reservations", reservation_id=[reservation_id + ":token", reservation_id + ":cost"],
+        )
         if not rows:
             raise KeyError(reservation_id)
         if any(row["state"] == "released" for row in rows):
@@ -545,21 +562,39 @@ class UsageLedger:
                                         "reservation_id": reservation_id + ":token"})
 
     def settle_provider_reservation(self, conn, reservation_id: str, event: UsageEvent):
-        attributed = self.attribute_provider_event(conn, reservation_id, event)
+        """Record the event in this transaction and settle the reservation after it commits."""
+        attributed = self.attribute_provider_event(reservation_id, event)
         self.append_in_transaction(conn, attributed)
         # A known cost with missing tokens cannot release token exposure, and
         # known tokens cannot make an unknown price free.
-        for kind, known in (("token", event.tokens_known), ("cost", event.cost_source != "unknown")):
-            if known:
-                conn.execute("""UPDATE usage_reservations SET state = 'settled', settled_event_id = ?
-                    WHERE reservation_id = ? AND state IN ('reserved','started')""",
-                    (attributed.event_id, reservation_id + ":" + kind))
+        known = [
+            reservation_id + ":" + kind
+            for kind, is_known in (("token", event.tokens_known), ("cost", event.cost_source != "unknown"))
+            if is_known
+        ]
+        run_tables = self.run_tables()
+
+        def settle() -> None:
+            with run_tables.transaction() as tables:
+                self.mark_reservations_settled(tables, known, attributed.event_id)
+
+        self.after_commit(settle)
         return attributed
+
+    @staticmethod
+    def mark_reservations_settled(tables, reservation_ids: list[str], event_id: str) -> int:
+        return tables.update(
+            "usage_reservations", {"state": "settled", "settled_event_id": event_id},
+            reservation_id=reservation_ids, state=("reserved", "started"),
+        )
 
     def flush_request(self, conn, row):
         event = UsageEvent.model_validate_json(row["receipt_json"])
-        reservation = json.loads(row["metadata_json"]).get("job_reservation_id")
+        metadata = json.loads(row["metadata_json"])
+        reservation = metadata.get("job_reservation_id")
         if reservation:
+            if metadata.get("job_id"):
+                self.ensure_job_session(self.run_tables().handle, metadata["job_id"])
             event = self.settle_provider_reservation(conn, reservation, event)
         else:
             self.append_in_transaction(conn, event)
@@ -579,6 +614,25 @@ class UsageLedger:
             conn.commit()
 
     # read
+
+    def calls(self, *, since: float, call_kinds: Iterable[str]) -> list[dict]:
+        """Every call of ``call_kinds`` since ``since`` whose tokens are known,
+        oldest first: when, which conversation, which model, and its tokens."""
+        kinds = tuple(call_kinds)
+        if not kinds:
+            return []
+        marks = ", ".join("?" for _ in kinds)
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                "SELECT ts, session_id, parent_session_id, call_kind, provider, api, "
+                "model_id, input_tokens, output_tokens, cache_read_tokens, "
+                "cache_write_tokens FROM usage_events "
+                f"WHERE ts >= ? AND tokens_known = 1 AND call_kind IN ({marks}) "
+                "ORDER BY ts",
+                (since, *kinds),
+            ).fetchall()
+        return [dict(r) for r in rows]
 
     def goal_usage(self, session_id: str, goal_id: str) -> dict:
         """One snapshot of known subtotals and unresolved request counts."""
@@ -704,6 +758,49 @@ class UsageLedger:
             ).fetchall()
         return [dict(r) for r in rows]
 
+    def append_probe_event(
+        self,
+        *,
+        provider: str,
+        kind: str,
+        method: str,
+        url: str,
+        status: Optional[int],
+        elapsed_ms: int,
+        error: Optional[str],
+        ts: Optional[float] = None,
+    ) -> None:
+        """Record one request sent on OpenProgram's own behalf (see ``probe_events``).
+        Rows older than :data:`PROBE_EVENTS_KEPT_S` go as new ones come."""
+        import uuid
+        now = time.time() if ts is None else ts
+        with self._lock:
+            conn = self._connect()
+            conn.execute("DELETE FROM probe_events WHERE ts < ?", (now - PROBE_EVENTS_KEPT_S,))
+            conn.execute(
+                "INSERT INTO probe_events (event_id, ts, provider, kind, method, url, "
+                "status, elapsed_ms, error) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (uuid.uuid4().hex, now, provider, kind, method, url, status, elapsed_ms, error),
+            )
+            conn.commit()
+
+    def probe_events(
+        self, *, since: float, provider: Optional[str] = None, limit: int = 50
+    ) -> list[dict]:
+        """Requests sent on OpenProgram's own behalf since ``since``, newest first."""
+        where, args = "ts >= ?", [since]
+        if provider is not None:
+            where += " AND provider = ?"
+            args.append(provider)
+        with self._lock:
+            conn = self._connect()
+            rows = conn.execute(
+                "SELECT ts, provider, kind, method, url, status, elapsed_ms, error "
+                f"FROM probe_events WHERE {where} ORDER BY ts DESC LIMIT ?",
+                (*args, limit),
+            ).fetchall()
+        return [dict(r) for r in rows]
+
     def session_activity(self, *, since: float) -> list[dict]:
         """Provider calls since ``since`` per session and model: how many,
         and when the latest one was recorded. Newest activity first."""
@@ -739,46 +836,36 @@ class UsageLedger:
         }
 
     def resource_counts(self, session_id: str, job_id: str) -> dict:
-        with self._lock:
-            conn = self._connect()
-            counts = conn.execute(
-                """SELECT
-                    SUM(CASE WHEN state IN ('live','stopping') THEN 1 ELSE 0 END),
-                    SUM(CASE WHEN state IN ('preparing','queued') THEN 1 ELSE 0 END),
-                    COUNT(*)
-                   FROM job_admissions WHERE session_id = ?""",
-                (session_id,),
-            ).fetchone()
-            row = conn.execute(
-                "SELECT state, queue_state, resume_command_id, admitted_seq FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
+        run_tables = self.run_tables()
+        tables = run_tables.handle
+        run_tables.ensure_session(session_id)
+        self.ensure_job_session(tables, job_id)
+        with run_tables.lock:
+            admissions = tables.rows("job_admissions", session_id=session_id)
+            row = tables.first("job_admissions", job_id=job_id)
             queue_position = None
             if row is not None and row["state"] == "queued":
-                queue_position = conn.execute(
-                    """SELECT COUNT(*) FROM job_admissions
-                       WHERE state = 'queued' AND admitted_seq <= ?""",
-                    (row["admitted_seq"],),
-                ).fetchone()[0]
-            reservations = conn.execute(
-                """SELECT COALESCE(SUM(reserved_tokens), 0),
-                          COALESCE(SUM(reserved_cost_microusd), 0)
-                   FROM usage_reservations
-                   WHERE job_id = ? AND state IN ('reserved','started')""",
-                (job_id,),
-            ).fetchone()
+                seat = row["admitted_seq"]
+                queue_position = tables.count(
+                    "job_admissions", state="queued", where=lambda item: item["admitted_seq"] <= seat,
+                )
+            reservations = tables.rows("usage_reservations", job_id=job_id, state=("reserved", "started"))
         return {
             "resource_state": (
                 row["queue_state"] if row is not None and row["state"] == "queued"
                 else row["state"] if row is not None else "untracked"
             ),
             "resume_command_id": row["resume_command_id"] if row is not None else None,
-            "session_live": {"used": int(counts[0] or 0), "limit": None},
-            "session_queued": {"used": int(counts[1] or 0), "limit": None},
-            "session_jobs": {"used": int(counts[2] or 0), "limit": None},
+            "session_live": {
+                "used": sum(item["state"] in ("live", "stopping") for item in admissions), "limit": None,
+            },
+            "session_queued": {
+                "used": sum(item["state"] in ("preparing", "queued") for item in admissions), "limit": None,
+            },
+            "session_jobs": {"used": len(admissions), "limit": None},
             "queue_position": queue_position,
-            "reserved_tokens": int(reservations[0] or 0),
-            "reserved_cost_microusd": int(reservations[1] or 0),
+            "reserved_tokens": sum(int(item["reserved_tokens"] or 0) for item in reservations),
+            "reserved_cost_microusd": sum(int(item["reserved_cost_microusd"] or 0) for item in reservations),
         }
 
     def close(self) -> None:
@@ -787,6 +874,12 @@ class UsageLedger:
                 self._conn.close()
                 self._conn = None
                 self._conn_pid = None
+            self._run_tables = None
+        with self._reader_lock:
+            if self._reader is not None:
+                self._reader.close()
+                self._reader = None
+                self._reader_pid = None
 
 
 # Process-wide default ledger. Lazily connects on first append/query.

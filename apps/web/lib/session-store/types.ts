@@ -3,6 +3,8 @@
 // Zustand store). Re-exported from ./index so `@/lib/session-store`
 // import paths are unchanged.
 
+import type { RowKind, RowOrigin } from "../chat/transcript/wire-types.generated";
+
 export type MessageStatus =
   | "pending"
   | "streaming"
@@ -64,7 +66,7 @@ export interface ChatToolCall {
 
 /** A "system needs a decision" request surfaced in the composer — the
  *  `data` payload of a question.asked frame (runtime.ask / confirm /
- *  tool approval). See composer modes (docs/reference/design/ui/composer/composer-interaction-modes.md). */
+ *  tool approval). See composer modes (docs/reference/design/ui/composer/composer-interaction-modes.html). */
 export interface PendingDecision {
   id: string;
   /** Owning conversation; output cards never target the active composer. */
@@ -163,25 +165,44 @@ export interface NoticeItem {
   line: string;
 }
 
+/** An automatic retry the reply is waiting on (chat-turn-visual-spec.html §1). */
+export interface RetryStatus {
+  attempt: number;
+  maxAttempts?: number;
+  /** transport | network_wait | output_limit | incomplete_response | a structured-output issue code */
+  reason?: string;
+  /** Wait before the next attempt, counted from `receivedAt`. */
+  delayMs?: number;
+  /** What failed, one short line. */
+  error?: string;
+  /** When the client received the notice (ms since epoch). */
+  receivedAt?: number;
+}
+
 export interface ChatMsg {
   id: string;                  // msg_id from server, or local generated for user msgs
   role: "user" | "assistant" | "system";
   content: string;             // final assistant text / user text
   /** User turns: pasted spans shown collapsed (lib/chat/send/paste-elements.ts). */
   pastedElements?: import("../chat/send/paste-elements.ts").PastedTextElement[];
+  /** An always-on report posted as a message: its id, kind, where it came
+   *  from and title. Older reports have no title. */
+  reportId?: string;
+  reportKind?: string;
+  reportSource?: string;
+  reportTitle?: string;
   /** Event-divider rows (compaction / snip). Other system rows omit this. */
   kind?: "compaction" | "snip" | "event";
   /** ``card`` = fold summary at the covered segment; ``event`` = execution marker. */
   slot?: "card" | "event";
   /** Covered-message count on reconstructed compaction rows. */
   summarisedCount?: number;
-  coversIds?: string[];
   tokensBefore?: number;
   tokensAfter?: number;
   /** Reasoning tokens streamed under a collapsible "Thinking" block. */
   thinking?: string;
   /** Live status for an automatic retry within this assistant turn. */
-  retryStatus?: { attempt: number; maxAttempts?: number; reason?: string; delayMs?: number };
+  retryStatus?: RetryStatus;
   /** Tool calls made during this assistant turn, in emit order. */
   tools?: ChatToolCall[];
   status?: MessageStatus;
@@ -209,6 +230,21 @@ export interface ChatMsg {
   steering?: boolean;
   /** Rendered at an ordered boundary inside this reply, not twice. */
   steeringReplyId?: string;
+  /** Which branch of the row dispatch this row takes: the server's word on
+   *  its rows, the local writer's on a local row. Every row carries one. */
+  rowKind: RowKind;
+  /** Server rows, on a card or child of a reply: the block that owns it, null when none does. */
+  blockId?: string | null;
+  /** Server rows: the compaction card that folds this row. */
+  coveredBy?: string;
+  /** Server rows, on user rows: who wrote it. */
+  origin?: RowOrigin;
+  /** The send this row belongs to: a local row names its own, a server row the one it answers. */
+  clientRequestId?: string;
+  /** Local rows only: where the row is drawn, since it belongs to no turn. */
+  localAnchor?: "tail" | { afterRowId: string };
+  /** Server rows, on a continuation: the replies a restart cut, oldest first. */
+  continues?: string[];
   /** Pass-through of the wire ``predecessor`` (conversation-chain
    *  edge) so we can correlate internal-source msgs (e.g.
    *  job_followup) and runtime/attach rows with the turn they hang
@@ -267,6 +303,8 @@ export interface ChatMsg {
    *  ``function === "attach"``. Drives the AttachCard rendering +
    *  drawer open behavior. */
   attach?: {
+    /** The tool call that started this agent, when its writer recorded it. */
+    tool_call_id?: string;
     session_id?: string;
     head_id?: string;
     commit_id?: string;
@@ -308,18 +346,19 @@ export interface ChatMsg {
   agentId?: string;
   /** Runtime-block child rows belonging to this assistant turn (LLM-
    *  issued Agent method calls — gui_agent).
-   *  Populated at the data-loading layer (conv-mapper for
-   *  history, chat-stream for live runs) so the parent assistant
-   *  bubble can render them INSIDE its own card instead of as
-   *  standalone top-level rows. Top-level MessageList skips any row
+   *  The server projection nests them (transcript/children.py) so the
+   *  parent assistant bubble renders them INSIDE its own card instead
+   *  of as standalone top-level rows. Top-level MessageList skips any row
    *  that lives here. Only assistant rows ever populate this. */
   runtimeChildren?: ChatMsg[];
+  /** A runtime child's tool call, when its record names one. */
+  toolCallId?: string;
   /** Spawned/attach cards anchored to this assistant turn（在哪调用就
    *  画在哪）: each row records a task() spawn made DURING this turn.
    *  The bubble renders each card right after the tool block that
-   *  spawned it (FIFO over blocks with tool==="agent"), i.e. thinking →
-   *  tool call → Spawned card → … → final text. Populated by
-   *  conv-mapper; rows living here are skipped at the top level. */
+   *  spawned it (the block its blockId names), i.e. thinking →
+   *  tool call → Spawned card → … → final text. The server projection
+   *  nests them; rows living here are skipped at the top level. */
   attachCards?: ChatMsg[];
   /** caller 链折出来的调用树（agent 调函数的层级，TNode 形状）：
    *  时间线的 FunctionStep 按工具名 FIFO 认领并递归渲染。 */
@@ -353,6 +392,10 @@ export interface TurnFileSummary {
   added: number | null;
   removed: number | null;
   recoverability?: "exact" | "unavailable";
+  /** Set by the chat, never the server: the list includes files from a part
+   *  of a restart-joined reply other than the last. Undo and the server's
+   *  file list work on one turn, so neither can stand for this list. */
+  spansTurns?: boolean;
 }
 
 /** A source the provider cited for a span of a text block. `start`/`end`
@@ -367,6 +410,9 @@ export interface Citation {
 export interface AssistantBlock {
   /** "restart" marks where a worker restart cut the reply off. */
   type: "thinking" | "text" | "tool" | "steering" | "restart";
+  /** Server rows: this block's stable id and its stored position. */
+  id?: string;
+  index?: number;
   timestamp?: number;
   /** thinking / text payload */
   text?: string;
@@ -424,6 +470,8 @@ export interface ConvSummary {
 export interface RunningTask {
   session_id: string;
   msg_id: string;
+  /** The reply row the server writes for this turn, as the server names it. */
+  reply_id?: string;
   func_name?: string;
   started_at?: number;
   execution_id?: string;
@@ -448,17 +496,16 @@ export interface TreeNode {
 /**
  * Normalized shape.
  *
- * ``messagesById`` holds every message ever observed, keyed by its id.
- * ``messageOrder[sessionId]`` holds the ordered id list for one
- * conversation. Split this way so a streaming delta only touches one
- * entry in ``messagesById`` and leaves ``messageOrder`` untouched —
+ * ``rowsByView[viewKey]`` holds one view's rows, keyed by id.
+ * ``messageOrder[viewKey]`` holds that view's ordered id list. Split this
+ * way so a streaming delta only touches one row and leaves
+ * ``messageOrder`` untouched —
  * components that subscribe to the id list (e.g. the scroll container)
  * don't re-render per token, only bubbles subscribed to *their own*
  * id do. Matches the pattern Claude.ai / ChatGPT webapps use.
  *
- * Cross-conversation cleanup: removing a conversation drops its ids
- * from the order map AND removes the referenced messages from
- * ``messagesById`` (no dangling entries).
+ * Cross-conversation cleanup: removing a conversation drops its views
+ * from both maps.
  */
 /** Per-agent settings state, mirrors ``window._agentSettings``
  *  shape. The TopBar reads this to render the Chat / Exec badges; legacy

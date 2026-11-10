@@ -396,11 +396,6 @@ def _action_run_doctor() -> None:
     )
 
 
-def _action_list_pools() -> None:
-    from .catalog import _cmd_list
-    _cmd_list(profile_filter=None, as_json=False)
-
-
 def _action_accounts_menu() -> None:
     from openprogram.models.auth.account.accounts import get_account_manager
     from openprogram.models.auth.account.accounts import AuthConfigError

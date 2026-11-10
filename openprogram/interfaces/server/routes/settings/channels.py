@@ -8,6 +8,10 @@ Accounts CRUD:
   POST   /api/channels/accounts          {channel, account_id, token}
   DELETE /api/channels/accounts/{channel}/{account_id}
 
+Group chat access:
+  POST   /api/channels/access/group-users   {channel, account_id, user_id, access}
+  DELETE /api/channels/access/group-users/{channel}/{account_id}/{user_id}
+
 Bindings CRUD:
   GET    /api/channels/bindings
   POST   /api/channels/bindings          {agent_id, channel, account_id?, peer?, peer_kind?}
@@ -41,6 +45,13 @@ class AddAccountRequest(BaseModel):
     token: str
 
 
+class AddGroupUserRequest(BaseModel):
+    channel: str
+    account_id: str = "default"
+    user_id: str
+    access: str
+
+
 class AddBindingRequest(BaseModel):
     agent_id: str
     channel: str
@@ -71,22 +82,39 @@ def register(app: FastAPI) -> None:
     # ----- health (heartbeat badge) -----------------------------------------
     @app.get("/api/channels/{platform}/{account_id}/status")
     def channel_status(platform: str, account_id: str):
-        from openprogram.interfaces.channels._heartbeats import get_last_seen
+        from openprogram.interfaces.channels import accounts as _acc
+        from openprogram.interfaces.channels._heartbeats import (
+            get_last_seen,
+            get_stop,
+            is_retrying,
+        )
 
-        last = get_last_seen(platform, account_id)
-        now = time.time()
-        if last is None:
-            # Never seen — either the adapter isn't enabled/configured,
-            # or the worker hasn't gotten around to spawning its
-            # thread yet. UI shows yellow ("connecting") for this.
+        def not_running(state: str) -> JSONResponse:
             return JSONResponse(
                 content={
                     "alive": False,
-                    "state": "unknown",
+                    "state": state,
                     "last_seen_at": None,
                     "age_seconds": None,
                 }
             )
+
+        # In the order that decides what the user has to do next.
+        if not _acc.is_enabled(platform, account_id):
+            return not_running("off")
+        if not _acc.is_configured(platform, account_id):
+            return not_running("no_token")
+        stop_reason = get_stop(platform, account_id)
+        if stop_reason is not None:
+            return not_running(stop_reason)
+        if is_retrying(platform, account_id):
+            return not_running("reconnecting")
+        last = get_last_seen(platform, account_id)
+        now = time.time()
+        if last is None:
+            # Usable account with no thread yet: the worker starts it
+            # on its next sync, or the worker is not running.
+            return not_running("unknown")
         age = now - last
         alive = age < _STALE_AFTER_SEC
         return JSONResponse(
@@ -208,8 +236,50 @@ def register(app: FastAPI) -> None:
                     {"user_id": user_id, **entry}
                     for user_id, entry in sorted(data["pending"].items())
                 ],
+                "group_full_access": [
+                    {"user_id": user_id, **entry}
+                    for user_id, entry in sorted(data["group_full_access"].items())
+                ],
+                "group_chat_only": [
+                    {"user_id": user_id, **entry}
+                    for user_id, entry in sorted(data["group_chat_only"].items())
+                ],
             })
         return JSONResponse(content={"accounts": rows})
+
+    @app.post("/api/channels/access/group-users")
+    def add_group_user(request: Request, body: AddGroupUserRequest):
+        _require_local_request(request)
+        from openprogram.interfaces.channels import _access
+        from openprogram.interfaces.channels import accounts as _acc
+
+        channel = body.channel.strip().lower()
+        account_id = body.account_id.strip() or "default"
+        if channel not in _access.GROUP_CHANNELS or _acc.get(channel, account_id) is None:
+            raise HTTPException(status_code=404, detail="no such group-capable account")
+        try:
+            user_id = _access.add_group_user(channel, account_id, body.user_id, body.access)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        return JSONResponse(content={"ok": True, "user_id": user_id})
+
+    @app.delete("/api/channels/access/group-users/{channel}/{account_id}/{user_id}")
+    def remove_group_user(
+        request: Request,
+        channel: str,
+        account_id: str,
+        user_id: str,
+    ):
+        _require_local_request(request)
+        from openprogram.interfaces.channels import _access
+
+        try:
+            removed = _access.remove_group_user(channel, account_id, user_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if not removed:
+            raise HTTPException(status_code=404, detail="group user not found")
+        return JSONResponse(content={"ok": True, "user_id": user_id})
 
     @app.post("/api/channels/access/approve")
     def approve_pairing(request: Request, body: ApprovePairingRequest):

@@ -11,7 +11,6 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
-import sqlite3
 import threading
 import time
 from types import SimpleNamespace
@@ -241,7 +240,7 @@ def _agent_execution(
     execution = store.create_execution(
         execution_id=execution_id,
         run_id=f"run-{execution_id}",
-        session_id=f"session-{execution_id}",
+        session_id=f"session-{execution_id}-{tmp_path.name}",
         revision_id=revision.revision_id,
         capabilities=CapabilitySet(
             pause=True,
@@ -259,7 +258,6 @@ def _agent_execution(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="agent-state-owner",
-        ttl_seconds=30,
         attempt_id=f"attempt-{execution_id}",
     )
     active, running = attempts.activate(
@@ -382,72 +380,6 @@ def test_agent_state_blob_ownership_and_gc_preserve_published_references(tmp_pat
     assert blobs.get(second_blob.ref, execution_id=second.execution_id) is not None
 
 
-@pytest.mark.parametrize(
-    ("safe_point_kind", "action_id"),
-    [
-        ("agent.provider.decision.after", "provider-action-1"),
-        ("agent.tool.action.after", "tool-action-1"),
-    ],
-)
-def test_agent_terminal_receipt_blob_checkpoint_frontier_roll_back_atomically(
-    tmp_path, safe_point_kind, action_id
-):
-    """A fault after receipt persistence must roll back the whole safe point."""
-
-    store, _attempts, _active, execution = _agent_execution(tmp_path)
-    control = RuntimeControlService(store, AttemptStore(store), DriverRegistry())
-    from openprogram.runtime.execution.effects import EffectClassification
-    from openprogram.runtime.execution.safe_points import AgentSafePointConflict
-
-    effect = control.effects.register(
-        effect_id=f"effect-{action_id}",
-        execution_id=execution.execution_id,
-        attempt_id=execution.current_attempt_id,
-        action_id=action_id,
-        classification=EffectClassification.IDEMPOTENT,
-        idempotency_key=f"{execution.execution_id}:{action_id}",
-        metadata={"kind": safe_point_kind},
-    )
-    control.effects.mark_dispatched(effect.effect_id, expected_status=effect.status)
-    before = store.get_execution(execution.execution_id)
-    assert before is not None
-    before_events = store.list_events(execution.execution_id)
-    terminal_receipt = (
-        {"provider_request_id": f"request-{action_id}"}
-        if "provider" in safe_point_kind
-        else {"tool_invocation_id": f"invocation-{action_id}", "result": "ok"}
-    )
-
-    with pytest.raises(AgentSafePointConflict) as injected:
-        control.commit_agent_safe_point(
-            execution_id=execution.execution_id,
-            attempt_id=execution.current_attempt_id,
-            generation=execution.owner_lease["generation"],
-            expected_version=before.status_version,
-            safe_point_kind=safe_point_kind,
-            frontier=({"step_id": action_id, "phase": "after_provider" if "provider" in safe_point_kind else "after_tool"},),
-            state_refs={},
-            effect_id=effect.effect_id,
-            terminal_receipt=terminal_receipt,
-            receipt_blob=b'{"receipt":"terminal"}',
-            fault_at="after_receipt_blob",
-        )
-    assert injected.value.code == "injected_failure"
-
-    after = store.get_execution(execution.execution_id)
-    assert after is not None
-    assert after.status_version == before.status_version
-    assert after.checkpoint_head_id is None
-    assert control.effects.get(effect.effect_id).status.value == "dispatched"
-    assert store.list_events(execution.execution_id) == before_events
-    assert not control.state_blobs.list(execution.execution_id)
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM checkpoints WHERE execution_id = ?",
-            (execution.execution_id,),
-        ).fetchone()[0] == 0
-
-
 def _admitted_agent_execution(tmp_path, *, execution_id: str = "exec-restart-1"):
     store = ExecutionStore(tmp_path / "admitted-agent.sqlite3")
     revision = store.create_revision(
@@ -456,7 +388,7 @@ def _admitted_agent_execution(tmp_path, *, execution_id: str = "exec-restart-1")
     execution = store.admit_execution(
         execution_id=execution_id,
         run_id=f"run-{execution_id}",
-        session_id=f"session-{execution_id}",
+        session_id=f"session-{execution_id}-{tmp_path.name}",
         revision_id=revision.revision_id,
         input_ref=f"input:{execution_id}",
         input_hash=f"hash:{execution_id}",
@@ -489,7 +421,6 @@ def _admitted_agent_execution(tmp_path, *, execution_id: str = "exec-restart-1")
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id=f"owner-{execution_id}",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -497,6 +428,13 @@ def _admitted_agent_execution(tmp_path, *, execution_id: str = "exec-restart-1")
         expected_execution_version=reserved.status_version,
     )
     return store, attempts, active, running
+
+
+def checkpoint_snapshot(store, execution):
+    from openprogram.runtime.execution.agent_journal import latest_pointer, load_journal
+
+    pointer = latest_pointer(execution.session_id, execution.execution_id)
+    return load_journal(execution.session_id, pointer).snapshot
 
 
 def _real_provider_safe_point(tmp_path, *, tool_calls=True, pause=True, expose_hook=None, expected_status=None):
@@ -567,103 +505,15 @@ def _real_provider_safe_point(tmp_path, *, tool_calls=True, pause=True, expose_h
     }) is pause
     paused = store.get_execution(running.execution_id)
     assert paused is not None and paused.status is (expected_status or (ExecutionStatus.PAUSED if pause else ExecutionStatus.RUNNING))
-    checkpoint = control.checkpoints.get(paused.checkpoint_head_id)
+    if pause:
+        checkpoint = control.checkpoints.get(paused.checkpoint_head_id)
+    else:
+        checkpoint = control.publish_agent_position(
+            attempt_id=active.attempt_id, generation=active.generation, fragment=hook._fragment(control),
+        )
+        paused = store.get_execution(running.execution_id)
     assert checkpoint is not None
     return store, control, active, paused, checkpoint, command
-
-
-def test_real_provider_callback_persists_v1_content_addressed_checkpoint(tmp_path):
-    store, _control, active, paused, checkpoint, command = _real_provider_safe_point(tmp_path)
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-
-    state = AgentCheckpointV1.load(store, checkpoint)
-    stored_command = store.get_command(command.command_id)
-    assert stored_command is not None and stored_command.status is CommandStatus.APPLIED
-    assert paused.owner_lease == {}
-    assert checkpoint.created_by_attempt_id == active.attempt_id
-    assert state.payload["turn"] == {
-        "user_message_id": "user-anchor",
-        "assistant_message_id": "assistant-anchor",
-        "base_history_head_id": "user-anchor",
-    }
-    assert state.payload["current_decision"]["tool_call_ids"] == ["tool-1"]
-    assert state.payload["next_tool_index"] == 0
-    assert state.payload["assistant_message_delta_ref"]["ref"].startswith("execstate://sha256/")
-    assert state.payload["resolved_model_system_tool_snapshot_ref"]["media_type"] == "application/json"
-
-
-def test_published_agent_checkpoint_children_survive_terminal_gc_and_load(tmp_path):
-    """Terminal GC keeps every blob reachable through the Agent schema."""
-    store, control, _active, paused, checkpoint, _command = _real_provider_safe_point(tmp_path)
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-
-    state = AgentCheckpointV1.load(store, checkpoint)
-    child_refs = {
-        descriptor["ref"] for descriptor in state.payload["state_refs"].values()
-    }
-    with store._connect() as connection:
-        registered = {
-            row["ref"] for row in connection.execute(
-                "SELECT ref FROM execution_state_blob_refs WHERE execution_id = ? "
-                "AND reference_kind = 'checkpoint' AND reference_id = ?",
-                (paused.execution_id, checkpoint.checkpoint_id),
-            )
-        }
-    assert child_refs <= registered
-
-    async def activate(attempt, _activation):
-        return DriverBinding(
-            execution_id=attempt.execution_id,
-            attempt_id=attempt.attempt_id,
-            generation=attempt.generation,
-            driver=SimpleNamespace(),
-            handle=object(),
-        )
-
-    resumed = asyncio.run(control.request_continue(
-        command_id="continue-for-gc",
-        execution_id=paused.execution_id,
-        expected_version=paused.status_version,
-        actor={"subject": "agent-owner"},
-        activator=activate,
-    ))
-    active = control.attempts.get(resumed.execution.current_attempt_id)
-    assert active is not None
-    finished = control.finish_attempt(
-        attempt_id=active.attempt_id,
-        generation=active.generation,
-        expected_execution_version=resumed.execution.status_version,
-        target=ExecutionStatus.COMPLETED,
-        outcome="completed",
-    )
-    assert finished.execution.status is ExecutionStatus.COMPLETED
-    # Completed receipt reconstruction envelopes may be collected; all published
-    # checkpoint children must remain readable with their original content.
-    children = {ref: store.get_state_blob(paused.execution_id, ref) for ref in child_refs}
-    assert all(children.values())
-    control.state_blobs.gc(execution_id=paused.execution_id)
-    assert {ref: store.get_state_blob(paused.execution_id, ref) for ref in child_refs} == children
-    loaded = AgentCheckpointV1.load(store, checkpoint)
-    assert loaded.payload == state.payload
-
-
-def test_terminal_gc_deletes_unreferenced_agent_state_blob(tmp_path, monkeypatch):
-    # The terminal hook compacts in the background; this test drives gc itself.
-    from openprogram.runtime.execution import retention
-    monkeypatch.setattr(retention, "defer", lambda _name, _run: None)
-    store, _attempts, _active, execution = _agent_execution(tmp_path)
-    orphan = store.put_state_blob(execution.execution_id, b'{"orphan":true}')
-    control = RuntimeControlService(store, AttemptStore(store), DriverRegistry())
-    finished = control.finish_attempt(
-        attempt_id=execution.current_attempt_id,
-        generation=execution.owner_lease["generation"],
-        expected_execution_version=execution.status_version,
-        target=ExecutionStatus.COMPLETED,
-        outcome="completed",
-    )
-    assert finished.execution.status is ExecutionStatus.COMPLETED
-    assert store.gc_state_blobs(execution.execution_id) == 1
-    assert store.get_state_blob(execution.execution_id, orphan["ref"]) is None
 
 
 def test_approval_wait_hands_off_before_tool_effect_and_resumes_from_checkpoint(tmp_path):
@@ -721,11 +571,7 @@ def test_approval_wait_hands_off_before_tool_effect_and_resumes_from_checkpoint(
     assert paused is not None and paused.status is ExecutionStatus.PAUSED
     waits = DurableWaitStore(store).list_open(execution_id=running.execution_id)
     assert len(waits) == 1 and waits[0].checkpoint_id == paused.checkpoint_head_id
-    with store._connect() as connection:
-        states = [row["status"] for row in connection.execute(
-            "SELECT status FROM effects WHERE execution_id = ?", (running.execution_id,)
-        )]
-    assert states == [EffectStatus.COMMITTED.value]
+    assert store._connect().count("effects", execution_id=running.execution_id) == 0
 
     dispatch = asyncio.run(control.request_wait_answer(
         command_id="answer-approval", execution_id=running.execution_id,
@@ -738,162 +584,8 @@ def test_approval_wait_hands_off_before_tool_effect_and_resumes_from_checkpoint(
     assert DurableWaitStore(store).get_wait(waits[0].wait_id).status is WaitStatus.RESOLVED
 
 
-@pytest.mark.parametrize("supports_key", [True, False])
-def test_provider_effect_classification_requires_declared_key_support(
-    tmp_path, supports_key
-):
-    store, _attempts, active, execution = _admitted_agent_execution(tmp_path)
-    from openprogram.runtime.conversation.production_driver import AgentProductionDriver
-
-    control = RuntimeControlService(store, AttemptStore(store), DriverRegistry())
-    hook = AgentProductionDriver(store, control_service=control)._safe_point_hook(
-        active,
-        SimpleNamespace(user_msg_id="user-anchor"),
-        threading.Event(),
-    )
-    payload = {
-        "resolved_snapshot": {"model": {"id": "fake"}, "system_prompt": "system", "tools": []},
-        "context": {"messages": []},
-        "supports_idempotency_key": supports_key,
-    }
-    assert hook("provider.before", payload) is False
-    with store._connect() as connection:
-        row = connection.execute(
-            "SELECT classification, idempotency_key, metadata_json FROM effects "
-            "WHERE execution_id = ?",
-            (execution.execution_id,),
-        ).fetchone()
-    assert row is not None
-    assert row["classification"] == ("idempotent" if supports_key else "nonrepeatable")
-    if supports_key:
-        assert row["idempotency_key"]
-        assert payload["idempotency_key"] == row["idempotency_key"]
-    else:
-        assert row["idempotency_key"] is None
-        assert payload["idempotency_key"] is None
-
-
-@pytest.mark.parametrize(
-    ("candidates", "actual", "expected_classification", "actual_support"),
-    [
-        (
-            [
-                {"api": "primary-api", "provider": "primary", "model": "p", "supports_idempotency_key": True},
-                {"api": "fallback-api", "provider": "fallback", "model": "f", "supports_idempotency_key": False},
-            ],
-            {"api": "fallback-api", "provider": "fallback", "model": "f"},
-            "nonrepeatable",
-            False,
-        ),
-        (
-            [
-                {"api": "primary-api", "provider": "primary", "model": "p", "supports_idempotency_key": False},
-                {"api": "fallback-api", "provider": "fallback", "model": "f", "supports_idempotency_key": True},
-            ],
-            {"api": "fallback-api", "provider": "fallback", "model": "f"},
-            "nonrepeatable",
-            True,
-        ),
-        (
-            [
-                {"api": "primary-api", "provider": "primary", "model": "p", "supports_idempotency_key": True},
-                {"api": "fallback-api", "provider": "fallback", "model": "f", "supports_idempotency_key": True},
-            ],
-            {"api": "fallback-api", "provider": "fallback", "model": "f"},
-            "idempotent",
-            True,
-        ),
-        (
-            [
-                {"api": "primary-api", "provider": "primary", "model": "p", "supports_idempotency_key": True},
-            ],
-            {"api": "primary-api", "provider": "primary", "model": "p"},
-            "idempotent",
-            True,
-        ),
-    ],
-)
-def test_provider_failover_effect_uses_actual_receipt_identity_and_capability(
-    tmp_path, candidates, actual, expected_classification, actual_support
-):
-    store, _attempts, active, execution = _admitted_agent_execution(tmp_path)
-    from openprogram.runtime.conversation.production_driver import AgentProductionDriver
-
-    control = RuntimeControlService(store, AttemptStore(store), DriverRegistry())
-    hook = AgentProductionDriver(store, control_service=control)._safe_point_hook(
-        active,
-        SimpleNamespace(user_msg_id="user-anchor"),
-        threading.Event(),
-    )
-    from openprogram.runtime.conversation.checkpoint import runtime_contract_snapshot
-    from openprogram.models.providers.types import Model
-    snapshot = runtime_contract_snapshot(
-        model=Model(id="p", name="p", api="openai-completions", provider="openai", base_url="https://example.invalid/v1"),
-        system_prompt="system", tools=[], request=SimpleNamespace(_execution_revision_id=execution.revision_id),
-    )
-    payload = {
-        "resolved_snapshot": snapshot,
-        "context": {"messages": []},
-        "supports_idempotency_key": all(
-            candidate["supports_idempotency_key"] for candidate in candidates
-        ),
-        "dispatch_candidates": candidates,
-    }
-    assert hook("provider.before", payload) is False
-    if payload["supports_idempotency_key"]:
-        assert payload["idempotency_key"] is not None
-    else:
-        assert payload["idempotency_key"] is None
-
-    with store._connect() as connection:
-        row = connection.execute(
-            "SELECT effect_id, classification, idempotency_key FROM effects "
-            "WHERE execution_id = ?",
-            (execution.execution_id,),
-        ).fetchone()
-    assert row is not None
-    assert row["classification"] == expected_classification
-    assert (row["idempotency_key"] is not None) is payload["supports_idempotency_key"]
-
-    assert hook("provider.after", {
-        "message": {
-            "role": "assistant", "content": [], "timestamp": 1, **actual,
-        },
-        "provider_request_id": "request-fallback",
-        "usage": {},
-    }) is False
-    effect = control.effects.get(row["effect_id"])
-    assert effect is not None and effect.status.value == "committed"
-    assert effect.receipt["api"] == actual["api"]
-    assert effect.receipt["provider"] == actual["provider"]
-    assert effect.receipt["model"] == actual["model"]
-    assert effect.receipt["supports_idempotency_key"] is actual_support
-    assert effect.receipt["idempotency_key"] == (
-        row["idempotency_key"] if actual_support else None
-    )
-
-
-def test_v1_checkpoint_rejects_tampered_state_blob_hash(tmp_path):
-    store, _control, _active, _paused, checkpoint, _command = _real_provider_safe_point(tmp_path)
-    from openprogram.runtime.execution.agent_checkpoint import (
-        AgentCheckpointError,
-        AgentCheckpointV1,
-    )
-
-    ref = checkpoint.state_refs["agent_checkpoint"]
-    with store._transaction() as connection:
-        connection.execute(
-            "UPDATE execution_state_blobs SET payload = ? WHERE execution_id = ? AND ref = ?",
-            (b"{}", checkpoint.execution_id, ref["ref"]),
-        )
-    with pytest.raises(AgentCheckpointError) as tampered:
-        AgentCheckpointV1.load(store, checkpoint)
-    assert tampered.value.code == "state_blob_corrupt"
-
-
 def test_step_commits_one_real_tool_callback_and_consumes_the_permit_atomically(tmp_path):
     store, control, _active, paused, checkpoint, _command = _real_provider_safe_point(tmp_path)
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
     from openprogram.runtime.conversation.checkpoint import AgentContinuation
     from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.conversation.production_driver import AgentProductionDriver
@@ -924,22 +616,11 @@ def test_step_commits_one_real_tool_callback_and_consumes_the_permit_atomically(
     ))
     active = control.attempts.get(dispatched.execution.current_attempt_id)
     assert active is not None
-    state = AgentCheckpointV1.load(store, checkpoint)
-    assistant = AssistantMessage.model_validate(state.read_json_ref(
-        store, paused.execution_id, state.payload["assistant_message_delta_ref"],
-    ))
-    continuation = AgentContinuation(
+    continuation = AgentContinuation.from_checkpoint(
+        store=store, checkpoint=checkpoint,
         request=TurnRequest(
             session_id=paused.session_id, user_text="resume exactly once",
             agent_id="main", source="component", user_msg_id="user-anchor",
-        ),
-        checkpoint=checkpoint,
-        state=state,
-        assistant_message=assistant,
-        tool_results=(),
-        resolved_snapshot=state.read_json_ref(
-            store, paused.execution_id,
-            state.payload["resolved_model_system_tool_snapshot_ref"],
         ),
     )
     driver = AgentProductionDriver(store, control_service=control)
@@ -985,11 +666,7 @@ def test_step_rejects_terminal_provider_checkpoint_without_leaving_a_permit_appl
     assert command.status is CommandStatus.REJECTED
     assert command.rejection_code == "no_next_action"
     assert current == paused
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM attempts WHERE execution_id = ?",
-            (paused.execution_id,),
-        ).fetchone()[0] == 1
+    assert store._connect().count("attempts", execution_id=paused.execution_id) == 1
 
 
 def test_chat_ack_pause_before_initial_activation_continues_the_admitted_turn_once(tmp_path):
@@ -1044,11 +721,7 @@ def test_chat_ack_pause_before_initial_activation_continues_the_admitted_turn_on
     while not provider_starts and time.monotonic() < deadline:
         threading.Event().wait(0.01)
     assert provider_starts == [("initial-pause-session", False)]
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM attempts WHERE execution_id = ?",
-            (admission.execution_id,),
-        ).fetchone()[0] == 1
+    assert store._connect().count("attempts", execution_id=admission.execution_id) == 1
 
 
 def test_public_cancel_uses_a_durable_exact_command_envelope(public_chat):
@@ -1307,7 +980,6 @@ def test_effect_dispatch_crash_blocks_continue_and_step_until_reconciled(public_
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="effect-owner",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -1373,7 +1045,7 @@ def test_returned_provider_failure_finishes_without_attention(tmp_path, stop_rea
     store, attempts, active, execution = _admitted_agent_execution(tmp_path)
     control = RuntimeControlService(store, attempts, DriverRegistry())
     hook = AgentProductionDriver(store, control_service=control)._safe_point_hook(
-        active, SimpleNamespace(user_msg_id="user-anchor", _execution_revision_id=execution.revision_id), threading.Event(),
+        active, SimpleNamespace(session_id=execution.session_id, user_msg_id="user-anchor", _execution_revision_id=execution.revision_id), threading.Event(),
     )
 
     async def safe_point(kind, payload):
@@ -1428,13 +1100,11 @@ def test_returned_provider_failure_finishes_without_attention(tmp_path, stop_rea
     if stop_reason == "repair":
         assert responses == ["invalid json", "{}"]
     assert control.effects.list_unresolved(execution.execution_id) == []
-    # A returned provider failure is still an authoritative result. Persist its
-    # exact message, while the execution remains failed and has no unresolved effect.
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    assert finished.execution.checkpoint_head_id
-    checkpoint = control.checkpoints.get(finished.execution.checkpoint_head_id)
-    state = AgentCheckpointV1.load(store, checkpoint)
-    message = state.read_json_ref(store, execution.execution_id, state.payload["assistant_message_delta_ref"])
+    # A returned provider failure is still an authoritative result. Its exact
+    # message is in the journal, while the execution remains failed.
+    from openprogram.runtime.execution.agent_journal import latest_pointer, load_journal
+    state = load_journal(execution.session_id, latest_pointer(execution.session_id, execution.execution_id))
+    message = state.last.message
     assert message["content"][0]["text"] == responses[-1]
     assert message["stop_reason"] == ("stop" if stop_reason in {"invalid", "repair"} else stop_reason)
 
@@ -1495,10 +1165,8 @@ def test_normal_provider_completion_records_continuation_without_pause(tmp_path)
     assert running.current_attempt_id == active.attempt_id
     assert checkpoint.created_by_attempt_id == active.attempt_id
     assert control.effects.list_unresolved(running.execution_id) == []
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    state = AgentCheckpointV1.load(store, checkpoint)
-    assert state.payload["next_tool_index"] == 0
-    assert state.payload["current_decision"]["tool_call_ids"] == ["tool-1"]
+    assert checkpoint.state_refs["agent_position"]["next_tool_index"] == 0
+    assert list(checkpoint.state_refs["agent_position"]["current_decision"]["tool_call_ids"]) == ["tool-1"]
 
 
 @pytest.mark.parametrize("boundary", ["tool.before", "tool.started", "provider.before"])
@@ -1523,31 +1191,20 @@ def test_pause_between_agent_effects_hands_off_without_failure(tmp_path, monkeyp
     if timing == "before":
         pause()
     else:
-        method = "mark_dispatched" if boundary == "tool.started" else "register"
-        original = getattr(control.effects, method)
+        original = store.get_execution
         def race(*args, **kwargs):
+            monkeypatch.setattr(store, "get_execution", original)
             pause()
             return original(*args, **kwargs)
-        monkeypatch.setattr(control.effects, method, race)
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    initial_state = AgentCheckpointV1.load(store, checkpoint)
-    tool_payload["resolved_snapshot"] = initial_state.read_json_ref(
-        store, running.execution_id,
-        initial_state.payload["resolved_model_system_tool_snapshot_ref"],
-    )
+        monkeypatch.setattr(store, "get_execution", race)
+    tool_payload["resolved_snapshot"] = checkpoint_snapshot(store, running)
     assert hook(boundary, tool_payload) is True
     paused = store.get_execution(running.execution_id)
     assert paused.status is ExecutionStatus.PAUSED
     assert store.get_command("pause-between-effects").status is CommandStatus.APPLIED
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    state = AgentCheckpointV1.load(store, control.checkpoints.get(paused.checkpoint_head_id))
-    assert state.payload["next_tool_index"] == 0
-    assert state.payload["current_decision"]["tool_call_ids"] == ["tool-1"]
-    with store._connect() as connection:
-        assert connection.execute(
-            "SELECT count(*) FROM effects WHERE execution_id = ? AND status IN ('planned', 'dispatched', 'uncertain')",
-            (running.execution_id,),
-        ).fetchone()[0] == 0
+    position = control.checkpoints.get(paused.checkpoint_head_id).state_refs["agent_position"]
+    assert position["next_tool_index"] == 0
+    assert list(position["current_decision"]["tool_call_ids"]) == ["tool-1"]
 
     # A new owner must admit the untouched tool once, including when an old
     # owner had registered (but never dispatched) that exact tool identity.
@@ -1569,23 +1226,14 @@ def test_pause_between_agent_effects_hands_off_without_failure(tmp_path, monkeyp
     from openprogram.models.providers.types import AssistantMessage
     request = TurnRequest(session_id=paused.session_id, user_text="resume exactly once",
                           agent_id="main", source="component", user_msg_id="user-anchor")
-    continuation = AgentContinuation(
-        request=request, checkpoint=control.checkpoints.get(paused.checkpoint_head_id),
-        state=state, tool_results=(),
-        assistant_message=AssistantMessage.model_validate(state.read_json_ref(
-            store, paused.execution_id, state.payload["assistant_message_delta_ref"])),
-        resolved_snapshot=tool_payload["resolved_snapshot"],
+    continuation = AgentContinuation.from_checkpoint(
+        store=store, checkpoint=control.checkpoints.get(paused.checkpoint_head_id), request=request,
     )
     next_attempt = control.attempts.get(resumed.execution.current_attempt_id)
     resumed_hook = AgentProductionDriver(store, control_service=control)._safe_point_hook(
         next_attempt, request, threading.Event(), continuation=continuation)
     assert resumed_hook("tool.before", tool_payload) is False
     assert resumed_hook("tool.started", tool_payload) is False
-    with store._connect() as connection:
-        assert connection.execute(
-            "SELECT count(*) FROM effects WHERE execution_id = ? AND status = 'dispatched'",
-            (running.execution_id,),
-        ).fetchone()[0] == 1
 
 
 @pytest.mark.parametrize("timing", ["before", "dispatch"])
@@ -1615,11 +1263,12 @@ def test_active_initial_pause_resumes_original_admission(tmp_path, monkeypatch, 
     if timing == "before":
         pause()
     else:
-        dispatch = control.effects.mark_dispatched
+        original = store.get_execution
         def race(*args, **kwargs):
+            monkeypatch.setattr(store, "get_execution", original)
             pause()
-            return dispatch(*args, **kwargs)
-        monkeypatch.setattr(control.effects, "mark_dispatched", race)
+            return original(*args, **kwargs)
+        monkeypatch.setattr(store, "get_execution", race)
     assert hook("provider.before", {"resolved_snapshot": snapshot, "context": {}}) is True
     paused = store.get_execution(running.execution_id)
     assert paused.status is ExecutionStatus.PAUSED
@@ -1641,31 +1290,4 @@ def test_active_initial_pause_resumes_original_admission(tmp_path, monkeypatch, 
     next_hook = AgentProductionDriver(store, control_service=control)._safe_point_hook(
         next_attempt, request, threading.Event())
     assert next_hook("provider.before", {"resolved_snapshot": snapshot, "context": {}}) is False
-    with store._connect() as connection:
-        assert connection.execute("SELECT count(*) FROM effects WHERE execution_id = ? AND status = 'dispatched'",
-                                  (running.execution_id,)).fetchone()[0] == 1
 
-
-def test_pause_during_result_publication_retries_only_checkpoint(tmp_path, monkeypatch):
-    from openprogram.runtime.execution.model import CommandKind
-    original = RuntimeControlService.commit_agent_safe_point
-    calls = []
-    def race(service, **kwargs):
-        calls.append(kwargs["effect_id"])
-        if len(calls) == 1:
-            execution = service.executions.get_execution(kwargs["execution_id"])
-            service.executions.accept_command_with_transition(
-                command_id="pause-during-publication", execution_id=execution.execution_id,
-                expected_version=execution.status_version, kind=CommandKind.PAUSE,
-                target=ExecutionStatus.PAUSING, payload={}, actor={"subject": "agent-owner"})
-        return original(service, **kwargs)
-    monkeypatch.setattr(RuntimeControlService, "commit_agent_safe_point", race)
-    hooks = []
-    # The completed provider is published while pause is pending; the next
-    # boundary performs the ownership handoff without a second provider call.
-    store, _, active, _, _, _ = _real_provider_safe_point(
-        tmp_path, pause=False, expose_hook=hooks, expected_status=ExecutionStatus.PAUSING)
-    assert len(calls) == 2 and calls[0] == calls[1]
-    assert hooks[0]("tool.before", {"tool_call_id": "tool-1", "arguments": {}}) is True
-    assert store.get_execution(active.execution_id).status is ExecutionStatus.PAUSED
-    assert store.get_command("pause-during-publication").status is CommandStatus.APPLIED

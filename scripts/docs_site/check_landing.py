@@ -19,8 +19,11 @@ from .template import render_page
 ROOT = Path(__file__).resolve().parents[2]
 LANDING = ROOT / "website" / "index.html"
 README = ROOT / "README.md"
-DOCS_README = ROOT / "docs" / "README.md"
-DOCS_README_ZH = ROOT / "docs" / "README.zh.md"
+DOCS_DIR = ROOT / "docs"
+DOCS_README = next((p for p in (DOCS_DIR / "README.md", DOCS_DIR / "README.html") if p.is_file()),
+                   DOCS_DIR / "README.md")
+DOCS_README_ZH = next((p for p in (DOCS_DIR / "README.zh.md", DOCS_DIR / "README.zh.html") if p.is_file()),
+                      DOCS_DIR / "README.zh.md")
 PYPROJECT = ROOT / "pyproject.toml"
 BUILT_SITE = ROOT / "docs" / "_site"
 SITE_TITLE = "OpenProgram: Self-Programming AI Agent Framework"
@@ -601,7 +604,9 @@ def main() -> int:
             require(copy.is_file() and copy.read_bytes() == src.read_bytes(),
                     f"missing or altered Markdown source: {copy}", failures)
     index_markdown = BUILT_SITE / "index.html.md"
-    require(index_markdown.is_file() and index_markdown.read_bytes() == DOCS_README.read_bytes(),
+    # An HTML overview publishes a generated copy; only a Markdown one is verbatim.
+    require(index_markdown.is_file()
+            and (DOCS_README.suffix != ".md" or index_markdown.read_bytes() == DOCS_README.read_bytes()),
             "missing or altered index Markdown source", failures)
     llms = BUILT_SITE / "llms.txt"
     require(llms.is_file(), "docs build did not produce llms.txt", failures)

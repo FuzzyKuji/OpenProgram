@@ -1,19 +1,34 @@
-"""Physical activation leases for canonical executions."""
+"""Activations of an execution inside the process that owns it."""
 
 from __future__ import annotations
 
-import sqlite3
 import time
 import uuid
 from contextlib import closing, contextmanager
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator, Mapping
 
 from .model import ExecutionRecord, ExecutionStatus
 from .store import ExecutionStore
+from .store.run_tables import RowConflict, TableHandle
 from .model import _json
+
+FAILURE_TEXT_CHARS = 4000
+# A provider error can echo megabytes. Scrubbing a little past the kept length
+# keeps a secret cut at the end of the kept text from escaping its pattern.
+_SCRUBBED_FAILURE_CHARS = 4 * FAILURE_TEXT_CHARS
+
+
+def stored_failure_text(text: str | None) -> str | None:
+    """The readable failure as an attempt keeps it: scrubbed, then bounded."""
+    if not text or not text.strip():
+        return None
+    from openprogram.operations.diagnostics.redaction import redact_text
+    from .audit import redact_audit_payload
+
+    return redact_audit_payload({"failure_text": redact_text(text[:_SCRUBBED_FAILURE_CHARS])[:FAILURE_TEXT_CHARS]})["failure_text"]
 
 
 class AttemptStatus(str, Enum):
@@ -30,12 +45,14 @@ class AttemptRecord:
     generation: int
     status: AttemptStatus
     owner_id: str
-    lease_expires_at: float
     leased_at: float
     updated_at: float
     activated_at: float | None = None
     ended_at: float | None = None
     outcome: str | None = None
+    fenced: bool = False
+    # Read only by the Activity events endpoint; to_dict feeds event payloads.
+    failure_text: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -44,12 +61,12 @@ class AttemptRecord:
             "generation": self.generation,
             "status": self.status.value,
             "owner_id": self.owner_id,
-            "lease_expires_at": self.lease_expires_at,
             "leased_at": self.leased_at,
             "activated_at": self.activated_at,
             "updated_at": self.updated_at,
             "ended_at": self.ended_at,
             "outcome": self.outcome,
+            "fenced": self.fenced,
         }
 
 
@@ -72,7 +89,7 @@ class AttemptStore:
         self._clock = clock
 
     @contextmanager
-    def _admission_transaction(self, session_id: str) -> Iterator[sqlite3.Connection]:
+    def _admission_transaction(self, session_id: str) -> Iterator[TableHandle]:
         from openprogram.state.paths import get_state_dir
         from openprogram.state.store.session.migration import session_hold_active
         from openprogram.state.store.session.session_lock import session_interprocess_lock
@@ -88,10 +105,7 @@ class AttemptStore:
 
     def _attempt_session_id(self, attempt_id: str) -> str:
         with closing(self.executions._connect()) as connection:
-            row = connection.execute(
-                "SELECT execution_id FROM attempts WHERE attempt_id = ?",
-                (attempt_id,),
-            ).fetchone()
+            row = connection.get("attempts", attempt_id)
         if row is None:
             raise AttemptConflict("attempt_not_found", f"attempt does not exist: {attempt_id}")
         execution = self.executions.get_execution(str(row["execution_id"]))
@@ -105,13 +119,10 @@ class AttemptStore:
         *,
         expected_version: int,
         owner_id: str,
-        ttl_seconds: float,
         attempt_id: str | None = None,
     ) -> tuple[AttemptRecord, ExecutionRecord]:
-        if not owner_id or ttl_seconds <= 0:
-            raise AttemptConflict(
-                "invalid_lease", "owner_id and a positive ttl_seconds are required"
-            )
+        if not owner_id:
+            raise AttemptConflict("invalid_lease", "owner_id is required")
         attempt_id = attempt_id or f"attempt_{uuid.uuid4().hex}"
         execution = self.executions.get_execution(execution_id)
         if execution is None:
@@ -133,13 +144,7 @@ class AttemptStore:
                 raise AttemptConflict(
                     "owner_exists", "execution already has a current attempt"
                 )
-            generation = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(generation), 0) + 1 FROM attempts "
-                    "WHERE execution_id = ?",
-                    (execution_id,),
-                ).fetchone()[0]
-            )
+            generation = self._next_generation(connection, execution_id)
             now = self._clock()
             lease = dict(execution.owner_lease)
             if "process_owner" in lease:
@@ -152,30 +157,27 @@ class AttemptStore:
                 generation=generation,
                 status=AttemptStatus.LEASED,
                 owner_id=owner_id,
-                lease_expires_at=now + ttl_seconds,
                 leased_at=now,
                 updated_at=now,
             )
             try:
                 self._insert(connection, record)
-            except sqlite3.IntegrityError as exc:
+            except RowConflict as exc:
                 raise AttemptConflict(
                     "attempt_exists", f"attempt already exists: {attempt_id}"
                 ) from exc
-            updated = connection.execute(
-                "UPDATE executions SET status_version = ?, current_attempt_id = ?, "
-                "owner_lease_json = ?, updated_at = ? "
-                "WHERE execution_id = ? AND status_version = ?",
-                (
-                    expected_version + 1,
-                    attempt_id,
-                    _json(lease),
-                    now,
-                    execution_id,
-                    expected_version,
-                ),
+            updated = connection.update(
+                "executions",
+                {
+                    "status_version": expected_version + 1,
+                    "current_attempt_id": attempt_id,
+                    "owner_lease_json": _json(lease),
+                    "updated_at": now,
+                },
+                execution_id=execution_id,
+                status_version=expected_version,
             )
-            if updated.rowcount != 1:
+            if updated != 1:
                 raise AttemptConflict("stale_version", "execution changed concurrently")
             execution = self.executions._require_execution(connection, execution_id)
             self.executions._append_event(
@@ -210,13 +212,13 @@ class AttemptStore:
             lease = dict(execution.owner_lease)
             if active:
                 from .process_owner import current_process_owner
-                self._validate_lease(attempt, self._clock())
                 lease["process_owner"] = current_process_owner()
             else:
                 lease.pop("process_owner", None)
-            connection.execute(
-                "UPDATE executions SET owner_lease_json = ? WHERE execution_id = ?",
-                (_json(lease), execution.execution_id),
+            connection.update(
+                "executions",
+                {"owner_lease_json": _json(lease)},
+                execution_id=execution.execution_id,
             )
 
     def activate(
@@ -234,7 +236,6 @@ class AttemptStore:
                     "invalid_state", f"attempt is already {attempt.status.value}"
                 )
             now = self._clock()
-            self._validate_lease(attempt, now)
             execution = self.executions._require_execution(
                 connection, attempt.execution_id
             )
@@ -246,10 +247,10 @@ class AttemptStore:
                 target=ExecutionStatus.RUNNING,
                 reason_code=None,
             )
-            connection.execute(
-                "UPDATE attempts SET status = ?, activated_at = ?, updated_at = ? "
-                "WHERE attempt_id = ?",
-                (AttemptStatus.ACTIVE.value, now, now, attempt_id),
+            connection.update(
+                "attempts",
+                {"status": AttemptStatus.ACTIVE.value, "activated_at": now, "updated_at": now},
+                attempt_id=attempt_id,
             )
             active = self._require(connection, attempt_id)
             self.executions._append_event(
@@ -262,29 +263,16 @@ class AttemptStore:
             )
             return active, running
 
-    def heartbeat(
-        self,
-        attempt_id: str,
-        *,
-        generation: int,
-        ttl_seconds: float,
-    ) -> AttemptRecord:
-        if ttl_seconds <= 0:
-            raise AttemptConflict("invalid_lease", "ttl_seconds must be positive")
-        with self.executions._transaction() as connection:
-            attempt = self._require(connection, attempt_id)
-            self._validate_generation(attempt, generation)
-            if attempt.status is AttemptStatus.ENDED:
-                self._validate_not_fenced(attempt)
-                raise AttemptConflict("terminal", "attempt has ended")
-            now = self._clock()
-            self._validate_lease(attempt, now)
-            connection.execute(
-                "UPDATE attempts SET lease_expires_at = ?, updated_at = ? "
-                "WHERE attempt_id = ?",
-                (now + ttl_seconds, now, attempt_id),
-            )
-            return self._require(connection, attempt_id)
+    def ensure_held(self, attempt_id: str, *, generation: int) -> AttemptRecord:
+        """Refuse an owner that recovery replaced or that has already ended."""
+        attempt = self.get(attempt_id)
+        if attempt is None:
+            raise AttemptConflict("not_found", f"attempt not found: {attempt_id}")
+        self._validate_generation(attempt, generation)
+        self._validate_not_fenced(attempt)
+        if attempt.status is AttemptStatus.ENDED:
+            raise AttemptConflict("terminal", "attempt has ended")
+        return attempt
 
     def finish(
         self,
@@ -295,6 +283,7 @@ class AttemptStore:
         target: ExecutionStatus,
         outcome: str,
         reason_code: str | None = None,
+        failure_text: str | None = None,
     ) -> tuple[AttemptRecord, ExecutionRecord]:
         with self.executions._transaction() as connection:
             attempt = self._require(connection, attempt_id)
@@ -303,7 +292,6 @@ class AttemptStore:
                 self._validate_not_fenced(attempt)
                 raise AttemptConflict("terminal", "attempt has ended")
             now = self._clock()
-            self._validate_lease(attempt, now)
             execution = self.executions._require_execution(
                 connection, attempt.execution_id
             )
@@ -316,10 +304,11 @@ class AttemptStore:
                 reason_code=reason_code,
                 clear_owner=True,
             )
-            connection.execute(
-                "UPDATE attempts SET status = ?, outcome = ?, ended_at = ?, "
-                "updated_at = ? WHERE attempt_id = ?",
-                (AttemptStatus.ENDED.value, outcome, now, now, attempt_id),
+            connection.update(
+                "attempts",
+                {"status": AttemptStatus.ENDED.value, "outcome": outcome, "ended_at": now, "updated_at": now,
+                 "failure_text": stored_failure_text(failure_text)},
+                attempt_id=attempt_id,
             )
             ended = self._require(connection, attempt_id)
             self.executions._append_event(
@@ -334,7 +323,7 @@ class AttemptStore:
 
     def _finish_in_transaction(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         attempt_id: str,
         *,
         generation: int,
@@ -342,15 +331,15 @@ class AttemptStore:
         target: ExecutionStatus,
         outcome: str,
         reason_code: str | None = None,
+        failure_text: str | None = None,
     ) -> tuple[AttemptRecord, ExecutionRecord]:
-        """Finish an active attempt under a caller-owned SQLite transaction."""
+        """Finish an active attempt under a caller-owned transaction."""
         attempt = self._require(connection, attempt_id)
         self._validate_generation(attempt, generation)
         if attempt.status is AttemptStatus.ENDED:
             self._validate_not_fenced(attempt)
             raise AttemptConflict("terminal", "attempt has ended")
         now = self._clock()
-        self._validate_lease(attempt, now)
         execution = self.executions._require_execution(connection, attempt.execution_id)
         self._validate_owner(execution, attempt, expected_execution_version)
         finished = self.executions._transition_execution(
@@ -361,9 +350,11 @@ class AttemptStore:
             reason_code=reason_code,
             clear_owner=True,
         )
-        connection.execute(
-            "UPDATE attempts SET status = ?, outcome = ?, ended_at = ?, updated_at = ? WHERE attempt_id = ?",
-            (AttemptStatus.ENDED.value, outcome, now, now, attempt_id),
+        connection.update(
+            "attempts",
+            {"status": AttemptStatus.ENDED.value, "outcome": outcome, "ended_at": now, "updated_at": now,
+             "failure_text": stored_failure_text(failure_text)},
+            attempt_id=attempt_id,
         )
         ended = self._require(connection, attempt_id)
         self.executions._append_event(
@@ -380,9 +371,16 @@ class AttemptStore:
         with closing(self.executions._connect()) as connection:
             return self._get(connection, attempt_id)
 
+    def list_for_execution(self, execution_id: str) -> list[AttemptRecord]:
+        """Every attempt of one execution, oldest generation first."""
+        self.executions.tables.ensure_execution(execution_id)
+        with closing(self.executions._connect()) as connection:
+            rows = connection.rows("attempts", execution_id=execution_id, order="generation")
+        return [self._record(row) for row in rows]
+
     def _end_for_owner_loss(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         attempt: AttemptRecord,
         *,
         outcome: str,
@@ -391,10 +389,16 @@ class AttemptStore:
         if attempt.status is AttemptStatus.ENDED:
             return attempt
         now = self._clock()
-        connection.execute(
-            "UPDATE attempts SET status = ?, lease_expires_at = 0, outcome = ?, "
-            "ended_at = ?, updated_at = ? WHERE attempt_id = ?",
-            (AttemptStatus.ENDED.value, outcome, now, now, attempt.attempt_id),
+        connection.update(
+            "attempts",
+            {
+                "status": AttemptStatus.ENDED.value,
+                "fenced": 1,
+                "outcome": outcome,
+                "ended_at": now,
+                "updated_at": now,
+            },
+            attempt_id=attempt.attempt_id,
         )
         return self._require(connection, attempt.attempt_id)
 
@@ -407,13 +411,14 @@ class AttemptStore:
             )
 
     @staticmethod
-    def _validate_lease(attempt: AttemptRecord, now: float) -> None:
-        if attempt.lease_expires_at <= now:
-            raise AttemptConflict("lease_expired", "attempt lease has expired")
+    def _validate_held(attempt: AttemptRecord) -> None:
+        """Refuse an owner that recovery fenced or that has ended."""
+        if attempt.status is AttemptStatus.ENDED:
+            raise AttemptConflict("stale_owner", "attempt owner was recovered")
 
     @staticmethod
     def _validate_not_fenced(attempt: AttemptRecord) -> None:
-        if attempt.lease_expires_at == 0:
+        if attempt.fenced:
             raise AttemptConflict("stale_owner", "attempt owner was recovered")
 
     @staticmethod
@@ -437,52 +442,51 @@ class AttemptStore:
             raise AttemptConflict("stale_owner", "attempt no longer owns execution")
 
     @staticmethod
-    def _insert(connection: sqlite3.Connection, attempt: AttemptRecord) -> None:
-        connection.execute(
-            "INSERT INTO attempts "
-            "(attempt_id, execution_id, generation, status, owner_id, "
-            "lease_expires_at, leased_at, activated_at, updated_at, ended_at, outcome) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                attempt.attempt_id,
-                attempt.execution_id,
-                attempt.generation,
-                attempt.status.value,
-                attempt.owner_id,
-                attempt.lease_expires_at,
-                attempt.leased_at,
-                attempt.activated_at,
-                attempt.updated_at,
-                attempt.ended_at,
-                attempt.outcome,
-            ),
+    def _next_generation(connection: TableHandle, execution_id: str) -> int:
+        attempts = connection.rows("attempts", execution_id=execution_id)
+        return max((int(attempt["generation"]) for attempt in attempts), default=0) + 1
+
+    @staticmethod
+    def _insert(connection: TableHandle, attempt: AttemptRecord) -> None:
+        connection.insert(
+            "attempts",
+            {
+                "attempt_id": attempt.attempt_id,
+                "execution_id": attempt.execution_id,
+                "generation": attempt.generation,
+                "status": attempt.status.value,
+                "owner_id": attempt.owner_id,
+                "leased_at": attempt.leased_at,
+                "activated_at": attempt.activated_at,
+                "updated_at": attempt.updated_at,
+                "ended_at": attempt.ended_at,
+                "outcome": attempt.outcome,
+                "fenced": int(attempt.fenced),
+            },
         )
 
     @classmethod
     def _get(
-        cls, connection: sqlite3.Connection, attempt_id: str
+        cls, connection: TableHandle, attempt_id: str
     ) -> AttemptRecord | None:
-        row = connection.execute(
-            "SELECT * FROM attempts WHERE attempt_id = ?", (attempt_id,)
-        ).fetchone()
+        row = connection.get("attempts", attempt_id)
         return cls._record(row) if row is not None else None
 
     @classmethod
-    def _require(cls, connection: sqlite3.Connection, attempt_id: str) -> AttemptRecord:
+    def _require(cls, connection: TableHandle, attempt_id: str) -> AttemptRecord:
         attempt = cls._get(connection, attempt_id)
         if attempt is None:
             raise AttemptConflict("not_found", f"attempt not found: {attempt_id}")
         return attempt
 
     @staticmethod
-    def _record(row: sqlite3.Row) -> AttemptRecord:
+    def _record(row: Mapping[str, Any]) -> AttemptRecord:
         return AttemptRecord(
             attempt_id=str(row["attempt_id"]),
             execution_id=str(row["execution_id"]),
             generation=int(row["generation"]),
             status=AttemptStatus(row["status"]),
             owner_id=str(row["owner_id"]),
-            lease_expires_at=float(row["lease_expires_at"]),
             leased_at=float(row["leased_at"]),
             activated_at=(
                 float(row["activated_at"]) if row["activated_at"] is not None else None
@@ -490,4 +494,6 @@ class AttemptStore:
             updated_at=float(row["updated_at"]),
             ended_at=(float(row["ended_at"]) if row["ended_at"] is not None else None),
             outcome=row["outcome"],
+            fenced=bool(row["fenced"]),
+            failure_text=row.get("failure_text"),
         )

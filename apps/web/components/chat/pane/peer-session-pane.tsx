@@ -10,7 +10,7 @@ import { SelectionQuote } from "../messages/editing/quote-to-chat";
  * `#chatArea` / `#chatMessages` ids read by ~10 modules under
  * `lib/runtime-bridge/`), so it can't be mounted twice. AppShell hides it
  * entirely while split, and each pane renders pure React instead: the same
- * `MessageRow`s off `useSessionStore` plus a full `<Composer sessionId=… />`.
+ * `TranscriptRows` the main chat draws, plus a full `<Composer sessionId=… />`.
  *
  * Both panes are always live. Each composer owns its session's draft,
  * settings and run state, and sends with `background: true`, so typing in
@@ -21,18 +21,21 @@ import { SelectionQuote } from "../messages/editing/quote-to-chat";
  * right rail and DAG follow. Interacting with a pane sets it silently
  * (`setActive`), which changes no layout and interrupts no input.
  */
-import { memo, useCallback, useEffect, useRef } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef } from "react";
 import { ArrowDown } from "lucide-react";
 import { Button } from "@/components/ui/button";
 
-import { useMessageIds, useSessionStore } from "@/lib/session-store";
-import { useSessionHistory } from "@/lib/chat/history/session-history";
+import { selectRow, selectViewRows, useMessageIds, useSessionStore } from "@/lib/session-store";
+import { HISTORY_PROTOCOL, holdsHistoryWindow, useSessionHistory } from "@/lib/chat/history/session-history";
 import { useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import {
   RECYCLE_MIN_ROWS,
   collectAlwaysLive,
   decideLiveRows,
+  foldKey,
   heightsFor,
+  setRowHeight,
+  type WindowNode,
 } from "@/lib/chat/history/message-window";
 import { TranscriptReadStatus } from "../messages/list/transcript-read-status";
 import { Composer } from "../composer";
@@ -43,7 +46,10 @@ import { useChatAreaStick } from "../messages/list/use-chat-area-stick";
 import { useMessageViewport } from "../messages/list/use-message-viewport";
 import { useHistoryWindow } from "../messages/list/use-history-window";
 import { DecisionOutputs } from "../messages/runtime/decision-output";
-import { PlainRow, RecyclableRow } from "../messages/list/rows/message-rows";
+import { TranscriptRows, coveringOf, useOriginalsToggle, usePlacedDecisions } from "../messages/list/transcript-rows";
+import { BotViewContext } from "../messages/list/transcript-view-scope";
+import { timeBreaks } from "@/lib/chat/transcript/bot-view";
+import { useBotView } from "@/lib/chat/transcript/use-bot-view";
 
 export const PeerSessionPane = memo(function PeerSessionPane({
   tabId,
@@ -81,8 +87,9 @@ export const PeerSessionPane = memo(function PeerSessionPane({
   const draft = useCenterTabs((s) => s.tabs.find((tab) => tab.id === tabId)?.draft === true);
   useEffect(() => {
     if (!sessionId || draft) return;
-    const read = () => requestSessionLoad({ action: "load_session", session_id: sessionId, history_version: 2 });
-    if (!(useSessionStore.getState().messageOrder[sessionId]?.length)) read();
+    const read = () => requestSessionLoad({ action: "load_session", session_id: sessionId, history_version: HISTORY_PROTOCOL });
+    // Rows without a window are what an earlier pane left behind.
+    if (!holdsHistoryWindow(useSessionHistory.getState().pages[sessionId])) read();
     const reconnect = (event: Event) => {
       if ((event as CustomEvent).detail?.connected) read();
     };
@@ -130,12 +137,32 @@ export const PeerSessionPane = memo(function PeerSessionPane({
     composerRootRef: composerHostRef,
   });
   const chatKey = scrollKey;
-  const snap = useSessionStore.getState();
-  const alwaysLive = collectAlwaysLive(ids, (id) => snap.messagesById[id]);
+  // The pane draws its conversation as the main chat would, bot view included.
+  const botView = useBotView(sessionId);
+  useOriginalsToggle();
+  const heldRows = selectViewRows(sessionId)(useSessionStore.getState());
+  const { covered } = coveringOf(ids, heldRows, botView);
+  const timeLabels = useMemo(() => timeBreaks(ids.flatMap((id) => {
+    const message = selectRow(sessionId, id)(useSessionStore.getState());
+    return message ? [message] : [];
+  })), [ids, sessionId]);
+  const botContext = useMemo(() => botView ? { breaks: timeLabels } : null, [botView, timeLabels]);
+  const placedDecisions = usePlacedDecisions(sessionId, ids);
+  const alwaysLive = collectAlwaysLive(ids, (id) => heldRows[id]);
   const { view, notifyMeasured } = useMessageViewport(chatKey, ids.length, true, areaRef);
+  const windowNodes: WindowNode[] = [];
+  for (let i = 0; i < ids.length;) {
+    if (!covered.has(ids[i])) {
+      windowNodes.push({ kind: "row", id: ids[i] });
+      i += 1;
+      continue;
+    }
+    windowNodes.push({ kind: "fold", id: ids[i] });
+    while (i < ids.length && covered.has(ids[i])) i += 1;
+  }
   const liveSet = chatKey
     ? decideLiveRows({
-        nodes: ids.map((id) => ({ kind: "row" as const, id })),
+        nodes: windowNodes,
         heights: heightsFor(chatKey),
         scrollTop: view.top,
         viewH: view.h,
@@ -145,6 +172,17 @@ export const PeerSessionPane = memo(function PeerSessionPane({
         recycleMin: RECYCLE_MIN_ROWS,
       })
     : null;
+  // A fold of covered originals recycles as one node, measured like a row.
+  useLayoutEffect(() => {
+    const column = columnRef.current;
+    if (!chatKey || !liveSet || !column) return;
+    let changed = false;
+    column.querySelectorAll<HTMLElement>("[data-fold-id]").forEach((el) => {
+      const fid = el.dataset.foldId;
+      if (fid && setRowHeight(chatKey, foldKey(fid), el.offsetHeight) !== "same") changed = true;
+    });
+    if (changed) notifyMeasured();
+  });
 
   // `flex: 1` (not just height) — the .center-split-* wrapper is a flex row
   // with no explicit height, so the pane fills its slot by flexing.
@@ -218,22 +256,18 @@ export const PeerSessionPane = memo(function PeerSessionPane({
                 : text("Send a message to start", "发送消息以开始会话")}
             </div>
           ) : (
-            ids.map((id) => (
-              liveSet && chatKey ? (
-                <RecyclableRow
-                  key={id}
-                  id={id}
-                  chatKey={chatKey}
-                  live={liveSet.has(id)}
-                  onMeasured={notifyMeasured}
-                  sessionIdOverride={sessionId ?? undefined}
-                />
-              ) : (
-                <PlainRow key={id} id={id} sessionIdOverride={sessionId ?? undefined} />
-              )
-            ))
+            <BotViewContext.Provider value={botContext}>
+              <TranscriptRows
+                sessionId={sessionId}
+                viewKey={sessionId}
+                ids={ids}
+                chatKey={chatKey}
+                liveRows={liveSet}
+                onMeasured={notifyMeasured}
+              />
+            </BotViewContext.Provider>
           )}
-          <DecisionOutputs key={sessionId} sessionId={sessionId} />
+          <DecisionOutputs key={sessionId} sessionId={sessionId} placed={placedDecisions} />
         </div>
       </div>
       {detached ? (

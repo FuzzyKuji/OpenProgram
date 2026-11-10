@@ -10,6 +10,7 @@ import time
 from ..store import SelfUpdateStore
 from ..types import TERMINAL_PHASES
 from ..types import UpdatePhase
+from ..types import VERIFIER_PHASES
 from ..verification.verifier_config import load_verifier_config
 from ..verification.verifier_config import verifier_prompt
 from ..verification.verifier_config import validate_model_capabilities
@@ -20,6 +21,13 @@ SYSTEM_CHECKS = frozenset({"runtime_revision", "owner_auth", "health", "web", "w
 _STARTUP_SECONDS = 90
 _CLAIM_SECONDS = 15
 _log = logging.getLogger(__name__)
+
+
+def _expected_gate_pid(record) -> int:
+    """Which worker the receipt names: this one, or the trial's it observes."""
+    if record.state.phase is UpdatePhase.TRIAL:
+        return record.state.detail.get("trial", {}).get("worker_pid")
+    return os.getpid()
 
 
 def _check_gate(record) -> None:
@@ -33,7 +41,7 @@ def _check_gate(record) -> None:
         type(gate["schema"]) is not int or gate["schema"] != 1
         or gate["candidate_sha"] != record.request.candidate_sha
         or type(gate["attempt"]) is not int or gate["attempt"] != record.state.attempt
-        or type(gate["worker_pid"]) is not int or gate["worker_pid"] != os.getpid()
+        or type(gate["worker_pid"]) is not int or gate["worker_pid"] != _expected_gate_pid(record)
         or isinstance(stamp, bool) or not isinstance(stamp, (int, float))
         or not math.isfinite(stamp) or stamp < record.request.created_at
         or not 0 <= time.time() - stamp <= _STARTUP_SECONDS
@@ -51,8 +59,8 @@ def require_verifier_execution(*, session_id, spawn_caller, **inputs) -> None:
     store = SelfUpdateStore()
     with store._locked():
         record = store._load_active_unlocked()
-        if record is None or record.state.phase is not UpdatePhase.VERIFYING:
-            raise ValueError("verifier execution requires an active verifying update")
+        if record is None or record.state.phase not in VERIFIER_PHASES:
+            raise ValueError("verifier execution requires an active update in trial or verifying")
         if load_rollback_intent(store, record) is not None:
             raise ValueError("verifier execution is forbidden during rollback")
         if commit_pending(store, record):
@@ -90,9 +98,6 @@ def recover_pending_updates() -> bool:
     external supervisor can write VERIFYING with its system-gate receipt.
     No App mutation or ordinary Scheduler task is performed here.
     """
-    from openprogram.runtime.jobs import get_runner
-    from openprogram.runtime.jobs.store import load_job
-    from openprogram.runtime.conversation.model_tools import resolve_model
     from ..delivery.launcher import launch_supervisor
     from .commit_intent import commit_pending
     from .rollback_intent import RECOVERY_SECONDS
@@ -119,6 +124,22 @@ def recover_pending_updates() -> bool:
             dispatch_pending()
             from ..repair.source_repair import dispatch_pending as dispatch_repair
             dispatch_repair()
+            from .switch import reconcile_at_start
+            reconcile_at_start(store, None)
+            return True
+        from . import switch
+        if switch.owns(record):
+            # The old version's controller owns this update; the worker only
+            # restarts it, or records a rollback the launcher made alone.
+            switch.reconcile_at_start(store, record)
+            from ..repair.diagnosis import dispatch_pending
+            dispatch_pending()
+            return True
+        from . import dev_stable
+        if dev_stable.owns(record):
+            # Its controller works outside this worker and restarts it on
+            # purpose; turns keep running on whichever code is installed.
+            dev_stable.ensure_running(store, record)
             return True
         repair = load_repair(store, record)
         if record.state.phase is UpdatePhase.NEEDS_MANUAL_RECOVERY and repair is None:
@@ -126,7 +147,7 @@ def recover_pending_updates() -> bool:
         launch_supervisor(record.request.update_id, resume=True)
         record = store.load(record.request.update_id)
         if record.state.phase in {
-            UpdatePhase.PREPARING, UpdatePhase.STAGING, UpdatePhase.READY,
+            UpdatePhase.PREPARING, UpdatePhase.BUILDING, UpdatePhase.READY,
         }:
             error_path = store.root / record.request.update_id / f"startup-error-{record.state.attempt}.json"
             return not (error_path.exists() or error_path.is_symlink())
@@ -195,50 +216,12 @@ def recover_pending_updates() -> bool:
             if record.state.phase is UpdatePhase.ACTIVATING:
                 time.sleep(0.1)
                 continue
-            if record.state.phase is not UpdatePhase.VERIFYING:
+            if record.state.phase not in VERIFIER_PHASES:
                 raise ValueError("unexpected startup update phase")
-            _check_gate(record)
-            config = load_verifier_config(store, record)
-            job_id = f"self-update:{record.request.update_id}:verify:{record.state.attempt}"
-            existing = load_job(record.request.session_id, job_id)
-            if existing is not None:
-                if existing.source != "self_update_verify" or existing.agent_id != record.request.agent_id:
-                    raise ValueError("verifier Job ID is occupied by a different job")
-                return True  # Terminal/orphan Jobs are evidence, never resubmitted.
-            validate_model_capabilities(config, resolve_model(config["profile_snapshot"], config["model_override"]))
-            claim = store.claim_verifier(
-                record.request.update_id, owner=f"worker:{os.getpid()}", lease_seconds=_CLAIM_SECONDS,
-            )
-            if not claim.acquired:
-                time.sleep(0.1)
-                continue
-            runner = get_runner()
-            with store._locked():
-                current = store._load_unlocked(record.request.update_id)
-                if current.state.phase in TERMINAL_PHASES:
-                    continue  # Terminal maintenance must also finish before admission.
-                if load_rollback_intent(store, current) is not None:
-                    continue
-                dispatch = current.state.dispatch
-                if current.state.phase is not UpdatePhase.VERIFYING or dispatch is None:
-                    raise ValueError("verification phase changed before admission")
-                if dispatch.generation != claim.generation or dispatch.lease_until <= time.time():
-                    continue
-                # Serialize admission with supervisor rollback. spawn_job does
-                # not wait for execution; its turn admission resumes on unlock.
-                _check_gate(current)
-                runner.spawn_job(
-                    job_id=claim.job_id, session_id=record.request.session_id,
-                    prompt=verifier_prompt(record, config), agent_id=config["agent_id"],
-                    source="self_update_verify", context_mode="clean", parent_msg_id=None,
-                    caller_msg_id=record.request.origin_assistant_id,
-                    spawn_caller=record.request.origin_assistant_id, advance_head=False,
-                    wait=True, label="Post-update verification", creates_agent=False,
-                    profile_snapshot=config["profile_snapshot"], model_override=config["model_override"],
-                    tools_override=config["tools_override"], response_format=config["response_format"],
-                    authority=config["authority"],
-                )
-            return True
+            if _admit_verifier(store, record):
+                return True
+            time.sleep(0.1)
+            continue
     except Exception as exc:
         _log.error("Self-update startup verification failed: %s", type(exc).__name__)
         if record is not None:
@@ -257,6 +240,68 @@ def recover_pending_updates() -> bool:
         return False
 
 
+def _admit_verifier(store, record) -> bool:
+    """Claim and spawn the frozen verifier Job; ``False`` means try again."""
+    from openprogram.runtime.jobs import get_runner
+    from openprogram.runtime.jobs.store import load_job
+    from openprogram.runtime.conversation.model_tools import resolve_model
+
+    _check_gate(record)
+    config = load_verifier_config(store, record)
+    job_id = f"self-update:{record.request.update_id}:verify:{record.state.attempt}"
+    existing = load_job(record.request.session_id, job_id)
+    if existing is not None:
+        if existing.source != "self_update_verify" or existing.agent_id != record.request.agent_id:
+            raise ValueError("verifier Job ID is occupied by a different job")
+        return True  # Terminal/orphan Jobs are evidence, never resubmitted.
+    validate_model_capabilities(config, resolve_model(config["profile_snapshot"], config["model_override"]))
+    claim = store.claim_verifier(
+        record.request.update_id, owner=f"worker:{os.getpid()}", lease_seconds=_CLAIM_SECONDS,
+    )
+    if not claim.acquired:
+        return False
+    runner = get_runner()
+    with store._locked():
+        current = store._load_unlocked(record.request.update_id)
+        if current.state.phase in TERMINAL_PHASES:
+            return False  # Terminal maintenance must also finish before admission.
+        if load_rollback_intent(store, current) is not None:
+            return False
+        dispatch = current.state.dispatch
+        if current.state.phase not in VERIFIER_PHASES or dispatch is None:
+            raise ValueError("verification phase changed before admission")
+        if dispatch.generation != claim.generation or dispatch.lease_until <= time.time():
+            return False
+        # Serialize admission with supervisor rollback. spawn_job does
+        # not wait for execution; its turn admission resumes on unlock.
+        _check_gate(current)
+        runner.spawn_job(
+            job_id=claim.job_id, session_id=record.request.session_id,
+            prompt=verifier_prompt(record, config), agent_id=config["agent_id"],
+            source="self_update_verify", context_mode="clean", parent_msg_id=None,
+            caller_msg_id=record.request.origin_assistant_id,
+            spawn_caller=record.request.origin_assistant_id, advance_head=False,
+            wait=True, label="Post-update verification", creates_agent=False,
+            profile_snapshot=config["profile_snapshot"], model_override=config["model_override"],
+            tools_override=config["tools_override"], response_format=config["response_format"],
+            authority=config["authority"],
+        )
+    return True
+
+
+def _dispatch_trial_verifier(update_id: str) -> bool:
+    """Admit the trial's verifier in this, the live, worker."""
+    store = SelfUpdateStore()
+    deadline = time.monotonic() + _STARTUP_SECONDS
+    while time.monotonic() < deadline:
+        record = store.load(update_id)
+        if record.state.phase is not UpdatePhase.TRIAL:
+            raise ValueError("update is no longer in its trial")
+        if _admit_verifier(store, record):
+            return True
+        time.sleep(0.1)
+    raise ValueError("the trial's verifier could not be admitted in time")
+
 
 def dispatch_hot_update(update_id: str) -> bool:
     """Run startup dispatch for a hot-swapped update in this running worker.
@@ -269,6 +314,8 @@ def dispatch_hot_update(update_id: str) -> bool:
 
     store = SelfUpdateStore()
     record = store.load(update_id)
+    if record.state.phase is UpdatePhase.TRIAL:
+        return _dispatch_trial_verifier(update_id)
     plan = load_plan(store.root / update_id)
     if plan is None or plan.restart != "hot":
         raise ValueError("update does not keep the running worker")

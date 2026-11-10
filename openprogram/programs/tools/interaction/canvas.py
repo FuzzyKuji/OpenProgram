@@ -37,6 +37,8 @@ from openprogram.programs._authoring.helpers import read_string_param
 from openprogram.programs._host.runtime import ToolReturn, function
 
 
+from openprogram.runtime.permissions import refusal
+
 NAME = "canvas"
 
 DEFAULT_CANVAS_ENV = "OPENPROGRAM_CANVAS_PATH"
@@ -103,7 +105,7 @@ def _read(path: str) -> str:
     from openprogram.host.sandbox import validate_read_path
     violation = validate_read_path(path)
     if violation:
-        raise PermissionError(f"sandbox policy: {violation}")
+        raise refusal.sandbox(NAME, violation)
     try:
         with open(path, "r", encoding="utf-8") as f:
             return f.read()
@@ -115,7 +117,7 @@ def _write(path: str, text: str) -> None:
     from openprogram.host.sandbox import validate_write_path
     violation = validate_write_path(path)
     if violation:
-        raise PermissionError(f"sandbox policy: {violation}")
+        raise refusal.sandbox(NAME, violation)
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
     with open(path, "w", encoding="utf-8") as f:
         f.write(text)
@@ -162,11 +164,11 @@ def _execute_result(
     from openprogram.host.sandbox import validate_read_path, validate_write_path
     violation = validate_read_path(resolved)
     if violation:
-        return ToolReturn(text=f"Error: sandbox policy: {violation}", is_error=True)
+        raise refusal.sandbox(NAME, violation)
     if action in {"set", "append", "delete"}:
         violation = validate_write_path(resolved)
         if violation:
-            return ToolReturn(text=f"Error: sandbox policy: {violation}", is_error=True)
+            raise refusal.sandbox(NAME, violation)
     try:
         current = _read(resolved)
     except PermissionError as e:

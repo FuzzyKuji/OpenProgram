@@ -1,5 +1,5 @@
 import { runtimeState } from "../state";
-import { useSessionStore } from "../../session-store";
+import { selectRow, useSessionStore } from "../../session-store";
 import type { GoalVerification } from "../../chat/decisions/goal-verification";
 
 /** Replay a snapshot that may have arrived before its assistant row. */
@@ -29,8 +29,11 @@ export function updateSessionGoal(
   conversation.goal = goal;
   runtimeState.conversations[sessionId] = conversation;
   const result = goal?.verification_message;
-  if (result && useSessionStore.getState().messagesById[result.message_id]) {
-    useSessionStore.getState().updateMessage(sessionId, result.message_id, { goalVerification: result.presentation });
+  if (result && selectRow(sessionId, result.message_id)(useSessionStore.getState())) {
+    useSessionStore.getState().applyLocalChange(sessionId, {
+      kind: "overlay_set", rowId: result.message_id,
+      fields: { goalVerification: result.presentation }, clear: ["until_field_matches"],
+    });
   }
   window.dispatchEvent(new CustomEvent("op:goal-state", {
     detail: { session_id: sessionId, goal },

@@ -1,25 +1,27 @@
-"""Resumable Agent loop input built on the durable Agent checkpoint.
+"""Resuming an Agent turn from its journal.
 
-The checkpoint payload, its codec and the runtime-contract check live in
-``openprogram.runtime.execution.agent_checkpoint``, where the control plane
-decodes them. This module holds the engine side: the runtime contract
-snapshot taken from live tools and the turn request, and the continuation
-that turns a checkpoint back into provider messages for a fresh attempt.
+This module holds the runtime contract snapshot taken from live tools and the
+turn request, and the continuation that turns a journal position back into
+provider messages for a fresh attempt.
 """
 from __future__ import annotations
 
 import hashlib
+import time
 from dataclasses import dataclass, field
 from types import CodeType
 from typing import Any, Mapping, TYPE_CHECKING
 
-from openprogram.models.providers.types import AssistantMessage, ToolResultMessage
-from openprogram.runtime.execution.agent_checkpoint import (
+from openprogram.models.providers.types import (
+    AssistantMessage, TextContent, ToolResultMessage, UserMessage,
+)
+from openprogram.runtime.execution.agent_journal import (
+    INTERRUPTED_TOOL_TEXT, JournalState, interrupted_outcome, load_journal,
+)
+from openprogram.runtime.execution.runtime_contract import (
     RUNTIME_CONTRACT_VERSION,
-    AgentCheckpointError,
-    AgentCheckpointV1,
-    _json_safe,
-    decode_turn_display,
+    RuntimeContractError,
+    json_safe as _json_safe,
     validate_runtime_contract,
 )
 
@@ -27,61 +29,6 @@ if TYPE_CHECKING:
     from openprogram.runtime.execution.checkpoints import CheckpointManifest
     from openprogram.runtime.execution.store import ExecutionStore
     from openprogram.runtime.agent.turn_request import TurnRequest
-
-
-def provider_context_from_effect(
-    continuation: "AgentContinuation",
-    store: Any,
-) -> list[Any] | None:
-    """Recover the exact pre-provider message context when it was saved.
-
-    A continuation checkpoint identifies the provider action, while the
-    corresponding effect retains the provider payload. Reuse it only when
-    both identities match the checkpoint; older checkpoints fall back to
-    graph rendering in the dispatcher.
-    """
-    action_id = continuation.provider_action_id
-    execution_id = continuation.checkpoint.execution_id
-    if not action_id or not execution_id:
-        return None
-    from openprogram.runtime.execution.effects import EffectStore, EffectStatus
-
-    if not callable(getattr(store, "_connect", None)):
-        return None
-    effect = EffectStore(store).get(f"effect_{action_id[:32]}")
-    if (
-        effect is None
-        or effect.execution_id != execution_id
-        or effect.action_id != action_id
-        or effect.metadata.get("kind") != "provider.before"
-        or effect.status is not EffectStatus.COMMITTED
-    ):
-        return None
-    metadata = effect.metadata
-    payload = metadata.get("payload") if isinstance(metadata, Mapping) else None
-    context = payload.get("context") if isinstance(payload, Mapping) else None
-    values = context.get("messages") if isinstance(context, Mapping) else None
-    if not isinstance(values, list):
-        return None
-    from openprogram.models.providers.types import UserMessage
-
-    result: list[Any] = []
-    for value in values:
-        if not isinstance(value, Mapping):
-            return None
-        role = value.get("role")
-        try:
-            if role == "user":
-                result.append(UserMessage.model_validate(value))
-            elif role == "assistant":
-                result.append(AssistantMessage.model_validate(value))
-            elif role == "toolResult":
-                result.append(ToolResultMessage.model_validate(value))
-            else:
-                return None
-        except Exception:
-            return None
-    return result
 
 
 def _code_material(value: Any) -> bytes:
@@ -195,88 +142,116 @@ def runtime_contract_snapshot(
     }
 
 
+def _interrupted_result(step: Any) -> ToolResultMessage:
+    return ToolResultMessage(
+        tool_call_id=step.tool_call_id, tool_name=step.tool_name,
+        content=[TextContent(text=INTERRUPTED_TOOL_TEXT)], is_error=True,
+        timestamp=int(time.time() * 1000),
+    )
+
+
 @dataclass(frozen=True)
 class AgentContinuation:
-    """A fresh-attempt carrier reconstructed solely from a checkpoint."""
+    """A fresh attempt's starting point, rebuilt from the turn's journal."""
 
     request: "TurnRequest"
     checkpoint: "CheckpointManifest"
-    state: AgentCheckpointV1
+    journal: JournalState
+    pointer: Mapping[str, Any]
+    user_message_id: str
+    assistant_message_id: str
     assistant_message: AssistantMessage
     tool_results: tuple[ToolResultMessage, ...]
     resolved_snapshot: Mapping[str, Any]
     display: tuple[dict[str, Any], ...] = ()
+    # A tool that started and never reported back, when it is not safe to
+    # repeat: this result tells the model so, and the first owner records it.
+    interrupted_result: ToolResultMessage | None = None
     execution_store: Any = field(default=None, repr=False, compare=False)
 
     @classmethod
     def from_checkpoint(
-        cls, *, store: "ExecutionStore", checkpoint: "CheckpointManifest", request: "TurnRequest"
+        cls, *, store: "ExecutionStore", checkpoint: "CheckpointManifest", request: "TurnRequest",
+        sessions: Any = None,
     ) -> "AgentContinuation":
-        state = AgentCheckpointV1.load(store, checkpoint)
-        payload = state.payload
-        turn = payload["turn"]
-        if request.user_msg_id and request.user_msg_id != turn["user_message_id"]:
-            raise AgentCheckpointError("checkpoint_schema_invalid", "continuation request has a different user anchor")
+        pointer = checkpoint.state_refs.get("agent_journal")
+        if not isinstance(pointer, Mapping):
+            raise RuntimeContractError("checkpoint_schema_invalid", "checkpoint names no journal position")
+        state = load_journal(request.session_id, pointer, sessions=sessions)
+        decision = state.last
+        if decision is None:
+            raise RuntimeContractError("checkpoint_schema_invalid", "journal has no model decision")
+        turn = state.turn
+        if request.user_msg_id and request.user_msg_id != turn.get("user_message_id"):
+            raise RuntimeContractError("checkpoint_schema_invalid", "continuation request has a different user anchor")
         request.user_msg_id = turn["user_message_id"]
-        assistant_data = state.read_json_ref(
-            store, checkpoint.execution_id, payload["assistant_message_delta_ref"]
-        )
-        try:
-            assistant = AssistantMessage.model_validate(assistant_data)
-            results = tuple(
-                ToolResultMessage.model_validate(
-                    state.read_json_ref(store, checkpoint.execution_id, descriptor)
-                )
-                for descriptor in payload["tool_result_delta_refs"]
-            )
-        except Exception as exc:
-            raise AgentCheckpointError("checkpoint_schema_invalid", "checkpoint message delta is invalid") from exc
-        tool_call_ids = [item.id for item in assistant.content if getattr(item, "type", None) == "toolCall"]
-        if tool_call_ids != payload["current_decision"]["tool_call_ids"]:
-            raise AgentCheckpointError("checkpoint_schema_invalid", "checkpoint decision tool calls differ from assistant delta")
-        snapshot = state.read_json_ref(
-            store, checkpoint.execution_id, payload["resolved_model_system_tool_snapshot_ref"]
-        )
+        snapshot = state.snapshot
         if (
-            not isinstance(snapshot, Mapping)
-            or not isinstance(snapshot.get("model"), Mapping)
+            not isinstance(snapshot.get("model"), Mapping)
             or not isinstance(snapshot["model"].get("id"), str)
             or not snapshot["model"]["id"]
             or not isinstance(snapshot.get("system_prompt"), str)
             or not isinstance(snapshot.get("tools"), list)
         ):
-            raise AgentCheckpointError("checkpoint_schema_invalid", "resolved snapshot is invalid")
+            raise RuntimeContractError("checkpoint_schema_invalid", "resolved snapshot is invalid")
         validate_runtime_contract(snapshot, snapshot)
-        display_blocks = decode_turn_display(
-            state, store=store, execution_id=checkpoint.execution_id,
-        )
+        try:
+            assistant = AssistantMessage.model_validate(decision.message)
+            results = [ToolResultMessage.model_validate(item) for item in state.tool_results()]
+        except Exception as exc:
+            raise RuntimeContractError("checkpoint_schema_invalid", "journal message is invalid") from exc
+        interrupted = None
+        unfinished = state.interrupted_step()
+        if unfinished is not None and interrupted_outcome(unfinished[1]) == "report":
+            interrupted = _interrupted_result(unfinished[1])
+            results.append(interrupted)
         return cls(
-            request=request,
-            checkpoint=checkpoint,
-            state=state,
-            assistant_message=assistant,
-            tool_results=results,
+            request=request, checkpoint=checkpoint, journal=state, pointer=dict(pointer),
+            user_message_id=str(turn["user_message_id"]),
+            assistant_message_id=str(turn["assistant_message_id"]),
+            assistant_message=assistant, tool_results=tuple(results),
             resolved_snapshot=dict(snapshot),
-            display=tuple(dict(card) for card in display_blocks),
+            display=tuple(state.display_blocks()),
+            interrupted_result=interrupted,
             execution_store=store,
         )
 
     @property
     def phase(self) -> str:
-        return str(self.state.payload["safe_point"]["phase"])
-
-    @property
-    def assistant_message_id(self) -> str:
-        return str(self.state.payload["turn"]["assistant_message_id"])
+        return "after_tool" if self.tool_results else "after_provider"
 
     @property
     def provider_action_id(self) -> str:
-        return str(self.state.payload["current_decision"]["provider_action_id"])
+        return self.journal.last.action_id
 
     @property
     def next_tool_index(self) -> int:
-        return int(self.state.payload["next_tool_index"])
+        return len(self.tool_results)
 
     @property
     def repeat_failures(self) -> dict[str, int]:
-        return dict(self.state.payload["repeat_failures"])
+        return dict(self.journal.repeat_failures)
+
+    @property
+    def loaded_deferred_tools(self) -> list[str]:
+        return list(self.journal.loaded_deferred_tools)
+
+    def prior_messages(self) -> list[Any]:
+        """Everything this turn said before its current decision, in order."""
+        messages: list[Any] = [_steer_message(item) for item in self.journal.steers_before]
+        for decision in self.journal.decisions[:-1]:
+            messages.append(AssistantMessage.model_validate(decision.message))
+            for call in decision.tool_calls:
+                step = decision.steps.get(str(call.get("id")))
+                if step is not None and step.result is not None:
+                    messages.append(ToolResultMessage.model_validate(step.result))
+            messages.extend(_steer_message(item) for item in decision.steers_after)
+        return messages
+
+    def steer_messages(self) -> list[Any]:
+        """Steering delivered after the current decision's tools."""
+        return [_steer_message(item) for item in self.journal.last.steers_after]
+
+
+def _steer_message(record: Mapping[str, Any]) -> UserMessage:
+    return UserMessage.model_validate(record["message"])

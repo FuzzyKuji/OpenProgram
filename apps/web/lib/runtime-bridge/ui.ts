@@ -12,6 +12,7 @@ import { pushStatusBadge, setLastStatus } from "@/lib/tabs/top-bar-sync";
 import { startChannelHealthPoll, stopChannelHealthPoll } from "./session/conversations";
 import { escAttr } from "./helpers";
 import { runtimeState } from "./state";
+import { channelBrand } from "@/lib/channels/channel-brands";
 
 /** The ONLY reason anything below still lives on `window`: this file
  *  generates HTML strings containing inline `onclick="…"` handlers,
@@ -168,18 +169,6 @@ export function updateStatus(status: string, source?: string): void {
 }
 
 /* ===== Channel / title helpers =================================== */
-
-const CHANNEL_BRAND: Record<string, string> = {
-  wechat: "WeChat",
-  discord: "Discord",
-  telegram: "Telegram",
-  slack: "Slack",
-};
-
-function channelBrand(channel: string): string {
-  if (!channel) return "";
-  return CHANNEL_BRAND[String(channel).toLowerCase()] || channel;
-}
 
 function channelPrefixFor(channel: string, accountId?: string): string {
   if (!channel) return "";

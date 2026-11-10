@@ -44,10 +44,6 @@ class ConversationSessionFacts(SessionFacts):
         from openprogram.runtime.execution.run_control import current_token
         return current_token(session_id, execution_id=execution_id) is not None
 
-    def in_plan_mode(self, session_id: str | None) -> bool:
-        from openprogram.runtime.conversation import plan_mode
-        return plan_mode.is_plan_mode(session_id)
-
     def project_defaults(self, session_id: str) -> dict:
         from openprogram.runtime.conversation import session_config
         return session_config.project_defaults(session_id)
@@ -76,7 +72,7 @@ class ConversationSessionFacts(SessionFacts):
     def holds_outbound(self, agent_id: str) -> bool:
         from openprogram.runtime.agent_registry import manager
         spec = manager.get(agent_id)
-        return spec is None or getattr(spec, "hold_outbound", True) is not False
+        return spec is not None and getattr(spec, "hold_outbound", False) is True
 
     def session_chat_model(self, session_id: str | None) -> tuple[Any, Any]:
         from openprogram.runtime.conversation import session_model

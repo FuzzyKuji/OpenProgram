@@ -17,6 +17,7 @@ import { useTranslation } from "@/lib/i18n";
 import { FileTypeIcon } from "@/components/files/file-type-icon";
 import { SolarIcon } from "@/components/solar-icons";
 import { TabFavicon } from "@/components/center-tabs/strip/tab-favicon";
+import { FillIcon } from "@/components/ui/fill-icon";
 
 import { mentionHost, mentionKey, type Mention } from "./mention-sources";
 
@@ -136,12 +137,12 @@ export function FileMenu({
                 }}
               >
                 {item.kind === "tab"
-                  ? <TabFavicon url={item.faviconUrl} />
+                  ? <FillIcon><TabFavicon url={item.faviconUrl} /></FillIcon>
                   : item.kind === "app"
                     ? item.icon
-                      ? <img src={item.icon} alt="" width={16} height={16} style={{ display: "block" }} />
-                      : <SolarIcon name="monitor" size={16} />
-                    : item.is_dir ? <SolarIcon name="folder-with-files" size={16} /> : <FileTypeIcon name={item.path} />}
+                      ? <FillIcon><img src={item.icon} alt="" width={16} height={16} style={{ display: "block" }} /></FillIcon>
+                      : <SolarIcon name="monitor" size={16} fit="fill" />
+                    : item.is_dir ? <SolarIcon name="folder-with-files" size={16} fit="fill" /> : <FillIcon><FileTypeIcon name={item.path} /></FillIcon>}
               </span>
               <span
                 style={{

@@ -10,6 +10,11 @@ from .listing import handle_list_sessions
 _log = logging.getLogger(__name__)
 
 
+def _close_browser_tabs(session_id: str) -> None:
+    from openprogram.programs.applications.browser.tabs import close_conversation_tabs_soon
+    close_conversation_tabs_soon(session_id)
+
+
 async def handle_delete_session(ws, cmd: dict):
     from openprogram.interfaces.server import server as _s
     from openprogram.runtime.context.session_db import default_db
@@ -39,6 +44,7 @@ async def handle_delete_session(ws, cmd: dict):
         # only after a reload.
         await handle_list_sessions(ws, {})
         return
+    _close_browser_tabs(session_id)
     _s._broadcast(json.dumps({"type": "session_deleted", "session_id": session_id}))
 
 
@@ -247,6 +253,7 @@ async def handle_update_session_flags(ws, cmd: dict):
         fields["sort_since"] = float(row.get("updated_at") or 0) if sort_at else 0.0
     if not fields:
         return
+    was_archived = bool((default_db().get_session(session_id) or {}).get("archived"))
     with _s._sessions_lock:
         conv = _s._sessions.get(session_id)
         if conv is not None:
@@ -255,6 +262,12 @@ async def handle_update_session_flags(ws, cmd: dict):
         default_db().update_session(session_id, **fields)
     except Exception as e:
         _s._log(f"[update_session_flags] {session_id}: {e}")
+    else:
+        if fields.get("archived"):
+            _close_browser_tabs(session_id)
+        if "archived" in fields and fields["archived"] != was_archived:
+            from openprogram.runtime.conversation.always_on.runtime import archive_changed
+            await asyncio.to_thread(archive_changed, session_id, fields["archived"])
     _s._broadcast(json.dumps({
         "type": "session_updated",
         "data": {"id": session_id, **fields},
@@ -312,11 +325,17 @@ async def handle_clear_sessions(ws, cmd: dict):
             _s._running_tasks.pop(cid, None)
         try:
             db.delete_session(cid)
+            _close_browser_tabs(cid)
         except Exception as e:
             _s._log(f"[clear_sessions] delete {cid}: {e}")
 
     # 删完回发一次真实列表（应为空），让发起方立刻看到清空结果，不靠刷新。
     await handle_list_sessions(ws, {})
+
+
+async def handle_set_window_hidden(ws, cmd: dict):
+    """Record whether this client's window is hidden (minimized or in the background)."""
+    ws._window_hidden = bool(cmd.get("hidden"))
 
 
 async def handle_mark_session_read(ws, cmd: dict):
@@ -327,14 +346,15 @@ async def handle_mark_session_read(ws, cmd: dict):
     Clears the ``unread`` flag (blue dot) and remembers
     ``ws._focused_session_id`` so a later background-run completion knows not
     to re-mark this session unread for a client that's actively on it.
-    Broadcasts so every open tab clears the dot together.
+    Broadcasts so every open tab clears the dot together. A hidden window
+    keeps its focus but has not seen anything, so dot and news stay.
     """
     from openprogram.interfaces.server import server as _s
     from openprogram.runtime.context.session_db import default_db
 
     sid = cmd.get("session_id") or None
     ws._focused_session_id = sid
-    if not sid:
+    if not sid or getattr(ws, "_window_hidden", False):
         return
     with _s._sessions_lock:
         conv = _s._sessions.get(sid)
@@ -348,3 +368,10 @@ async def handle_mark_session_read(ws, cmd: dict):
         "type": "session_updated",
         "data": {"id": sid, "unread": False},
     }, default=str))
+    try:
+        from openprogram.runtime.conversation.always_on import pending
+        if pending.mark_seen(sid):
+            # Its news left the pending inbox.
+            _s._broadcast(json.dumps({"type": "always_on_update", "data": {"session_id": sid}}))
+    except Exception as e:  # noqa: BLE001 - reading the conversation goes on
+        _s._log(f"[mark_session_read] pending {sid}: {e}")

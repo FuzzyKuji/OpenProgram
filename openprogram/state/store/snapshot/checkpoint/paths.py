@@ -19,6 +19,10 @@ not collision-free across paths). Legacy unsuffixed blobs remain readable. Refer
 until their turn is pruned; files are never overwritten in place.
 The manifest is the source of truth
 for "which backup belongs to which path".
+
+Beside the turn directories sit ``checkpoints/`` and ``blobs/`` (one recovery
+point per prompt, see ``prompt_checkpoints``) and ``intents/`` + ``intent-locks/``
+(durable rewind transactions).
 """
 from __future__ import annotations
 

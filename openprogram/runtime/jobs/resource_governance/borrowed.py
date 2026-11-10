@@ -3,8 +3,19 @@ from __future__ import annotations
 import time
 from typing import Any, Callable, Mapping
 
+from openprogram.runtime.jobs.resource_governance.limits import _NO_TERMINAL_BLOCK
+
 
 class BorrowedOperations:
+    def _parent_holds_claim(
+        self, tables, parent_job_id: str, owner_instance_id: str, lease_generation: int,
+    ) -> bool:
+        return self._admission(
+            tables, parent_job_id, state=("live", "stopping"),
+            owner_instance_id=owner_instance_id, lease_generation=lease_generation,
+        ) is not None
+
+
     def release_borrowed_job(
         self,
         job_id: str,
@@ -15,33 +26,23 @@ class BorrowedOperations:
         reason_code: str,
     ) -> bool:
         """Release a child only while its borrowed parent fence is current."""
-        with self.ledger.immediate() as conn:
-            parent = conn.execute(
-                """SELECT 1 FROM job_admissions
-                   WHERE job_id = ? AND state IN ('live','stopping')
-                     AND owner_instance_id = ? AND lease_generation = ?""",
-                (parent_job_id, owner_instance_id, lease_generation),
-            ).fetchone()
-            if parent is None:
+        with self._write() as tables:
+            if not self._parent_holds_claim(
+                tables, parent_job_id, owner_instance_id, lease_generation,
+            ):
                 return False
-            return conn.execute(
-                """UPDATE job_admissions
-                   SET state = 'released', terminal_blocked = 0,
-                       terminal_block_command_id = NULL,
-                       terminal_block_phase = NULL,
-                       terminal_block_expires_at = NULL,
-                       terminal_block_prior_dispatch_ready = NULL,
-                       released_at = ?, reason_code = ?,
-                       lease_expires_at = NULL, resume_parent_msg_id = NULL
-                   WHERE job_id = ? AND state = 'queued'
-                     AND borrowed_parent_job_id = ?
-                     AND NOT EXISTS (
-                         SELECT 1 FROM job_finalizations
-                         WHERE job_finalizations.job_id = job_admissions.job_id
-                           AND job_finalizations.state = 'pending'
-                     )""",
-                (time.time(), reason_code, job_id, parent_job_id),
-            ).rowcount == 1
+            self.ledger.ensure_job_session(tables, job_id)
+            if self._pending_finalization(tables, job_id):
+                return False
+            return tables.update(
+                "job_admissions",
+                {
+                    "state": "released", **_NO_TERMINAL_BLOCK,
+                    "released_at": time.time(), "reason_code": reason_code,
+                    "resume_parent_msg_id": None,
+                },
+                job_id=job_id, state="queued", borrowed_parent_job_id=parent_job_id,
+            ) == 1
 
 
     def start_borrowed_job(
@@ -53,62 +54,23 @@ class BorrowedOperations:
         lease_generation: int,
     ) -> bool:
         """Fence a borrowed child's runtime without consuming live capacity."""
-        with self.ledger.immediate() as conn:
-            parent = conn.execute(
-                """SELECT 1 FROM job_admissions
-                   WHERE job_id = ? AND state IN ('live','stopping')
-                     AND owner_instance_id = ? AND lease_generation = ?""",
-                (parent_job_id, owner_instance_id, lease_generation),
-            ).fetchone()
-            if parent is None:
+        with self._write() as tables:
+            if not self._parent_holds_claim(
+                tables, parent_job_id, owner_instance_id, lease_generation,
+            ):
                 return False
+            self.ledger.ensure_job_session(tables, job_id)
             now = time.time()
-            return conn.execute(
-                """UPDATE job_admissions
-                   SET owner_instance_id = ?, lease_generation = ?,
-                       started_at = ?, last_activity_at = ?, lease_expires_at = ?
-                   WHERE job_id = ? AND state = 'queued'
-                     AND dispatch_ready = 0
-                     AND terminal_blocked = 0
-                     AND borrowed_parent_job_id = ?
-                     AND owner_instance_id IS NULL""",
-                (
-                    owner_instance_id, lease_generation, now, now, now + 30.0,
-                    job_id, parent_job_id,
-                ),
-            ).rowcount == 1
-
-
-    def renew_borrowed_lease(
-        self,
-        job_id: str,
-        *,
-        parent_job_id: str,
-        owner_instance_id: str,
-        lease_generation: int,
-    ) -> bool:
-        """Renew the child entry only while the borrowed parent fence is live."""
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE job_admissions AS child SET lease_expires_at = ?
-                   WHERE child.job_id = ? AND child.state = 'queued'
-                     AND child.borrowed_parent_job_id = ?
-                     AND child.owner_instance_id = ?
-                     AND child.lease_generation = ?
-                     AND EXISTS (
-                         SELECT 1 FROM job_admissions AS parent
-                         WHERE parent.job_id = child.borrowed_parent_job_id
-                           AND parent.state IN ('live','stopping')
-                           AND parent.owner_instance_id = ?
-                           AND parent.lease_generation = ?
-                     )""",
-                (
-                    time.time() + 30.0, job_id, parent_job_id,
-                    owner_instance_id, lease_generation,
-                    owner_instance_id, lease_generation,
-                ),
-            ).rowcount == 1
-
+            return tables.update(
+                "job_admissions",
+                {
+                    "owner_instance_id": owner_instance_id,
+                    "lease_generation": lease_generation,
+                    "started_at": now, "last_activity_at": now,
+                },
+                job_id=job_id, state="queued", dispatch_ready=0, terminal_blocked=0,
+                borrowed_parent_job_id=parent_job_id, owner_instance_id=None,
+            ) == 1
 
     def finalize_borrowed_job(
         self,
@@ -138,40 +100,28 @@ class BorrowedOperations:
 
     def release_orphaned_borrowed_jobs(self) -> list[tuple[str, str]]:
         """Release borrowed children whose parent no longer owns a claim."""
-        with self.ledger.immediate() as conn:
-            rows = conn.execute(
-                """SELECT child.job_id, child.session_id
-                   FROM job_admissions AS child
-                   LEFT JOIN job_admissions AS parent
-                     ON parent.job_id = child.borrowed_parent_job_id
-                   WHERE child.state = 'queued'
-                     AND child.borrowed_parent_job_id IS NOT NULL
-                     AND NOT EXISTS (
-                         SELECT 1 FROM job_finalizations
-                         WHERE job_finalizations.job_id = child.job_id
-                           AND job_finalizations.state = 'pending'
-                     )
-                     AND (parent.job_id IS NULL
-                          OR parent.state NOT IN ('live','stopping'))"""
-            ).fetchall()
-            for row in rows:
-                conn.execute(
-                    """UPDATE job_admissions
-                       SET state = 'released', terminal_blocked = 0,
-                           terminal_block_command_id = NULL,
-                           terminal_block_phase = NULL,
-                           terminal_block_expires_at = NULL,
-                           terminal_block_prior_dispatch_ready = NULL,
-                           released_at = ?,
-                           resume_parent_msg_id = NULL,
-                           reason_code = 'error.borrowed_parent_lost'
-                       WHERE job_id = ? AND state = 'queued'
-                         AND NOT EXISTS (
-                             SELECT 1 FROM job_finalizations
-                             WHERE job_finalizations.job_id = job_admissions.job_id
-                               AND job_finalizations.state = 'pending'
-                         )""",
-                    (time.time(), row["job_id"]),
+        with self._write() as tables:
+            pending = {
+                row["job_id"] for row in tables.rows("job_finalizations", state="pending")
+            }
+            orphans = []
+            for child in tables.rows(
+                "job_admissions", state="queued",
+                where=lambda row: row["borrowed_parent_job_id"] is not None,
+            ):
+                if child["job_id"] in pending:
+                    continue
+                parent = self._admission(tables, child["borrowed_parent_job_id"])
+                if parent is None or parent["state"] not in ("live", "stopping"):
+                    orphans.append(child)
+            for child in orphans:
+                tables.update(
+                    "job_admissions",
+                    {
+                        "state": "released", **_NO_TERMINAL_BLOCK,
+                        "released_at": time.time(), "resume_parent_msg_id": None,
+                        "reason_code": "error.borrowed_parent_lost",
+                    },
+                    job_id=child["job_id"], state="queued",
                 )
-        return [(str(row["job_id"]), str(row["session_id"])) for row in rows]
-
+        return [(str(row["job_id"]), str(row["session_id"])) for row in orphans]

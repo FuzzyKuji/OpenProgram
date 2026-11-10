@@ -37,6 +37,10 @@ export interface ToastDetail {
   action?: ToastAction;
   /** The conversation the toast is about, if any. */
   sessionId?: string;
+  /** Every notice of a kind shows at the same width, whatever its text. */
+  uniformWidth?: boolean;
+  /** Names the toast so dismissToast can take it down early. */
+  key?: string;
 }
 
 export interface ToastOptions {
@@ -45,9 +49,12 @@ export interface ToastOptions {
   link?: ToastLink;
   action?: ToastAction;
   sessionId?: string;
+  uniformWidth?: boolean;
+  key?: string;
 }
 
 export const TOAST_EVENT = "op:toast";
+export const TOAST_DISMISS_EVENT = "op:toast-dismiss";
 
 /** Fire a transient toast. No-op during SSR. */
 export function showToast(message: string, opts: ToastOptions = {}): void {
@@ -61,7 +68,15 @@ export function showToast(message: string, opts: ToastOptions = {}): void {
         link: opts.link,
         action: opts.action,
         sessionId: opts.sessionId,
+        uniformWidth: opts.uniformWidth,
+        key: opts.key,
       },
     }),
   );
+}
+
+/** Take down the toast shown with this key, if it is still up. */
+export function dismissToast(key: string): void {
+  if (typeof window === "undefined") return;
+  window.dispatchEvent(new CustomEvent<string>(TOAST_DISMISS_EVENT, { detail: key }));
 }

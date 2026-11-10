@@ -18,13 +18,14 @@ import { openSession } from "@/lib/tabs/navigation/open-session";
 
 type Text = (en: string, zh: string) => string;
 
-/** Resolves to the new conversation's id, or null after a failure toast. */
-export async function copyConversation(sessionId: string, text: Text): Promise<string | null> {
+/** With `msgId` the copy ends at that message rather than HEAD.
+ *  Resolves to the new conversation's id, or null after a failure toast. */
+export async function copyConversation(sessionId: string, text: Text, msgId?: string): Promise<string | null> {
   try {
     const response = await fetch("/api/chat/branch_session", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ session_id: sessionId }),
+      body: JSON.stringify(msgId ? { session_id: sessionId, msg_id: msgId } : { session_id: sessionId }),
     });
     const data = await response.json().catch(() => ({})) as {
       ok?: boolean; new_session_id?: string; title?: string; error?: string;

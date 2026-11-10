@@ -65,6 +65,81 @@ test("A mouse wheel zooms, two fingers pan, a right drag pans, a left drag draws
   assert.match(gestures, /menuAt && !moved[\s\S]{0,120}new MouseEvent\("contextmenu"/);
 });
 
+test("A pan whose release went missing outside the window stops at the next move", async () => {
+  const { wireGestures } = await import("../../lib/runtime-bridge/dag/interaction/view/gestures.ts");
+  const store = await import("../../lib/runtime-bridge/dag/store/globals.ts");
+  const listeners = {};
+  const captured = new Set();
+  const host = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    setPointerCapture: (id) => captured.add(id),
+    hasPointerCapture: (id) => captured.has(id),
+    releasePointerCapture: (id) => captured.delete(id),
+    classList: { add() {}, remove() {} },
+  };
+  wireGestures(host, { zoomAt() {}, dismiss() {}, moved() {} });
+  store.setView(0, 0, 1);
+  const fire = (type, o) => listeners[type]({ type, pointerId: 7, target: null, ...o });
+
+  fire("pointerdown", { button: 2, buttons: 2, clientX: 100, clientY: 100 });
+  fire("pointermove", { button: -1, buttons: 2, clientX: 130, clientY: 100 });
+  assert.equal(store._viewTx, 30);
+
+  // The button came up beyond the window's edge; no pointerup ever arrives.
+  fire("pointermove", { button: -1, buttons: 0, clientX: 400, clientY: 300 });
+  fire("pointermove", { button: -1, buttons: 0, clientX: 500, clientY: 300 });
+  assert.equal(store._viewTx, 30);
+  assert.equal(store._viewTy, 0);
+  assert.equal(host.hasPointerCapture(7), false);
+});
+
+test("A pan keeps following the cursor outside the window and stops when the button comes up", async () => {
+  const { wireGestures } = await import("../../lib/runtime-bridge/dag/interaction/view/gestures.ts");
+  const store = await import("../../lib/runtime-bridge/dag/store/globals.ts");
+  const listeners = {};
+  const host = {
+    addEventListener: (type, fn) => { listeners[type] = fn; },
+    setPointerCapture() {}, hasPointerCapture: () => false, releasePointerCapture() {},
+    classList: { add() {}, remove() {} },
+  };
+  let follow = null;
+  let stopped = 0;
+  wireGestures(host, {
+    zoomAt() {}, dismiss() {}, moved() {},
+    followHeldButton: (held, onCursor, onReleased) => {
+      follow = { held, onCursor, onReleased };
+      return () => { stopped += 1; };
+    },
+  });
+  store.setView(0, 0, 1);
+  const fire = (type, o) => listeners[type]({ type, pointerId: 8, target: null, ...o });
+  const quiet = () => new Promise((resolve) => setTimeout(resolve, 60));
+
+  // A press alone starts nothing: a plain right click stays a plain click.
+  fire("pointerdown", { button: 2, buttons: 2, clientX: 100, clientY: 100 });
+  assert.equal(follow, null);
+  fire("pointermove", { button: -1, buttons: 2, clientX: 120, clientY: 100 });
+  assert.equal(follow.held, 2);
+  assert.equal(store._viewTx, 20);
+
+  // While the page still hears moves, the reports add nothing.
+  follow.onCursor({ x: 500, y: 500 });
+  follow.onCursor({ x: 520, y: 500 });
+  assert.equal(store._viewTx, 20);
+
+  // Past the edge the page hears nothing, and the reports drive the pan.
+  await quiet();
+  follow.onCursor({ x: 600, y: 540 });
+  assert.equal(store._viewTx, 100);
+  assert.equal(store._viewTy, 40);
+
+  // The button comes up out there: the pan is over.
+  follow.onReleased();
+  assert.equal(stopped, 1);
+  follow.onCursor({ x: 900, y: 900 });
+  assert.equal(store._viewTx, 100);
+});
+
 const box = { left: 10, top: 10, right: 20, bottom: 20 };
 
 test("A marquee selects what it touches, not only what it encloses", () => {

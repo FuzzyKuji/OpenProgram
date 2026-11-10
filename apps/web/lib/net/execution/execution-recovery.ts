@@ -59,7 +59,7 @@ export function createExecutionRecovery(options: {
   };
 }
 
-export function shouldReloadAfterExecution(
+export function shouldReleaseAfterExecution(
   recovered: boolean,
   observedRunningExecution: boolean,
 ): boolean {

@@ -18,6 +18,15 @@ from openprogram.interfaces.channels.base import Channel
 
 _log = logging.getLogger(__name__)
 
+#: Slack error codes that only a new token can fix.
+LOGIN_REJECTED_ERRORS = (
+    "invalid_auth", "not_authed", "token_revoked", "token_expired", "account_inactive",
+)
+
+
+def _login_rejected(error: Exception) -> bool:
+    return any(code in str(error) for code in LOGIN_REJECTED_ERRORS)
+
 
 class SlackChannel(Channel):
     platform_id = "slack"
@@ -75,9 +84,9 @@ class SlackChannel(Channel):
         try:
             me = web.auth_test()
         except Exception as e:  # noqa: BLE001
-            # invalid_auth 是永久失败 — 正常 return, run_forever 不重启;
+            # 令牌失效是永久失败 — 正常 return, run_forever 不重启;
             # 网络类异常继续往上抛, 走退避重连.
-            if "invalid_auth" in str(e) or "not_authed" in str(e):
+            if _login_rejected(e):
                 _log.error("[%s] auth failed — check bot/app tokens; "
                            "re-run `openprogram channels accounts login slack`", tag)
                 return
@@ -95,10 +104,12 @@ class SlackChannel(Channel):
             etype = event.get("type")
             if etype not in ("message", "app_mention"):
                 return
-            # subtype None = 普通消息, "file_share" = 带附件的消息;
+            # subtype None = 普通消息, "file_share" = 带附件的消息,
+            # "thread_broadcast" = 同时发到频道的帖子回复;
             # "bot_message" 交给 base 当机器人消息丢弃; 其余 subtype
             # (joined / edited ...) 忽略.
-            if event.get("subtype") not in (None, "file_share", "bot_message"):
+            if event.get("subtype") not in (
+                    None, "file_share", "thread_broadcast", "bot_message"):
                 return
             if event.get("user") == my_id:
                 return
@@ -169,7 +180,14 @@ class SlackChannel(Channel):
             self.handle_inbound(ch_msg)
 
         client.socket_mode_request_listeners.append(_handle)
-        client.connect()
+        try:
+            client.connect()
+        except Exception as e:  # noqa: BLE001
+            if _login_rejected(e):
+                _log.error("[%s] app token rejected — re-run "
+                           "`openprogram channels accounts login slack`", tag)
+                return
+            raise
         try:
             while not stop.is_set():
                 stop.wait(0.5)

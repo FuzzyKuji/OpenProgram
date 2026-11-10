@@ -1,1 +1,36 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Unified Agent execution</title><style>body{font:16px/1.7 system-ui;max-width:960px;margin:36px auto;padding:0 20px}table{border-collapse:collapse;width:100%}td,th{padding:10px;text-align:left;border-bottom:1px solid #aaa}code{overflow-wrap:anywhere}</style><main><h1>Unified Agent execution</h1><p>Engineering design for the public Agent and Context interfaces and the production ChatAgent subtype. Existing model loops, permissions, durable execution ownership and storage are reused.</p><h2>Contract</h2><table><tr><th>Owner</th><th>Responsibility</th></tr><tr><td>Agent</td><td>Configured calls and persistent turns, asynchronous cancellation, event delivery, continuation entry and profile resolution.</td></tr><tr><td>Context</td><td>Explicit session writer and branch, named content, providers and history selection. Content never grants authority.</td></tr><tr><td>ChatAgent</td><td>Conversation defaults and the actual production chat entry, implemented through Agent.</td></tr><tr><td>Shared turn runtime</td><td>Admission, model/tool execution, compression, streaming, persistence and finalization. The old dispatcher is an import compatibility adapter.</td></tr><tr><td>Execution control</td><td>Existing durable attempt ownership, pause, steering and checkpoint resume. No parallel job registry.</td></tr></table><h2>Boundaries</h2><p>A conversation retains its session graph across turns. Plain helpers add no DAG nodes. Nested Agents retain independent graphs. Context blocks remain user content. Permission, memory and sandbox restrictions still apply. Tool timeout produces a tool error without cancelling its parent turn. User cancellation propagates to active work. Resume reuses persisted model context and does not repeat user admission.</p><h2>Migration and acceptance</h2><ol><li>Add public tests for Agent session turns, Context content/history, separate sessions, events and cancellation.</li><li>Expose the shared turn runtime through Agent, extend Context using the existing store and rendering mechanisms, and keep dispatcher import identity compatible.</li><li>Introduce ChatAgent and route production fresh and resumed turns through the class; retain the established driver and checkpoint protocol.</li><li>Verify real fake-provider chat and durable continuation, independent reviews, full Python/frontend/docs gates, then refresh the installed App.</li></ol><p>No external model requests, new databases or UI redesign are required. Existing graph ownership is retained. Reference implementation: the repository's existing agent_loop, Context engine, production driver and turn pipeline; this change makes no external framework capability claims.</p><h2>Implementation status</h2><p>The code and public regression tests are present. Release acceptance includes independent reviews, full regression tests and installed-runtime checks.</p></main></html>
+<title>Agent and Context contract</title>
+<meta name="description" content="Responsibilities of Agent, Context, ChatAgent and the shared turn runtime.">
+<meta name="covers" content="openprogram/runtime/agent/">
+<h1>Agent and Context contract</h1>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">Owner</th><th scope="col">Responsible for</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">Agent</code></th><td>Configured calls and persistent turns (<code translate="no">run_turn</code>, <code translate="no">resume_turn</code>, <code translate="no">arun_turn</code>, <code translate="no">aresume_turn</code>), cancellation, events, profile resolution (<code translate="no">from_spec</code>)</td></tr>
+<tr><th scope="row"><code translate="no">Context</code></th><td>Session writer and branch, named content, providers, history selection (<code translate="no">None</code>, <code translate="no">"thread"</code>, <code translate="no">"chat"</code> or a callable)</td></tr>
+<tr><th scope="row"><code translate="no">ChatAgent</code></th><td>Conversation defaults; the production chat entry, through <code translate="no">Agent</code></td></tr>
+<tr><th scope="row">Shared turn runtime</th><td>Admission, model and tool execution, compression, streaming, persistence, finalization. <code translate="no">dispatcher</code> is an import alias for it.</td></tr>
+<tr><th scope="row">Execution control</th><td>Durable attempt ownership, pause, steering, checkpoint resume. No parallel job registry.</td></tr>
+</tbody>
+</table>
+
+<h2 id="boundaries">Boundaries</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Conversation</th><td>Keeps its session graph across turns</td></tr>
+<tr><th scope="row">Plain helper</th><td>Adds no DAG nodes</td></tr>
+<tr><th scope="row">Nested Agent</th><td>Keeps an independent graph</td></tr>
+<tr><th scope="row">Context content</th><td>Stays user content: never grants authority; permission, memory and sandbox limits still apply</td></tr>
+<tr><th scope="row">Tool timeout</th><td>A tool error; the parent turn continues</td></tr>
+<tr><th scope="row">User cancellation</th><td>Reaches all active work</td></tr>
+<tr><th scope="row">Resume</th><td>Reuses persisted model context, repeats no user admission</td></tr>
+</tbody>
+</table>
+
+<h2 id="implementation-status">Implementation status</h2>
+
+<p>Code and public regression tests are present.</p>
+
+<p class="next"><a href="llm-and-agent.html">Agent execution core</a></p>

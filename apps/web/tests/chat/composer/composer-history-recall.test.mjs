@@ -4,9 +4,9 @@ import test from 'node:test';
 import { act, createElement } from 'react';
 import { createRoot } from 'react-dom/client';
 import { parseHTML } from 'linkedom';
-const host = globalThis.__historyProbe = { currentSessionId: 'A', messageOrder: { A: ['a'], B: ['b'] }, messagesById: { a: {role:'user',content:'old A'}, b:{role:'user',content:'old B'} } };
+const host = globalThis.__historyProbe = { currentSessionId: 'A', messageOrder: { A: ['a'], B: ['b'] }, rowsById: { a: {role:'user',content:'old A'}, b:{role:'user',content:'old B'} } };
 registerHooks({resolve(s,c,next){
- if(s==='@/lib/session-store') return {url:'data:text/javascript,'+encodeURIComponent('export const useSessionStore = select => select(globalThis.__historyProbe);'),shortCircuit:true};
+ if(s==='@/lib/session-store') return {url:'data:text/javascript,'+encodeURIComponent('export const useSessionStore = select => select(globalThis.__historyProbe); export const selectViewRows = () => state => state.rowsById;'),shortCircuit:true};
  return next(s,c);
 }});
 const {document,window}=parseHTML('<html><body></body></html>');

@@ -70,10 +70,10 @@ html[data-sidebar-closed] #sidebar .rail-scroll {
    The footer is laid out at the open card's width in both states, against
    the left edge, and the card clips it: its top border and its hover fill
    reach across the card in both states, and the name never re-wraps.
-   - The avatar glides from 16px to 6px in from the card's left edge, its
-     collapsed place in the 47px card: the trigger's padding moves on the
+   - The avatar glides from 16px to 5px in from the card's left edge, its
+     collapsed place in the 46px card: the trigger's padding moves on the
      rail's own duration and curve (user-menu-footer.module.css). The right
-     padding moves from 16px to 26px at the same time, so the name keeps
+     padding moves from 16px to 27px at the same time, so the name keeps
      one width and moves with the avatar.
    - The name and the chevron fade out and in. */
 .sidebar.rail-shell .user-menu-footer {
@@ -95,16 +95,16 @@ html[data-sidebar-closed] #sidebar .rail-scroll {
   opacity: 0;
 }
 .sidebar.collapsed .user-menu-footer-trigger {
-  padding-left: 6px;
-  padding-right: 26px;
+  padding-left: 5px;
+  padding-right: 27px;
 }
 /* Before hydration the server-rendered sidebar is open while the inline
    script has already forced the collapsed width (rule above): the avatar
    rests in its collapsed place from the first paint, and nothing glides
    when React then marks the sidebar collapsed. */
 html[data-sidebar-closed] #sidebar .user-menu-footer-trigger {
-  padding-left: 6px;
-  padding-right: 26px;
+  padding-left: 5px;
+  padding-right: 27px;
   transition: none;
 }
 

@@ -233,7 +233,7 @@ def test_fallback_consumes_durable_exact_owner_answer(automatic, monkeypatch):
     manifest = asyncio.run(prepare())
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(execution.execution_id, expected_version=execution.status_version,
-        owner_id="test", ttl_seconds=30)
+        owner_id="test")
     active, running = attempts.activate(leased.attempt_id, generation=leased.generation,
         expected_execution_version=reserved.status_version)
     wait = DurableWaitStore(store).open_wait(wait_id="auto-approval", execution_id=execution.execution_id,

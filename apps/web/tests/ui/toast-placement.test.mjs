@@ -100,3 +100,12 @@ test("the host places itself from the anchor and observes only while a toast sho
   const rename = source("lib/chat/session-auto-rename.ts");
   assert.equal((rename.match(/showToast\(/g) ?? []).length, (rename.match(/sessionId \}\);/g) ?? []).length);
 });
+
+test("a long message wraps inside the bubble instead of running past its edge", () => {
+  const css = source("components/ui/toast-host.module.css");
+  const toast = css.match(/\.toast \{[^}]*\}/)[0];
+  assert.doesNotMatch(toast, /white-space:\s*nowrap/);
+  assert.match(toast, /max-width:/);
+  assert.match(css, /\.message \{[^}]*overflow-wrap: anywhere/);
+  assert.match(source("components/ui/toast-host.tsx"), /className=\{styles\.message\}/);
+});

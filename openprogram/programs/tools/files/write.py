@@ -38,7 +38,8 @@ def _read_staged_source(source_path: str, target_path: str) -> tuple[bytes, dict
 
     violation = validate_read_path(source_path)
     if violation:
-        raise ValueError(f"sandbox policy: {violation}")
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("write", violation)
     check_current(source_path)
     info = os.lstat(source_path)
     if not stat.S_ISREG(info.st_mode) or is_link_metadata(info) or info.st_nlink != 1:
@@ -102,7 +103,8 @@ def execute(file_path: str, content: str | None = None,
     from openprogram.host.sandbox import validate_write_path
     violation = validate_write_path(file_path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("write", violation)
     payload: str | bytes
     source_state: dict[str, dict] = {}
     target_state = None
@@ -194,7 +196,7 @@ write = function(
     accept_edits_safe=True,
     description=_DESCRIPTION,
     toolset=["core"],
-    unsafe_in=["wechat", "telegram", "plan"],
+    unsafe_in=["plan"],
     path_params={"file_path": "write", "source_path": "read"},
 )(execute)
 

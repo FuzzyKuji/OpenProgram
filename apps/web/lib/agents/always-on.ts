@@ -13,10 +13,24 @@ export type AlwaysOnChannelTarget = {
 /** No scheduled wakes from start until end, local "HH:MM"; may cross midnight. */
 export type AlwaysOnQuietHours = { start: string; end: string };
 
+/** The kinds of report an always-on check-in makes. */
+export type AlwaysOnReportKind = "finding" | "approval" | "done";
+export const REPORT_KINDS: AlwaysOnReportKind[] = ["finding", "approval", "done"];
+
+/** Where one kind of report reaches the user beyond the conversation itself. */
+export type AlwaysOnNotifyRule = { desktop: boolean; channels: boolean };
+export type AlwaysOnNotify = Record<AlwaysOnReportKind, AlwaysOnNotifyRule>;
+
 export type AlwaysOnConfig = {
   enabled: boolean;
   goal: string;
-  wake_minutes: number;
+  /** A fixed interval, or null: the agent schedules its own wakes (further apart, 1 to 100 hours, when it sets none). */
+  wake_minutes: number | null;
+  /** "provider/model" for background check-ins; "" uses the conversation's model. */
+  check_in_model: string;
+  notify: AlwaysOnNotify;
+  /** Cap on this Agent's check-in spending per local day; null is no cap. */
+  daily_budget_usd: number | null;
   research: boolean;
   autonomy: "report" | "act";
   channels: AlwaysOnChannelTarget[];
@@ -32,7 +46,8 @@ export type AlwaysOnDelivery = AlwaysOnChannelTarget & {
 };
 
 export type AlwaysOnWakeOutcome =
-  | "disabled" | "quiet" | "busy" | "goal_started" | "goal_in_progress" | "goal_paused" | "check_in" | "idle";
+  | "disabled" | "quiet" | "busy" | "goal_started" | "goal_in_progress" | "goal_paused" | "check_in" | "idle"
+  | "nothing_new" | "reported" | "skipped" | "budget" | "interrupted" | "failed";
 
 /** The saved configuration and the channel conversations reports can go to. */
 export type AlwaysOnAgentInfo = {
@@ -42,10 +57,34 @@ export type AlwaysOnAgentInfo = {
 };
 
 export const ALL_WAKE_DAYS = [0, 1, 2, 3, 4, 5, 6];
+export const NOTIFY_DEFAULTS: AlwaysOnNotify = {
+  finding: { desktop: true, channels: true },
+  approval: { desktop: true, channels: true },
+  done: { desktop: true, channels: true },
+};
 export const ALWAYS_ON_DEFAULTS: AlwaysOnConfig = {
-  enabled: false, goal: "", wake_minutes: 60, research: true, autonomy: "report", channels: [],
+  enabled: false, goal: "", wake_minutes: null, check_in_model: "", notify: NOTIFY_DEFAULTS,
+  daily_budget_usd: null, research: true, autonomy: "report", channels: [],
   quiet_hours: null, wake_days: ALL_WAKE_DAYS,
 };
+/** What turning a fixed interval on starts from. */
+export const WAKE_MINUTES_DEFAULT = 60;
+
+/** A saved configuration with every field present; a missing rule notifies. */
+export function normalizeAlwaysOn(raw: Partial<AlwaysOnConfig> | undefined): AlwaysOnConfig {
+  const config = { ...ALWAYS_ON_DEFAULTS, ...raw };
+  const notify = Object.fromEntries(REPORT_KINDS.map((kind) => {
+    const rule = raw?.notify?.[kind];
+    return [kind, { desktop: rule?.desktop !== false, channels: rule?.channels !== false }];
+  })) as AlwaysOnNotify;
+  return {
+    ...config,
+    wake_minutes: config.wake_minutes ?? null,
+    check_in_model: config.check_in_model ?? "",
+    daily_budget_usd: config.daily_budget_usd ?? null,
+    notify,
+  };
+}
 /** What turning quiet hours on starts from. */
 export const QUIET_HOURS_DEFAULT: AlwaysOnQuietHours = { start: "22:00", end: "08:00" };
 
@@ -65,9 +104,27 @@ export function fetchAlwaysOn(agentId: string, signal?: AbortSignal): Promise<Al
   return jsonFetch<AlwaysOnAgentInfo>(`/api/agents/${encodeURIComponent(agentId)}/always-on`, { signal });
 }
 
-/** A wake-minutes value the server accepts. */
-export function wakeMinutesValid(value: number): boolean {
+/** A wake-minutes value the server accepts; null leaves the timing to the agent. */
+export function wakeMinutesValid(value: number | null): boolean {
+  if (value === null) return true;
   return Number.isInteger(value) && value >= WAKE_MINUTES_MIN && value <= WAKE_MINUTES_MAX;
+}
+
+/** A daily budget the server accepts: none, or a positive amount of dollars. */
+export function dailyBudgetValid(value: number | null): boolean {
+  return value === null || (Number.isFinite(value) && value > 0);
+}
+
+/** The budget field's text as a value: empty is no budget. */
+export function parseDailyBudget(input: string): number | null {
+  const trimmed = input.trim();
+  return trimmed === "" ? null : Number(trimmed);
+}
+
+/** The budget field's text for a saved value: what was typed while it still means that value, else the value. */
+export function dailyBudgetText(typed: string, value: number | null): string {
+  if (Object.is(parseDailyBudget(typed), value)) return typed;
+  return value === null ? "" : String(value);
 }
 
 export function sameChannelTarget(a: AlwaysOnChannelTarget, b: AlwaysOnChannelTarget): boolean {

@@ -215,7 +215,7 @@ def test_remote_paths_are_not_resolved_on_the_host(scope, monkeypatch, backend_i
 @pytest.mark.parametrize("backend_id", ["ssh", "docker"])
 def test_remote_override_with_host_sandbox_fails_closed(scope, monkeypatch, backend_id):
     monkeypatch.setattr(sandbox, "resolve_policy", lambda: sandbox.SandboxPolicy())
-    with pytest.raises(PermissionError, match="backend-native"):
+    with pytest.raises(PermissionError, match="cannot be checked against the sandbox"):
         prepare_command("echo ok", "/remote", backend_id=backend_id, worktree=None)
 
 

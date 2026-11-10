@@ -11,7 +11,6 @@ from openprogram.models.providers.types import (
     AssistantMessage,
     Context,
     Tool,
-    ToolCall,
 )
 from openprogram.models.providers.utils.event_stream import EventStream
 
@@ -33,6 +32,7 @@ from openprogram.runtime.agent.loop.guards import (
     _SafePointStop,
     _SteeredResponse,
 )
+from openprogram.runtime.agent.loop.text_tool_calls import recover_text_tool_calls
 from openprogram.runtime.agent.loop.message_context import (
     _durable_message,
     _inject_memory_prefetch,
@@ -61,6 +61,37 @@ def _instant_steer_enabled() -> bool:
         return True
 
 
+def _steered_partial(partial: AssistantMessage) -> AssistantMessage:
+    """The part of a response a steer cut off that the history keeps.
+
+    Calls the steer cut off were never dispatched, so they are dropped; only
+    the text and thinking the user already saw remain. Mid-stream, providers
+    hold blocks as plain dicts until the response finishes, and a dict call
+    would otherwise slip past an ``isinstance`` check, be validated into a
+    real call when the next request is built, and go out without a result
+    (OpenAI: "No tool output found for function call ...").
+    """
+    message = partial.model_copy(deep=True)
+    kept: list = []
+    for block in message.content:
+        if isinstance(block, dict):
+            if block.get("type") == "toolCall":
+                continue
+            # Streaming bookkeeping, not part of any content block.
+            block = {key: value for key, value in block.items() if key not in ("index", "partial_json")}
+            try:
+                block = AssistantMessage.model_validate(
+                    {**message.model_dump(exclude={"content"}), "content": [block]},
+                ).content[0]
+            except Exception:
+                pass
+        elif getattr(block, "type", None) == "toolCall":
+            continue
+        kept.append(block)
+    message.content = kept
+    return message
+
+
 async def _cancel_response_stream(response_stream: Any, iterator: Any, *, cleanup_timeout: float | None = None) -> None:
     """Stop a discarded provider response before starting its recovery."""
     from openprogram.models.providers.utils.event_stream import close_stream
@@ -80,7 +111,30 @@ async def _stream_assistant_response(
     """
     Stream an assistant response from the LLM.
     Mirrors streamAssistantResponse() in TypeScript.
+
+    Every credential picked for the call sticks to the conversation
+    (``config.session_id``), so a rotating key pool keeps the vendor's
+    prompt cache warm (``openprogram.models.auth.pool``).
     """
+    from openprogram.models.auth.context import conversation_affinity
+
+    with conversation_affinity(config.session_id):
+        return await _stream_in_conversation(
+            context, config, cancel_event, ev_stream, stream_fn,
+            structured_plan, provider_snapshot, output_attempt,
+        )
+
+
+async def _stream_in_conversation(
+    context: AgentContext,
+    config: AgentLoopConfig,
+    cancel_event: asyncio.Event | None,
+    ev_stream: EventStream[AgentEvent, list[AgentMessage]],
+    stream_fn: StreamFn | None,
+    structured_plan: Any | None,
+    provider_snapshot: Any | None,
+    output_attempt: int | None,
+) -> AssistantMessage | _SteeredResponse:
     messages = context.messages
 
     # Apply context transform if configured
@@ -126,6 +180,8 @@ async def _stream_assistant_response(
     from openprogram.state.memory.policy import current as _memory_policy, allowed as _memory_allowed
     if _memory_policy() is not None and not _memory_allowed():
         prefetch_block = ""
+    if context.run_note:
+        prefetch_block = "\n\n".join(part for part in (prefetch_block, context.run_note) if part)
     sys_prompt = context.system_prompt or None
     if structured_plan is not None and structured_plan.mode == "prompt":
         from openprogram.models.providers.structured_output import build_prompt_fallback
@@ -311,7 +367,7 @@ async def _stream_assistant_response(
         )
 
     from openprogram.models.providers import SimpleStreamOptions
-    from openprogram.runtime.context.request_compaction import RequestCompactor
+    from openprogram.runtime.context.compaction.request import RequestCompactor
     # ``thinking_levels`` is the model's request-body capability contract.
     # A stale session/agent preference can outlive a model switch, so never
     # forward it to a model whose list is empty: OpenAI-compatible upstreams
@@ -490,14 +546,9 @@ async def _stream_assistant_response(
                             if not cleanup.done():
                                 cleanup.cancel()
                             cleanup.add_done_callback(lambda task: task.exception() if not task.cancelled() else None)
-                        message = (partial_message.model_copy(deep=True) if partial_message is not None else AssistantMessage(
+                        message = (_steered_partial(partial_message) if partial_message is not None else AssistantMessage(
                             content=[], api=config.model.api, provider=config.model.provider, model=config.model.id,
                         ))
-                        # Calls the steer cut off were never dispatched; keep
-                        # only the text and thinking the user already saw.
-                        message.content = [
-                            item for item in message.content if not isinstance(item, ToolCall)
-                        ]
                         # Preserve the real response outcome so request projection
                         # drops incomplete reasoning signatures on continuation.
                         message.stop_reason = "aborted"
@@ -588,6 +639,8 @@ async def _stream_assistant_response(
                     "cancelled" if event.error.stop_reason == "aborted" else "failed"
                 )
                 final_message = event.message if event.type == "done" else event.error
+                if event.type == "done" and structured_plan is None:
+                    recover_text_tool_calls(final_message, context.tools)
                 if final_message.usage.tokens_reported:
                     final_message.usage.request_input_estimate = request_input_estimate
                     if (final_message.model == config.model.id

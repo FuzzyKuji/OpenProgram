@@ -19,7 +19,6 @@ class DispatchOperations:
                 execution_id,
                 expected_version=execution.status_version,
                 owner_id=self._instance_id,
-                ttl_seconds=30.0,
             )
             active, running = self._execution_attempts.activate(
                 leased.attempt_id,
@@ -170,11 +169,7 @@ class DispatchOperations:
 
 
     def _claimed_resume_command_id(self, job_id: str) -> str | None:
-        row = self._governor.ledger.connection().execute(
-            "SELECT resume_command_id FROM job_admissions "
-            "WHERE job_id = ? AND state = 'live'",
-            (job_id,),
-        ).fetchone()
+        row = self._governor.ledger.run_tables().handle.first("job_admissions", job_id=job_id, state="live")
         value = row["resume_command_id"] if row is not None else None
         return value if isinstance(value, str) and value else None
 
@@ -543,34 +538,15 @@ class DispatchOperations:
     ) -> None:
         """Wait for the canonical Agent owner and project only its outcome."""
         result = None
-        lease_stop = shared.threading.Event()
-        lease_thread = None
         try:
             if attempt_id is None or attempt_generation is None:
                 raise RuntimeError("canonical attempt identity is unavailable")
             if binding is None:
                 raise RuntimeError("canonical driver binding is unavailable")
-            lease_thread = shared.threading.Thread(
-                target=self._renew_job_lease,
-                args=(
-                    job_id,
-                    lease_generation,
-                    lease_stop,
-                    attempt_id,
-                    attempt_generation,
-                ),
-                daemon=True,
-                name=f"op-job-lease-{job_id}",
-            )
-            lease_thread.start()
             result = binding.handle.done.result()
         except Exception:
             shared._log.exception("canonical Agent owner ended unexpectedly for %s", job_id)
         finally:
-            lease_stop.set()
-            if lease_thread is not None:
-                # One renewal write on a loaded store outlasts a second.
-                lease_thread.join(timeout=30.0)
             execution = self._execution_store.get_execution(job_id)
             try:
                 if execution is not None and execution.status.value in {

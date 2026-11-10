@@ -1,79 +1,111 @@
-<!doctype html><html lang="zh"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>OpenProgram 应用运行方案与 Harness 调研</title><style>
-:root{color-scheme:light;--bg:#fff;--text:#202124;--muted:#64676d;--line:#d7d9dd;--accent:#225f8b}*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:16px/1.85 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif}a{color:var(--accent);text-underline-offset:3px}a:focus-visible,button:focus-visible,input:focus-visible,select:focus-visible{outline:3px solid #156da5;outline-offset:4px}.layout{max-width:1450px;margin:auto;display:grid;grid-template-columns:220px minmax(0,1fr);gap:50px;padding:40px 32px 100px}aside{position:sticky;top:25px;align-self:start;max-height:94vh;overflow:auto}aside strong{display:block;margin-bottom:16px}nav a{display:block;padding:5px 0;font-size:13px;text-decoration:none;color:#555}nav a:hover{text-decoration:underline}main{min-width:0}header{padding:0 0 30px;border-bottom:2px solid #26282b}.eyebrow{font-size:12px;color:var(--muted);letter-spacing:.08em}h1{font-size:clamp(29px,4vw,44px);line-height:1.3;letter-spacing:-.02em;margin:14px 0}header p{max-width:790px;font-size:18px}section{padding:34px 0;border-bottom:1px solid var(--line);scroll-margin-top:20px}h2{font-size:25px;font-weight:650;margin:0 0 20px;line-height:1.4}h3{font-size:19px;margin:25px 0 10px}p{margin:12px 0;max-width:940px}.note,small{font-size:13px;color:var(--muted)}small{display:block;font-weight:400}.cite{font-size:12px;white-space:normal}code{font:13px/1.6 ui-monospace,SFMono-Regular,Consolas,monospace;overflow-wrap:anywhere}pre{background:#f5f6f7;border:1px solid var(--line);padding:18px;overflow:auto;line-height:1.55}.table-wrap{overflow-x:auto;max-width:100%;border:1px solid var(--line);margin:20px 0}table{border-collapse:collapse;width:100%;font-size:13px;line-height:1.7}th,td{border-bottom:1px solid var(--line);padding:13px 14px;text-align:left;vertical-align:top}thead th{background:#f0f1f2;font-size:12px}tbody th{font-weight:600;min-width:125px}td{min-width:130px}tr:last-child td,tr:last-child th{border-bottom:0}#matrix-table{min-width:900px}.filters{display:flex;flex-wrap:wrap;gap:14px;align-items:end}label{font-size:13px}input,select{display:block;background:white;border:1px solid #adb0b5;border-radius:3px;padding:9px;font:14px inherit;max-width:100%}#count{font-size:13px;color:var(--muted)}.architecture{display:grid;grid-template-columns:repeat(3,1fr);border-top:1px solid #888;border-left:1px solid #888;margin:20px 0}.architecture div{padding:18px;border-bottom:1px solid #888;border-right:1px solid #888;font-size:14px}.demo{border:1px solid #555;background:#1e1e1e;color:#ddd;margin:20px 0;min-height:400px}.demo-head{display:flex;justify-content:space-between;align-items:center;padding:12px 18px;border-bottom:1px solid #444;font-size:12px;gap:12px}.demo button{font:inherit;color:inherit;background:transparent;border:1px solid #454545;padding:12px 16px;border-radius:8px;cursor:pointer;text-align:left}.demo button:hover{background:#303030}.demo-head button{padding:4px 8px}.launcher{width:min(490px,calc(100% - 40px));margin:26px auto;display:grid;gap:10px}.launcher .builtin,.launcher button{padding:11px 20px;border:1px solid #383838;border-radius:12px;color:#b1b1ba;font-size:15px}.launcher button{border-color:#667888;color:#e3e7eb}#application{padding:25px 30px;min-height:345px}#application h3{margin-top:0}.sample-data{border-top:1px solid #555;margin-top:25px;padding-top:15px}.sample-data span{font-size:12px;color:#aaa}.sources{padding-left:25px;font-size:13px}.sources li{margin:14px 0}.sources span{display:block;color:var(--muted);font-size:11px;overflow-wrap:anywhere}.status{font-size:13px;color:#555}.skip{position:absolute;top:-100px}.skip:focus{top:8px;background:white;padding:8px;z-index:10}[hidden]{display:none!important}@media(max-width:850px){.layout{display:block;padding:22px 18px 60px}aside{position:static;max-height:none;margin-bottom:25px}nav{display:flex;flex-wrap:wrap;gap:4px 16px}nav a{font-size:12px}aside strong{margin-bottom:8px}h2{font-size:22px}.architecture{grid-template-columns:1fr 1fr}section{padding:26px 0}.demo{min-height:380px}}@media(max-width:460px){.architecture{grid-template-columns:1fr}.filters{display:block}.filters label{display:block;margin:10px 0}input,select{width:100%}#application{padding:20px}h1{font-size:30px}}@media print{aside,.filters,.demo{display:none}.layout{display:block;padding:0}body{font-size:11px}section{break-inside:auto}h2,h3{break-after:avoid}table{font-size:10px}#matrix-table{min-width:0}.table-wrap{overflow:visible}a{color:inherit}}
-</style></head><body><a class="skip" href="#main">跳至正文</a><div class="layout"><aside><strong>OpenProgram<br>应用运行设计</strong><nav aria-label="文档目录"><a href="#management-scenarios">使用样例与管理体系调整</a><a href="#decision">Application 软件与 Program 能力分别管理</a><a href="#experience">用户看到什么</a><a href="#scope">调研范围与判断方法</a><a href="#matrix">公开机制比较</a><a href="#mechanisms">哪些机制直接影响我们的选择</a><a href="#baseline">OpenProgram 当前实现与边界</a><a href="#architecture">应用架构与责任划分</a><a href="#contract">最小应用合同</a><a href="#models">模型与业务操作如何结合</a><a href="#lifecycle">打开、后台执行、恢复与升级</a><a href="#boundary">隔离与可移植性</a><a href="#choices">采用、调整与暂不采用</a><a href="#implementation">实施分解与验收</a><a href="#status">实现状态与证据限制</a><a href="#sources">来源索引</a></nav></aside><main id="main"><header><div class="eyebrow">HARNESS 调研 · 应用设计</div><h1>已创建的应用，<br>在新标签页直接打开</h1><p>界面自由编写，业务数据独立保存，模型与程序能力通过明确的运行合同调用。</p><div class="status">应用运行与管理体系已实现　/　38 个框架、产品或协议条目　/　42 个来源入口</div></header><section id="management-scenarios"><h2>按使用样例实施：Program、Package 与 Application</h2>
-<p>本节规定管理体系调整。Program 是可调用能力的总称，Tools 与 Workflows 保留现有定义。Package 是包含这些能力的安装单位，harness 属于 Package。Application 是用户可打开的软件，拥有自己的界面、版本、数据和运行生命周期。Package 不作为新的执行类型；Application 不再记录在 Program 来源目录中。</p>
-<div class="table-wrap"><table><thead><tr><th>用户样例</th><th>入口与操作</th><th>可观察结果及失败处理</th><th>实现与验收</th></tr></thead><tbody>
-<tr><td>U1 查看已有能力</td><td>Abilities → Programs，展开 Tools 和 Applications</td><td>Applications 列出内置应用和已安装应用（含 harness），分别标为内置或已安装；选择一项显示来源、默认调用入口与调用结构。gui_agent 等调用名不变，软件应用不进入能力扫描。</td><td>来源发现、explorer、调用图和页面分类统一；API 测试检查两个根及其路径。</td></tr>
-<tr><td>U2 安装、升级和卸载程序包</td><td>包详情查看管理命令；使用现有 programs install、install --upgrade、uninstall CLI</td><td>新安装使用 programs/packages。已有安装按原路径继续识别，记录标明 package；不重新下载、不移动外部源码、不修改开发符号链接目标。桌面只读依赖限制保留，页面明确由拥有环境的 CLI 管理。</td><td>安装目录辅助函数、保护路径、来源记录、registry、CLI 与刷新脚本兼容新旧目录；安装/撤销与未知目录不导入测试。</td></tr>
-<tr><td>U3 安装一个软件应用</td><td>侧栏 Applications → 输入本地应用目录 → 安装</td><td>显示声明、来源、版本及启用状态。Python 后端须在安装表单明确勾选信任本地代码；重复 ID、坏入口或依赖准备失败返回错误，不覆盖旧版本。</td><td>独立管理页复用 owner API；新注册文件 applications/catalog.json。浏览器从安装表单验证目录、失败和成功。</td></tr>
-<tr><td>U4 从菜单打开软件</td><td>新标签页点击应用按钮；管理页也可点击 Open</td><td>打开应用自己的标签；同实例复用。项目应用按当前项目或项目选择器绑定。普通 Program/Package 不自动产生启动按钮。</td><td>复用现有应用打开路径与项目选择；浏览器验证管理页和菜单指向同一实例。</td></tr>
-<tr><td>U5 管理已安装软件</td><td>Applications → 启停、显示/隐藏、更新、卸载</td><td>禁用阻止新打开与操作；隐藏仅移除菜单按钮；更新需明确使用原来源重新安装并保持既有 schema 保护。卸载撤销注册，保留用户数据；再次安装恢复原实例。错误保留在对应操作处。</td><td>复用 PATCH、install replace 与 DELETE API；页面刷新及跨页重新打开读取最新目录。验证保存的数据和运行版本不受分类迁移影响。</td></tr>
-<tr><td>U6 更新已有 OpenProgram</td><td>启动或首次读取新应用目录</td><td>将旧 program-sources.json 中 kind=application 的软件记录迁入独立文件，包括禁用、隐藏、来源和卸载记录；先写入新文件成功再移除旧记录。冲突拒绝覆盖并保留原始记录，可重复执行。程序包来源继续存在于 Program 目录。</td><td>真实 API 触发迁移，验证幂等、写入失败、冲突及数据/实例身份保留。相同锁序串行化迁移与目录更新。</td></tr>
-<tr><td>U7 使用命令行或 Agent 调用</td><td><code>openprogram programs</code> list/install/run/status/cancel/enable/disable/uninstall</td><td>应用和其他 Program 用同一个命令组管理，没有单独的应用命令。</td><td>CLI parser/dispatch 与 help 验证，沿用 owner-authenticated application client。</td></tr>
-</tbody></table></div>
-<h3>管理入口与目录</h3><pre>Abilities / Programs                   Applications /applications
-  Tools                                  已安装的软件及安装表单
-  Applications                           来源、版本、启停、更新、卸载
-    browser（内置）                      Open → 同一应用实例标签
-    weekly_report（已安装）
-    paper_harness（已安装）         新标签页
-                                         已启用且未隐藏的软件按钮</pre>
-<p>新程序包安装目录为 ~/.openprogram/programs/&lt;name&gt;/。旧安装器放在 openprogram/programs/packages/ 或 programs/applications/ 下的克隆在 worker 启动时移过去，界面统一显示在 Applications 下；旧源码不搬入软件数据目录。Program 来源仍由 program-sources.json 管理。软件注册使用 applications/catalog.json；已有 versions、environments、实例 SQLite、运行记录和数据目录保持原位置。源目录分类改变不赋予任何未登记目录执行权限。</p>
-<h3>实施顺序与范围</h3><p>作为一项完整的分类迁移实施：先固定 U1/U6 的公开入口失败测试，再修改来源与独立目录；随后完成 U2/U7 的目录和 CLI 兼容、U3–U5 的管理页面与菜单接入，最后验证端到端使用样例。所有共享目录消费者、沙箱保护、发行打包、产品文档和契约测试一起更新。独立规范审查通过后进行质量审查，再执行完整测试清单并更新默认 App。</p>
-<p>本次不增加插件市场、不改三个 harness 的算法、不自动把任意代码识别成软件，不新增其他语言 runner，也不增加独立部署。程序包的安装仍使用已有 CLI 环境约束；应用安装页面不能借程序包接口修改桌面宿主依赖。</p>
-<p>实现状态：U1–U7 已实现并验收。分类、独立目录迁移、管理页、菜单启动与顶层 CLI 已通过独立规范审查、质量审查和完整检查。默认 App 已验证 harness 位于 Applications、管理页与菜单复用阅读器实例、原笔记与项目文件分析结果保留、菜单隐藏及恢复。实际迁移核对三个应用记录、三个实例与两个数据文件保持一致，十四条 Program 来源保留；重复历史登记按同一路径识别，仍拒绝不同安装位置的冲突。安装、更新、禁用、卸载后重新安装及失败处理由公开 API、CLI 和真实浏览器测试覆盖。模型成功与失败使用受控集成测试验证，不表示真实模型服务可用性；独立部署与 MCP Apps 适配仍未实现。</p></section><section id="decision"><h2>Application 软件与 Program 能力分别管理</h2>
-<p>OpenProgram 的应用包含自己的界面、业务逻辑、数据和依赖；框架负责应用注册、打开、运行上下文与公共能力。创建完成并验证的应用，以名称和图标出现在新标签页。用户点一下就打开应用，不需要重新描述需求，也不需要回到生成它的对话。</p>
-<p>默认界面采用标准 Web 技术：HTML、CSS、JavaScript，以及编译后的 React、Vue 等。应用可以自行设计页面、编辑器、图表和交互，不必由 OpenProgram 的几个固定组件拼装。Python 后端处理业务和模型任务。HTML 是界面的实现技术，不能据此判断程序是否完整；后端、状态、运行合同和部署依赖才决定软件能力。</p>
-<p>应用默认在 OpenProgram 中运行。架构允许同一应用以后用最小 runtime 单独部署，不要求打开整个桌面客户端；这仍属于依赖 OpenProgram runtime 的软件。完全去掉 OpenProgram 依赖，需要应用提供替代模型、存储和运行实现，不能承诺自动导出任何应用为独立程序。</p>
-<p>这项设计的具体价值是：应用按钮与 Agent 使用同一业务操作，模型调用归入已有执行记录，业务数据不依赖聊天窗口，升级不会改变正在运行的任务代码。它是产品合同的组合，不能声称上述单项机制市场独有。Hermes 的 UI 扩展、MCP Apps 的可移植界面和 AgentOS 的运行服务都已有直接参考。<a class="cite" href="https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk">[8] Hermes 桌面插件 SDK</a> <a class="cite" href="https://modelcontextprotocol.io/extensions/apps/overview">[40] MCP Apps</a> <a class="cite" href="https://docs.agno.com/agent-os/introduction">[29] Agno / AgentOS</a></p>
-</section><section id="experience"><h2>用户看到什么</h2>
-<p>新标签页保留 Files、New chat、Browser、Terminal，已启用且注册完成的应用追加在同一区域。应用自己的功能在打开后展示，不把模型、端口、runtime 或安装路径放在启动按钮上。管理入口负责隐藏、重命名显示名称、卸载和查看错误；隐藏不删除应用数据。</p>
-<div class="demo" aria-label="应用入口交互示意"><div class="demo-head"><span>OpenProgram · 交互示意</span><button id="home" hidden>返回新标签页</button></div>
-<div id="launcher"><div class="launcher"><div class="builtin">▤　文件</div><div class="builtin">＋　新建聊天</div><div class="builtin">◎　浏览器</div><div class="builtin">›_　终端</div><button data-app="论文阅读器">▣　论文阅读器</button><button data-app="数据分析">▥　数据分析</button></div></div>
-<div id="application" hidden><h3 id="app-title"></h3><p id="app-copy"></p><div class="sample-data"><span>已保存的内容</span><p id="app-data"></p></div></div></div>
-<p class="note">上方仅演示“从新标签页打开已存在应用”，不调用模型、不安装软件。四个内置项目作为背景展示；两个应用按钮和返回按钮可以操作。</p>
-<p>同一应用在同一项目默认复用已打开标签页；不同项目可以分别打开，数据范围明确分开。新标签页没有活动项目时，先使用应用已绑定的项目；应用要求项目而尚未绑定时，首次打开才选择。应用不能跟随任意另一个聊天标签页的 cwd 静默改变数据目录。</p>
-<p>“一句话创建”的入口仍是已有对话：Agent 编写应用包和依赖说明，完成构建与行为验证，然后在该创建任务授权范围内注册应用。注册成功才出现菜单按钮。创建失败保留源码和错误供修复，不把尚不能打开的半成品显示为可用应用；后续修改生成候选版本，验证后再替换。</p>
-<p>第一次打开可能显示准备依赖或启动中；失败时留在同一个应用页显示失败原因和重试入口。普通页面关闭仅关闭视图。用户已发起的后台任务继续运行；重新打开读取同一任务状态。服务进程退出与业务任务中断分开报告。</p>
-</section><section id="scope"><h2>调研范围与判断方法</h2>
-<p>本报告覆盖下表列出的主要公开 Agent harness、编码工具、嵌入式框架、应用平台及界面协议。分类按本问题中的作用划分，不是市场份额排名。协议不是 harness；纳入它们是为了回答界面如何集成，而不是把不同层次混称为同类产品。</p>
-<p>DSH 发行包、worktable 和 OpenProgram 进行了相关代码路径核查；其他项目以当前官方文档、公开示例或仓库说明为证据。未安装并端到端验证所有产品。表中的“未核实”表示来源不足，不等于产品绝对不支持。Cursor、Windsurf 的内部实现未知。AutoGen、Semantic Kernel 在 Microsoft Agent Framework 的沿革中讨论，未伪装成三套已经逐项核查的当前实现。</p>
-<p>“所有市面框架”没有封闭名录。未穷尽商业产品、社区分支及私有 harness；例如 Qwen Code、Strands 的相关页面本次未成功获取，Trae、Kimi CLI、各类云端软件生成服务也不在已核查矩阵内。这些缺口限制了市场唯一性结论，不影响下方已经明确的应用运行需求。</p>
-<p>对每个项目分别问：扩展交付什么？谁加载和执行？谁渲染 UI？业务状态存在哪里？能否离开宿主？“会写软件”“能执行代码”“有 UI”“支持安装应用”分别判断，不互相替代。</p>
-</section><section id="matrix"><h2>公开机制比较</h2><div class="filters"><label>筛选类别 <select id="category"><option value="">全部</option><option>宿主扩展</option><option>Agent 服务</option><option>编码工具</option><option>闭源产品</option><option>嵌入式框架</option><option>应用平台</option><option>界面协议</option></select></label><label>查找名称 <input id="query" type="search" placeholder="例如 Hermes、MCP" /></label><span id="count" role="status"></span></div><div class="table-wrap"><table id="matrix-table"><thead><tr><th>项目 / 证据</th><th>类别</th><th>扩展或运行机制</th><th>界面能力</th><th>宿主依赖 / 来源</th></tr></thead><tbody><tr data-category="宿主扩展"><th scope="row">DeepSeek Harness<small>已读本地发行包代码</small></th><td>宿主扩展</td><td>Cordis 生命周期、服务注入；动态插件包含 host/client 两部分。</td><td>宿主 React 插槽；动态前端调用已注册的后端处理函数。</td><td>插件依赖 DSH 服务与加载器；不自动成为独立软件。<br><a class="cite" href="https://github.com/deepseek-ai/deepseek-harness">[1] DeepSeek Harness</a></td></tr><tr data-category="宿主扩展"><th scope="row">dsh-worktable<small>已读插件源码</small></th><td>宿主扩展</td><td>安装包同时提供后端路由与前端工作台。</td><td>项目入口、分屏；生成产物按 widget-result.json 装入 iframe。</td><td>工作台依赖 DSH；生成页面是否独立取决于页面自己的依赖。<br><a class="cite" href="https://github.com/Aisland-SJL/dsh-worktable">[2] dsh-worktable</a></td></tr><tr data-category="宿主扩展"><th scope="row">Pi<small>官方文档</small></th><td>宿主扩展</td><td>TypeScript 扩展：工具、事件、命令与上下文。</td><td>ctx.ui 自定义终端组件、消息渲染和覆盖面板。</td><td>扩展运行依赖 Pi；终端组件并非 HTML。<br><a class="cite" href="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md">[3] Pi</a></td></tr><tr data-category="宿主扩展"><th scope="row">OpenCode<small>官方文档</small></th><td>宿主扩展</td><td>JS/TS 插件事件钩子、自定义工具、SDK client。</td><td>已查文档列出 TUI 通知等接口；不能据此认定支持任意业务页面插件。</td><td>插件依赖 OpenCode；应用程序产物的独立性另论。<br><a class="cite" href="https://opencode.ai/docs/plugins/">[4] OpenCode</a></td></tr><tr data-category="Agent 服务"><th scope="row">Codex App Server<small>官方文档</small></th><td>Agent 服务</td><td>双向 JSON-RPC，线程、轮次、事件与审批。</td><td>客户端自己实现界面；该接口不是应用安装清单。</td><td>可构建独立客户端，但 Agent 能力仍依赖 Codex 服务。<br><a class="cite" href="https://learn.chatgpt.com/docs/app-server">[5] Codex App Server</a></td></tr><tr data-category="宿主扩展"><th scope="row">Claude Code<small>官方文档</small></th><td>宿主扩展</td><td>插件打包 skills、agents、hooks、MCP、LSP 等。</td><td>公开插件合同主要扩展 Agent；未据此确认任意 React 页面注册。</td><td>插件依赖 Claude Code；不能把插件包视为桌面应用。<br><a class="cite" href="https://code.claude.com/docs/en/plugins-reference">[6] Claude Code</a></td></tr><tr data-category="宿主扩展"><th scope="row">Hermes<small>官方文档</small></th><td>宿主扩展</td><td>Python register(ctx) 与多种能力注册。</td><td>另有 Desktop SDK、Dashboard 扩展，不只有终端插件。</td><td>本地宿主扩展；兼容其他插件格式只代表明确支持的子集。<br><a class="cite" href="https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/">[7] Hermes</a></td></tr><tr data-category="宿主扩展"><th scope="row">OpenClaw<small>官方文档</small></th><td>宿主扩展</td><td>Gateway 插件提供工具、服务、通道与运行能力。</td><td>交互 Dashboard 与 macOS widget panel 的合同不同。</td><td>插件依赖 Gateway；面板显示 HTML 不等于全部运行能力。<br><a class="cite" href="https://docs.openclaw.ai/tools/plugin">[10] OpenClaw</a></td></tr><tr data-category="宿主扩展"><th scope="row">Gemini CLI<small>官方文档</small></th><td>宿主扩展</td><td>扩展打包 prompts、MCP、命令等 Agent 配置与能力。</td><td>CLI 扩展机制；不是任意应用页面的安装合同。</td><td>扩展使用 Gemini CLI 的加载与运行环境。<br><a class="cite" href="https://geminicli.com/docs/extensions/">[12] Gemini CLI</a></td></tr><tr data-category="宿主扩展"><th scope="row">goose<small>官方文档</small></th><td>宿主扩展</td><td>MCP 扩展、recipes、CLI/API。</td><td>Desktop 明确支持 MCP Apps 交互界面。</td><td>MCP 服务可分离部署；UI 需要兼容宿主。<br><a class="cite" href="https://block.github.io/goose/index.html">[13] goose</a></td></tr><tr data-category="Agent 服务"><th scope="row">OpenHands<small>官方文档</small></th><td>Agent 服务</td><td>Python/REST SDK、工具、会话与远程 Agent Server。</td><td>可用 SDK 构建自己的开发者体验。</td><td>可嵌入应用；不等于通用应用菜单或任意宿主 UI 扩展。<br><a class="cite" href="https://docs.openhands.dev/sdk">[14] OpenHands</a></td></tr><tr data-category="Agent 服务"><th scope="row">DeerFlow<small>官方仓库说明</small></th><td>Agent 服务</td><td>Gateway、长任务 Agent、skills、文件和执行环境。</td><td>完整 Web 客户端；只读静态演示与带后端运行模式明确不同。</td><td>完整功能需要其运行后端；演示页面不能证明服务独立性。<br><a class="cite" href="https://github.com/bytedance/deer-flow">[15] DeerFlow</a></td></tr><tr data-category="编码工具"><th scope="row">Aider<small>官方文档</small></th><td>编码工具</td><td>以代码修改、测试和 Git 工作流为主。</td><td>命令行产品；本次未核实通用应用 UI 插件合同。</td><td>写出的源码可按自身依赖部署；与 Aider 扩展是两回事。<br><a class="cite" href="https://aider.chat/docs/">[16] Aider</a></td></tr><tr data-category="编码工具"><th scope="row">mini-SWE-agent<small>官方仓库说明</small></th><td>编码工具</td><td>简化 Agent 循环、独立 shell action、线性历史。</td><td>CLI 与轨迹查看器。</td><td>能生成程序；所查合同不负责安装程序为宿主应用。<br><a class="cite" href="https://github.com/SWE-agent/mini-swe-agent">[17] mini-SWE-agent</a></td></tr><tr data-category="编码工具"><th scope="row">Mistral Vibe<small>官方仓库说明</small></th><td>编码工具</td><td>CLI 编码 Agent，程序模式及流式输出。</td><td>终端；本次未核实业务页面插件合同。</td><td>可被程序调用；输出格式不承担 UI 渲染合同。<br><a class="cite" href="https://github.com/mistralai/mistral-vibe">[18] Mistral Vibe</a></td></tr><tr data-category="编码工具"><th scope="row">Cline<small>官方文档</small></th><td>编码工具</td><td>MCP 扩展外部工具与服务。</td><td>所查页面证明工具集成，不证明任意 UI 扩展。</td><td>MCP 服务器可以独立运行；宿主负责工具调用。<br><a class="cite" href="https://docs.cline.bot/mcp/mcp-overview">[19] Cline</a></td></tr><tr data-category="编码工具"><th scope="row">Roo Code<small>官方文档</small></th><td>编码工具</td><td>项目/全局 MCP，stdio、HTTP 等连接。</td><td>编辑器内的 Agent 交互。</td><td>MCP 服务与编辑器扩展是不同部署对象。<br><a class="cite" href="https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo/">[20] Roo Code</a></td></tr><tr data-category="编码工具"><th scope="row">Continue<small>官方文档</small></th><td>编码工具</td><td>配置 MCP 工具到 Agent。</td><td>编辑器/Agent 集成；本次未核实任意业务页面注册。</td><td>工具服务可跨宿主；Continue 配置仍依赖 Continue。<br><a class="cite" href="https://docs.continue.dev/customize/deep-dives/mcp">[21] Continue</a></td></tr><tr data-category="闭源产品"><th scope="row">Cursor<small>官方概览；内部未知</small></th><td>闭源产品</td><td>公开文档提供 Agent、Rules、MCP 等入口。</td><td>产品界面可见；内部插件运行机制本次未核实。</td><td>不依据公开功能列表推断内部架构或任意应用宿主合同。<br><a class="cite" href="https://cursor.com/docs">[22] Cursor</a></td></tr><tr data-category="闭源产品"><th scope="row">Windsurf / Devin Desktop<small>官方文档；内部未知</small></th><td>闭源产品</td><td>公开 Cascade MCP 集成。</td><td>编辑器内交互；内部机制未核实。</td><td>MCP 能力不等于业务应用页面的可移植性。<br><a class="cite" href="https://docs.devin.ai/desktop/cascade/mcp">[23] Windsurf / Devin Desktop</a></td></tr><tr data-category="嵌入式框架"><th scope="row">Claude Agent SDK<small>官方文档</small></th><td>嵌入式框架</td><td>把 Claude Agent 能力嵌入 Python/TypeScript 程序。</td><td>应用自行提供 UI。</td><td>可脱离 Claude Code 的交互界面；仍有 SDK/runtime 依赖。<br><a class="cite" href="https://code.claude.com/docs/en/agent-sdk/overview">[24] Claude Agent SDK</a></td></tr><tr data-category="嵌入式框架"><th scope="row">LangGraph<small>官方文档</small></th><td>嵌入式框架</td><td>状态图、持久化、恢复与人工介入。</td><td>图/事件不规定最终业务 UI。</td><td>可作为独立程序的库；持久化要实际配置。<br><a class="cite" href="https://docs.langchain.com/oss/python/langgraph/overview">[25] LangGraph</a></td></tr><tr data-category="嵌入式框架"><th scope="row">Deep Agents<small>官方文档</small></th><td>嵌入式框架</td><td>在 LangGraph 上组合工具、文件、上下文与子 Agent。</td><td>Agent harness 与最终应用界面分离。</td><td>可嵌入应用，依赖其库和运行配置。<br><a class="cite" href="https://docs.langchain.com/oss/python/deepagents/overview">[26] Deep Agents</a></td></tr><tr data-category="嵌入式框架"><th scope="row">Google ADK<small>官方文档</small></th><td>嵌入式框架</td><td>Agent 开发、编排、工具与部署体系。</td><td>开发工具与业务应用 UI 应分别评估。</td><td>用于构建/部署 Agent；不是桌面应用注册协议。<br><a class="cite" href="https://adk.dev/">[27] Google ADK</a></td></tr><tr data-category="嵌入式框架"><th scope="row">Microsoft Agent Framework<small>官方文档</small></th><td>嵌入式框架</td><td>Agent 与 workflow 开发；延续 AutoGen、Semantic Kernel 的相关能力。</td><td>应用自行集成界面与渠道。</td><td>SDK/服务依赖，不要求使用某个桌面宿主页面。<br><a class="cite" href="https://learn.microsoft.com/en-us/agent-framework/overview/">[28] Microsoft Agent Framework</a></td></tr><tr data-category="Agent 服务"><th scope="row">Agno / AgentOS<small>官方文档</small></th><td>Agent 服务</td><td>FastAPI 运行 agents、teams、workflows；数据库状态与接口。</td><td>Control Plane 用于管理；可有自己的产品前端。</td><td>应用可独立部署服务；仍需 AgentOS 与存储配置。<br><a class="cite" href="https://docs.agno.com/agent-os/introduction">[29] Agno / AgentOS</a></td></tr><tr data-category="嵌入式框架"><th scope="row">CrewAI<small>官方文档</small></th><td>嵌入式框架</td><td>Flows 表达业务流程与状态。</td><td>流程运行不限定业务前端。</td><td>应用依赖库及其部署环境；不是页面插件格式。<br><a class="cite" href="https://docs.crewai.com/en/concepts/flows">[30] CrewAI</a></td></tr><tr data-category="嵌入式框架"><th scope="row">PydanticAI<small>官方文档</small></th><td>嵌入式框架</td><td>类型化 Agent 与 UI 事件流集成。</td><td>UI Event Streams 为前端消费事件提供适配。</td><td>前端与 Agent 运行可分离；不是完整应用安装协议。<br><a class="cite" href="https://pydantic.dev/docs/ai/integrations/ui/overview/">[31] PydanticAI</a></td></tr><tr data-category="嵌入式框架"><th scope="row">Mastra<small>官方文档</small></th><td>嵌入式框架</td><td>TypeScript agents、workflows、服务与存储。</td><td>支持 Next.js、React/Vite 等应用集成；Studio 用于开发管理。</td><td>业务应用可自己部署，依赖 Mastra 服务/库。<br><a class="cite" href="https://mastra.ai/docs">[32] Mastra</a></td></tr><tr data-category="嵌入式框架"><th scope="row">NeMo Agent Toolkit<small>官方仓库说明</small></th><td>嵌入式框架</td><td>函数、模型、workflow 配置与多框架集成。</td><td>所查入口以运行/优化 Agent 工作流为主。</td><td>部署工具链；不据此认定通用桌面应用插件支持。<br><a class="cite" href="https://github.com/NVIDIA/NeMo-Agent-Toolkit">[33] NeMo Agent Toolkit</a></td></tr><tr data-category="嵌入式框架"><th scope="row">smolagents<small>官方仓库说明</small></th><td>嵌入式框架</td><td>CodeAgent 执行代码并调用工具，可分享 Agent。</td><td>应用 UI 另行实现或集成。</td><td>可写普通 Python 程序；不是宿主页面扩展协议。<br><a class="cite" href="https://github.com/huggingface/smolagents">[34] smolagents</a></td></tr><tr data-category="应用平台"><th scope="row">Dify<small>官方仓库说明</small></th><td>应用平台</td><td>Plugin Daemon 管理 local/debug/serverless 插件运行。</td><td>插件运行与 Dify 应用展示分开；不能把后端插件当任意 UI。</td><td>本地子进程或远程运行仍依赖 Dify 插件调用协议。<br><a class="cite" href="https://github.com/langgenius/dify-plugin-daemon">[35] Dify</a></td></tr><tr data-category="应用平台"><th scope="row">Open WebUI<small>官方文档</small></th><td>应用平台</td><td>Python Tools/Functions 扩展推理与平台行为。</td><td>Action 可增加聊天按钮；还有事件驱动的交互扩展。</td><td>平台扩展依赖 Open WebUI，不是自动独立发布的软件。<br><a class="cite" href="https://docs.openwebui.com/features/extensibility/plugin/">[36] Open WebUI</a></td></tr><tr data-category="应用平台"><th scope="row">Chainlit<small>官方文档</small></th><td>应用平台</td><td>Python 应用配合自定义元素及回调。</td><td>CustomElement 使用 React；也可开发自有前端。</td><td>元素依赖 Chainlit 上下文；完整应用可以作为服务部署。<br><a class="cite" href="https://docs.chainlit.io/api-reference/elements/custom">[37] Chainlit</a></td></tr><tr data-category="界面协议"><th scope="row">OpenAI Plugins（原 Apps SDK 路径）<small>官方文档</small></th><td>界面协议</td><td>MCP 工具提供 UI 资源，标准 bridge 加宿主特定扩展。</td><td>iframe Web UI；当前官方文档以 MCP Apps 为基础。</td><td>可跨兼容宿主；window.openai 特定能力不能自动跨宿主。<br><a class="cite" href="https://developers.openai.com/plugins/build/chatgpt-ui">[39] OpenAI Plugins（原 Apps SDK 路径）</a></td></tr><tr data-category="界面协议"><th scope="row">MCP Apps<small>官方文档</small></th><td>界面协议</td><td>工具与 ui:// 资源关联；JSON-RPC / postMessage。</td><td>沙箱 Web UI，可选择前端框架。</td><td>兼容的是 UI/工具交互；不负责本地安装、业务数据库与后台任务。<br><a class="cite" href="https://modelcontextprotocol.io/extensions/apps/overview">[40] MCP Apps</a></td></tr><tr data-category="界面协议"><th scope="row">AG-UI<small>官方文档</small></th><td>界面协议</td><td>Agent 与 UI 的事件通信。</td><td>不规定 HTML、原生组件或页面框架。</td><td>解决流式交互，不是应用包、权限系统或部署器。<br><a class="cite" href="https://docs.ag-ui.com/introduction">[41] AG-UI</a></td></tr><tr data-category="界面协议"><th scope="row">A2UI<small>官方文档</small></th><td>界面协议</td><td>生成结构化 UI 描述，由受信组件目录渲染。</td><td>限制在可用组件与 renderer 合同内。</td><td>可跨平台渲染；不等于运行任意生成前端代码。<br><a class="cite" href="https://a2ui.org/">[42] A2UI</a></td></tr></tbody></table></div><p class="note">“官方仓库说明”仅代表阅读公开说明，不表示审计过整个仓库。没有实测证据的兼容能力不计为验收通过。</p></section><section id="mechanisms"><h2>哪些机制直接影响我们的选择</h2>
-<h3>DSH：宿主插件和生成页面是两条不同路径</h3>
-<p>安装的 worktable 插件通过宿主服务和 UI 插槽工作，自己的分屏布局由 React 实现；它不是一个可以直接双击运行的独立软件。其“生成窗口”则根据产物清单读取 HTML、URL 或文件，把内容放入窗口。页面如果只使用自身资源，可以单独托管；一旦依赖 DSH 路由、会话或插件服务，离开 DSH 就缺少这些实现。<a class="cite" href="https://github.com/Aisland-SJL/dsh-worktable">[2] dsh-worktable</a></p>
-<p>另一个机制是 DSH 动态 Cordis 插件：已读发行包中，host 部分注册处理函数，client 部分由宿主提供运行环境并调用后端。它可以有真实逻辑，不只是静态展示；但受支持 API、加载生命周期及动态代码格式约束，不是“任意代码都能在任意窗口运行”。其 Node vm 使用也不能当作操作系统级安全隔离。<a class="cite" href="https://github.com/deepseek-ai/deepseek-harness">[1] DeepSeek Harness</a></p>
-<h3>Hermes 与 Pi：宿主扩展可以提供复杂交互，但依赖明确</h3>
-<p>Hermes Desktop SDK 有 pane、page、sidebar、status bar、palette 等贡献点；本地插件直接在宿主环境加载，与隔离 HTML 预览是不同执行路径。Dashboard 也支持页面与 slot。可采用其明确的贡献点和生命周期概念，但不应让普通生成应用拿到宿主全部内部对象。Pi 的自定义 UI 是终端组件，说明“插件界面都是 HTML”本身也不成立。<a class="cite" href="https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk">[8] Hermes 桌面插件 SDK</a> <a class="cite" href="https://hermes-agent.nousresearch.com/docs/user-guide/features/extending-the-dashboard">[9] Hermes 仪表盘扩展</a> <a class="cite" href="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md">[3] Pi</a></p>
-<h3>OpenClaw：展示面板与交互应用不可混为一谈</h3>
-<p>当前 macOS widget panel 文档明确说明该面板只负责渲染；宿主集成操作在 Control UI 和 session dashboard 使用，A2UI 也属于 dashboard。不能只看同一个 canvas 名称，就把旧文档或其他界面的能力迁移到面板上。<a class="cite" href="https://docs.openclaw.ai/platforms/mac/canvas">[11] OpenClaw 组件面板</a></p>
-<h3>MCP Apps、AG-UI、A2UI 分别解决不同问题</h3>
-<p>MCP Apps 提供可移植的 Web 资源与宿主通信合同；AG-UI 描述 Agent 和用户界面之间的事件；A2UI 让宿主根据组件目录渲染声明式数据。完整自由布局的应用适合 Web UI，常见表单适合可选声明式渲染，流式任务需要事件协议。三者均不自动提供应用安装、数据迁移和后台服务生命周期。<a class="cite" href="https://modelcontextprotocol.io/extensions/apps/overview">[40] MCP Apps</a> <a class="cite" href="https://docs.ag-ui.com/introduction">[41] AG-UI</a> <a class="cite" href="https://a2ui.org/">[42] A2UI</a></p>
-<h3>运行框架：独立部署不等于不依赖框架</h3>
-<p>LangGraph 的状态持久化、AgentOS 的运行 API、OpenHands 的 SDK/Agent Server 都支持将 Agent 能力用于自己的产品。应用可以独立部署，同时依赖某个运行库或服务。OpenProgram 应沿用这一依赖表达，不把“离开桌面客户端”与“删除全部 OpenProgram 依赖”混为一谈。<a class="cite" href="https://docs.langchain.com/oss/python/langgraph/overview">[25] LangGraph</a> <a class="cite" href="https://docs.agno.com/agent-os/introduction">[29] Agno / AgentOS</a> <a class="cite" href="https://docs.openhands.dev/sdk">[14] OpenHands</a></p>
-</section><section id="baseline"><h2>OpenProgram 当前实现与边界</h2>
-<p>应用运行能力复用既有 Program 来源管理、模型 Runtime、执行记录和标签页基础。本文沿用 <a href="programs-architecture.zh.html">Programs 代码结构</a>；更广泛的比较见 <a href="../../framework-comparison.zh.html">框架比较</a>。独立审查、完整验收与本地 App 的交付状态集中列在文末。</p>
-<div class="table-wrap"><table><thead><tr><th>当前实现</th><th>源码</th><th>边界</th></tr></thead><tbody>
-<tr><td>新标签页保留四个内置入口，并读取已安装应用；点击后按实例复用应用标签。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/pages/new-tab-page.tsx"><code>apps/web/components/center-tabs/pages/new-tab-page.tsx</code></a></td><td>项目应用支持选择项目和复用已保存绑定；隐藏与停用分开管理。</td></tr>
-<tr><td>独立应用界面通过 sandbox iframe 和 MessagePort 调用实例接口。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/center-tabs/pages/application-tab-pane.tsx"><code>apps/web/components/center-tabs/pages/application-tab-pane.tsx</code></a></td><td>应用自行编写 HTML/CSS/JavaScript，不依赖宿主 React 组件；页面不能直接调用 owner API。</td></tr>
-<tr><td>应用注册写入独立 applications/catalog.json，固定内容版本保存在应用版本目录；旧 Program 来源记录首次读取时迁移。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/_host/ui/catalog.py"><code>openprogram/programs/_host/ui/catalog.py</code></a></td><td>Python 安装需要明确 trust；最终快照再次检查授权；不把进程隔离当作恶意代码沙箱。</td></tr>
-<tr><td>Python 操作由独立进程执行，生命周期使用既有执行记录、Attempt 和 Driver。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/_host/ui/service.py"><code>openprogram/programs/_host/ui/service.py</code></a></td><td>并发取消共用一次清理；保留进程树归属，主进程退出后仍可终止子进程。</td></tr>
-<tr><td>模型调用绑定已有 Runtime 和 SessionNodeWriter。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/_host/ui/runner.py"><code>openprogram/programs/_host/ui/runner.py</code></a></td><td>应用定义的模型名传入 Runtime；模型凭据不交给页面。普通 Python 调用栈不支持恢复。</td></tr>
-<tr><td>实例保存业务状态、运行结果、提问及递增事件。</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/_host/ui/state.py"><code>openprogram/programs/_host/ui/state.py</code></a></td><td>重开页面恢复数据；worker 重启标记中断。自动数据迁移、附件 API 和菜单排序未实现。</td></tr>
-</tbody></table></div>
-<p>应用和宿主插件分开管理：既有插件可扩展宿主行为，应用通过自己的页面和实例接口运行。现有插件 loader 不提供本文的应用隔离保证；插件贡献 Application 的自动适配仍属于后续扩展。</p>
-</section><section id="architecture"><h2>应用架构与责任划分</h2>
-<div class="architecture" role="img" aria-label="新标签页经应用定义打开隔离界面，界面操作经能力接口进入应用运行上下文，调用现有 Programs 与模型服务"><div>新标签页 / 应用标签页<br><small>名称、图标、打开、关闭视图</small></div><div>Application 定义<br><small>来源、版本、UI、操作、数据范围</small></div><div>应用 Web UI<br><small>自己的组件和业务交互</small></div><div>能力接口 / 运行适配器<br><small>校验身份、操作、授权和任务</small></div><div>已有 Tool / Workflow / Runtime<br><small>普通代码、llm()、agent()</small></div><div>应用状态 / 任务记录<br><small>业务数据、事件、结果与恢复</small></div></div>
-<p>Application 是一种 Program 包，扩展已有来源注册。Plugin 是扩展宿主行为的安装单元，可以提供工具或主题；插件贡献 Application 定义的自动适配保留为扩展。不是每个插件都出现在新标签页，也不是每个 Application 都要改动宿主 UI。一个包只保留一份应用定义；后续插件适配应引用同一份定义。</p>
-<p>普通应用只能在自己的标签页内渲染。全局工具栏、聊天编辑器、主题和系统级服务属于另一类受信宿主扩展，沿用插件权限。对应用暴露少量稳定的 API，不公开 React store、全局 session manager 或框架内部模块。应用可选用外观组件包，但标准 HTML 和独立前端构建同样有效。</p>
-<p>第一阶段支持静态 Web 应用和带 Python 业务操作的 Web 应用。浏览器可执行的 JavaScript、Canvas、WebGL、WASM 可以用于页面；系统 GUI、GPU 驱动、任意二进制、任意语言服务不是浏览器天然能力。后续如需 Node/其他语言后端，增加明确的 runtime adapter 和依赖合同，不宣称首版支持任何程序。</p>
-<p>包保留自己的依赖文件、测试和发布边界。发布 UI 使用构建产物，不在每次点击时运行开发服务器、安装 latest 依赖或让 Agent 再生成代码。应用没有后台操作时完全不启动 Python 进程；有操作时按需启动对应 runner。runner 是应用执行容器的逻辑角色，进程隔离与安全沙箱必须分别实现、分别标注。</p>
-</section><section id="contract"><h2>最小应用合同</h2>
-<p>首版以应用清单引用 Python entrypoint 和已构建静态目录；以下字段对应当前 application.json；公开命令和 SDK 见产品文档。操作名只在 UI/进程通信边界寻址，Python 内部仍用普通函数 import 和调用，不新增第二套 Workflow 字符串调度系统。</p>
-<pre><code>{
+<title>应用运行时</title>
+<meta name="description" content="OpenProgram 如何打开、运行、存储和隔离应用，以及公开的 Agent 框架如何比较。">
+<span id="decision"></span>
+<h1>应用运行时</h1>
+<p>应用有自己的界面、业务逻辑、数据和依赖，从新标签页打开，不必回到创建它的对话。</p>
+
+<figure id="architecture">
+<svg class="fig-wide" viewBox="0 0 680 262" role="img" aria-label="新标签页或应用页面打开应用标签页，它是一个沙箱 iframe，运行应用自己的 HTML、CSS 和 JavaScript。通过 MessagePort 连接宿主桥，宿主桥检查实例、能力和操作，并为每个操作启动一个 runner 进程。runner 调用 Runtime 的 llm、agent 和 Program，并保存实例状态。">
+  <defs><marker id="ar-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="40">启动</text>
+  <text class="t-soft" x="0" y="64">新标签页、应用页面</text>
+  <line class="ln" x1="168" y1="33" x2="228" y2="33" marker-end="url(#ar-a)"/>
+  <text class="t-big" x="240" y="40">应用标签页</text>
+  <text class="t-soft" x="240" y="64">沙箱 iframe</text>
+  <text class="t-soft" x="240" y="84">自己的 HTML、CSS、JavaScript</text>
+  <line class="ln" x1="424" y1="33" x2="468" y2="33" marker-end="url(#ar-a)"/>
+  <text class="t-cmd mid notranslate" translate="no" x="434" y="22">MessagePort</text>
+  <text class="t-big" x="480" y="40">宿主桥</text>
+  <text class="t-soft" x="480" y="64">检查实例、</text>
+  <text class="t-soft" x="480" y="84">能力、操作</text>
+  <line class="ln" x1="520" y1="96" x2="520" y2="146" marker-end="url(#ar-a)"/>
+  <text class="t-big" x="480" y="170">Runner</text>
+  <text class="t-soft" x="480" y="194">每个操作一个进程</text>
+  <line class="ln" x1="470" y1="163" x2="410" y2="163" marker-end="url(#ar-a)"/>
+  <text class="t-big" x="240" y="170">Runtime</text>
+  <text class="t-soft" x="240" y="194">llm()、agent()、Program</text>
+  <text class="t-soft" x="240" y="214">执行记录</text>
+  <path class="ln" d="M560 204V246H60V212" marker-end="url(#ar-a)"/>
+  <text class="t-big" x="0" y="170">实例状态</text>
+  <text class="t-soft" x="0" y="194">业务数据、事件、</text>
+  <text class="t-soft" x="0" y="214">结果、问题</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>启动</strong><small>新标签页、应用页面</small></li>
+  <li><strong>应用标签页</strong><small>沙箱 iframe，自己的 HTML、CSS、JavaScript</small></li>
+  <li class="via"><code translate="no">MessagePort</code></li>
+  <li><strong>宿主桥</strong><small>检查实例、能力、操作</small></li>
+  <li><strong>Runner</strong><small>每个操作一个进程</small></li>
+  <li><strong>Runtime</strong><small>llm()、agent()、Program、执行记录</small></li>
+  <li class="flow-end"><strong>实例状态</strong><small>业务数据、事件、结果、问题</small></li>
+</ol>
+</figure>
+
+<details id="experience">
+<summary>价值与限度</summary>
+<ul>
+<li>界面用标准 Web：HTML、CSS、JavaScript、编译后的 React 或 Vue，不是拼装固定的 OpenProgram 组件。HTML 是界面技术，不代表完整度；软件能做什么取决于后端、状态、契约和部署依赖。</li>
+<li>价值：按钮和 Agent 共用业务操作，模型调用进入现有执行记录，业务数据独立于聊天窗口。这是产品契约的组合，不声称独有。</li>
+<li>应用在 OpenProgram 内运行。将来仍可用最小运行时部署；去掉全部 OpenProgram 依赖需要替换模型、存储和执行实现，因此不承诺自动独立导出。</li>
+<li>浏览器可执行的 JavaScript、Canvas、WebGL 和 WASM 可用。系统 GUI、GPU 驱动、任意二进制和其他语言服务不可用，需要显式的运行时适配器和依赖契约。</li>
+</ul>
+</details>
+
+<h2 id="management-scenarios">术语与入口</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">术语</th><th scope="col">含义</th></tr></thead>
+<tbody>
+<tr><th scope="row">Program</th><td>可调用能力；Tool 和 Workflow 保持原定义</td></tr>
+<tr><th scope="row">Package</th><td>容纳这些能力的安装单元，包括 harness。不是执行类型。</td></tr>
+<tr><th scope="row">Application</th><td>用户可打开的软件，有自己的界面、版本、数据和生命周期</td></tr>
+<tr><th scope="row">宿主插件</th><td>扩展宿主行为的安装单元，如工具或主题。单独管理；现有加载器不保证应用隔离，插件也不会自动适配成 Application。</td></tr>
+</tbody>
+</table>
+<table class="stack">
+<thead><tr><th scope="col">目标</th><th scope="col">入口</th><th scope="col">结果与失败</th></tr></thead>
+<tbody>
+<tr><th scope="row">查看能力</th><td>Abilities → Programs</td><td>每个应用目录一个普通文件夹，内置或已安装；来源、默认入口、调用结构。<code translate="no">gui_agent</code> 等名称不变。</td></tr>
+<tr><th scope="row">安装、升级、卸载包</th><td><code translate="no">openprogram programs install</code>、<code translate="no">install --upgrade</code>、<code translate="no">uninstall</code></td><td>克隆到 <code translate="no">~/.openprogram/programs/&lt;name&gt;/</code>。开发符号链接保持目标不变。未知目录绝不导入。</td></tr>
+<tr><th scope="row">安装软件</th><td>Applications → Install…</td><td>显示声明、来源、版本、启用状态。Python 后端需要勾选明确信任。重复 ID、无效入口、依赖准备失败都返回错误，不覆盖现有内容。</td></tr>
+<tr><th scope="row">打开</th><td>新标签页按钮，或 Applications 上的 Open</td><td>独立标签页，同一实例。项目应用绑定当前项目或选择器。没有 UI 的 Program 不增加按钮。</td></tr>
+<tr><th scope="row">管理</th><td>Applications：启用、显示或隐藏、更新、卸载</td><td>停用阻止新的打开和操作，并取消进行中的操作；隐藏只移除按钮。错误显示在对应操作旁。刷新和重新打开读取最新目录。</td></tr>
+<tr><th scope="row">从 CLI 或 Agent 调用</th><td><code translate="no">openprogram programs</code> <code translate="no">list</code>、<code translate="no">run</code>、<code translate="no">status</code>、<code translate="no">cancel</code>、<code translate="no">check</code>、<code translate="no">install</code>、<code translate="no">uninstall</code>、<code translate="no">enable</code>、<code translate="no">disable</code></td><td>与所有 Program 同一命令组，没有单独的应用命令。</td></tr>
+</tbody>
+</table>
+<details>
+<summary>目录与旧安装</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">路径</th><th scope="col">内容</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">program-sources.json</code></th><td>Program 来源</td></tr>
+<tr><th scope="row"><code translate="no">~/.openprogram/programs/catalog.json</code></th><td>应用注册：来源目录、启用、隐藏、显示名、审核过的 manifest。不复制任何内容。</td></tr>
+<tr><th scope="row"><code translate="no">~/.openprogram/programs/.runtime/</code></th><td><code translate="no">state.sqlite</code>、<code translate="no">data/&lt;instance&gt;/data.sqlite</code>、<code translate="no">runs/</code>、<code translate="no">environments/</code></td></tr>
+</tbody>
+</table>
+<ul>
+<li><code translate="no">program_directory.migrate_user_directory</code> 用重命名把 <code translate="no">workflows/</code> 和 <code translate="no">applications/</code> 移进 <code translate="no">programs/</code>。旧安装器在 <code translate="no" data-claim="example">openprogram/programs/packages/</code> 或 <code translate="no">applications/</code> 下的克隆也会移动。可重复执行。</li>
+<li>首次读取目录时，<code translate="no">kind=application</code> 的行移出 <code translate="no">program-sources.json</code>，包括停用、隐藏、来源和卸载状态。先写目录再删旧行；冲突时保留原文件。迁移和目录更新串行执行。</li>
+<li>重新分类目录不给未注册目录任何执行权限。桌面版只读依赖限制不变：应用表单不能用包 API 修改宿主依赖。</li>
+</ul>
+</details>
+
+<h2 id="new-tab">新标签页</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">主题</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">顺序</th><td>文件、新建对话、浏览器、终端；带窗口的内置应用；已启用且可见的已安装应用。按钮不显示模型、端口、运行时或路径。</td></tr>
+<tr><th scope="row">再次打开</th><td>同一应用和项目复用已打开的标签页。不同项目用显式数据范围独立打开。</td></tr>
+<tr><th scope="row">没有活动项目</th><td>复用已保存的绑定；未绑定的项目应用询问一次。应用绝不跟随其他聊天标签页的工作目录。</td></tr>
+<tr><th scope="row">首次打开</th><td>可能显示依赖准备。失败留在应用页面，给出原因和 Retry。</td></tr>
+<tr><th scope="row">关闭</th><td>只关闭视图。服务进程退出和任务中断分别报告。</td></tr>
+<tr><th scope="row">创建</th><td>从聊天开始：Agent 编写包和依赖声明，构建并验证，然后在该任务的授权内注册。只有成功才增加按钮；失败保留源码和错误以便修复。</td></tr>
+</tbody>
+</table>
+
+<h2 id="contract">应用契约</h2>
+<pre translate="no" tabindex="0"><code translate="no">{
   "id": "local.paper-reader",
-  "title": "论文阅读器",
+  "title": "Paper reader",
   "icon": "book-open",
   "version": "1.0.0",
   "ui": { "root": "web/dist", "entry": "index.html" },
@@ -81,72 +113,248 @@
   "scope": "project",
   "capabilities": ["model.invoke", "storage.app", "files.project.read"],
   "dataSchema": 1,
-  "operations": { "summarize": { "agent": true, "input": { "type": "object" }, "output": { "type": "string" } } }
+  "operations": {
+    "summarize": { "agent": true, "input": { "type": "object" }, "output": { "type": "string" } }
+  }
 }</code></pre>
-<p>静态应用省略 backend，capabilities 可为空。id 是包内稳定身份，不使用标题、绝对路径或生成它的 chat ID。安装记录关联 owner、来源、内容摘要和已选版本；应用实例由 app ID、owner 和显式 project scope 标识。应用展示偏好如隐藏与排序属于用户偏好，不写入发行包。</p>
-<div class="table-wrap"><table><thead><tr><th>对象</th><th>责任与最少字段</th></tr></thead><tbody>
-<tr><td>ApplicationDefinition</td><td>app ID、来源引用、版本/UI 资源、运行类型、操作 schema、能力需求、数据 schema。</td></tr>
-<tr><td>Installation</td><td>引用已有来源记录；选中版本、启用状态、验证结果和权限决策。不是复制源码目录就算安装完成。</td></tr>
-<tr><td>AppInstance</td><td>owner + app ID + project scope；业务数据位置及活动运行。一个窗口不是一个数据库。</td></tr>
-<tr><td>View</td><td>tab ID、instance ID、UI route、正在显示的运行；可以销毁并重建。</td></tr>
-<tr><td>OperationRun</td><td>run ID、instance ID、操作版本、输入、身份、幂等键、状态、事件序号、结果引用。与已有执行记录关联，不复制完整 DAG。</td></tr>
-</tbody></table></div>
-<p>跨进程操作提供输入/输出 schema。客户端不能自行指定任意 import path、源码路径或 owner；服务器根据安装记录解析。后端可信身份来自已认证连接，不相信 JSON 中的 appId 就是权限凭证。运行事件包含递增序号，客户端断线后按游标补读；结果与错误都写入持久记录。</p>
-<p>业务状态采用按应用实例划分的 SQLite 数据库；附件 API 保留为后续扩展。数据置于当前 profile 状态目录下，由宿主使用内部生成的实例键定位。默认 profile 对应 ~/.openprogram；不在源码版本目录保存用户数据。项目路径变化只更新项目绑定，不改变实例身份。已有 Runtime 数据库保存执行事实，应用状态仅引用 run ID；不另建平行的 Agent 会话数据库。localStorage 只缓存可丢弃的视图偏好。</p>
-<p>Python runner 使用固定版本的应用依赖环境；应用依赖不得直接安装进主 worker 环境。宿主通过已选安装记录启动允许的入口，不接受来自浏览器的任意启动命令。每次业务操作启动一个 runner，操作结束后清理所属进程树；关闭视图不取消操作。再次打开页面读取持久状态，不需要常驻应用服务。</p>
-</section><section id="models"><h2>模型与业务操作如何结合</h2>
-<p>首版论文阅读器示例接受论文文本，支持“生成摘要”和“保存批注”。保存由确定性代码完成；摘要操作进入 OpenProgram Runtime，再调用已有 llm()。PDF 导入需要应用另外实现。模型只承担需要推理的步骤，不要求每次按钮点击都先经过一次聊天。</p>
-<p>用户按“生成摘要”和 Agent 调用该应用的 summarize 操作，都经过同一输入校验、权限和实现。是否向 Agent 暴露某项操作由应用明确声明，不能把所有内部数据库方法自动注册为工具。Agent 调用也必须绑定应用实例，不能因聊天切换而改用另一个项目的数据。</p>
-<p>Runtime 由 runner 创建，使用应用清单指定的模型名或宿主默认配置，并绑定应用运行记录。上下文只包含操作输入与应用明确提供的数据，不随活动聊天切换。当前对话的显式导入保留为后续能力；模型配置在 Runtime 创建时解析。运行中的操作固定其应用内容版本。</p>
-<p>前端得到任务进度和结果，不得到 provider 密钥。模型调用使用已有 Runtime 的记录与错误处理。context.ask() 产生 question 事件，用户回答绑定 run ID 与 request ID；回答只能用于该次运行当前仍在等待的问题。应用提问不引入第二套 ExecutionStatus。</p>
-<p>数据修改应先由普通代码校验模型输出，再事务性提交。模型返回的自然语言“已保存”不是保存成功证据。对于不可幂等的外部副作用，重试必须查询已有操作记录或交给用户处理，不能因为网络超时就自动再执行一遍。</p>
-</section><section id="lifecycle"><h2>打开、后台执行、恢复与升级</h2>
-<h3>打开路径</h3><p>新标签页读取已验证 Application 定义 → 用户选择应用 → 解析应用实例与绑定项目 → 复用或创建应用标签 → 加载固定版本资源 → 建立能力连接 → 获取业务状态与活动运行。注册/列出应用只读 manifest，不导入应用业务代码，不发起模型请求。</p>
-<h3>任务路径</h3><p>提交操作时持久化输入、幂等键和 accepted 事件，随后由既有 Attempt 管理 running。需要输入时保存 question，完成时进入 completed / failed / cancelled。关闭视图不产生 cancelled。停止任务终止所属进程树，完成清理后才返回 cancelled；迟到结果不能覆盖终态。并发修改同一业务对象使用数据库事务或版本检查，不能以前端按钮禁用代替后端并发控制。</p>
-<h3>重启路径</h3><p>重新打开页面恢复视图和状态；worker 重启后，未完成运行按既有 owner-loss 规则标记 interrupted 或完成已请求的取消。保留输入、已保存进度和结果，并清楚显示中断。首版不自动续跑 Python 操作；应用可以读取已保存业务状态后显式提交新操作。</p>
-<h3>升级路径</h3><p>构建候选版本 → 静态/schema 校验 → 依赖准备 → 启动与行为验证 → 数据兼容检查 → 原子切换安装记录。正在运行的操作固定旧版本，新启动操作使用新版本。旧视图和新后端必须版本一致；不允许更新静态文件时悄悄切换已加载页面的操作合同。</p>
-<p>首版拒绝 dataSchema 或 scope 不兼容的替换，不自动执行迁移。后续迁移需要备份、验证和明确恢复流程。卸载停止相关运行并隐藏应用，保留来源、schema、scope、代码快照与业务数据；重新安装仍受同一兼容检查约束。业务数据删除 API 未提供。</p>
-</section><section id="boundary"><h2>隔离与可移植性</h2>
-<p>浏览器隔离是应用自由编写界面的前提。首版普通应用使用 sandbox iframe 与受限 CSP；不能复用当前无 sandbox 的同源插件页作为隔离保证。选择 opaque origin 时通过经校验的 MessageChannel/窗口握手通信；若后续使用独立 origin，也必须隔离宿主 cookie、storage 与管理 API。CORS 本身不是鉴权，iframe 本身也不是默认安全。</p>
-<p>应用资源按安装内容摘要提供，只允许访问已发布静态目录。宿主仅向自己创建的 iframe 交付 MessagePort，并按绑定实例校验操作；不接受页面自行指定的 owner、任意 URL 或其他实例运行。前端默认不能直接访问全部 /api/*。需要联网、项目文件或设备权限时声明具体能力，服务端在每次操作重新检查，停用或卸载后撤销连接。</p>
-<p>Python 独立进程可以隔离依赖和崩溃，但不能阻止代码直接读取宿主文件或联网。首版后端应用只支持明确获准的本地代码，不把 manifest 的能力列表宣传为恶意 Python 的安全沙箱。接纳不受信远程代码之前，必须实现平台级文件/网络限制或容器沙箱，并验证子进程、包安装脚本和继承环境。高信任宿主插件继续单独标识。</p>
-<div class="table-wrap"><table><thead><tr><th>运行方式</th><th>依赖</th><th>设计承诺</th></tr></thead><tbody>
-<tr><td>纯静态应用</td><td>标准浏览器和自身资源。</td><td>无宿主 API 时可独立托管；数据迁移仍由应用负责。</td></tr>
-<tr><td>OpenProgram 内应用</td><td>UI + 应用后端 + OpenProgram Runtime。</td><td>当前实现；菜单入口、模型操作、数据和任务归属一致。</td></tr>
-<tr><td>独立部署，同一 runtime</td><td>应用包 + 最小 runtime + 配置/存储。</td><td>架构保留边界；在实施适配与验收前不宣称可用。</td></tr>
-<tr><td>MCP Apps 跨宿主</td><td>MCP server + 兼容宿主及其能力。</td><td>共享 UI/工具合同；OpenProgram 特定后台运行 API 不自动可移植。</td></tr>
-<tr><td>完全无 OpenProgram 依赖</td><td>应用自己提供模型、任务、存储等替代实现。</td><td>不自动保证；必须单独构建和测试。</td></tr>
-</tbody></table></div>
-</section><section id="choices"><h2>采用、调整与暂不采用</h2>
-<div class="table-wrap"><table><thead><tr><th>选择</th><th>依据</th><th>具体处理</th></tr></thead><tbody>
-<tr><td>采用：标准 Web 应用界面</td><td><a class="cite" href="https://modelcontextprotocol.io/extensions/apps/overview">[40] MCP Apps</a> <a class="cite" href="https://developers.openai.com/plugins/build/chatgpt-ui">[39] OpenAI Plugins（原 Apps SDK 路径）</a></td><td>自由前端构建；主题组件可选。用稳定接口连接宿主。</td></tr>
-<tr><td>采用：明确贡献与生命周期</td><td><a class="cite" href="https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk">[8] Hermes 桌面插件 SDK</a> <a class="cite" href="https://github.com/deepseek-ai/deepseek-harness">[1] DeepSeek Harness</a></td><td>应用贡献限制在自己的页面；宿主全局 UI 插槽留给受信插件。</td></tr>
-<tr><td>采用：状态与页面分开</td><td><a class="cite" href="https://docs.langchain.com/oss/python/langgraph/overview">[25] LangGraph</a> <a class="cite" href="https://docs.agno.com/agent-os/introduction">[29] Agno / AgentOS</a></td><td>业务状态和运行记录持久化；不以 localStorage 或聊天历史作唯一数据库。</td></tr>
-<tr><td>调整：MCP Apps 集成</td><td><a class="cite" href="https://modelcontextprotocol.io/extensions/apps/overview">[40] MCP Apps</a></td><td>保留标准 bridge 适配，先实现本地应用合同；标准工具调用不足的持久任务以明确宿主扩展暴露，不能谎称标准保证。</td></tr>
-<tr><td>调整：UI 事件流</td><td><a class="cite" href="https://docs.ag-ui.com/introduction">[41] AG-UI</a></td><td>复用既有事件语义，需要跨框架接入时做 AG-UI adapter，避免重建内部任务系统。</td></tr>
-<tr><td>可选：声明式 UI</td><td><a class="cite" href="https://a2ui.org/">[42] A2UI</a></td><td>适合确认单和普通表单；不规定所有应用只能使用内置组件。</td></tr>
-<tr><td>暂不采用：任意动态代码直接进入宿主</td><td>宿主稳定性与普通应用隔离要求。</td><td>代码先成为可审查、可构建的应用版本，再注册运行；不把 eval 作为默认发布机制。</td></tr>
-<tr><td>暂不采用：完整市场、任意语言 runner、原生 GUI 嵌入</td><td>不影响已经明确的首版使用路径。</td><td>先证明安装—打开—操作—恢复的合同；不把发布平台做成首版依赖。</td></tr>
-</tbody></table></div>
-</section><section id="implementation"><h2>实施分解与验收</h2>
-<p>此节是已批准的实施范围。阶段 1–4 已通过独立审查、完整检查与默认 App 验收；阶段 5 保持未实现。每一步必须从公开入口验证，不能仅凭注册器单测宣称用户可以使用应用。现有 Programs 与插件兼容测试应随相关改动一起运行。</p>
-<div class="table-wrap"><table><thead><tr><th>阶段 / 主要位置</th><th>交付行为</th><th>必要验收</th></tr></thead><tbody>
-<tr><td>1. 应用定义与来源<br>programs/_host/sources.py、plugins manifest/loader、应用目录 API</td><td>一份定义、一份来源身份、验证与启用状态；元数据发现不执行代码。</td><td>重复 ID、无效入口、缺失来源、停用后残留；未安装应用不出现在菜单。</td></tr>
-<tr><td>2. 菜单与页面<br>new-tab-page.tsx、center-tabs state、app-shell.tsx、应用页面组件</td><td>点击固定入口打开静态应用，复用标签并绑定实例；隔离页面资源。</td><td>从四入口页面增加两个应用；键盘打开、刷新恢复、两个项目互不串数据；iframe 无法访问宿主状态。</td></tr>
-<tr><td>3. 业务操作与 Runtime<br>server 应用路由、Program 执行适配与事件</td><td>Python 操作进入已有模型/Workflow 运行合同；取消、提问、结果持久化。</td><td>UI 与 Agent 调用相同操作；模型配置生效、凭据不出前端、重复提交不重复写入。</td></tr>
-<tr><td>4. 完整生命周期<br>来源版本、应用状态存储与 runner 管理</td><td>依赖准备、后台任务、重启中断处理、版本固定、数据迁移与卸载。</td><td>关闭页后任务继续；worker 中断可解释；升级期间旧任务不换代码；迁移失败不损坏旧数据。</td></tr>
-<tr><td>5. 兼容与独立部署<br>独立 adapter，按需求增加</td><td>MCP Apps、最小 runtime 服务部署；之后再考虑非 Python runner。</td><td>相同 UI/操作在明确支持的第二种宿主或部署目标实际运行；不以截图代替。</td></tr>
-</tbody></table></div>
-<p>阶段 1–4 合起来才是可称为“完整应用支持”的第一版。阶段 2 单独完成只能称为静态应用入口。第一版使用三种验收应用：不调用模型的本地计算器、保存批注并生成摘要的论文阅读器、可显示进度并处理重启中断的批量文件分析。验收数据必须包括再次打开、重启、重复点击和模型失败。</p>
-<p>性能目标以可测条件规定：列出新标签页不启动任何应用业务进程；已有应用重复点击不产生第二个同 scope 实例；打开应用不触发生成代码或模型请求；大产物按引用读取而非塞入每条事件。具体延迟和资源预算在首个完整样例中测量，当前没有基准数据，不给出未经测量的毫秒或周数承诺。</p>
-</section><section id="status"><h2>实现状态与证据限制</h2>
-<p>阶段 1–4 已实现：应用注册与固定版本、新标签页入口、独立 UI 与能力 bridge、Python 操作、实例数据和执行记录。独立规范审查、质量审查和完整检查通过；默认 App 已验证菜单启动计算器、笔记保存后重新打开、Python 文件分析以及重启后恢复应用标签与结果。模型成功与失败、取消、重复提交和运行中断由集成测试验证，未将真实模型服务可用性视为离线测试保证。独立部署与 MCP Apps 适配保持未实现。</p>
-<p>操作状态使用现有 ExecutionStore；模型记录使用既有 SessionNodeWriter，保存到应用运行目录。UI 通过 MessagePort 使用实例限定的接口；opaque-origin 页面以单版本资源凭据加载相对模块，凭据只允许读取 UI 资源。Python 每个内容版本使用独立环境，依赖宿主框架；首版用 context.ask() 表达应用提问，worker 停止后报告 interrupted，不恢复 Python 调用栈。JSON 状态上限为 4 MiB，事件上限为 1 MiB；附件管理、自动 schema 迁移、对话上下文选择与菜单手动排序仍未实现。产品接口见 <a href="../../../../capabilities/applications.zh.md">应用文档</a>。</p>
-<p>DSH 细节基于已安装的 0.1.5-rc.1 发行包，worktable 源码版本为 0.3.3。二者未做完整兼容性验收；GitHub 当前默认分支也可能继续变化。其动态插件加载机制与 worktable 的产物页面机制分别引用，不用一个版本的演示代表另一个版本的能力。</p>
-</section><section id="sources"><h2>来源索引</h2><p>框架事实使用项目官方文档、官方仓库或本地公开发行包。链接支持其附近的具体描述，不代表对该项目所有实现的背书。OpenProgram 文件链接指向 main；本次核查的本地版本见独立交付记录。</p><ol class="sources"><li id="source-1"><a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a><span>https://github.com/deepseek-ai/deepseek-harness</span></li><li id="source-2"><a href="https://github.com/Aisland-SJL/dsh-worktable">dsh-worktable</a><span>https://github.com/Aisland-SJL/dsh-worktable</span></li><li id="source-3"><a href="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md">Pi</a><span>https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md</span></li><li id="source-4"><a href="https://opencode.ai/docs/plugins/">OpenCode</a><span>https://opencode.ai/docs/plugins/</span></li><li id="source-5"><a href="https://learn.chatgpt.com/docs/app-server">Codex App Server</a><span>https://learn.chatgpt.com/docs/app-server</span></li><li id="source-6"><a href="https://code.claude.com/docs/en/plugins-reference">Claude Code</a><span>https://code.claude.com/docs/en/plugins-reference</span></li><li id="source-7"><a href="https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/">Hermes</a><span>https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/</span></li><li id="source-8"><a href="https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk">Hermes 桌面插件 SDK</a><span>https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk</span></li><li id="source-9"><a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/extending-the-dashboard">Hermes 仪表盘扩展</a><span>https://hermes-agent.nousresearch.com/docs/user-guide/features/extending-the-dashboard</span></li><li id="source-10"><a href="https://docs.openclaw.ai/tools/plugin">OpenClaw</a><span>https://docs.openclaw.ai/tools/plugin</span></li><li id="source-11"><a href="https://docs.openclaw.ai/platforms/mac/canvas">OpenClaw 组件面板</a><span>https://docs.openclaw.ai/platforms/mac/canvas</span></li><li id="source-12"><a href="https://geminicli.com/docs/extensions/">Gemini CLI</a><span>https://geminicli.com/docs/extensions/</span></li><li id="source-13"><a href="https://block.github.io/goose/index.html">goose</a><span>https://block.github.io/goose/index.html</span></li><li id="source-14"><a href="https://docs.openhands.dev/sdk">OpenHands</a><span>https://docs.openhands.dev/sdk</span></li><li id="source-15"><a href="https://github.com/bytedance/deer-flow">DeerFlow</a><span>https://github.com/bytedance/deer-flow</span></li><li id="source-16"><a href="https://aider.chat/docs/">Aider</a><span>https://aider.chat/docs/</span></li><li id="source-17"><a href="https://github.com/SWE-agent/mini-swe-agent">mini-SWE-agent</a><span>https://github.com/SWE-agent/mini-swe-agent</span></li><li id="source-18"><a href="https://github.com/mistralai/mistral-vibe">Mistral Vibe</a><span>https://github.com/mistralai/mistral-vibe</span></li><li id="source-19"><a href="https://docs.cline.bot/mcp/mcp-overview">Cline</a><span>https://docs.cline.bot/mcp/mcp-overview</span></li><li id="source-20"><a href="https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo/">Roo Code</a><span>https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo/</span></li><li id="source-21"><a href="https://docs.continue.dev/customize/deep-dives/mcp">Continue</a><span>https://docs.continue.dev/customize/deep-dives/mcp</span></li><li id="source-22"><a href="https://cursor.com/docs">Cursor</a><span>https://cursor.com/docs</span></li><li id="source-23"><a href="https://docs.devin.ai/desktop/cascade/mcp">Windsurf / Devin Desktop</a><span>https://docs.devin.ai/desktop/cascade/mcp</span></li><li id="source-24"><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK</a><span>https://code.claude.com/docs/en/agent-sdk/overview</span></li><li id="source-25"><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph</a><span>https://docs.langchain.com/oss/python/langgraph/overview</span></li><li id="source-26"><a href="https://docs.langchain.com/oss/python/deepagents/overview">Deep Agents</a><span>https://docs.langchain.com/oss/python/deepagents/overview</span></li><li id="source-27"><a href="https://adk.dev/">Google ADK</a><span>https://adk.dev/</span></li><li id="source-28"><a href="https://learn.microsoft.com/en-us/agent-framework/overview/">Microsoft Agent Framework</a><span>https://learn.microsoft.com/en-us/agent-framework/overview/</span></li><li id="source-29"><a href="https://docs.agno.com/agent-os/introduction">Agno / AgentOS</a><span>https://docs.agno.com/agent-os/introduction</span></li><li id="source-30"><a href="https://docs.crewai.com/en/concepts/flows">CrewAI</a><span>https://docs.crewai.com/en/concepts/flows</span></li><li id="source-31"><a href="https://pydantic.dev/docs/ai/integrations/ui/overview/">PydanticAI</a><span>https://pydantic.dev/docs/ai/integrations/ui/overview/</span></li><li id="source-32"><a href="https://mastra.ai/docs">Mastra</a><span>https://mastra.ai/docs</span></li><li id="source-33"><a href="https://github.com/NVIDIA/NeMo-Agent-Toolkit">NeMo Agent Toolkit</a><span>https://github.com/NVIDIA/NeMo-Agent-Toolkit</span></li><li id="source-34"><a href="https://github.com/huggingface/smolagents">smolagents</a><span>https://github.com/huggingface/smolagents</span></li><li id="source-35"><a href="https://github.com/langgenius/dify-plugin-daemon">Dify</a><span>https://github.com/langgenius/dify-plugin-daemon</span></li><li id="source-36"><a href="https://docs.openwebui.com/features/extensibility/plugin/">Open WebUI</a><span>https://docs.openwebui.com/features/extensibility/plugin/</span></li><li id="source-37"><a href="https://docs.chainlit.io/api-reference/elements/custom">Chainlit</a><span>https://docs.chainlit.io/api-reference/elements/custom</span></li><li id="source-38"><a href="https://docs.chainlit.io/deploy/react/overview">Chainlit 自定义 React 前端</a><span>https://docs.chainlit.io/deploy/react/overview</span></li><li id="source-39"><a href="https://developers.openai.com/plugins/build/chatgpt-ui">OpenAI Plugins（原 Apps SDK 路径）</a><span>https://developers.openai.com/plugins/build/chatgpt-ui</span></li><li id="source-40"><a href="https://modelcontextprotocol.io/extensions/apps/overview">MCP Apps</a><span>https://modelcontextprotocol.io/extensions/apps/overview</span></li><li id="source-41"><a href="https://docs.ag-ui.com/introduction">AG-UI</a><span>https://docs.ag-ui.com/introduction</span></li><li id="source-42"><a href="https://a2ui.org/">A2UI</a><span>https://a2ui.org/</span></li></ol></section></main></div><script>
-const trs=[...document.querySelectorAll('#matrix-table tbody tr')];
-function filter(){const cat=document.querySelector('#category').value;const q=document.querySelector('#query').value.toLowerCase();let n=0;for(const tr of trs){tr.hidden=!!((cat&&tr.dataset.category!==cat)||!tr.querySelector('th').textContent.toLowerCase().includes(q));if(!tr.hidden)n++}document.querySelector('#count').textContent=`显示 ${n} / ${trs.length} 项`}
-document.querySelector('#category').addEventListener('change',filter);document.querySelector('#query').addEventListener('input',filter);filter();
-let lastButton=null;for(const b of document.querySelectorAll('[data-app]'))b.addEventListener('click',()=>{lastButton=b;document.querySelector('#launcher').hidden=true;document.querySelector('#application').hidden=false;const h=document.querySelector('#home');h.hidden=false;document.querySelector('#app-title').textContent=b.dataset.app;document.querySelector('#app-copy').textContent=b.dataset.app==='论文阅读器'?'查看文献、阅读摘要与整理批注。':'查看数据集、分析结果与已保存的图表。';document.querySelector('#app-data').textContent=b.dataset.app==='论文阅读器'?'示例文献 · 摘要与批注':'示例数据集 · 分析记录';h.focus()});
-document.querySelector('#home').addEventListener('click',()=>{document.querySelector('#launcher').hidden=false;document.querySelector('#application').hidden=true;document.querySelector('#home').hidden=true;lastButton?.focus()});
-</script></body></html>
+<p class="note">静态应用省略 <code translate="no">backend</code>。<code translate="no">id</code> 是稳定的包身份，绝不是标题、路径或创建对话的 ID。字段规则和公开 API：<a href="../../../../capabilities/applications.zh.html">应用</a>。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">对象</th><th scope="col">内容</th></tr></thead>
+<tbody>
+<tr><th scope="row">定义</th><td>从来源读取的 manifest 加源码树的内容摘要，在加载和每次重新加载时计算</td></tr>
+<tr><th scope="row">安装</th><td>目录行：来源目录、设置、审核过的数据身份和信任。包上限 100 MiB，不允许符号链接或特殊文件。</td></tr>
+<tr><th scope="row">实例</th><td>应用 ID、owner、项目范围、业务数据位置。窗口不是数据库。</td></tr>
+<tr><th scope="row">视图</th><td>标签页、实例、UI 路由、显示的运行。可丢弃。</td></tr>
+<tr><th scope="row">操作运行</th><td>运行 ID、实例、定义、输入、请求键、状态、事件序列、结果。链接现有执行记录，不复制 DAG。</td></tr>
+</tbody>
+</table>
+<ul>
+<li>操作有输入输出 schema。客户端不能选择导入路径、来源路径或 owner，由服务器解析。可信身份来自已认证的连接，不来自 JSON 字段。</li>
+<li>操作名只存在于 UI 和进程边界。Python 内部用普通 import，没有第二个字符串调度器。</li>
+<li>事件序列递增，客户端按游标恢复。结果和错误持久化。状态 JSON 最多 4 MiB，单个事件 1 MiB；大输出用引用。</li>
+<li>项目路径变化只更新绑定，不改变实例身份。Runtime 数据库保存执行事实，应用状态引用运行 ID。<code translate="no">localStorage</code> 只缓存可丢弃的视图偏好。</li>
+<li>用户数据绝不放在来源目录。</li>
+<li>Python 环境：每个应用和固定依赖集合一个，首次使用时创建，绝不安装进主 worker。列表只读 manifest，不启动进程。静态应用不启动 Python。发布的 UI 用构建产物：不起开发服务器，不装最新依赖，不在点击时重新生成。</li>
+</ul>
+
+<h2 id="models">模型与业务操作</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">共用路径</th><td>按钮和 Agent 调用共用输入校验、权限和实现。只有 <code translate="no">agent: true</code> 的操作暴露，名为 <code translate="no">&lt;id&gt;__&lt;operation&gt;</code>；内部数据库方法绝不成为工具。Agent 调用绑定实例，不能切换项目数据。</td></tr>
+<tr><th scope="row">模型调用</th><td>runner 按 manifest 的模型名或宿主默认值创建 Runtime，绑定运行记录（<code translate="no">runs/</code> 下的 <code translate="no">SessionNodeWriter</code>）。上下文是操作输入和显式提供的应用数据，与活动聊天无关。点按钮前不需要聊天。</td></tr>
+<tr><th scope="row">凭据</th><td>页面只拿到进度和结果，绝不拿到 provider 密钥</td></tr>
+<tr><th scope="row">问题</th><td><code translate="no">context.ask()</code> 发出问题事件；回答绑定运行和请求 ID，只对当前待答问题生效。没有第二个 <code translate="no">ExecutionStatus</code>。</td></tr>
+<tr><th scope="row">提交</th><td>普通代码在事务提交前校验模型输出。自然语言的“已保存”不是证据。</td></tr>
+<tr><th scope="row">重试</th><td>请求键对提交去重；相同键配不同输入被拒绝。非幂等的外部效果要检查现有记录或询问用户；网络超时绝不重复执行。</td></tr>
+</tbody>
+</table>
+
+<h2 id="lifecycle">生命周期</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">路径</th><th scope="col">顺序</th></tr></thead>
+<tbody>
+<tr><th scope="row">打开</th><td>读取已验证定义 → 选择 → 解析实例和项目 → 复用或创建标签页 → 按摘要加载资源 → 连接能力端口 → 读取状态和活动运行。不导入业务代码，不发模型请求。</td></tr>
+<tr><th scope="row">任务</th><td>持久化输入、请求键和 accepted 事件；现有 Attempt 管理运行；持久化问题；以 completed、failed 或 cancelled 结束。Stop 终止拥有的进程树，清理后才报告 cancelled；迟到的结果不能覆盖终态。进程树所有权持久化，父进程退出后子进程也会结束。并发写需要事务或版本检查，不是禁用按钮。</td></tr>
+<tr><th scope="row">重启</th><td>重新打开恢复视图和状态。worker 重启后，未完成的运行按 owner 丢失规则变为 interrupted，或完成已请求的取消。输入、进度和结果保留。Python 栈不恢复；应用可读取保存的状态并提交新操作。</td></tr>
+<tr><th scope="row">更新</th><td><code translate="no">install --replace</code> 或 Update from source：校验 manifest 和目录树，在单独进程检查后端，复查摘要，检查 <code translate="no">dataSchema</code> 和 <code translate="no">scope</code>，然后原子切换目录行。来源变化时以新摘要重新加载。从旧摘要的视图提交会被拒绝并提示重新打开。</td></tr>
+<tr><th scope="row">卸载</th><td>取消操作，隐藏应用，保留来源目录、数据以及 schema 和 scope 身份。兼容的重新安装恢复实例。没有业务数据删除 API。</td></tr>
+</tbody>
+</table>
+<p class="note">不兼容的 <code translate="no">dataSchema</code> 或 <code translate="no">scope</code> 被拒绝；需要备份、校验和明确恢复的自动迁移尚未实现。</p>
+
+<h2 id="boundary">隔离与可移植性</h2>
+<ul>
+<li>iframe 使用 <code translate="no">sandbox="allow-scripts"</code>、严格 CSP 和不透明源。宿主和页面通过校验过的 MessageChannel 握手通信。现有同源插件页面不能证明隔离；CORS 不是认证。</li>
+<li>资源按摘要寻址，限于发布的 UI 目录，凭据只允许读取 UI。桥拒绝页面提供的 owner、URL 和其他实例的运行。页面访问不到 <code translate="no">/api/*</code>。能力按操作重新检查；停用或卸载即撤销。</li>
+<li>独立的 Python 进程隔离依赖和崩溃，不隔离宿主文件和网络。后端是明确信任的本地代码，manifest 能力不是恶意代码沙箱。不受信的远程代码需要平台限制或容器，覆盖子进程、安装脚本和继承的环境。</li>
+<li>普通应用只在自己的标签页渲染，拿到一个小而稳定的 API，而不是 React store 或会话管理器。全局工具栏、聊天编辑器、主题和系统服务属于受信任的宿主扩展。</li>
+</ul>
+<table class="stack">
+<thead><tr><th scope="col">运行模式</th><th scope="col">依赖</th><th scope="col">承诺</th></tr></thead>
+<tbody>
+<tr><th scope="row">纯静态</th><td>浏览器和自身资源</td><td>可独立托管；数据迁移由应用负责</td></tr>
+<tr><th scope="row">在 OpenProgram 内</th><td>UI、后端、OpenProgram Runtime</td><td>当前实现</td></tr>
+<tr><th scope="row">独立部署，同一运行时</th><td>包、最小运行时、配置、存储</td><td>边界已预留；适配器和验收完成前不可用</td></tr>
+<tr><th scope="row">跨宿主 MCP Apps</th><td>MCP 服务器、兼容宿主</td><td>共享 UI 和工具契约；OpenProgram 后台 API 不可移植</td></tr>
+<tr><th scope="row">完全不依赖 OpenProgram</th><td>替换模型、任务、存储</td><td>不保证；单独构建和测试</td></tr>
+</tbody>
+</table>
+
+<h2 id="choices">采用、调整、推迟</h2>
+<table class="stack">
+<thead><tr><th scope="col">选择</th><th scope="col">依据</th><th scope="col">处理</th></tr></thead>
+<tbody>
+<tr><th scope="row">采用：标准 Web 界面</th><td>MCP Apps、OpenAI Plugins</td><td>前端自由构建，主题组件可选，宿主 API 稳定</td></tr>
+<tr><th scope="row">采用：显式贡献与生命周期</th><td><a href="https://hermes-agent.nousresearch.com/docs/developer-guide/desktop-plugin-sdk">Hermes Desktop Plugin SDK</a>、DeepSeek Harness</td><td>应用只在自己的页面内贡献；全局插槽仍是受信任插件的能力</td></tr>
+<tr><th scope="row">采用：状态与页面分离</th><td>LangGraph、AgentOS</td><td>持久化状态和运行记录；<code translate="no">localStorage</code> 和聊天历史都不是数据库</td></tr>
+<tr><th scope="row">调整：MCP Apps</th><td>MCP Apps</td><td>预留标准桥适配，先做本地契约。持久任务用显式宿主扩展，不声称是标准。</td></tr>
+<tr><th scope="row">调整：UI 事件流</th><td>AG-UI</td><td>沿用现有事件语义；需要跨框架集成时加适配器</td></tr>
+<tr><th scope="row">可选：声明式 UI</th><td>A2UI</td><td>适合确认和常见表单，不强制</td></tr>
+<tr><th scope="row">推迟：宿主内任意动态代码</th><td>宿主稳定性、隔离</td><td>代码注册前先成为可审查的构建；<code translate="no">eval</code> 不是发布方式</td></tr>
+<tr><th scope="row">推迟：市场、其他语言 runner、原生 GUI 嵌入</th><td>安装、打开、操作、恢复都不需要</td><td>不是当前版本的依赖</td></tr>
+</tbody>
+</table>
+
+<h2 id="matrix">公开框架调研</h2>
+<p>对每个项目问：交付什么、谁加载和执行、谁渲染 UI、业务状态在哪、能否离开宿主。代码生成、代码执行、UI 和应用安装分开判断。</p>
+<details>
+<summary>宿主扩展 (9)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://github.com/deepseek-ai/deepseek-harness">DeepSeek Harness</a><span class="arg">已读本地发行包代码</span></th><td>Cordis 生命周期、服务注入；动态插件包含 host/client 两部分。</td><td>宿主 React 插槽；动态前端调用已注册的后端处理函数。</td><td>插件依赖 DSH 服务与加载器；不自动成为独立软件。</td></tr>
+<tr><th scope="row"><a href="https://github.com/Aisland-SJL/dsh-worktable">dsh-worktable</a><span class="arg">已读插件源码</span></th><td>安装包同时提供后端路由与前端工作台。</td><td>项目入口、分屏；生成产物按 widget-result.json 装入 iframe。</td><td>工作台依赖 DSH；生成页面是否独立取决于页面自己的依赖。</td></tr>
+<tr><th scope="row"><a href="https://github.com/earendil-works/pi/blob/main/packages/coding-agent/docs/extensions.md">Pi</a><span class="arg">官方文档</span></th><td>TypeScript 扩展：工具、事件、命令与上下文。</td><td>ctx.ui 自定义终端组件、消息渲染和覆盖面板。</td><td>扩展运行依赖 Pi；终端组件并非 HTML。</td></tr>
+<tr><th scope="row"><a href="https://opencode.ai/docs/plugins/">OpenCode</a><span class="arg">官方文档</span></th><td>JS/TS 插件事件钩子、自定义工具、SDK client。</td><td>已查文档列出 TUI 通知等接口；不能据此认定支持任意业务页面插件。</td><td>插件依赖 OpenCode；应用程序产物的独立性另论。</td></tr>
+<tr><th scope="row"><a href="https://code.claude.com/docs/en/plugins-reference">Claude Code</a><span class="arg">官方文档</span></th><td>插件打包 skills、agents、hooks、MCP、LSP 等。</td><td>公开插件合同主要扩展 Agent；未据此确认任意 React 页面注册。</td><td>插件依赖 Claude Code；不能把插件包视为桌面应用。</td></tr>
+<tr><th scope="row"><a href="https://hermes-agent.nousresearch.com/docs/developer-guide/plugins/">Hermes</a><span class="arg">官方文档</span></th><td>Python register(ctx) 与多种能力注册。</td><td>另有 Desktop SDK、Dashboard 扩展，不只有终端插件。</td><td>本地宿主扩展；兼容其他插件格式只代表明确支持的子集。</td></tr>
+<tr><th scope="row"><a href="https://docs.openclaw.ai/tools/plugin">OpenClaw</a><span class="arg">官方文档</span></th><td>Gateway 插件提供工具、服务、通道与运行能力。</td><td>交互 Dashboard 与 macOS widget panel 的合同不同。</td><td>插件依赖 Gateway；面板显示 HTML 不等于全部运行能力。</td></tr>
+<tr><th scope="row"><a href="https://geminicli.com/docs/extensions/">Gemini CLI</a><span class="arg">官方文档</span></th><td>扩展打包 prompts、MCP、命令等 Agent 配置与能力。</td><td>CLI 扩展机制；不是任意应用页面的安装合同。</td><td>扩展使用 Gemini CLI 的加载与运行环境。</td></tr>
+<tr><th scope="row"><a href="https://block.github.io/goose/index.html">goose</a><span class="arg">官方文档</span></th><td>MCP 扩展、recipes、CLI/API。</td><td>Desktop 明确支持 MCP Apps 交互界面。</td><td>MCP 服务可分离部署；UI 需要兼容宿主。</td></tr>
+</tbody>
+</table>
+</details>
+<details>
+<summary>Agent 服务 (4)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://learn.chatgpt.com/docs/app-server">Codex App Server</a><span class="arg">官方文档</span></th><td>双向 JSON-RPC，线程、轮次、事件与审批。</td><td>客户端自己实现界面；该接口不是应用安装清单。</td><td>可构建独立客户端，但 Agent 能力仍依赖 Codex 服务。</td></tr>
+<tr><th scope="row"><a href="https://docs.openhands.dev/sdk">OpenHands</a><span class="arg">官方文档</span></th><td>Python/REST SDK、工具、会话与远程 Agent Server。</td><td>可用 SDK 构建自己的开发者体验。</td><td>可嵌入应用；不等于通用应用菜单或任意宿主 UI 扩展。</td></tr>
+<tr><th scope="row"><a href="https://github.com/bytedance/deer-flow">DeerFlow</a><span class="arg">官方仓库说明</span></th><td>Gateway、长任务 Agent、skills、文件和执行环境。</td><td>完整 Web 客户端；只读静态演示与带后端运行模式明确不同。</td><td>完整功能需要其运行后端；演示页面不能证明服务独立性。</td></tr>
+<tr><th scope="row"><a href="https://docs.agno.com/agent-os/introduction">Agno / AgentOS</a><span class="arg">官方文档</span></th><td>FastAPI 运行 agents、teams、workflows；数据库状态与接口。</td><td>Control Plane 用于管理；可有自己的产品前端。</td><td>应用可独立部署服务；仍需 AgentOS 与存储配置。</td></tr>
+</tbody>
+</table>
+</details>
+<details>
+<summary>编码工具 (6)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://aider.chat/docs/">Aider</a><span class="arg">官方文档</span></th><td>以代码修改、测试和 Git 工作流为主。</td><td>命令行产品；本次未核实通用应用 UI 插件合同。</td><td>写出的源码可按自身依赖部署；与 Aider 扩展是两回事。</td></tr>
+<tr><th scope="row"><a href="https://github.com/SWE-agent/mini-swe-agent">mini-SWE-agent</a><span class="arg">官方仓库说明</span></th><td>简化 Agent 循环、独立 shell action、线性历史。</td><td>CLI 与轨迹查看器。</td><td>能生成程序；所查合同不负责安装程序为宿主应用。</td></tr>
+<tr><th scope="row"><a href="https://github.com/mistralai/mistral-vibe">Mistral Vibe</a><span class="arg">官方仓库说明</span></th><td>CLI 编码 Agent，程序模式及流式输出。</td><td>终端；本次未核实业务页面插件合同。</td><td>可被程序调用；输出格式不承担 UI 渲染合同。</td></tr>
+<tr><th scope="row"><a href="https://docs.cline.bot/mcp/mcp-overview">Cline</a><span class="arg">官方文档</span></th><td>MCP 扩展外部工具与服务。</td><td>所查页面证明工具集成，不证明任意 UI 扩展。</td><td>MCP 服务器可以独立运行；宿主负责工具调用。</td></tr>
+<tr><th scope="row"><a href="https://roocodeinc.github.io/Roo-Code/features/mcp/using-mcp-in-roo/">Roo Code</a><span class="arg">官方文档</span></th><td>项目/全局 MCP，stdio、HTTP 等连接。</td><td>编辑器内的 Agent 交互。</td><td>MCP 服务与编辑器扩展是不同部署对象。</td></tr>
+<tr><th scope="row"><a href="https://docs.continue.dev/customize/deep-dives/mcp">Continue</a><span class="arg">官方文档</span></th><td>配置 MCP 工具到 Agent。</td><td>编辑器/Agent 集成；本次未核实任意业务页面注册。</td><td>工具服务可跨宿主；Continue 配置仍依赖 Continue。</td></tr>
+</tbody>
+</table>
+</details>
+<details>
+<summary>闭源产品 (2)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://cursor.com/docs">Cursor</a><span class="arg">官方概览；内部未知</span></th><td>公开文档提供 Agent、Rules、MCP 等入口。</td><td>产品界面可见；内部插件运行机制本次未核实。</td><td>不依据公开功能列表推断内部架构或任意应用宿主合同。</td></tr>
+<tr><th scope="row"><a href="https://docs.devin.ai/desktop/cascade/mcp">Windsurf / Devin Desktop</a><span class="arg">官方文档；内部未知</span></th><td>公开 Cascade MCP 集成。</td><td>编辑器内交互；内部机制未核实。</td><td>MCP 能力不等于业务应用页面的可移植性。</td></tr>
+</tbody>
+</table>
+</details>
+<details>
+<summary>嵌入式框架 (10)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK</a><span class="arg">官方文档</span></th><td>把 Claude Agent 能力嵌入 Python/TypeScript 程序。</td><td>应用自行提供 UI。</td><td>可脱离 Claude Code 的交互界面；仍有 SDK/runtime 依赖。</td></tr>
+<tr><th scope="row"><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph</a><span class="arg">官方文档</span></th><td>状态图、持久化、恢复与人工介入。</td><td>图/事件不规定最终业务 UI。</td><td>可作为独立程序的库；持久化要实际配置。</td></tr>
+<tr><th scope="row"><a href="https://docs.langchain.com/oss/python/deepagents/overview">Deep Agents</a><span class="arg">官方文档</span></th><td>在 LangGraph 上组合工具、文件、上下文与子 Agent。</td><td>Agent harness 与最终应用界面分离。</td><td>可嵌入应用，依赖其库和运行配置。</td></tr>
+<tr><th scope="row"><a href="https://adk.dev/">Google ADK</a><span class="arg">官方文档</span></th><td>Agent 开发、编排、工具与部署体系。</td><td>开发工具与业务应用 UI 应分别评估。</td><td>用于构建/部署 Agent；不是桌面应用注册协议。</td></tr>
+<tr><th scope="row"><a href="https://learn.microsoft.com/en-us/agent-framework/overview/">Microsoft Agent Framework</a><span class="arg">官方文档</span></th><td>Agent 与 workflow 开发；延续 AutoGen、Semantic Kernel 的相关能力。</td><td>应用自行集成界面与渠道。</td><td>SDK/服务依赖，不要求使用某个桌面宿主页面。</td></tr>
+<tr><th scope="row"><a href="https://docs.crewai.com/en/concepts/flows">CrewAI</a><span class="arg">官方文档</span></th><td>Flows 表达业务流程与状态。</td><td>流程运行不限定业务前端。</td><td>应用依赖库及其部署环境；不是页面插件格式。</td></tr>
+<tr><th scope="row"><a href="https://pydantic.dev/docs/ai/integrations/ui/overview/">PydanticAI</a><span class="arg">官方文档</span></th><td>类型化 Agent 与 UI 事件流集成。</td><td>UI Event Streams 为前端消费事件提供适配。</td><td>前端与 Agent 运行可分离；不是完整应用安装协议。</td></tr>
+<tr><th scope="row"><a href="https://mastra.ai/docs">Mastra</a><span class="arg">官方文档</span></th><td>TypeScript agents、workflows、服务与存储。</td><td>支持 Next.js、React/Vite 等应用集成；Studio 用于开发管理。</td><td>业务应用可自己部署，依赖 Mastra 服务/库。</td></tr>
+<tr><th scope="row"><a href="https://github.com/NVIDIA/NeMo-Agent-Toolkit">NeMo Agent Toolkit</a><span class="arg">官方仓库说明</span></th><td>函数、模型、workflow 配置与多框架集成。</td><td>所查入口以运行/优化 Agent 工作流为主。</td><td>部署工具链；不据此认定通用桌面应用插件支持。</td></tr>
+<tr><th scope="row"><a href="https://github.com/huggingface/smolagents">smolagents</a><span class="arg">官方仓库说明</span></th><td>CodeAgent 执行代码并调用工具，可分享 Agent。</td><td>应用 UI 另行实现或集成。</td><td>可写普通 Python 程序；不是宿主页面扩展协议。</td></tr>
+</tbody>
+</table>
+</details>
+<details>
+<summary>应用平台 (3)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://github.com/langgenius/dify-plugin-daemon">Dify</a><span class="arg">官方仓库说明</span></th><td>Plugin Daemon 管理 local/debug/serverless 插件运行。</td><td>插件运行与 Dify 应用展示分开；不能把后端插件当任意 UI。</td><td>本地子进程或远程运行仍依赖 Dify 插件调用协议。</td></tr>
+<tr><th scope="row"><a href="https://docs.openwebui.com/features/extensibility/plugin/">Open WebUI</a><span class="arg">官方文档</span></th><td>Python Tools/Functions 扩展推理与平台行为。</td><td>Action 可增加聊天按钮；还有事件驱动的交互扩展。</td><td>平台扩展依赖 Open WebUI，不是自动独立发布的软件。</td></tr>
+<tr><th scope="row"><a href="https://docs.chainlit.io/api-reference/elements/custom">Chainlit</a><span class="arg">官方文档</span></th><td>Python 应用配合自定义元素及回调。</td><td>CustomElement 使用 React；也可开发自有前端。</td><td>元素依赖 Chainlit 上下文；完整应用可以作为服务部署。</td></tr>
+</tbody>
+</table>
+</details>
+<details>
+<summary>界面协议 (4)</summary>
+<table class="stack">
+<thead><tr><th scope="col">项目</th><th scope="col">机制</th><th scope="col">UI</th><th scope="col">宿主依赖</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://developers.openai.com/plugins/build/chatgpt-ui">OpenAI Plugins（原 Apps SDK 路径）</a><span class="arg">官方文档</span></th><td>MCP 工具提供 UI 资源，标准 bridge 加宿主特定扩展。</td><td>iframe Web UI；当前官方文档以 MCP Apps 为基础。</td><td>可跨兼容宿主；window.openai 特定能力不能自动跨宿主。</td></tr>
+<tr><th scope="row"><a href="https://modelcontextprotocol.io/extensions/apps/overview">MCP Apps</a><span class="arg">官方文档</span></th><td>工具与 ui:// 资源关联；JSON-RPC / postMessage。</td><td>沙箱 Web UI，可选择前端框架。</td><td>兼容的是 UI/工具交互；不负责本地安装、业务数据库与后台任务。</td></tr>
+<tr><th scope="row"><a href="https://docs.ag-ui.com/introduction">AG-UI</a><span class="arg">官方文档</span></th><td>Agent 与 UI 的事件通信。</td><td>不规定 HTML、原生组件或页面框架。</td><td>解决流式交互，不是应用包、权限系统或部署器。</td></tr>
+<tr><th scope="row"><a href="https://a2ui.org/">A2UI</a><span class="arg">官方文档</span></th><td>生成结构化 UI 描述，由受信组件目录渲染。</td><td>限制在可用组件与 renderer 合同内。</td><td>可跨平台渲染；不等于运行任意生成前端代码。</td></tr>
+</tbody>
+</table>
+</details>
+<details id="scope">
+<summary>证据限度</summary>
+<ul>
+<li>“官方仓库描述”指阅读公开描述，不是审计仓库。没有实测的兼容不算验收。链接只支持相邻的说法，不背书整个实现。</li>
+<li>相关的 DSH 发行版、worktable 和 OpenProgram 代码已检查；其他项目依据当前官方文档、公开示例或仓库描述。并非每个产品都安装测试过。</li>
+<li>“未验证”表示证据不足，不表示不支持。Cursor 和 Windsurf 内部未知。AutoGen 和 Semantic Kernel 放在 Microsoft Agent Framework 的演进中讨论。</li>
+<li>列表并不封闭：商业产品、社区分支和私有 harness 未穷尽。相关的 Qwen Code 和 Strands 页面无法获取；Trae、Kimi CLI 和云端软件生成服务不在矩阵内。这些缺口限制的是独有性声明，不是这里的需求。</li>
+<li>DSH 细节依据已安装发行版 0.1.5-rc.1，worktable 源码 0.3.3。两者都没有完整兼容验收；一个版本的演示不能作为另一个版本能力的证据。</li>
+</ul>
+</details>
+
+<details id="mechanisms">
+<summary>影响选择的机制</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">项目</th><th scope="col">发现</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://github.com/Aisland-SJL/dsh-worktable">dsh-worktable</a></th><td>宿主服务、UI 插槽、React 分栏；不是独立软件。生成的窗口从 artifact 清单读取 HTML、URL 或文件。只用自身资源的页面可单独托管；依赖 DSH 路由、会话或插件服务的页面离开 DSH 就失去它们。</td></tr>
+<tr><th scope="row"><a href="https://github.com/deepseek-ai/deepseek-harness">DSH 动态 Cordis 插件</a></th><td>宿主部分注册处理器；客户端部分在宿主内运行并调用后端。有真实逻辑，但受支持的 API、加载生命周期和代码格式约束。Node <code translate="no">vm</code> 不是操作系统级隔离。</td></tr>
+<tr><th scope="row"><a href="https://hermes-agent.nousresearch.com/docs/user-guide/features/extending-the-dashboard">Hermes</a></th><td>窗格、页面、侧栏、状态栏和命令面板贡献；本地插件直接在宿主内加载，不同于隔离的 HTML 预览；Dashboard 有页面和插槽。采纳：显式贡献和生命周期，但不把宿主内部对象交给生成的应用。</td></tr>
+<tr><th scope="row">Pi</th><td>自定义 UI 用终端组件：并非所有插件界面都是 HTML。</td></tr>
+<tr><th scope="row"><a href="https://docs.openclaw.ai/platforms/mac/canvas">OpenClaw 小组件面板</a></th><td>只做渲染。宿主操作和 A2UI 属于 Control UI 和会话 dashboard；同叫 canvas 不等于能力相通。</td></tr>
+<tr><th scope="row">MCP Apps、AG-UI、A2UI</th><td>可移植 Web 资源和宿主通信；Agent 到 UI 的事件；从组件目录声明式渲染。都不提供安装、数据迁移或后台生命周期。</td></tr>
+<tr><th scope="row">LangGraph、AgentOS、OpenHands</th><td>应用可独立部署但仍需库和服务：离开桌面客户端不等于去掉所有依赖。</td></tr>
+<tr><th scope="row"><a href="https://docs.chainlit.io/deploy/react/overview">Chainlit 自定义 React 前端</a></th><td>完整应用可以带自己的前端作为服务部署。</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="status">实现状态</h2>
+<table class="stack">
+<thead><tr><th scope="col">阶段</th><th scope="col">交付</th><th scope="col">状态</th></tr></thead>
+<tbody>
+<tr><th scope="row">1. 定义与来源</th><td>单一定义和来源身份、校验、启用状态；发现时不执行代码</td><td>已实现</td></tr>
+<tr><th scope="row">2. 菜单与页面</th><td>静态应用打开、复用标签页、绑定实例、隔离资源</td><td>已实现</td></tr>
+<tr><th scope="row">3. 业务操作与 Runtime</th><td>Python 操作使用模型和 Workflow 契约；取消、问题、结果持久化</td><td>已实现</td></tr>
+<tr><th scope="row">4. 完整生命周期</th><td>依赖、后台任务、重启中断、摘要检查、卸载</td><td>已实现</td></tr>
+<tr><th scope="row">5. 兼容与独立部署</th><td>MCP Apps 适配器、最小运行时部署；其他语言 runner 以后再做。验收：同一 UI 和操作真正在第二个宿主上运行</td><td>未实现</td></tr>
+</tbody>
+</table>
+<p class="note">同样未实现：附件 API、自动 schema 迁移、对话上下文导入、手动菜单排序、论文阅读示例的 PDF 导入、插件自动适配 Application。</p>
+<details id="baseline">
+<summary>代码地图</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">文件</th><th scope="col">作用</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">apps/web/components/center-tabs/pages/new-tab-page.tsx</code></th><td>启动按钮；获得焦点时和每十秒刷新列表</td></tr>
+<tr><th scope="row"><code translate="no">apps/web/components/center-tabs/pages/application-tab-pane.tsx</code></th><td>沙箱 iframe 和 MessagePort 实例 API</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/ui/loader.py</code></th><td>每个应用通过一个 <code translate="no">ProgramContext</code> 挂载</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/ui/catalog.py</code>、<code translate="no">catalog_store.py</code></th><td>注册、摘要、环境、信任</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/ui/service.py</code></th><td>基于 <code translate="no">ExecutionStore</code>、Attempt 和 Driver 的操作；共享取消清理</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/ui/runner.py</code></th><td>每个进程一个受信任操作；Runtime 和 <code translate="no">context</code></td></tr>
+<tr><th scope="row"><code translate="no">openprogram/programs/_host/ui/state.py</code></th><td>实例、操作元数据、事件、实例数据</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/interfaces/server/routes/catalog/applications.py</code></th><td><code translate="no">/api/applications</code>、实例、运行和资源路由</td></tr>
+</tbody>
+</table>
+<p>遵循 <a href="programs-architecture.zh.html">Programs 代码结构</a>；更广的比较见<a href="../../framework-comparison.zh.html">框架对比</a>。</p>
+</details>
+<details id="implementation">
+<summary>验收</summary>
+<ul>
+<li>示例应用：不用模型的计算器、保存批注并从粘贴文本生成摘要的论文阅读器、显示进度和重启中断的批量文件分析。</li>
+<li>通过公开入口（API、CLI、真实浏览器）检查：安装、更新、停用、卸载后重装、失败、重复点击、重新打开和重启。默认 App 检查：harness 在 Applications 下、管理页和菜单复用同一实例、笔记和分析结果保留、菜单隐藏和恢复、重启后恢复标签页和结果。</li>
+<li>集成测试覆盖模型成功和失败、取消、重复提交和中断；离线测试不保证真实模型可用。</li>
+<li>性能目标：列出新标签页不启动业务进程；重复打开不产生第二个同范围实例；打开不触发代码生成或模型请求。不做未测量的延迟承诺。</li>
+</ul>
+</details>

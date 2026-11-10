@@ -77,7 +77,7 @@ def test_canonical_child_job_inherits_goal_and_settles_once(tmp_path, monkeypatc
     from openprogram.models.usage.context import request_context, usage_scope
     from openprogram.models.usage.ledger import UsageLedger
 
-    monkeypatch.setattr("openprogram.state.paths.get_execution_db_path", lambda: tmp_path / "executions.db")
+    monkeypatch.setattr("openprogram.state.paths.get_run_state_path", lambda: tmp_path / "executions.db")
     monkeypatch.setattr(goals, "_db", lambda: store_fixture)
     monkeypatch.setattr(goals, "_emit_goal_update", lambda *a, **k: None)
     meter = UsageLedger(tmp_path / "usage.db")
@@ -178,7 +178,7 @@ def test_canonical_child_job_inherits_goal_and_settles_once(tmp_path, monkeypatc
         if mode == "receipt_failure":
             with meter.read() as conn:
                 assert conn.execute("SELECT state FROM usage_requests").fetchone()[0] == "started"
-                assert {row[0] for row in conn.execute("SELECT state FROM usage_reservations")} == {"started"}
+                assert {row["state"] for row in meter.run_tables().handle.rows("usage_reservations")} == {"started"}
                 assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 0
             fail["enabled"] = False
         meter.close()
@@ -193,7 +193,7 @@ def test_canonical_child_job_inherits_goal_and_settles_once(tmp_path, monkeypatc
         with meter.read() as conn:
             rows = conn.execute("SELECT goal_id, job_id, execution_id FROM usage_events").fetchall()
             assert {tuple(row) for row in rows} == {(goal["goal_id"], child_id, child_id) for child_id in child_ids}
-            assert {row[0] for row in conn.execute("SELECT state FROM usage_reservations")} == {"settled"}
+            assert {row["state"] for row in meter.run_tables().handle.rows("usage_reservations")} == {"settled"}
     finally:
         jobs.shutdown()
         meter.close()

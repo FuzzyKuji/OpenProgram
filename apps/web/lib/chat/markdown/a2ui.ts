@@ -23,6 +23,7 @@
  * the model's text.
  */
 import { A2UI_ICONS } from "./a2ui-icons.ts";
+import { retagOpenFence } from "./open-fence.ts";
 
 export const A2UI_LANG = "a2ui";
 /** Info string given to a fence that is still open at the end of the
@@ -71,39 +72,9 @@ export function a2uiPending(): string {
 
 /** Retag a fenced ```a2ui block that is still open at the end of `src`
  *  as ```a2ui-partial, so the renderer can tell an unfinished stream from
- *  a malformed finished block. Fences follow CommonMark: up to three
- *  spaces of indent, three or more backticks or tildes, closed by the
- *  same character at least as long with nothing after it. */
+ *  a malformed finished block. */
 export function markOpenA2uiFence(src: string): string {
-  if (!src.includes(A2UI_LANG)) return src;
-  let open: { char: string; len: number; lineStart: number; infoStart: number; lang: string } | null = null;
-  let pos = 0;
-  while (pos <= src.length) {
-    const nl = src.indexOf("\n", pos);
-    const end = nl === -1 ? src.length : nl;
-    const line = src.slice(pos, end);
-    if (open) {
-      const close = /^ {0,3}(`{3,}|~{3,})[ \t]*$/.exec(line);
-      if (close && close[1][0] === open.char && close[1].length >= open.len) open = null;
-    } else {
-      const fence = /^( {0,3})(`{3,}|~{3,})(.*)$/.exec(line);
-      if (fence && !(fence[2][0] === "`" && fence[3].includes("`"))) {
-        open = {
-          char: fence[2][0],
-          len: fence[2].length,
-          lineStart: pos,
-          infoStart: pos + fence[1].length + fence[2].length,
-          lang: fence[3].trim().split(/\s+/)[0] ?? "",
-        };
-      }
-    }
-    if (nl === -1) break;
-    pos = nl + 1;
-  }
-  if (!open || open.lang !== A2UI_LANG) return src;
-  const infoEnd = src.indexOf("\n", open.lineStart);
-  const lineEnd = infoEnd === -1 ? src.length : infoEnd;
-  return src.slice(0, open.infoStart) + A2UI_PARTIAL_LANG + src.slice(lineEnd);
+  return retagOpenFence(src, A2UI_LANG, A2UI_PARTIAL_LANG);
 }
 
 // ---- Parsing -------------------------------------------------------------

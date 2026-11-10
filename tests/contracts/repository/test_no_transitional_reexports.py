@@ -46,7 +46,7 @@ MOVED: dict[str, tuple[str, ...]] = {
     "openprogram.runtime.agent.call_state": ("default_expose", "_VALID_EXPOSE"),
     "openprogram.runtime.agent.workflow_site": ("current_entry", "current_site"),
     "openprogram.runtime.conversation.production_driver": (
-        "AgentCheckpointV1", "AgentCheckpointError", "AttemptRecord", "ExecutionStatus",
+        "AttemptRecord", "ExecutionStatus",
         "ExecutionStore", "RuntimeControlService", "validate_runtime_contract",
     ),
     "openprogram.runtime.permissions.authority": (

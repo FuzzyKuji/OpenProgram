@@ -4,6 +4,16 @@ from . import shared
 
 
 class StorageOperations:
+    @shared.contextmanager
+    def reading_cached_index(self):
+        """Reads in this block skip the foreign-write check, so they cost no rebuild."""
+        token = shared._READING_CACHED_INDEX.set(True)
+        try:
+            yield
+        finally:
+            shared._READING_CACHED_INDEX.reset(token)
+
+
     def _session_lock(self, session_id: str):
         with self._lock:
             lock = self._session_locks.get(session_id)
@@ -123,8 +133,8 @@ class StorageOperations:
         )
 
 
-    def _open(self, session_id: str, *, create_if_missing: bool = False) -> shared.Optional[tuple[shared.GitSession, shared.SessionMemoryIndex]]:
-        """Return (git, idx). Loads from disk on first access. None if
+    def _open(self, session_id: str, *, create_if_missing: bool = False) -> shared.Optional[tuple[shared.SessionLog, shared.SessionMemoryIndex]]:
+        """Return (log, idx). Loads from disk on first access. None if
         session doesn't exist and ``create_if_missing`` is False."""
         if not create_if_missing and (
             not isinstance(session_id, str)
@@ -143,7 +153,7 @@ class StorageOperations:
             # publishing its intent.
             if create_if_missing and shared.is_deleted(self.root_path, session_id):
                 return None
-            verified_git: shared.GitSession | None = None
+            verified_log: shared.SessionLog | None = None
             sdir = self._session_dir(session_id)
             if create_if_missing and not sdir.exists() and (
                     not self._explicit_root or session_id in self._project_ids):
@@ -169,15 +179,13 @@ class StorageOperations:
                 if cached:
                     self._sessions.move_to_end(session_id)
             if not create_if_missing:
-                verified_git = shared.GitSession(sdir)
-                if (
-                    sdir.is_symlink()
-                    or not verified_git.exists()
-                    or not (sdir / "history").is_dir()
-                ):
+                verified_log = shared.SessionLog(sdir)
+                if sdir.is_symlink():
+                    return None
+                if not verified_log.exists():
                     return None
             if cached:
-                git, idx = cached
+                session_log, idx = cached
                 # Agent method runs execute in a fork()'d subprocess
                 # that appends history and moves HEAD on disk directly —
                 # this process's cached index can't see that, so a
@@ -186,39 +194,9 @@ class StorageOperations:
                 # end). Two stat calls detect the foreign write; rebuild
                 # from disk when it happened. Own-process writes call
                 # mark_synced(), so they never trigger a rebuild.
-                with idx._persist_lock:
-                    if git.exists() and git.stale():
-                        # Rebuild IN PLACE (reset + repopulate the SAME index
-                        # object): callers across a multi-step operation hold
-                        # (git, idx) from an earlier _open — swapping the
-                        # cached object would orphan their reference, and a
-                        # later step that re-opens (e.g. commit_turn) would
-                        # persist the rebuilt object's stale head over their
-                        # in-memory update.
-                        # A foreign atomic write can finish during this load.
-                        # Keep the pre-read stamp so the next read detects it.
-                        fingerprint = git.stat_fingerprint()
-                        disk_meta = git.read_meta()
-                        disk_hist = git.list_history()
-                        # A concurrent reader can land here between
-                        # create_session's set_meta() and its _persist_meta()
-                        # — the repo exists (some other write initialized it)
-                        # but meta.json is still empty/absent on disk. Blindly
-                        # rebuilding then resets the index and throws away the
-                        # just-populated in-memory meta (source/channel/peer_*
-                        # silently vanished). Disk with nothing in it is never
-                        # a more truthful view than populated memory, so skip
-                        # the rebuild instead of destroying state.
-                        if not disk_meta and not disk_hist and (idx.meta or idx.head_id):
-                            pass
-                        else:
-                            idx.rebuild_from_paths(
-                                disk_hist,
-                                disk_meta,
-                                shared._node_conv_predecessor,
-                                shared._node_caller,
-                            )
-                            git.mark_synced(fingerprint)
+                if (not shared._READING_CACHED_INDEX.get()
+                        and self._absorb_foreign_writes(session_log, idx)):
+                    shared.report_foreign_change(session_id)
                 # A cached session may be the callback target of an active
                 # CheckpointStore transaction (its get_head/CAS callbacks
                 # re-enter SessionStore while the intent lock is held).  The
@@ -228,25 +206,25 @@ class StorageOperations:
                 return cached
             if not sdir.exists() and not create_if_missing:
                 return None
-            git = verified_git or shared.GitSession(sdir)
+            session_log = verified_log or shared.SessionLog(sdir)
             idx = shared.SessionMemoryIndex()
-            if git.exists():
-                fingerprint = git.stat_fingerprint()
-                idx.rebuild_from_paths(
-                    git.list_history(),
-                    git.read_meta(),
+            if session_log.exists():
+                fingerprint = session_log.stat_fingerprint()
+                idx.rebuild(
+                    session_log.list_history(),
+                    session_log.read_meta(),
                     shared._node_conv_predecessor,
                     shared._node_caller,
                 )
-                git.mark_synced(fingerprint)
+                session_log.mark_synced(fingerprint)
             with self._lock:
                 # New key lands at the MRU (end) of the OrderedDict.
-                self._sessions[session_id] = (git, idx)
+                self._sessions[session_id] = (session_log, idx)
                 # Evict least-recently-used entries beyond the cap. The
                 # just-inserted session is at the MRU end, so popitem(last=
                 # False) (oldest) never evicts it as long as cap >= 1. An
-                # evicted index rebuilds losslessly from git on next access;
-                # an in-flight turn keeps its own (git, idx) reference and is
+                # evicted index rebuilds losslessly from the log on next access;
+                # an in-flight turn keeps its own (log, idx) reference and is
                 # unaffected by being dropped from this dict.
                 while len(self._sessions) > self._cache_cap:
                     self._sessions.popitem(last=False)
@@ -257,36 +235,84 @@ class StorageOperations:
                 # later public open must retry recovery instead of returning
                 # the partially exposed cached index.
                 with self._lock:
-                    if self._sessions.get(session_id) == (git, idx):
+                    if self._sessions.get(session_id) == (session_log, idx):
                         self._sessions.pop(session_id, None)
                 raise
-            return git, idx
+            return session_log, idx
+
+
+    def _absorb_foreign_writes(self, session_log: shared.SessionLog, idx: shared.SessionMemoryIndex) -> bool:
+        """Bring the cached index up to date with writes from other processes; True when it rebuilt."""
+        with idx._persist_lock:
+            if not session_log.exists() or not session_log.stale():
+                return False
+            # Rebuild IN PLACE (reset + repopulate the SAME index
+            # object): callers across a multi-step operation hold
+            # (log, idx) from an earlier _open — swapping the
+            # cached object would orphan their reference, and a
+            # later step that re-opens (e.g. commit_turn) would
+            # persist the rebuilt object's stale head over their
+            # in-memory update.
+            # A foreign atomic write can finish during this load.
+            # Keep the pre-read stamp so the next read detects it.
+            fingerprint = session_log.stat_fingerprint()
+            disk_meta = session_log.read_meta()
+            disk_nodes = session_log.list_history()
+            # A concurrent reader can land here between
+            # create_session's set_meta() and its _persist_meta()
+            # — the repo exists (some other write initialized it)
+            # but its fields are still empty on disk. Blindly
+            # rebuilding then resets the index and throws away the
+            # just-populated in-memory meta (source/channel/peer_*
+            # silently vanished). Disk with nothing in it is never
+            # a more truthful view than populated memory, so skip
+            # the rebuild instead of destroying state.
+            if not disk_meta and not disk_nodes and (idx.meta or idx.head_id):
+                return False
+            idx.rebuild(
+                disk_nodes,
+                disk_meta,
+                shared._node_conv_predecessor,
+                shared._node_caller,
+            )
+            session_log.mark_synced(fingerprint)
+            return True
+
+
+    def read_index(self, session_id: str, reader):
+        """Answer ``reader(index)`` from the cached index, or None for no session.
+
+        The reader gets the live index: it must treat it as read-only and
+        tolerate a concurrent write, because no lock is held while it runs.
+        """
+        pair = self._open(session_id)
+        return reader(pair[1]) if pair else None
 
 
     @shared.contextmanager
-    def _head_file_lock(self, git: shared.GitSession):
+    def _head_file_lock(self, session_log: shared.SessionLog):
         """Serialize durable writers by session id, then re-read placement."""
-        session_id = git.path.name
+        session_id = session_log.path.name
         with shared.session_interprocess_lock(
             session_id, root=self.root_path if self._explicit_root else None,
         ):
             if shared.is_deleted(self.root_path, session_id):
                 raise RuntimeError(f"session deleted: {session_id}")
             current = self._session_dir(session_id)
-            if current != git.path:
-                git.path = current
+            if current != session_log.path:
+                session_log.path = current
             yield
 
 
-    def _persist_meta(self, git: shared.GitSession, idx: shared.SessionMemoryIndex) -> None:
-        """Sync the in-memory meta back to ``meta.json``. Called whenever
+    def _persist_meta(self, session_log: shared.SessionLog, idx: shared.SessionMemoryIndex) -> None:
+        """Sync the in-memory meta back to the session log. Called whenever
         title / head_id / extra / branches change."""
-        with self._head_file_lock(git):
+        with self._head_file_lock(session_log):
             with idx._persist_lock:
                 with idx._lock:
                     meta = dict(idx.meta)
                     meta["head_id"] = idx.head_id
-                git.write_meta(meta)
+                session_log.write_meta(meta)
 
 
     def session_workdir(self, session_id: str) -> shared.Optional[shared.Path]:
@@ -295,33 +321,22 @@ class StorageOperations:
         pair = self._open(session_id)
         if not pair:
             return None
-        git, _ = pair
-        git._ensure_init()
-        return git.workdir_path
+        session_log, _ = pair
+        session_log._ensure_init()
+        return session_log.workdir_path
 
 
     def commit_turn(self, session_id: str, message: str) -> shared.Optional[str]:
-        """Commit the current working tree as one turn. Public so the
-        dispatcher can call it at turn end; also called internally by
-        write paths that don't need an explicit commit boundary.
-
-        Repo layout is append-only by design — no mutable "current
-        state" mirror file: history/ holds per-node files, context/
-        commits/ holds per-commit files, meta.json carries session-
-        level scalars (head_id is a UI pointer, single-valued by
-        construction). Two agents writing concurrently never target
-        the same file. Refresh meta only here.
-
-        Returns commit sha or None if nothing to commit.
-        """
+        """Make the session's fields durable at a turn boundary. Nodes are
+        already durable; ``message`` names the boundary for callers' logs."""
         pair = self._open(session_id)
         if not pair:
             return None
-        git, idx = pair
-        with self._head_file_lock(git):
+        session_log, idx = pair
+        with self._head_file_lock(session_log):
             with idx._persist_lock:
                 with idx._lock:
                     meta = dict(idx.meta)
                     meta["head_id"] = idx.head_id
-                git.write_meta(meta)
-            return git.commit_all(message)
+                session_log.write_meta(meta)
+            return None

@@ -89,6 +89,11 @@ function createWebViews({
     return true;
   }
 
+  /** Whether the user is looking at this page: it is on screen in the window they are in. */
+  function watched(record, owner) {
+    return record.nativeVisible === true && owner.win.isFocused?.() === true;
+  }
+
   function handleWebTabShortcut(record, event, input) {
     if (
       input?.type !== "keyDown"
@@ -99,6 +104,10 @@ function createWebViews({
     const owner = ownerOf(record);
     if (!owner) return false;
     const wc = record.view.webContents;
+    // Keys an Agent sends to a page arrive here too. The ones that focus the
+    // App or open its UI are the user's only when they typed them into it.
+    if ((key === "f" || key === "l" || key === "k" || key === "p")
+        && !(watched(record, owner) && wc.isFocused?.() === true)) return false;
     if (key === "f" || key === "l") {
       event.preventDefault();
       owner.win.webContents.send("webtab:command", {
@@ -355,6 +364,9 @@ function createWebViews({
       view.setBounds(HIDDEN_WEBTAB_BOUNDS);
       view.setVisible(false);
       const wc = view.webContents;
+      // The Agent works in Pages the user is not looking at. Chromium would
+      // otherwise stop drawing a hidden Page, and clicks wait on its frames.
+      wc.setBackgroundThrottling(false);
       // Pinch out magnifies the page as in Safari; pinch in at normal size
       // (reported by webtab-preload.js) opens the App's window overview.
       const allowPinchZoom = () => { Promise.resolve(wc.setVisualZoomLevelLimits?.(1, 3)).catch(() => {}); };
@@ -389,6 +401,12 @@ function createWebViews({
       wc.on("will-prevent-unload", (event) => {
         const owner = ownerOf(record);
         if (!owner || recordFor(owner, id) !== record || wc.isDestroyed() || record.confirmingUnload) return;
+        if (!watched(record, owner)) {
+          // Nobody is at this page to answer, and a dialog would bring the
+          // App in front of what the user is doing: the navigation goes on.
+          event.preventDefault();
+          return;
+        }
         record.confirmingUnload = true;
         try {
           const choice = dialog.showMessageBoxSync(owner.win, {

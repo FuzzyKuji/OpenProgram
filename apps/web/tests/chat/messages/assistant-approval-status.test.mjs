@@ -15,9 +15,11 @@ await build({
   absWorkingDir: web, entryPoints: ['components/chat/messages/bubbles/assistant-bubble.tsx'],
   external: ['react'], bundle: true, platform: 'node', format: 'esm', packages: 'external', jsx: 'automatic', outfile: file,
   plugins: [{ name: 'bubble-services', setup(b) {
-    b.onResolve({ filter: /^(@\/|\.\.?\/)/ }, a => a.importer.endsWith('assistant-bubble.tsx') && !['@/lib/format-utils/format'].includes(a.path) ? { path: a.path, namespace: 'stub' } : null);
+    b.onResolve({ filter: /^(@\/|\.\.?\/)/ }, a => a.importer.endsWith('assistant-bubble.tsx') && !['@/lib/format-utils/format','@/lib/chat/transcript/owned-children','@/lib/chat/transcript/row-status'].includes(a.path) ? { path: a.path, namespace: 'stub' } : null);
     b.onLoad({ filter: /.*/, namespace: 'stub' }, a => ({ resolveDir: web, contents:
-      a.path.includes('session-store') ? 'export const useSessionStore = selector => selector(globalThis.approvalState);' :
+      a.path.includes('session-store') ? 'export const useSessionStore = selector => selector(globalThis.approvalState); export const selectRow = () => () => undefined, selectViewRows = () => () => ({});' :
+      a.path.includes('pending-steers') ? 'export const PendingSteers=()=>null;' :
+      a.path.includes('rewind-error-actions') ? 'export const RewindErrorActions=()=>null; export const useRewindOffered=()=>false;' :
       a.path.includes('agent-style') ? 'export const agentColor=()=>"", agentInitial=()=>"", agentDisplayName=()=>"Agent", useAgentProfile=()=>({name:"Agent"});' :
       a.path.includes('i18n') ? 'export const useTranslation=()=>({text:(en)=>en});' :
       a.path.includes('use-avatar-align') ? 'export const useAvatarAlign=()=>({containerRef:null,avatarTop:0});' :
@@ -25,16 +27,20 @@ await build({
       a.path.includes('streaming-blocks') ? 'export const splitMarkdownBlocks=t=>[t];' :
       a.path.includes('markdown-render') ? 'export const typesetMath=()=>{};' :
       a.path.includes('mermaid') ? 'export const renderMermaidLazily=()=>{};' :
+      a.path.includes('visual-frames') ? 'export const mountVisualsIn=()=>{};' :
       a.path.includes('user-attachments') ? 'export const parseAttachments=text=>({attachments:[],text}), AttachmentChips=()=>null;' :
       a.path.includes('turn-files-presentation') ? 'export const shouldRenderTurnFiles=()=>false;' :
       a.path.includes('assistant-file-cards') ? 'export const AssistantFileCards=()=>null; export const sentFilePath=()=>null;' :
       // Provider-run web searches and their citations are not part of these renders.
       a.path.includes('web-sources') ? 'export const CitationSources=()=>null, isProviderSearch=()=>false;' :
       // A restart's continuation: these tests render single replies with no predecessor.
-      a.path.includes('restart-continuation') ? 'export const restartPredecessors=()=>[], fallbackBlocks=()=>[], joinedReply=(cut,reply)=>reply;' :
+      a.path.includes('restart-continuation') ? 'export const continuedRows=()=>[], fallbackBlocks=()=>[], joinedReply=(cut,reply)=>reply;' :
       // The thinking status as a marker the tests look for.
+      // The retry pieces as markers: where each lands is what these tests check.
+      a.path.includes('retry-status') ? 'import {createElement} from "react"; export const RetryTag=({retry})=>createElement("span",{className:"retry-tag"},retry.reason||""), RetryStep=({retry})=>createElement("span",{className:"retry-step"},retry.reason||""), RetryStrip=({retry})=>createElement("div",{className:"retry-strip"},retry.reason||"");' :
+      a.path.includes('transcript-view-scope') ? 'export const useRowSessionId=(own)=>own??globalThis.approvalState.currentSessionId;' :
       a.path.includes('thinking-status') ? 'import {createElement} from "react"; export const ThinkingStatus=()=>createElement("span",{className:"thinking-status"});' :
-      'import {createElement} from "react"; export const Avatar=()=>null, AgentAvatarById=()=>null, UserBubble=()=>null, AttachCard=()=>null, ExecutionStrip=({children,streaming})=>createElement("section",{"data-active":String(!!streaming)},children), summarizeToolGroup=()=>({label:"",failed:0,added:null,removed:null}), FunctionStep=()=>null, ProviderSearchStep=()=>null, StepRow=()=>null, SPAWNING_TOOL_NAMES=new Set(), SubAgentStep=()=>null, RestartStep=()=>null, toolOutcome=b=>b.outcome, ThinkingStep=({text})=>text, MessageActions=()=>null, MessageTimestamp=()=>null, RuntimeBlock=()=>null, TurnFilesChips=()=>null;'
+      'import {createElement} from "react"; export const Avatar=()=>null, AgentAvatarById=()=>null, UserBubble=()=>null, AttachCard=()=>null, ExecutionStrip=({children,streaming,status})=>createElement("section",{"data-active":String(!!streaming)},status,children), summarizeToolGroup=()=>({label:"",failed:0,added:null,removed:null}), FunctionStep=()=>null, ProviderSearchStep=()=>null, StepRow=()=>null, SubAgentStep=()=>null, SubAgentStrip=()=>null, StepExpansionScope=({children})=>children, RestartStep=()=>null, toolOutcome=b=>b.outcome, ThinkingStep=({text})=>text, MessageActions=()=>null, MessageTimestamp=()=>null, RuntimeBlock=()=>null, TurnFilesChips=()=>null;'
     }));
   }}],
 });
@@ -59,7 +65,7 @@ test('only the canonical approval owner shows a waiting status, removed on resol
 test('a failed assistant retains the streamed text alongside the error notice', () => {
   globalThis.approvalState={currentSessionId:'s1',pendingDecisions:[],executionUpdateOrders:{}};
   const html = renderToStaticMarkup(createElement(AssistantBubble,{msg:{
-    id:'failed', role:'assistant', status:'error', content:'provider disconnected',
+    id:'failed', role:'assistant',rowKind:'assistant', status:'error', content:'provider disconnected',
     blocks:[{type:'thinking',text:'Checking evidence'},{type:'text',text:'Partial response'}],
   },sessionIdOverride:'s1'}));
   assert.match(html, /Checking evidence/);
@@ -69,7 +75,7 @@ test('a failed assistant retains the streamed text alongside the error notice', 
 
 function renderBlocks(blocks, status='running', usage) {
   globalThis.approvalState={currentSessionId:'s1',pendingDecisions:[],executionUpdateOrders:{}};
-  return renderToStaticMarkup(createElement(AssistantBubble,{msg:{id:'m1',role:'assistant',status,blocks,usage},sessionIdOverride:'s1'}));
+  return renderToStaticMarkup(createElement(AssistantBubble,{msg:{id:'m1',role:'assistant',rowKind:'assistant',status,blocks,usage},sessionIdOverride:'s1'}));
 }
 test('only the final active execution segment animates and text ends that animation', () => {
   const blocks=[{type:'thinking',text:'Earlier'},{type:'text',text:'Update'},{type:'thinking',text:'Current'}];
@@ -87,7 +93,7 @@ test('only the original empty reply placeholder has the new logo', () => {
   assert.doesNotMatch(renderBlocks([{type:'text',text:'Answer'}]), /class="thinking-status"/);
   globalThis.approvalState={currentSessionId:'s1',pendingDecisions:[],executionUpdateOrders:{}};
   const activeTool=renderToStaticMarkup(createElement(AssistantBubble,{msg:{
-    id:'m1',role:'assistant',status:'running',content:'Update',
+    id:'m1',role:'assistant',rowKind:'assistant',status:'running',content:'Update',
     tools:[{id:'t1',tool:'search',status:'running'}],
     blocks:[{type:'text',text:'Update'},{type:'tool',tool:'search',tool_call_id:'t1'}],
   }}));
@@ -100,7 +106,7 @@ test('only the original empty reply placeholder has the new logo', () => {
 
 test('live tools suppress motion alongside text and retry keeps its status label', () => {
   globalThis.approvalState={currentSessionId:'s1',pendingDecisions:[],executionUpdateOrders:{}};
-  const msg={id:'m1',role:'assistant',status:'running',content:'Update',
+  const msg={id:'m1',role:'assistant',rowKind:'assistant',status:'running',content:'Update',
     tools:[{id:'t1',tool:'search',status:'running'}],
     blocks:[{type:'tool',tool:'search',tool_call_id:'t1'},{type:'text',text:'Update'}]};
   const html=renderToStaticMarkup(createElement(AssistantBubble,{msg}));
@@ -109,27 +115,23 @@ test('live tools suppress motion alongside text and retry keeps its status label
   const parallelThinking=renderToStaticMarkup(createElement(AssistantBubble,{msg:{...msg,
     blocks:[...msg.blocks,{type:'thinking',text:'Current'}]}}));
   assert.equal([...parallelThinking.matchAll(/data-active="true"/g)].length,1);
+  // The reply ends in text: the retry is a row of its own after it.
   const retry=renderToStaticMarkup(createElement(AssistantBubble,{msg:{...msg,retryStatus:{attempt:2,reason:'transport'}}}));
-  assert.match(retry,/Retrying 2/);
-  const waiting=renderToStaticMarkup(createElement(AssistantBubble,{msg:{...msg,retryStatus:{attempt:3,reason:'network_wait',delayMs:20000}}}));
-  assert.match(waiting,/Waiting for the network · checking again in 20s/);
-  assert.doesNotMatch(waiting,/Retrying/);
+  assert.match(retry,/class="retry-strip">transport/);
+  assert.doesNotMatch(retry,/retry-tag|retry-step/);
   assert.doesNotMatch(retry,/class="thinking-status"/);
+  // The reply ends in a tool group: its row carries the tag and its
+  // timeline ends with the retry row; no row of its own.
+  const inGroup=renderToStaticMarkup(createElement(AssistantBubble,{msg:{...msg,content:'',
+    blocks:[{type:'tool',tool:'search',tool_call_id:'t1'}],retryStatus:{attempt:3,reason:'network_wait',delayMs:20000}}}));
+  assert.match(inGroup,/<section data-active="false"><span class="retry-tag">network_wait<\/span><span class="retry-step">network_wait<\/span><\/section>/);
+  assert.doesNotMatch(inGroup,/retry-strip/);
+  // A finished reply shows no retry.
+  assert.doesNotMatch(renderToStaticMarkup(createElement(AssistantBubble,{msg:{...msg,status:'cancelled',retryStatus:{attempt:2,reason:'transport'}}})),/retry-/);
   const modelRetry=renderToStaticMarkup(createElement(AssistantBubble,{msg:{id:"m1",role:"assistant",status:"running",retryStatus:{attempt:2}}}));
   assert.doesNotMatch(modelRetry,/class="thinking-status"/);
+  assert.match(modelRetry,/class="retry-strip"/);
   assert.doesNotMatch(renderToStaticMarkup(createElement(AssistantBubble,{msg:{...msg,status:'cancelled'}})),/class="thinking-status"/);
-});
-
-test('the owning terminal execution stops activity even when the last message flag trails completion', () => {
-  const msg={id:'m1',role:'assistant',status:'streaming',content:'',blocks:[]};
-  const htmlFor=executionOrder=>{
-    globalThis.approvalState={currentSessionId:'s1',pendingDecisions:[],executionUpdateOrders:{e1:executionOrder}};
-    return renderToStaticMarkup(createElement(AssistantBubble,{msg,sessionIdOverride:'s1'}));
-  };
-  assert.doesNotMatch(htmlFor({...order,terminal:true}),/class="thinking-status"/);
-  assert.match(htmlFor(order),/class="thinking-status"/);
-  assert.match(htmlFor({...order,terminal:true,sessionId:'s2'}),/class="thinking-status"/);
-  assert.match(htmlFor({...order,terminal:true,messageIds:['old-message']}),/class="thinking-status"/);
 });
 
 for (const [status,label] of [['cancelled','You stopped this reply'],['interrupted','This reply was interrupted']]) {
@@ -146,9 +148,10 @@ for (const [status,label] of [['cancelled','You stopped this reply'],['interrupt
 
 test('a split pane keeps its own sub-agent cards in its timeline, whatever session has focus', () => {
   globalThis.approvalState={currentSessionId:'focused',pendingDecisions:[],executionUpdateOrders:{}};
-  const card=(session)=>({id:'card1',role:'assistant',content:'',attach:{session_id:session,label:'Helper',status:'running'}});
+  // The server decides which cards are this conversation's (transcript/rows.py).
+  const card=(session)=>({id:'card1',role:'assistant',rowKind:session==='peer'?'sub_agent_step':'external_reference',content:'',attach:{session_id:session,label:'Helper',status:'running'}});
   const draw=(session)=>renderToStaticMarkup(createElement(AssistantBubble,{msg:{
-    id:'m1',role:'assistant',status:'done',blocks:[{type:'text',text:'Done'}],attachCards:[card(session)],
+    id:'m1',role:'assistant',rowKind:'assistant',status:'done',blocks:[{type:'text',text:'Done'}],attachCards:[card(session)],
   },sessionIdOverride:'peer'}));
   assert.doesNotMatch(draw('peer'), /attach-row/);
   assert.match(draw('other'), /attach-row/);

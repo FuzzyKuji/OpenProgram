@@ -1,4 +1,4 @@
-"""Durable, explicitly delimited function steps on the canonical execution store.
+"""Durable, explicitly delimited function steps, recorded in the function's own log.
 
 Orchestration outside ``step`` must be deterministic and free of side effects.
 A step result is JSON data, never a pickled Python frame or executable object.
@@ -7,29 +7,25 @@ A step result is JSON data, never a pickled Python frame or executable object.
 from __future__ import annotations
 
 import ast
-from contextlib import closing, contextmanager
+from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass, field, replace
 import hashlib
 import importlib
 import inspect
 import json
+import os
 import platform
 import sys
 from pathlib import Path
 import textwrap
-import time
 import types
 
 from openprogram.runtime.execution import AttemptStore, RuntimeControlService
 from openprogram.runtime.execution.checkpoints import CheckpointFragment
 from openprogram.runtime.execution.driver import DriverRegistry
-from openprogram.runtime.execution.effects import (
-    EffectClassification,
-    EffectConflict,
-    EffectStatus,
-    EffectStore,
-)
+from openprogram.runtime.execution.effects import EffectStatus
+from openprogram.runtime.execution.function_log import DISPATCHED, FunctionLog, function_log_at
 from openprogram.runtime.execution.model import CommandKind, CommandStatus
 
 
@@ -511,132 +507,135 @@ def _restore(snapshot):
     return restore(snapshot["root"])
 
 
-@dataclass
-class _Execution:
-    store: object
-    attempt_id: str
-    generation: int
-    call_key: str
-    policy: str
-    execution_id: str
-    checkpoint_root: bool = True
-    frames: list = field(default_factory=list)
-    ancestors: tuple = ()
+class _TableOwner:
+    """The owner inside the process that holds the run tables."""
 
-    def owned(self, connection):
-        attempts = AttemptStore(self.store)
-        attempt = attempts._require(connection, self.attempt_id)
-        attempts._validate_generation(attempt, self.generation)
-        attempts._validate_lease(attempt, time.time())
-        execution = self.store._require_execution(connection, self.execution_id)
-        attempts._validate_owner(execution, attempt, execution.status_version)
-        if attempt.status.value != "active":
-            raise FunctionCompatibilityError("Function owner is no longer active")
-        return execution
+    def __init__(self, store, attempt_id, generation, execution_id, checkpoint_root):
+        self.store = store
+        self.attempt_id = attempt_id
+        self.generation = generation
+        self.execution_id = execution_id
+        self.checkpoint_root = checkpoint_root
 
-    def checkpoint(self, connection, execution, step_id):
-        if not self.checkpoint_root:
-            return
-        from openprogram.runtime.execution.checkpoints import ExecutionCheckpointStore
-        from openprogram.runtime.execution.restart import window_seconds
+    def validate(self):
+        with self.store._transaction() as connection:
+            attempts = AttemptStore(self.store)
+            attempt = attempts._require(connection, self.attempt_id)
+            attempts._validate_generation(attempt, self.generation)
+            attempts._validate_held(attempt)
+            execution = self.store._require_execution(connection, self.execution_id)
+            attempts._validate_owner(execution, attempt, execution.status_version)
+            if attempt.status.value != "active":
+                raise FunctionCompatibilityError("Function owner is no longer active")
 
-        ExecutionCheckpointStore(self.store)._publish_in_transaction(
+    def stop_requested(self):
+        execution = self.store.get_execution(self.execution_id)
+        if execution.status.value in {"cancelling", "cancelled"}:
+            return "cancel"
+        pending = self.store.list_commands(
+            self.execution_id,
+            kinds=(CommandKind.PAUSE,),
+            statuses=(CommandStatus.ACCEPTED, CommandStatus.APPLYING),
+        )
+        return "pause" if pending else None
+
+    def admitted(self, call_key, policy):
+        if self.checkpoint_root:
+            publish_function_checkpoint(self.store, self.execution_id, self.attempt_id, call_key, policy)
+
+
+class _ParentOwner:
+    """The owner inside a function subprocess: its parent, the Worker."""
+
+    def __init__(self, log, generation, parent_pid, on_admitted):
+        self.log = log
+        self.generation = generation
+        self.parent_pid = parent_pid
+        self.on_admitted = on_admitted
+
+    def validate(self):
+        if os.getppid() != self.parent_pid:
+            raise FunctionSuspended("the process that owned this function has exited")
+
+    def stop_requested(self):
+        self.validate()
+        requested = self.log.requested(self.generation)
+        return "cancel" if "cancel" in requested else "pause" if "pause" in requested else None
+
+    def admitted(self, call_key, policy):
+        if self.on_admitted is not None:
+            self.on_admitted(call_key, policy)
+
+
+def publish_function_checkpoint(store, execution_id, attempt_id, call_key, policy):
+    """Record where a restarted Worker finds this call's progress."""
+    from openprogram.runtime.execution.checkpoints import ExecutionCheckpointStore
+    from openprogram.runtime.execution.restart import window_seconds
+
+    with store._transaction() as connection:
+        execution = store._require_execution(connection, execution_id)
+        ExecutionCheckpointStore(store)._publish_in_transaction(
             connection,
-            execution_id=self.execution_id,
+            execution_id=execution_id,
             expected_version=execution.status_version,
             revision_id=execution.revision_id,
             parent_checkpoint_id=execution.checkpoint_head_id,
-            frontier=({"kind": "function.step.after", "step_id": step_id},),
+            frontier=({"kind": "function.step.after", "step_id": "function.admitted"},),
             state_refs={
-                "function": {
-                    "version": 1,
-                    "call_key": self.call_key,
-                    "policy": self.policy,
-                },
+                "function": {"version": 1, "call_key": call_key, "policy": policy},
                 "restart_window_seconds": window_seconds(),
             },
             completed_actions=(),
             effect_receipts=(),
             child_frontier={},
             pending_command_ids=(),
-            created_by_attempt_id=self.attempt_id,
+            created_by_attempt_id=attempt_id,
         )
 
+
+@dataclass
+class _Execution:
+    log: FunctionLog
+    owner: object
+    attempt_id: str
+    generation: int
+    call_key: str
+    policy: str
+    execution_id: str
+    frames: list = field(default_factory=list)
+    ancestors: tuple = ()
+
     def save(self, kind, key, value):
-        with self.store._transaction() as connection:
-            execution = self.owned(connection)
-            if (
-                kind == "function.admitted"
-                and connection.execute(
-                    "SELECT 1 FROM execution_events WHERE execution_id = ? AND kind = 'function.admitted' "
-                    "AND json_extract(payload_json, '$.call_key') = ? LIMIT 1",
-                    (self.execution_id, key),
-                ).fetchone()
-            ):
-                raise FunctionCompatibilityError(
-                    "Function invocation was concurrently admitted"
-                )
-            ref = self.store._put_state_blob_in_transaction(
-                connection,
-                execution_id=self.execution_id,
-                payload=_json(value),
-                media_type="application/json",
-                schema_version=1,
-            )
-            connection.execute(
-                "INSERT OR IGNORE INTO execution_state_blob_refs VALUES (?, ?, ?, ?, ?, ?)",
-                (self.execution_id, ref["ref"], kind, "function", key, time.time()),
-            )
-            self.store._append_event(
-                connection,
-                execution_id=self.execution_id,
-                kind=kind,
-                payload={
-                    "call_key": key,
-                    "ref": ref["ref"],
-                    **(
-                        {"reason": value["reason"], "policy": value["policy"]}
-                        if kind == "function.incompatible"
-                        else {}
-                    ),
-                },
-                created_at=time.time(),
-                execution_version=execution.status_version,
-            )
-            if kind in {"function.admitted", "function.completed"}:
-                self.checkpoint(connection, execution, kind)
-        return ref["ref"]
+        self.owner.validate()
+        if kind == "function.admitted" and self.log.saved(kind, key) is not None:
+            raise FunctionCompatibilityError("Function invocation was concurrently admitted")
+        self.log.save(kind, key, value)
+        if kind == "function.admitted" and key == self.call_key and not self.ancestors:
+            self.owner.admitted(key, self.policy)
 
     def load(self, kind, key):
-        # Load invocation metadata once per entry; individual steps use indexed effects.
-        for event in reversed(self.store.list_events(self.execution_id)):
-            if event.kind == kind and event.payload.get("call_key") == key:
-                blob = self.store.get_state_blob(
-                    self.execution_id, event.payload["ref"]
-                )
-                if blob is None:
-                    raise FunctionCompatibilityError(
-                        "Function continuation data is missing"
-                    )
-                return json.loads(blob["payload"])
-        return None
+        return self.log.saved(kind, key)
 
     def boundary(self):
         from openprogram.host.cancellation import CancelledError
 
-        execution = self.store.get_execution(self.execution_id)
-        if execution.status.value in {"cancelling", "cancelled"}:
+        stop = self.owner.stop_requested()
+        if stop == "cancel":
             raise CancelledError()
-        commands = self.store.list_commands(
-            self.execution_id,
-            kinds=(CommandKind.PAUSE,),
-            statuses=(CommandStatus.ACCEPTED, CommandStatus.APPLYING),
-        )
-        if commands:
+        if stop == "pause":
             raise FunctionSuspended()
 
 
 _current = ContextVar("durable_function_execution", default=None)
+
+
+@contextmanager
+def _bound(context):
+    token = _current.set(context)
+    try:
+        yield
+    finally:
+        _current.reset(token)
 
 
 @contextmanager
@@ -656,76 +655,83 @@ def function_execution(
     attempt = AttemptStore(store).get(attempt_id)
     if attempt is None:
         raise FunctionCompatibilityError("Function attempt is missing")
+    owner = _TableOwner(store, attempt_id, generation, attempt.execution_id, checkpoint_root)
+    owner.validate()
     context = _Execution(
-        store,
-        attempt_id,
-        generation,
-        call_key,
-        policy,
-        attempt.execution_id,
-        checkpoint_root=checkpoint_root,
+        store.function_log(attempt.execution_id), owner, attempt_id, generation,
+        call_key, policy, attempt.execution_id,
     )
-    with store._transaction() as connection:
-        context.owned(connection)
-    token = _current.set(context)
     try:
-        yield
+        with _bound(context):
+            yield
     except FunctionSuspended as exc:
         if isinstance(exc, FunctionCompatibilityError):
-            import asyncio
-
-            context.save(
-                "function.incompatible",
-                call_key,
-                {"reason": str(exc), "policy": policy},
-            )
-            current = store.get_execution(context.execution_id)
-            if current.status.value == "running":
-                asyncio.run(
-                    RuntimeControlService(
-                        store, AttemptStore(store), DriverRegistry()
-                    ).request_pause(
-                        command_id="function-incompatible-" + attempt_id,
-                        execution_id=context.execution_id,
-                        expected_version=current.status_version,
-                        actor={
-                            "surface": "function",
-                            "reason": "function_incompatible",
-                        },
-                    )
-                )
-        execution = store.get_execution(context.execution_id)
-        commands = store.list_commands(
-            context.execution_id,
-            kinds=(CommandKind.PAUSE,),
-            statuses=(CommandStatus.ACCEPTED, CommandStatus.APPLYING),
-        )
-        if commands and publish_pause:
-            from openprogram.runtime.execution.restart import window_seconds
-
-            RuntimeControlService(
-                store, AttemptStore(store), DriverRegistry()
-            ).arrive_safe_point(
-                attempt_id=attempt_id,
-                generation=generation,
-                command_id=commands[0].command_id,
-                expected_execution_version=execution.status_version,
-                fragment=CheckpointFragment(
-                    safe_point_kind="function.step.after",
-                    frontier=({"kind": "function.step.after", "call_key": call_key},),
-                    state_refs={
-                        "function": {
-                            "version": 1,
-                            "call_key": call_key,
-                            "policy": policy,
-                        },
-                        "restart_window_seconds": window_seconds(),
-                    },
-                ),
-            )
+            context.log.save("function.incompatible", call_key, {"reason": str(exc), "policy": policy})
+            request_incompatible_pause(store, context.execution_id, attempt_id)
+        if publish_pause:
+            _publish_pause(store, context, attempt_id, generation, call_key, policy)
         raise
-    finally:
-        _current.reset(token)
+
+
+def request_incompatible_pause(store, execution_id, attempt_id, service=None):
+    """Stop an execution whose saved progress cannot continue with this code."""
+    import asyncio
+
+    current = store.get_execution(execution_id)
+    if current.status.value != "running":
+        return
+    control = service or RuntimeControlService(store, AttemptStore(store), DriverRegistry())
+    asyncio.run(control.request_pause(
+        command_id="function-incompatible-" + attempt_id,
+        execution_id=execution_id,
+        expected_version=current.status_version,
+        actor={"surface": "function", "reason": "function_incompatible"},
+    ))
+
+
+def _publish_pause(store, context, attempt_id, generation, call_key, policy):
+    execution = store.get_execution(context.execution_id)
+    commands = store.list_commands(
+        context.execution_id,
+        kinds=(CommandKind.PAUSE,),
+        statuses=(CommandStatus.ACCEPTED, CommandStatus.APPLYING),
+    )
+    if not commands:
+        return
+    from openprogram.runtime.execution.restart import window_seconds
+
+    RuntimeControlService(store, AttemptStore(store), DriverRegistry()).arrive_safe_point(
+        attempt_id=attempt_id,
+        generation=generation,
+        command_id=commands[0].command_id,
+        expected_execution_version=execution.status_version,
+        fragment=CheckpointFragment(
+            safe_point_kind="function.step.after",
+            frontier=({"kind": "function.step.after", "call_key": call_key},),
+            state_refs={
+                "function": {"version": 1, "call_key": call_key, "policy": policy},
+                "restart_window_seconds": window_seconds(),
+            },
+        ),
+    )
+
+
+@contextmanager
+def subprocess_function_execution(
+    log_path, *, execution_id, attempt_id, generation, call_key, policy, on_admitted=None,
+):
+    """Bind a function subprocess to its own log; its parent keeps the run state."""
+    log = function_log_at(log_path)
+    context = _Execution(
+        log, _ParentOwner(log, generation, os.getppid(), on_admitted),
+        attempt_id, generation, call_key, policy, execution_id,
+    )
+    try:
+        with _bound(context):
+            yield
+    except FunctionCompatibilityError as exc:
+        log.save("function.incompatible", call_key, {"reason": str(exc), "policy": policy})
+        raise
 
 
 def invoke(fn, name, args, kwargs):
@@ -799,11 +805,7 @@ def _invoke(fn, name, args, kwargs, *, runtime=None, revision=None):
         else:
             _validate_orchestration(fn)
             snapshot = _snapshot(fn)
-    saved_nodes = [
-        dict(event.payload["node"])
-        for event in context.store.list_events(context.execution_id)
-        if event.kind == "function.node" and event.payload.get("call_key") == key
-    ]
+    saved_nodes = context.log.nodes(key)
     frame = {
         "key": key,
         "counts": {},
@@ -865,16 +867,8 @@ def _node(context, kind, name):
     else:
         context.boundary()
         _activate_version(context, frame)
-        with context.store._transaction() as connection:
-            execution = context.owned(connection)
-            context.store._append_event(
-                connection,
-                execution_id=context.execution_id,
-                kind="function.node",
-                payload={"call_key": frame["key"], "node": identity},
-                created_at=time.time(),
-                execution_version=execution.status_version,
-            )
+        context.owner.validate()
+        context.log.add_node(frame["key"], identity)
     frame["cursor"] += 1
     return identity
 
@@ -891,7 +885,6 @@ def workflow(name, fn, *args, **kwargs):
         context,
         call_key=context.call_key + "/" + _digest(identity),
         frames=[],
-        checkpoint_root=False,
         ancestors=(*context.ancestors, (context, context.frames[-1])),
     )
     token = _current.set(child)
@@ -926,7 +919,6 @@ def parallel(branches):
                         context,
                         call_key=context.call_key + "/" + _digest(identity),
                         frames=[],
-                        checkpoint_root=False,
                         ancestors=(*context.ancestors, (context, context.frames[-1])),
                     ),
                 )
@@ -974,105 +966,33 @@ def _step(name, fn, args, kwargs):
         )
     identity = _node(context, "step", name)
     action_id = _digest(identity)
-    effect_id = "function-step-" + _digest(
-        {"execution": context.execution_id, "attempt": context.attempt_id, **identity}
-    )
-    effects = EffectStore(context.store)
-    with closing(context.store._connect()) as connection:
-        row = connection.execute(
-            "SELECT * FROM effects WHERE execution_id = ? AND action_id = ? "
-            "AND status IN ('committed', 'dispatched', 'uncertain') ORDER BY created_at DESC LIMIT 1",
-            (context.execution_id, action_id),
-        ).fetchone()
-    effect = effects._record(row) if row else None
     input_hash = _digest({"args": args, "kwargs": kwargs})
-    if effect is not None:
-        if effect.metadata["input_hash"] != input_hash:
+    recorded = context.log.step(action_id)
+    if recorded is not None and recorded.status in {
+        DISPATCHED, EffectStatus.COMMITTED.value, EffectStatus.UNCERTAIN.value,
+    }:
+        if recorded.input_hash != input_hash:
             raise FunctionCompatibilityError(f"Completed step inputs changed: {name}")
-        if effect.status is not EffectStatus.COMMITTED:
-            raise FunctionCompatibilityError(
-                f"Step outcome needs reconciliation: {name}"
-            )
-        blob = context.store.get_state_blob(
-            context.execution_id, effect.receipt["result_ref"]
-        )
-        if blob is None:
+        if recorded.status != EffectStatus.COMMITTED.value:
+            raise FunctionCompatibilityError(f"Step outcome needs reconciliation: {name}")
+        if recorded.result is None:
             raise FunctionCompatibilityError(f"Step result is missing: {name}")
-        return json.loads(blob["payload"])
+        return json.loads(recorded.result)
     context.boundary()
-    try:
-        effects.register(
-            effect_id=effect_id,
-            execution_id=context.execution_id,
-            attempt_id=context.attempt_id,
-            action_id=action_id,
-            classification=EffectClassification.UNKNOWN,
-            idempotency_key=None,
-            metadata={
-                "function_step": identity,
-                "input_hash": input_hash,
-                "code_hash": context.frames[-1]["code_hash"],
-            },
-        )
-        effects.mark_dispatched(effect_id, expected_status=EffectStatus.PLANNED)
-    except EffectConflict as exc:
-        if exc.code != "admission_closed":
-            raise
-        from openprogram.host.cancellation import CancelledError
-
-        try:
-            context.boundary()
-        except (FunctionSuspended, CancelledError) as stopped:
-            # Only a host-known, undispatched intent can be settled. Keep
-            # ownership fencing and all other admission failures intact.
-            planned = effects.get(effect_id)
-            if planned is not None and planned.status is EffectStatus.PLANNED:
-                effects.resolve_not_started(
-                    effect_id,
-                    receipt={"outcome": "not_started", "execution_started": False,
-                             "pause_before_dispatch": isinstance(stopped, FunctionSuspended)},
-                    attempt_id=context.attempt_id, generation=context.generation,
-                )
-            raise
-        raise
+    context.owner.validate()
+    context.log.start_step(
+        action_id=action_id, identity=identity, input_hash=input_hash,
+        code_hash=context.frames[-1]["code_hash"], attempt_id=context.attempt_id,
+    )
     result = fn(*args, **kwargs)
-    # Persist result and effect receipt atomically. A crash before this transaction
-    # remains unresolved rather than reissuing a possibly completed external write.
-    with context.store._transaction() as connection:
-        execution = context.owned(connection)
-        current = effects._require(connection, effect_id)
-        if current.status is not EffectStatus.DISPATCHED:
-            raise FunctionCompatibilityError("Step was concurrently reconciled")
-        ref = context.store._put_state_blob_in_transaction(
-            connection,
-            execution_id=context.execution_id,
-            payload=_result_json(result),
-            media_type="application/json",
-            schema_version=1,
-        )
-        now = time.time()
-        connection.execute(
-            "INSERT OR IGNORE INTO execution_state_blob_refs VALUES (?, ?, ?, ?, ?, ?)",
-            (
-                context.execution_id,
-                ref["ref"],
-                "result",
-                "function_step",
-                effect_id,
-                now,
-            ),
-        )
-        connection.execute(
-            "UPDATE effects SET status = ?, receipt_json = ?, updated_at = ?, resolved_at = ? WHERE effect_id = ?",
-            ("committed", _json({"result_ref": ref["ref"]}), now, now, effect_id),
-        )
-        effects._append_event(
-            connection,
-            execution.status_version,
-            effects._require(connection, effect_id),
-            now,
-        )
-        context.checkpoint(connection, execution, effect_id)
+    # A crash before this line leaves the step's outcome unknown rather than
+    # reissuing a possibly completed external write.
+    payload = _result_json(result)
+    context.owner.validate()
+    current = context.log.step(action_id)
+    if current is None or current.status != DISPATCHED:
+        raise FunctionCompatibilityError("Step was concurrently reconciled")
+    context.log.commit_step(action_id, payload)
     context.boundary()
     return result
 
@@ -1092,11 +1012,9 @@ def default_policy(store=None, execution_id=None):
                 "use_latest",
             }:
                 return command.payload["code_change_policy"]
-        for event in store.list_events(execution_id):
-            if event.kind == "function.admitted":
-                blob = store.get_state_blob(execution_id, event.payload["ref"])
-                if blob:
-                    return json.loads(blob["payload"]).get("policy", "keep_original")
+        log = store.function_log(execution_id)
+        for saved in log.admitted() if log is not None else ():
+            return saved.get("policy", "keep_original")
     from openprogram.state.config import read_config
 
     settings = read_config().get("execution", {})
@@ -1111,14 +1029,9 @@ def default_policy(store=None, execution_id=None):
 def retained_function_names(store, execution_id):
     from openprogram.programs._host.runtime import get
 
+    log = store.function_log(execution_id)
     names = set()
-    for event in store.list_events(execution_id):
-        if event.kind != "function.admitted":
-            continue
-        blob = store.get_state_blob(execution_id, event.payload["ref"])
-        if blob is None:
-            continue
-        saved = json.loads(blob["payload"])
+    for saved in log.admitted() if log is not None else ():
         name = saved.get("name")
         tool = get(name) if isinstance(name, str) else None
         if tool is not None and getattr(tool, "_resumable", False):

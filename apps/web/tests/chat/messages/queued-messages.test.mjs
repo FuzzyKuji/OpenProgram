@@ -9,29 +9,31 @@ import { scratchDir } from "../../scratch-dir.mjs";
 
 const web = dirname(fileURLToPath(new URL('../../../package.json', import.meta.url)));
 const dir = scratchDir(web, "queue-ui-test");
-await build({absWorkingDir:web, stdin:{contents:`export { QueuedMessages } from './components/chat/messages/editing/queued-messages'; export { useSendQueue, registerChatSender } from './lib/chat/send/send-queue'; export { queuedMessagePayload } from './lib/chat/send/queued-attachments';`,resolveDir:web},bundle:true,format:'esm',platform:'node',packages:'external',outfile:join(dir,'test.mjs'),jsx:'automatic',tsconfig:join(web,'tsconfig.json'),plugins:[{name:'ports',setup(b){
+await build({absWorkingDir:web, stdin:{contents:`export { QueuedMessages } from './components/chat/messages/editing/queued-messages'; export { PendingSteers } from './components/chat/messages/bubbles/pending-steers'; export { useSendQueue, registerChatSender, settleDeliveredSteer } from './lib/chat/send/send-queue'; export { queuedMessagePayload } from './lib/chat/send/queued-attachments';`,resolveDir:web},bundle:true,format:'esm',platform:'node',packages:'external',outfile:join(dir,'test.mjs'),jsx:'automatic',tsconfig:join(web,'tsconfig.json'),plugins:[{name:'ports',setup(b){
  b.onResolve({filter:/^react$/},()=>({path:'react',external:true}));
  b.onResolve({filter:/\.module\.css$/},()=>({path:'css',namespace:'stub'}));
  b.onResolve({filter:/desktop-bridge$/},()=>({path:'bridge',namespace:'stub'}));
  b.onResolve({filter:/\/i18n$/},()=>({path:'i18n',namespace:'stub'}));
  b.onResolve({filter:/\/session-store$/},()=>({path:'session',namespace:'stub'}));
  b.onResolve({filter:/lazy-document-window$/},()=>({path:'viewer',namespace:'stub'}));
+ b.onResolve({filter:/\/user-bubble$/},()=>({path:'bubble',namespace:'stub'}));
  b.onLoad({filter:/.*/,namespace:'stub'},({path})=>({contents:({
  css:`export default new Proxy({}, {get:(_,key)=>String(key)});`,
  bridge:`export const desktopBridge=()=>({getPathForFile:file=>'/fixture/'+file.name});`,
  i18n:`export const useTranslation=()=>({text:(en)=>en});`,
  session:`export const useSessionStore=selector=>selector(globalThis.sessions); useSessionStore.getState=()=>globalThis.sessions;`,
+ bubble:`import {createElement} from 'react'; export const UserBubble=({msg})=>createElement('div',{'data-status':msg.status},msg.content);`,
  viewer:`import {createElement} from 'react'; export const DocumentWindow=props=>createElement('div',{'data-document-path':props.path,'data-document-session':props.sessionId},'Document preview');`,
  })[path]}));
 }}]});
 const {window}=parseHTML('<html><body></body></html>');
 Object.assign(globalThis,{window,document:window.document,HTMLElement:window.HTMLElement,Element:window.Element,CustomEvent:window.CustomEvent,IS_REACT_ACT_ENVIRONMENT:true,requestAnimationFrame:cb=>cb()});
 Object.defineProperty(globalThis,'localStorage',{value:{getItem:()=>null,setItem(){},removeItem(){}},configurable:true});
-globalThis.sessions={activeChatKey:'A',currentSessionId:'A',wsStatus:'open',runningTasks:{A:{msg_id:'busy'}}};
+globalThis.sessions={activeChatKey:'A',currentSessionId:'A',wsStatus:'open',runningTasks:{A:{msg_id:'busy',reply_id:'busy_reply'}}};
 window.location={pathname:'/s/A'};
 const {createElement:h,act}=await import('react');
 const {createRoot}=await import('react-dom/client');
-const {QueuedMessages,useSendQueue,registerChatSender,queuedMessagePayload}=await import(pathToFileURL(join(dir,'test.mjs')));
+const {QueuedMessages,PendingSteers,useSendQueue,registerChatSender,settleDeliveredSteer,queuedMessagePayload}=await import(pathToFileURL(join(dir,'test.mjs')));
 
 test('queued bubble previews attachments and edits files without changing order or another draft',async()=>{
  const doc={id:'old',filename:'old.txt',ext:'txt',sizeBytes:3,content:'old',sourcePath:'/fixture/old.txt',order:0};
@@ -99,30 +101,27 @@ test('queued bubble previews attachments and edits files without changing order 
 });
 
 
-test('receipt polls keep waiting and uncertain status text stable', async()=>{
+test('a row going into this turn leaves the card; a failed one comes back', async()=>{
  useSendQueue.setState({queues:{}});
  const id=useSendQueue.getState().enqueue('A',{text:'supplement',thinking:'medium',webSearchEnabled:false,background:false});
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
  const patch=async data=>act(async()=>useSendQueue.getState().setSteering('A',id,data));
+ const row=()=>host.querySelector(`[data-queued-message="${id}"]`);
  try {
  await act(async()=>root.render(h(QueuedMessages,{sessionId:'A'})));
- const remove=()=>[...host.querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Remove from queue');
+ assert.ok(row(),'a Next turn row is in the card');
  await patch({injecting:true});
- const waiting=host.querySelector('[role=status]').textContent;
- assert.equal(remove().disabled,true,'the steer request is still being prepared');
+ assert.equal(row(),null,'the transcript shows it while the steer request is prepared');
  await patch({steerCommand:{command_id:'same'},injecting:false});
- assert.equal(host.querySelector('[role=status]').textContent,waiting);
- await patch({injecting:true});
- assert.equal(host.querySelector('[role=status]').textContent,waiting);
- await patch({injecting:false,steerError:'unconfirmed'});
- const uncertain=host.querySelector('[role=status]').textContent;
- await patch({injecting:true});
- assert.equal(host.querySelector('[role=status]').textContent,uncertain);
- assert.equal(remove().disabled,false,'a submitted steer can be taken back');
+ assert.equal(row(),null,'and while its receipt is awaited');
+ await patch({steerError:'unconfirmed'});
+ assert.ok(row(),'an unconfirmed delivery is back in the card');
+ const remove=[...row().querySelectorAll('button')].find(b=>b.getAttribute('aria-label')==='Remove from queue');
+ assert.equal(remove.disabled,false,'and can be taken back');
  } finally {await act(async()=>root.unmount());host.remove();useSendQueue.setState({queues:{}});}
 });
 
-test('rows tag where they go and Clear all keeps rows still being delivered', async()=>{
+test('only rows for the next turn are listed and Clear all keeps rows still being delivered', async()=>{
  useSendQueue.setState({queues:{}});
  const settings={thinking:'medium',webSearchEnabled:false,background:false};
  const steering=useSendQueue.getState().enqueue('A',{...settings,text:'add this now'});
@@ -133,11 +132,11 @@ test('rows tag where they go and Clear all keeps rows still being delivered', as
  try {
  await act(async()=>root.render(h(QueuedMessages,{sessionId:'A'})));
  const rows=[...host.querySelectorAll('[data-queued-message]')];
- assert.equal(rows[0].querySelector('[data-tone]').textContent,'This turn');
- assert.equal(rows[1].querySelector('[data-tone]').textContent,'Next turn');
- assert.equal(rows[1].querySelector('button[aria-expanded]').textContent,'next one');
- assert.match(host.textContent,/2 queued messages/);
- assert.match(host.textContent,/1 adding to this turn/);
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].querySelector('[data-tone]').textContent,'Next turn');
+ assert.equal(rows[0].querySelector('button[aria-expanded]').textContent,'next one');
+ assert.match(host.textContent,/1 queued message/);
+ assert.doesNotMatch(host.textContent,/adding to this turn/);
  const clear=[...host.querySelectorAll('button')].find(b=>b.textContent==='Clear all');
  await act(async()=>clear.dispatchEvent(new window.Event('click',{bubbles:true})));
  assert.deepEqual(useSendQueue.getState().queues.A.map(row=>row.id),[steering]);
@@ -145,57 +144,26 @@ test('rows tag where they go and Clear all keeps rows still being delivered', as
  } finally {await act(async()=>root.unmount());host.remove();useSendQueue.setState({queues:{}});}
 });
 
-test('removing, editing or clearing a This turn row takes the message back first', async()=>{
+test('a message going into this turn shows at the end of the running reply until the turn writes it', async()=>{
  useSendQueue.setState({queues:{}});
  const settings={thinking:'medium',webSearchEnabled:false,background:false};
- const add=(text,commandId)=>{
-  const id=useSendQueue.getState().enqueue('A',{...settings,text});
-  if(commandId) useSendQueue.getState().setSteering('A',id,{steerCommand:{command_id:commandId}});
-  return id;
- };
- const ids=()=>(useSendQueue.getState().queues.A??[]).map(row=>row.id);
+ const steering=useSendQueue.getState().enqueue('A',{...settings,text:'the DMIT server was released'});
+ useSendQueue.getState().enqueue('A',{...settings,text:'for later'});
+ useSendQueue.getState().setSteering('A',steering,{steerCommand:{command_id:'cmd-1'}});
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
- const originalFetch=globalThis.fetch;const asked=[];const replies={};
- globalThis.fetch=async(url,init)=>{
-  const commandId=/^\/api\/execution\/command\/([^/]+)\/withdraw$/.exec(url)?.[1];
-  assert.ok(commandId&&init?.method==='POST',`unexpected request ${url}`);
-  asked.push(commandId);
-  return Response.json(replies[commandId]??{withdrawn:true,command:{command_id:commandId,status:'rejected',rejection_code:'withdrawn'}});
- };
- const press=async(row,label)=>{
-  const target=[...host.querySelectorAll(`[data-queued-message="${row}"] button`)].find(b=>b.getAttribute('aria-label')===label);
-  assert.equal(target.disabled,false);
-  await act(async()=>{target.dispatchEvent(new window.Event('click',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,0));});
- };
  try {
- await act(async()=>root.render(h(QueuedMessages,{sessionId:'A'})));
- let removed,edited,taken,waiting;
- await act(async()=>{removed=add('drop this','c-remove');edited=add('reword this','c-edit');});
- await press(removed,'Remove from queue');
- assert.deepEqual(asked,['c-remove']);
- assert.deepEqual(ids(),[edited]);
- await press(edited,'Edit queued message');
- assert.deepEqual(asked,['c-remove','c-edit']);
- assert.equal(useSendQueue.getState().queues.A[0].editing,true);
- assert.equal(useSendQueue.getState().queues.A[0].steerCommand,undefined);
- assert.ok(host.querySelector('textarea'));
- await act(async()=>useSendQueue.getState().endEdit('A',edited));
-
- // A message the turn already took stays; Clear all removes the rest.
- replies['c-taken']={withdrawn:false,command:{command_id:'c-taken',status:'applying'}};
- await act(async()=>{taken=add('too late','c-taken');waiting=add('still waiting','c-waiting');});
- await press(taken,'Remove from queue');
- assert.deepEqual(ids(),[edited,taken,waiting]);
- const clear=[...host.querySelectorAll('button')].find(b=>b.textContent==='Clear all');
- assert.equal(clear.disabled,false);
- await act(async()=>{clear.dispatchEvent(new window.Event('click',{bubbles:true}));await new Promise(resolve=>setTimeout(resolve,0));});
- assert.deepEqual(ids(),[taken]);
- assert.ok(asked.includes('c-waiting'));
- } finally {
- // The row left on its way into the turn keeps a confirmation timer.
- await act(async()=>useSendQueue.setState({queues:{}}));
- await act(async()=>root.unmount());host.remove();globalThis.fetch=originalFetch;
- }
+ await act(async()=>root.render(h(PendingSteers,{sessionId:'A',replyId:'busy_reply'})));
+ const bubbles=[...host.querySelectorAll('[data-pending-steer]')];
+ assert.deepEqual(bubbles.map(el=>el.dataset.pendingSteer),[steering]);
+ assert.equal(bubbles[0].querySelector('[data-status]').dataset.status,'pending');
+ assert.match(bubbles[0].textContent,/the DMIT server was released/);
+ await act(async()=>root.render(h(PendingSteers,{sessionId:'A',replyId:'another-reply'})));
+ assert.equal(host.querySelector('[data-pending-steer]'),null,'only the reply that owns the turn shows it');
+ await act(async()=>root.render(h(PendingSteers,{sessionId:'A',replyId:'busy_reply'})));
+ await act(async()=>settleDeliveredSteer('A','cmd-1'));
+ assert.equal(host.querySelector('[data-pending-steer]'),null,'the written message takes its place');
+ assert.deepEqual(useSendQueue.getState().queues.A.map(row=>row.text),['for later']);
+ } finally {await act(async()=>root.unmount());host.remove();useSendQueue.setState({queues:{}});}
 });
 
 test('rows reorder by keyboard, and rows being delivered or edited keep their slot', async()=>{
@@ -218,7 +186,8 @@ test('rows reorder by keyboard, and rows being delivered or edited keep their sl
   await act(async()=>el.dispatchEvent(Object.assign(new window.Event('keydown',{bubbles:true}),{key:k,altKey:true})));};
  try {
  await act(async()=>root.render(h(QueuedMessages,{sessionId:'A'})));
- assert.deepEqual([...host.querySelectorAll('[data-queued-message]')].map(el=>el.dataset.queuedMessage),[b,c,a,d]);
+ // c is on its way into the turn: the transcript shows it, not the card.
+ assert.deepEqual([...host.querySelectorAll('[data-queued-message]')].map(el=>el.dataset.queuedMessage),[b,a,d]);
  // Alt+↓ on b steps over the pinned row c.
  await key(b,'ArrowDown');
  assert.deepEqual(order(),[a,c,b,d]);
@@ -226,11 +195,10 @@ test('rows reorder by keyboard, and rows being delivered or edited keep their sl
  assert.deepEqual(order(),[a,c,d,b]);
  await key(a,'ArrowUp');
  assert.deepEqual(order(),[a,c,d,b], 'the first row cannot move up');
- assert.equal(host.querySelector(`[data-queued-message="${c}"] button[aria-expanded]`).getAttribute('aria-keyshortcuts'),null);
  } finally {await act(async()=>root.unmount());host.remove();useSendQueue.setState({queues:{}});}
 });
 
-test('rows show their enqueue time, offer Add to this turn, and announce a pending insert', async()=>{
+test('rows show their enqueue time and offer Add to this turn', async()=>{
  useSendQueue.setState({queues:{}});
  const settings={thinking:'medium',webSearchEnabled:false,background:false};
  const waiting=useSendQueue.getState().enqueue('A',{...settings,text:'add me'});
@@ -240,10 +208,10 @@ test('rows show their enqueue time, offer Add to this turn, and announce a pendi
  const host=document.createElement('div');document.body.append(host);const root=createRoot(host);
  try {
  await act(async()=>root.render(h(QueuedMessages,{sessionId:'A'})));
- const [first,second]=host.querySelectorAll('[data-queued-message]');
- assert.equal(second.querySelector('.message-timestamp').textContent,new Date(queuedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
- assert.equal(first.querySelector('[role=status]').textContent,'Waiting to add to current turn…');
+ const rows=host.querySelectorAll('[data-queued-message]');
+ assert.equal(rows.length,1);
+ assert.equal(rows[0].querySelector('.message-timestamp').textContent,new Date(queuedAt).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}));
  const labels=row=>[...row.querySelectorAll('button[aria-label]')].map(b=>b.getAttribute('aria-label'));
- assert.ok(labels(second).includes('Add to this turn'));
+ assert.ok(labels(rows[0]).includes('Add to this turn'));
  } finally {await act(async()=>root.unmount());host.remove();useSendQueue.setState({queues:{}});}
 });

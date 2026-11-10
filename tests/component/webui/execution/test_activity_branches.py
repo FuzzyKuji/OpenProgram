@@ -101,7 +101,9 @@ def test_branch_projection_observes_placement_from_another_store(tmp_path):
     root = tmp_path / 'home-sessions'
     reader = SessionStore(root)
     registrar = SessionStore(root)
-    project = SessionStore(tmp_path / 'project-sessions')
+    # Inside the home store: a conversation folder recorded under another
+    # store's root belongs to a copied state and is not followed.
+    project = SessionStore(root / 'project-sessions')
     writer = SessionNodeWriter(project, 'placed')
     writer.append(Call(id='user', role='user', predecessor='ROOT'))
     writer.append(Call(id='assistant', role='llm', predecessor='user'))
@@ -118,7 +120,7 @@ def test_branch_projection_observes_relocation_after_open(tmp_path):
     reader = SessionStore(tmp_path / 'home')
     registrar = SessionStore(tmp_path / 'home')
     for place, tip in [('old', 'old-tip'), ('new', 'new-tip')]:
-        project = SessionStore(tmp_path / place)
+        project = SessionStore(tmp_path / 'home' / place)
         writer = SessionNodeWriter(project, 'placed')
         writer.append(Call(id='user', role='user', predecessor='ROOT'))
         writer.append(Call(id=tip, role='llm', predecessor='user'))

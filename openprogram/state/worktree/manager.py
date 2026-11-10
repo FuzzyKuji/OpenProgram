@@ -172,6 +172,7 @@ class WorktreeManager:
         parent_session: Optional[str] = None,
         parent_job: Optional[str] = None,
         pr: Optional[str] = None,
+        destination: Optional[str] = None,
     ) -> Worktree:
         """Create a new worktree on ``source_repo``.
 
@@ -266,7 +267,7 @@ class WorktreeManager:
         _validate_ref(base_ref, "base_ref")
         # Final worktree path lives outside both source_repo and
         # the chat store so neither can accidentally pick up its files.
-        path = _worktrees_root() / f"{wt_id}-{slug}"
+        path = Path(destination) if destination else _worktrees_root() / f"{wt_id}-{slug}"
         if _is_inside_sessions_dir(path):
             raise WorktreeError(
                 "worktree_in_sessions_dir: worktree path would land in "

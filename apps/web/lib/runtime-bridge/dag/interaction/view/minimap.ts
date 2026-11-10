@@ -163,7 +163,10 @@ function mapCanvas(host: HTMLElement, jump: (x: number, y: number) => void): HTM
     toWorld(e);
   });
   c.addEventListener("pointermove", (e) => {
-    if (c!.hasPointerCapture(e.pointerId)) toWorld(e);
+    if (!c!.hasPointerCapture(e.pointerId)) return;
+    // The left button is up but no release arrived: the drag is over.
+    if (e.buttons & 1) toWorld(e);
+    else c!.releasePointerCapture(e.pointerId);
   });
   // The map holds still under a drag (``paintMinimap``); let go, it
   // refits around where the view ended up.

@@ -38,6 +38,8 @@ class CheckpointFragment:
     # driver data, rather than a second durable control-state store.
     managed_action: Mapping[str, Any] | None = None
     control_step: Mapping[str, Any] | None = None
+    # An Agent turn leaves open steering for its next activation to deliver.
+    leaves_steering_open: bool = False
 
 
 @dataclass(frozen=True)
@@ -112,11 +114,9 @@ class CheckpointManifest:
             "schema_version": self.schema_version,
             "created_at": self.created_at,
         }
-        # AgentCheckpointV1 is retained as a state reference in the generic
-        # manifest.  Mirror its durable routing fields for transports and
-        # diagnostics without adding a second checkpoint schema or store.
+        # Mirror an Agent turn's routing fields for transports and diagnostics.
         state = _thaw_json(self.state_refs)
-        agent_state = state.get("agent_checkpoint_v1")
+        agent_state = state.get("agent_position")
         if isinstance(agent_state, Mapping):
             state = agent_state
         for key in ("safe_point", "turn", "current_decision", "next_tool_index"):
@@ -215,7 +215,7 @@ class ExecutionCheckpointStore:
         completed_frontier: Sequence[Mapping[str, Any]] | None = None,
         checkpoint_id: str | None = None,
         content_hash: str | None = None,
-        recovery_effect_id: str | None = None,
+        owner_lost: bool = False,
     ) -> tuple[CheckpointManifest, ExecutionRecord]:
         """Publish while an existing store transaction is held."""
         content = {
@@ -254,31 +254,17 @@ class ExecutionCheckpointStore:
         if execution.status in TERMINAL_EXECUTION_STATUSES:
             raise CheckpointConflict("terminal", f"execution is already {execution.status.value}")
         now = self._clock()
-        attempt = connection.execute(
-            "SELECT execution_id, status, lease_expires_at FROM attempts WHERE attempt_id = ?",
-            (created_by_attempt_id,),
-        ).fetchone()
-        receipt_recovery = False
-        if recovery_effect_id is not None:
-            from .agent_receipts import validates_expired_publication
-            receipt_recovery = validates_expired_publication(self.executions, connection, recovery_effect_id,
-                execution=execution, state_refs=state_refs, frontier=frontier)
-            if not receipt_recovery:
-                raise CheckpointConflict("receipt_invalid", "recovery checkpoint is not authorized by its result")
+        attempt = connection.get("attempts", created_by_attempt_id)
         if (
             attempt is None
             or attempt["execution_id"] != execution_id
             or execution.current_attempt_id != created_by_attempt_id
             or attempt["status"] != "active"
-            or (float(attempt["lease_expires_at"]) <= now and not receipt_recovery)
         ):
             raise CheckpointConflict("stale_attempt", "only the current active attempt can publish a checkpoint")
-        unresolved = connection.execute(
-            "SELECT effect_id FROM effects WHERE execution_id = ? AND status IN ('dispatched', 'uncertain') LIMIT 1",
-            (execution_id,),
-        ).fetchone()
+        unresolved = self.executions._first_unresolved_effect(connection, execution_id)
         if unresolved is not None:
-            raise CheckpointConflict("unresolved_effect", f"effect requires resolution: {unresolved['effect_id']}")
+            raise CheckpointConflict("unresolved_effect", f"effect requires resolution: {unresolved}")
         if execution.checkpoint_head_id != parent_checkpoint_id:
             raise CheckpointConflict("parent_mismatch", "parent_checkpoint_id is not the current checkpoint head")
         if parent_checkpoint_id is not None:
@@ -294,11 +280,7 @@ class ExecutionCheckpointStore:
         self.executions._collect_state_refs(list(effect_receipts), refs)
         self.executions._expand_state_blob_refs(connection, execution_id, refs)
         for ref in refs:
-            row = connection.execute(
-                "SELECT sha256, payload, byte_length, media_type, schema_version "
-                "FROM execution_state_blobs WHERE execution_id = ? AND ref = ?",
-                (execution_id, ref),
-            ).fetchone()
+            row = connection.get("execution_state_blobs", execution_id, ref)
             if row is None:
                 raise CheckpointConflict("state_ref_invalid", "checkpoint references a missing or foreign state blob")
             payload = bytes(row["payload"])
@@ -334,18 +316,31 @@ class ExecutionCheckpointStore:
         )
         self._insert(connection, checkpoint)
         for ref in refs:
-            connection.execute(
-                "INSERT OR IGNORE INTO execution_state_blob_refs "
-                "(execution_id, ref, name, reference_kind, reference_id, created_at) "
-                "VALUES (?, ?, ?, 'checkpoint', ?, ?)",
-                (execution_id, ref, "checkpoint", checkpoint.checkpoint_id, now),
+            connection.insert(
+                "execution_state_blob_refs",
+                {
+                    "execution_id": execution_id,
+                    "ref": ref,
+                    "name": "checkpoint",
+                    "reference_kind": "checkpoint",
+                    "reference_id": checkpoint.checkpoint_id,
+                    "created_at": now,
+                },
+                on_conflict="ignore",
             )
         safe_point = _thaw_json(checkpoint.frontier[-1]) if checkpoint.frontier else {}
-        updated = connection.execute(
-            "UPDATE executions SET checkpoint_head_id = ?, safe_point_json = ?, status_version = ?, updated_at = ? WHERE execution_id = ? AND status_version = ?",
-            (checkpoint_id, _json(safe_point), expected_version + 1, now, execution_id, expected_version),
+        updated = connection.update(
+            "executions",
+            {
+                "checkpoint_head_id": checkpoint_id,
+                "safe_point_json": _json(safe_point),
+                "status_version": expected_version + 1,
+                "updated_at": now,
+            },
+            execution_id=execution_id,
+            status_version=expected_version,
         )
-        if updated.rowcount != 1:
+        if updated != 1:
             raise CheckpointConflict("stale_version", "execution changed concurrently")
         execution = self.executions._require_execution(connection, execution_id)
         self.executions._append_event(connection, execution_id=execution_id, execution_version=execution.status_version, kind="execution.updated", payload={"record": execution.to_dict()}, created_at=now)
@@ -359,53 +354,41 @@ class ExecutionCheckpointStore:
     def list_for_execution(self, execution_id: str) -> list[CheckpointManifest]:
         """Return published checkpoints for one execution in creation order."""
         with closing(self.executions._connect()) as connection:
-            rows = connection.execute(
-                "SELECT checkpoint_id FROM checkpoints WHERE execution_id = "
-                "? ORDER BY created_at, checkpoint_id",
-                (execution_id,),
-            ).fetchall()
+            rows = connection.rows("checkpoints", order=("created_at", "checkpoint_id"), execution_id=execution_id)
             return [checkpoint for row in rows
                     if (checkpoint := self._get(connection, str(row["checkpoint_id"]))) is not None]
 
     @staticmethod
     def _insert(connection, checkpoint: CheckpointManifest) -> None:
-        connection.execute(
-            "INSERT INTO checkpoints "
-            "(checkpoint_id, execution_id, revision_id, parent_checkpoint_id, "
-                "source_execution_version, frontier_json, state_refs_json, "
-            "completed_actions_json, completed_frontier_json, effect_receipts_json, child_frontier_json, "
-            "pending_commands_json, created_by_attempt_id, content_hash, "
-            "schema_version, created_at) VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                checkpoint.checkpoint_id,
-                checkpoint.execution_id,
-                checkpoint.revision_id,
-                checkpoint.parent_checkpoint_id,
-                checkpoint.source_execution_version,
-                _json(_thaw_json(checkpoint.frontier)),
-                _json(_thaw_json(checkpoint.state_refs)),
-                _json(_thaw_json(checkpoint.completed_actions)),
-                (
+        connection.insert(
+            "checkpoints",
+            {
+                "checkpoint_id": checkpoint.checkpoint_id,
+                "execution_id": checkpoint.execution_id,
+                "revision_id": checkpoint.revision_id,
+                "parent_checkpoint_id": checkpoint.parent_checkpoint_id,
+                "source_execution_version": checkpoint.source_execution_version,
+                "frontier_json": _json(_thaw_json(checkpoint.frontier)),
+                "state_refs_json": _json(_thaw_json(checkpoint.state_refs)),
+                "completed_actions_json": _json(_thaw_json(checkpoint.completed_actions)),
+                "completed_frontier_json": (
                     _json(_thaw_json(checkpoint.completed_frontier))
                     if checkpoint.completed_frontier is not None
                     else None
                 ),
-                _json(_thaw_json(checkpoint.effect_receipts)),
-                _json(_thaw_json(checkpoint.child_frontier)),
-                _json(checkpoint.pending_command_ids),
-                checkpoint.created_by_attempt_id,
-                checkpoint.content_hash,
-                checkpoint.schema_version,
-                checkpoint.created_at,
-            ),
+                "effect_receipts_json": _json(_thaw_json(checkpoint.effect_receipts)),
+                "child_frontier_json": _json(_thaw_json(checkpoint.child_frontier)),
+                "pending_commands_json": _json(checkpoint.pending_command_ids),
+                "created_by_attempt_id": checkpoint.created_by_attempt_id,
+                "content_hash": checkpoint.content_hash,
+                "schema_version": checkpoint.schema_version,
+                "created_at": checkpoint.created_at,
+            },
         )
 
     @classmethod
     def _get(cls, connection, checkpoint_id: str) -> CheckpointManifest | None:
-        row = connection.execute(
-            "SELECT * FROM checkpoints WHERE checkpoint_id = ?", (checkpoint_id,)
-        ).fetchone()
+        row = connection.get("checkpoints", checkpoint_id)
         if row is None:
             return None
         return CheckpointManifest(

@@ -319,7 +319,7 @@ def _convert_tool_result_block(tr_msg: ToolResultMessage, is_oauth: bool = False
     }
 
 
-# Provider-side web search (docs/reference/design/providers/web-search.md).
+# Provider-side web search (docs/reference/design/providers/web-search.html).
 _WEB_SEARCH_TOOL = {"type": "web_search_20250305", "name": "web_search"}
 
 
@@ -541,19 +541,6 @@ def _build_system(
     return blocks if blocks else None
 
 
-def _make_empty_assistant(model: Model) -> AssistantMessage:
-    return AssistantMessage(
-        role="assistant",
-        content=[],
-        api=model.api,
-        provider=model.provider,
-        model=model.id,
-        usage=Usage(),
-        stop_reason="stop",
-        timestamp=int(time.time() * 1000),
-    )
-
-
 async def stream_simple(
     model: Model,
     context: Context,
@@ -611,7 +598,9 @@ async def stream_simple(
     is_oauth = (_conn.kind in ("oauth", "device_code", "cli_delegated")) if _conn else _is_oauth_token(api_key)
     base_url = (_conn.base_url if _conn and _conn.base_url else None) \
         or getattr(model, "base_url", None) or getattr(model, "baseUrl", None)
-    cache_control = _get_cache_control(base_url, getattr(opts, "cache_retention", None))
+    from openprogram.models.providers.settings.cache_spec import with_lifetime_setting
+    retention = with_lifetime_setting(getattr(opts, "cache_retention", None))
+    cache_control = _get_cache_control(base_url, retention)
 
     _merged_headers = {**(getattr(opts, "headers", None) or {}), **(_conn.headers if _conn else {})}
     from ...shared.opencode_headers import opencode_headers
@@ -642,10 +631,9 @@ async def stream_simple(
     # default inside _build_messages/_build_system.
     if cache_control is not None:
         from openprogram.models.providers.settings.cache_policy import apply_cache_policy
-        _retention = getattr(opts, "cache_retention", None)
         transformed_context = apply_cache_policy(
             transformed_context, "anthropic",
-            ttl_seconds=3600 if _retention == "long" else None,
+            ttl_seconds=3600 if retention == "long" else None,
         )
 
     messages = _build_messages(transformed_context, is_oauth=is_oauth, cache_control=cache_control)
@@ -728,7 +716,7 @@ async def stream_simple(
         }
 
     # Track partial state
-    partial = _make_empty_assistant(model)
+    partial = AssistantMessage.empty(model)
     content_blocks: list[Any] = []
     block_index_map: dict[int, int] = {}  # anthropic index → content_blocks index
     tool_arg_buffers: dict[int, str] = {}

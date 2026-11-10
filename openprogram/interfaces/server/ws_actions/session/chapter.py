@@ -39,24 +39,13 @@ def _user_node(db, session_id: str, message_id: str):
 
 
 def _patch_open_views(_s, session_id: str, message_id: str, chapter) -> None:
-    """Keep the server's copies of the transcript in step with the store:
-    the in-memory conversation mirror and every connection's history
-    snapshot, so a later page of history carries the new pin."""
+    """Keep the in-memory conversation mirror in step with the store.
+    Transcript reads project from the store, so they carry the pin already."""
     with _s._sessions_lock:
         conv = _s._sessions.get(session_id)
         for row in (conv or {}).get("messages") or []:
             if isinstance(row, dict) and row.get("id") == message_id:
                 row["chapter"] = chapter
-    with _s._ws_lock:
-        connections = list(_s._ws_connections)
-    for conn in connections:
-        snapshot = (getattr(conn, "_history_snapshots", None) or {}).get(session_id)
-        patch = getattr(snapshot, "patch_message", None)
-        if patch is not None:
-            try:
-                patch(message_id, {"chapter": chapter})
-            except Exception as e:  # noqa: BLE001 - a stale snapshot renews on its next page
-                _s._log(f"[set_message_chapter] snapshot patch {session_id}: {e}")
 
 
 async def handle_set_message_chapter(ws, cmd: dict) -> None:

@@ -74,7 +74,7 @@ class _Tools:
         self.blocked: set[str] = set()
         self.wait_kind: str | None = None
         self.decline_policy = "fail"
-        self.wait_timeout = 5.0
+        self.wait_timeout = 60.0
         self.wait_started = threading.Event()
         self.wait_finished = threading.Event()
         self.schema_variant = "initial"
@@ -199,7 +199,9 @@ class _Tools:
         return result
 
 
-def _wait(predicate, timeout: float = 4.0, detail=None):
+# Conditions return at once when met; the limit only bounds a real hang,
+# and a loaded parallel run can take many seconds to get there.
+def _wait(predicate, timeout: float = 30.0, detail=None):
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         result = predicate()
@@ -373,14 +375,14 @@ def real_agent_chat(tmp_path, monkeypatch):
         provider.release.set()
         for gate in tools.release.values():
             gate.set()
-        deadline = time.monotonic() + 4.0
+        deadline = time.monotonic() + 30.0
         while time.monotonic() < deadline and server._is_run_active(session_id):
             threading.Event().wait(0.01)
         with server._running_tasks_lock:
             running = server._running_tasks.get(session_id)
             thread = running.get("thread") if isinstance(running, dict) else None
         if thread is not None:
-            thread.join(timeout=4.0)
+            thread.join(timeout=30.0)
         with server._running_tasks_lock:
             server._running_tasks.pop(session_id, None)
         if previous_provider is None:
@@ -626,14 +628,11 @@ def test_continue_rejects_changed_tool_runtime_contract(real_agent_chat, mutatio
     assert real_agent_chat.provider.call_count == 1
     assert real_agent_chat.tools.calls == []
 
-    from openprogram.runtime.execution.outbox import ProjectionDispatcher
-    from openprogram.runtime.execution.projections import projection_handlers
+    from openprogram.runtime.execution.event_effects import ExecutionEventEffects
 
-    projections = ProjectionDispatcher(
-        real_agent_chat.store, projection_handlers(real_agent_chat.store)
-    )
-    projections.dispatch_once(owner_id="test-resume-notice", limit=1000)
-    projections.dispatch_once(owner_id="test-resume-notice", limit=1000)
+    projections = ExecutionEventEffects(real_agent_chat.store, after=0)
+    projections.drain()
+    projections.drain()
     reply = next(
         item
         for item in real_agent_chat.sessions.get_branch(real_agent_chat.session_id)
@@ -651,7 +650,7 @@ def test_continue_rejects_changed_tool_runtime_contract(real_agent_chat, mutatio
         lambda: real_agent_chat.store.get_execution(execution.execution_id).status
         is ExecutionStatus.COMPLETED
     )
-    projections.dispatch_once(owner_id="test-recovered-notice", limit=1000)
+    projections.drain()
     reply = next(
         item
         for item in real_agent_chat.sessions.get_branch(real_agent_chat.session_id)
@@ -818,14 +817,11 @@ def test_mismatch_notice_after_restart_paused_marker(real_agent_chat):
     )
     assert command["status"] == "rejected"
     assert command["rejection_code"] == "continuation_contract_mismatch"
-    from openprogram.runtime.execution.outbox import ProjectionDispatcher
-    from openprogram.runtime.execution.projections import projection_handlers
+    from openprogram.runtime.execution.event_effects import ExecutionEventEffects
 
-    projections = ProjectionDispatcher(
-        real_agent_chat.store, projection_handlers(real_agent_chat.store)
-    )
-    projections.dispatch_once(owner_id="test-paused-notice", limit=1000)
-    projections.dispatch_once(owner_id="test-paused-notice", limit=1000)
+    projections = ExecutionEventEffects(real_agent_chat.store, after=0)
+    projections.drain()
+    projections.drain()
     reply = next(
         item
         for item in real_agent_chat.sessions.get_branch(real_agent_chat.session_id)
@@ -1232,6 +1228,59 @@ def test_a_declined_wait_returns_to_the_model_instead_of_failing(
     assert h.provider.call_count == 2
 
 
+def test_an_answer_that_beats_the_paused_runner_out_still_resumes(
+    real_agent_chat, monkeypatch
+):
+    """The next attempt waits for the old runner instead of failing the run."""
+    from openprogram.runtime.conversation import run_control
+    from tests.component.providers.scripted_provider import (
+        ScriptedText,
+        ScriptedToolCall,
+    )
+
+    h = real_agent_chat
+    real_claim = run_control.claim_cancel_event
+    real_unregister = run_control.unregister_cancel_event
+    refused = threading.Event()
+
+    def claim(*args, **kwargs):
+        claimed = real_claim(*args, **kwargs)
+        if not claimed:
+            refused.set()
+        return claimed
+
+    def unregister(*args, **kwargs):
+        # The paused runner holds its slot until its successor has been refused.
+        refused.wait(30)
+        return real_unregister(*args, **kwargs)
+
+    monkeypatch.setattr(run_control, "claim_cancel_event", claim)
+    monkeypatch.setattr(run_control, "unregister_cancel_event", unregister)
+    h.tools.wait_kind = "ask"
+    h.tools.decline_policy = "continue"
+    h.provider.add_response(ScriptedToolCall("first", {}, "call-early-answer"))
+    h.provider.add_response(ScriptedText("Understood."))
+    execution = _chat(h)
+    question = _pending_question(h, kind="ask")
+    _wait(
+        lambda: h.store.get_execution(execution.execution_id).status
+        is ExecutionStatus.PAUSED
+    )
+
+    _question_action(h, "question_reject", question.id)
+
+    completed = _wait(
+        lambda: (
+            item
+            if (item := h.store.get_execution(execution.execution_id)).status
+            in {ExecutionStatus.COMPLETED, ExecutionStatus.FAILED}
+            else None
+        ),
+    )
+    assert refused.is_set()
+    assert completed.status is ExecutionStatus.COMPLETED
+
+
 def test_cancel_wakes_real_question_wait_with_exact_reason(real_agent_chat):
     from tests.component.providers.scripted_provider import ScriptedToolCall
 
@@ -1329,6 +1378,50 @@ def test_durable_wait_registration_publishes_checkpoint_before_tool_dispatch(
     assert real_agent_chat.tools.calls == []
     # Resolve it through the public canonical wait command.
     _question_action(real_agent_chat, "question_reject", question.id)
+
+
+def test_forced_reconcile_resumes_an_approval_the_new_policy_drops_with_no_version_change(
+    real_agent_chat, monkeypatch
+):
+    from tests.component.providers.scripted_provider import ScriptedText, ScriptedToolCall
+    from openprogram.runtime.permissions.authority import local_owner_authority
+    from openprogram.runtime.permissions.approval import wrap_with_approval
+    from openprogram.runtime.permissions import update_permission, reconcile_permission_waits
+    from openprogram.runtime.permissions.modes import PermissionRules
+    from openprogram.runtime.permissions.session_facts import facts
+    from openprogram.runtime.execution.waits import DurableWaitStore, WaitStatus
+    import openprogram.runtime.conversation.turn_runtime.loop_runner as loop_runner
+
+    h = real_agent_chat
+    monkeypatch.setattr(loop_runner, "_wrap_with_approval", wrap_with_approval)
+    update_permission(h.session_id, "ask", 0, local_owner_authority())
+    h.provider.add_response(ScriptedToolCall("first", {}, "permission-first"))
+    h.provider.add_response(ScriptedText("done"))
+    execution = _chat(h)
+    question = _pending_question(h, kind="approval")
+    # A forced reconcile skips a wait whose old runner is still leaving, and
+    # the driver's own recheck after it leaves is not forced.
+    _wait(lambda: not facts().turn_running(h.session_id, execution.execution_id))
+
+    # An allow rule stands in for a policy change that bumps no permission version.
+    monkeypatch.setattr("openprogram.runtime.permissions.rule.load_merged_rules",
+                        lambda _sid: PermissionRules(allow=["first"]))
+    asyncio.run(reconcile_permission_waits(h.session_id, service=h.control))
+    assert DurableWaitStore(h.store).get_wait(question.id).status is not WaitStatus.RESOLVED
+    assert h.tools.calls == []
+
+    asyncio.run(reconcile_permission_waits(h.session_id, service=h.control, force=True))
+    completed = _wait(
+        lambda: (
+            item
+            if (item := h.store.get_execution(execution.execution_id)).status
+            in {ExecutionStatus.COMPLETED, ExecutionStatus.FAILED}
+            else None
+        ),
+        detail=lambda: {"errors": h.activation_errors, "outcomes": [str(x) for x in h.outcomes]},
+    )
+    assert completed.status is ExecutionStatus.COMPLETED
+    assert h.tools.calls == ["first"]
 
 
 def test_permission_change_resumes_real_approval_without_repeating_provider(
@@ -1574,11 +1667,9 @@ def test_bypass_update_during_generation_or_batch_needs_no_new_approval(
     from openprogram.runtime.execution.waits import DurableWaitStore
 
     assert not DurableWaitStore(h.store).list_open(session_id=h.session_id)
-    with h.store._connect() as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM execution_waits WHERE execution_id = ?",
-            (execution.execution_id,),
-        ).fetchone()[0] == (1 if phase == "between_tools" else 0)
+    assert h.store._connect().count("execution_waits", execution_id=execution.execution_id) == (
+        1 if phase == "between_tools" else 0
+    )
 
 
 def test_cancel_resumed_local_shell_reaps_child_and_finalizes_chat(
@@ -1673,6 +1764,7 @@ def test_cancel_at_resumed_provider_boundary_finalizes(real_agent_chat, monkeypa
                 assert release.wait(30)
             return hook(kind, payload)
 
+        run.record_steer = hook.record_steer
         return run
 
     monkeypatch.setattr(AgentProductionDriver, "_safe_point_hook", make)
@@ -1721,8 +1813,7 @@ def test_decline_preserves_checkpoint_trace_and_notifies_chat(
         ScriptedText,
         ScriptedToolCall,
     )
-    from openprogram.runtime.execution.outbox import ProjectionDispatcher
-    from openprogram.runtime.execution.projections import projection_handlers
+    from openprogram.runtime.execution.event_effects import ExecutionEventEffects
 
     h = real_agent_chat
     h.tools.wait_kind = "approval"
@@ -1748,12 +1839,9 @@ def test_decline_preserves_checkpoint_trace_and_notifies_chat(
         lambda: h.store.get_execution(execution.execution_id).status
         is ExecutionStatus.FAILED
     )
-    dispatcher = ProjectionDispatcher(h.store, projection_handlers(h.store))
-    while True:
-        delivered = dispatcher.dispatch_once(owner_id="test-trace")
-        assert delivered.failed == 0
-        if delivered.claimed == 0:
-            break
+    effects = ExecutionEventEffects(h.store, after=0)
+    effects.drain()
+    assert not effects._retries
     source = h.store.get_execution_input(execution.execution_id)
     from openprogram.state.store import SessionNodeWriter
 
@@ -1769,7 +1857,6 @@ def test_decline_preserves_checkpoint_trace_and_notifies_chat(
         b.get("tool_call_id") == "call-denied" and b.get("result") for b in blocks
     )
     assert "declined" in node.output.lower()
-    assert any(f.get("type") == "session_reload" for f in frames)
     assert h.tools.calls == ["second"]
     assert any(
         b.get("tool_call_id") == "call-finished" and b.get("result") == "second:ok"

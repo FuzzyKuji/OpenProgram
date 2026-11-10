@@ -90,7 +90,7 @@ def _looks_like_tui_invocation(argv: list[str]) -> bool:
         "providers", "web", "resume", "init", "doctor", "browser",
         "worker", "update", "memory", "mcp", "trash", "backup",
         "recordings", "stop", "status", "restart", "upgrade", "help",
-        "execution", "jobs", "scheduler-worker", "cron-worker", "self-update", "dev",
+        "execution", "jobs", "scheduler-worker", "cron-worker", "self-update", "dev", "versions",
     }
     bypass_flags = {
         "--print", "-p", "--help", "-h", "--version", "--print-prompt",
@@ -407,6 +407,9 @@ def _dispatch_maintenance_command(args) -> None:
     if args.command == "dev":
         from openprogram.interfaces.cli.commands.dev import _cmd_dev
         sys.exit(_cmd_dev(args))
+    if args.command == "versions":
+        from openprogram.interfaces.cli.commands.versions import _cmd_versions
+        sys.exit(_cmd_versions(args))
     if args.command == "self-update":
         from openprogram.interfaces.cli.commands.self_update import _cmd_self_update
         sys.exit(_cmd_self_update(args))
@@ -1213,6 +1216,7 @@ def _dispatch_setup_command(args) -> None:
 _COMMAND_DISPATCH = {
     "rescue": _dispatch_maintenance_command,
     "dev": _dispatch_maintenance_command,
+    "versions": _dispatch_maintenance_command,
     "self-update": _dispatch_maintenance_command,
     "logs": _dispatch_maintenance_command,
     "completion": _dispatch_maintenance_command,
@@ -1254,7 +1258,9 @@ _COMMAND_DISPATCH = {
 
 
 def main():
+    from openprogram.operations.self_update.versions.layout import apply_base_environment
     from openprogram.operations.worker.lifecycle import use_named_runtime_for_cli
+    apply_base_environment()
     use_named_runtime_for_cli()
     _ensure_utf8_stdio()
     parser, args = _parse_arguments()

@@ -1,0 +1,55 @@
+<title>Codex transport</title>
+<meta name="description" content="How a Codex turn reaches the backend: kept WebSocket, delta continuation and compressed HTTP.">
+<h1>Codex transport</h1>
+<table class="stack">
+<thead><tr><th scope="col">Turn</th><th scope="col">Transport</th><th scope="col">Body</th></tr></thead>
+<tbody>
+<tr><th scope="row">ChatGPT sign-in, carries on from the last reply</th><td>kept WebSocket</td><td>only new input, with <code translate="no">previous_response_id</code></td></tr>
+<tr><th scope="row">ChatGPT sign-in, anything else</th><td>kept WebSocket</td><td>whole</td></tr>
+<tr><th scope="row">ChatGPT sign-in, socket unavailable</th><td>HTTP</td><td>zstd level 3, no checksum, <code translate="no">Content-Encoding: zstd</code></td></tr>
+<tr><th scope="row">API key</th><td>HTTP</td><td>plain</td></tr>
+</tbody>
+</table>
+<p class="note">Endpoint <code translate="no">chatgpt.com/backend-api/codex/responses</code>. Both ways end in one consumer, <code translate="no">openai_codex._consume</code>, under <code translate="no">read_budget.ReadBudget</code>: no bytes for <code translate="no">STREAM_IDLE_TIMEOUT_S</code>, no data for <code translate="no">STREAM_DATA_STALL_TIMEOUT_S</code>, caller deadline and Stop polled at 4 Hz.</p>
+<h2>WebSocket</h2>
+<p><code translate="no">open_turn</code> dials with the HTTP headers plus <code translate="no">OpenAI-Beta: responses_websockets=2026-02-06</code>, sends one <code translate="no">{"type":"response.create", …body}</code>, and reads frames that are the SSE events' JSON. <code translate="no">codex.rate_limits</code>, <code translate="no">codex.response.metadata</code> and <code translate="no">responsesapi.websocket_timing</code> are skipped.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Delta rule</th><th scope="col">Value</th></tr></thead>
+<tbody>
+<tr><th scope="row">Socket key</th><td>Event loop, URL, authorization, account, <code translate="no">prompt_cache_key</code></td></tr>
+<tr><th scope="row">Remembered</th><td>Shape (all but <code translate="no">input</code>); digest of each input item and reply output item</td></tr>
+<tr><th scope="row">Delta when</th><td>Same shape, and input starts with exactly those items</td></tr>
+<tr><th scope="row">Digest ignores</th><td>ids, status, a message's <code translate="no">phase</code>, empty annotations and logprobs; <code translate="no">arguments</code> compared as parsed JSON</td></tr>
+<tr><th scope="row">Resent whole on a new socket</th><td><code translate="no">previous_response_not_found</code>, or a reused socket fails before the reply starts</td></tr>
+</tbody>
+</table>
+<h2>Falling back to HTTP</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Cause of <code translate="no">SocketUnavailable</code></th><th scope="col">Note</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">OPENPROGRAM_CODEX_WEBSOCKET=0</code></th><td>Tests set it, except the transport's own, which use a local server</td></tr>
+<tr><th scope="row">Handshake fails</th><td>Host shunned <code translate="no">SHUN_S</code>, 10 min, except after 401, 429 or 5xx</td></tr>
+<tr><th scope="row">Close 1009, message too big</th><td>Remembered for the host</td></tr>
+<tr><th scope="row">Connection limit</th><td>Refused by the backend</td></tr>
+</tbody>
+</table>
+<p class="note">A socket cut after the reply starts is an ordinary retryable stream break. <code translate="no">OPENPROGRAM_CODEX_ZSTD=0</code> turns compression off.</p>
+<dl class="pairs">
+<dt>Idle limit</dt><dd><code translate="no">KEEP_IDLE_S</code>, 10 min</dd>
+<dt>Age limit</dt><dd><code translate="no">KEEP_AGE_S</code>, 55 min</dd>
+<dt>Kept at most</dt><dd><code translate="no">KEEP_MAX</code>, 32</dd>
+<dt>Closed by</dt><dd><code translate="no">drain()</code>, through <code translate="no">http_client.register_loop_closer</code></dd>
+</dl>
+<details><summary>Code</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">File</th><th scope="col">Holds</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openai_codex/openai_codex.py</code></th><td><code translate="no">_run</code>, shared consumer</td></tr>
+<tr><th scope="row"><code translate="no">openai_codex/websocket_transport.py</code></th><td>Dialing, kept sockets, deltas, shunning</td></tr>
+<tr><th scope="row"><code translate="no">openai_codex/read_budget.py</code></th><td>Read budgets</td></tr>
+<tr><th scope="row"><code translate="no">openai_codex/request_compression.py</code></th><td><code translate="no">encode_turn</code></td></tr>
+<tr><th scope="row"><code translate="no">providers/utils/http_proxy.py</code></th><td><code translate="no">proxy_for_url</code>, shared with HTTP</td></tr>
+</tbody>
+</table>
+<p class="note">Deltas and zstd are confirmed against the live backend for plain and tool turns. Follows magpie's Codex WebSocket support (yetone/magpie, MIT).</p>
+</details>

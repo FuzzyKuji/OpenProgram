@@ -4,7 +4,7 @@
 # -----------------------------------------------------------------------------
 # This script creates an editable checkout and builds local assets. It is for
 # contributors and source development, not stable release installation. See
-# docs/install/install.md for the macOS DMG and managed CLI installation.
+# docs/install/install.html for the macOS DMG and managed CLI installation.
 # It can still be run straight off the web for a development checkout:
 #   curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/scripts/install.sh | bash
 # It clones OpenProgram to ~/OpenProgram (override with --target DIR), then
@@ -259,5 +259,5 @@ verify_product_extras
 # ---- done --------------------------------------------------------------------
 printf "\n${c_green}OpenProgram ready.${c_reset}\n"
 printf "  Start:     openprogram           # first run walks you through provider setup, then opens the chat\n"
-printf "  Web UI:    openprogram web        # -> http://localhost:18100\n"
+printf "  Web UI:    openprogram web        # opens the browser signed in (port 18100)\n"
 printf "  Programs:  openprogram programs install <directory | git URL | owner/repo>\n"

@@ -77,6 +77,22 @@ export function reportAttention(event: AttentionEvent): boolean {
   return true;
 }
 
+/** Whether an always_on_report frame asks for a desktop notification. The
+ *  server applies the Agent's notify rule for the report's kind and says so
+ *  with `notify_desktop` (or `notify: {desktop}`); a frame without either
+ *  comes from before the rules and notifies. */
+export function reportNotifiesDesktop(frame: unknown): boolean {
+  if (!frame || typeof frame !== "object") return true;
+  const data = frame as { notify_desktop?: unknown; notify?: unknown; report?: { notify_desktop?: unknown } };
+  if (typeof data.notify_desktop === "boolean") return data.notify_desktop;
+  if (typeof data.report?.notify_desktop === "boolean") return data.report.notify_desktop;
+  const notify = data.notify;
+  if (notify && typeof notify === "object" && typeof (notify as { desktop?: unknown }).desktop === "boolean") {
+    return (notify as { desktop: boolean }).desktop;
+  }
+  return true;
+}
+
 /** Terminal execution statuses that deserve a notification, by kind. */
 export function attentionKindForExecutionStatus(status: unknown): AttentionKind | null {
   if (status === "completed") return "done";

@@ -161,29 +161,49 @@ def resolve_foreground_execution(session_id: str) -> str | None:
 
 
 def cancel_session_executions(session_id: str) -> list[dict[str, Any]]:
-    """Cancel every non-terminal root execution in a session."""
+    """Cancel every non-terminal root execution in a session.
+
+    A chat turn lives only in the execution store until its projection
+    reaches the session graph, so the store is read first; graph nodes
+    then cover function runs that have no canonical record.
+    """
     from openprogram.runtime.context.session_db import default_db
+    from openprogram.runtime.execution import default_store
+
+    results: list[dict[str, Any]] = []
+    canonical_ids: set[str] = set()
+    for execution in default_store().list_nonterminal(session_id=session_id):
+        canonical_ids.add(execution.execution_id)
+        if execution.parent_execution_id:
+            continue
+        try:
+            results.append(
+                _cancel_canonical_execution(execution, reason_code="cancel.session"),
+            )
+        except (ExecutionNotFound, ExecutionNotCancellable):
+            continue
 
     store = default_db()
     try:
         nodes = store.get_nodes(session_id)
     except Exception:
-        return []
+        return results
     roots = [
         node for node in nodes
         if not node.caller
         and _node_status(node) in {"queued", "running", "cancelling"}
     ]
-    if not roots:
+    if not roots and not results:
         foreground = resolve_foreground_execution(session_id)
         if foreground:
             roots = [
                 node for node in nodes if node.id == foreground
             ]
     token = _cancel_reason.set("cancel.session")
-    results: list[dict[str, Any]] = []
     try:
         for node in roots:
+            if node.id in canonical_ids:
+                continue
             try:
                 results.append(cancel_execution(node.id))
             except (ExecutionNotFound, ExecutionNotCancellable):
@@ -191,6 +211,15 @@ def cancel_session_executions(session_id: str) -> list[dict[str, Any]]:
     finally:
         _cancel_reason.reset(token)
     return results
+
+
+def cancel_execution_for_reason(execution_id: str, reason_code: str):
+    """:func:`cancel_execution`, recording why the system stopped it."""
+    token = _cancel_reason.set(reason_code)
+    try:
+        return cancel_execution(execution_id)
+    finally:
+        _cancel_reason.reset(token)
 
 
 def cancel_execution(execution_id: str):

@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-В Windows: `irm https://openprogram.io/install.ps1 | iex`. Настольное приложение для macOS — подписанный DMG на [странице релизов](https://github.com/FuzzyKuji/OpenProgram/releases). Другие варианты — в [руководстве по установке](docs/install/install.md) (на английском).
+В Windows (начиная с v1.1.0): `irm https://openprogram.io/install.ps1 | iex`. Настольное приложение для macOS — DMG на [странице релизов](https://github.com/FuzzyKuji/OpenProgram/releases); приложения для Linux и Windows появятся в v1.1.0. Если openprogram.io не отвечает: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. Другие варианты — в [руководстве по установке](https://openprogram.io/docs/install/install.html) (на английском).
 
 ## Быстрый старт
 
@@ -59,7 +59,7 @@ openprogram        # мастер настройки, затем чат в те�
 openprogram web    # рабочее пространство на http://localhost:18100
 ```
 
-Дальше: [начало работы](docs/start/GETTING_STARTED.md) · [модели](docs/models/README.md) · [вся документация](docs/README.md) (на английском)
+Дальше: [начало работы](docs/start/GETTING_STARTED.html) · [модели](docs/models/README.html) · [вся документация](docs/README.html) (на английском)
 
 ## Коротко
 
@@ -76,7 +76,7 @@ class SupportAgent(Agent):
         return self("Draft a short reply.")
 ```
 
-Решает модель; Python гарантирует, что нужные шаги будут выполнены. См. [как писать агентов](docs/capabilities/agentic-programming/writing-functions/agent.md) (на английском).
+Решает модель; Python гарантирует, что нужные шаги будут выполнены. См. [как писать агентов](docs/capabilities/agentic-programming/writing-functions/agent.html) (на английском).
 
 ## Возможности
 
@@ -101,7 +101,7 @@ class SupportAgent(Agent):
 
 | | |
 |---|---|
-| **[Настольный и веб-интерфейс](https://openprogram.io/docs/reference/design/ui/README.html)** | Одно рабочее пространство на macOS, Windows, Linux или сервере. |
+| **[Настольный и веб-интерфейс](https://openprogram.io/docs/reference/design/ui/README.html)** | Приложение на macOS, а начиная с v1.1.0 и на Linux и Windows; веб-интерфейс — на любой из этих систем или на сервере. |
 | **[Разделённые панели](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | Чаты, файлы, терминалы и веб-страницы рядом. |
 | **[Встроенный браузер](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | Браузер, который агент читает и которым управляет у вас на глазах. |
 | **[Встроенный терминал](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | Терминалы в рабочем пространстве, общие с агентом. |

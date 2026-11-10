@@ -30,6 +30,8 @@ import {
   CommandShortcut,
 } from "@/components/ui/command";
 import { activityTs, displayTitle } from "@/components/sidebar/sessions/helpers";
+import { ChannelLogo } from "@/components/channels/channel-logo";
+import { channelBrand } from "@/lib/channels/channel-brands";
 import { desktopBridge } from "@/lib/desktop/desktop-bridge";
 import { useTranslation } from "@/lib/i18n";
 import { navigate } from "@/lib/nav/navigate";
@@ -131,11 +133,14 @@ export function CommandPalette() {
                   <CommandItem
                     key={conv.id}
                     value={`session:${conv.id}`}
-                    keywords={[title, conv.preview || "", conv.project || ""]}
+                    keywords={[title, conv.preview || "", conv.project || "", channelBrand(conv.channel)]}
                     onSelect={() => run(() => openSession(conv.id))}
                   >
-                    <MessageSquare />
-                    <span className="min-w-0 truncate">{title}</span>
+                    {conv.channel ? <ChannelLogo channel={conv.channel} size={16} /> : <MessageSquare />}
+                    <span className="min-w-0 truncate">
+                      {conv.channel ? <span className="sr-only">{channelBrand(conv.channel)}: </span> : null}
+                      {title}
+                    </span>
                     {runningTasks[conv.id] ? (
                       <CommandShortcut>{text("Running", "运行中")}</CommandShortcut>
                     ) : (

@@ -137,15 +137,13 @@ class CancellationOperations:
                 kinds=(CommandKind.CANCEL,),
             )
         else:
-            rows = connection.execute(
-                "SELECT * FROM commands WHERE execution_id = ? AND kind = ? "
-                "AND status = ? ORDER BY submitted_at, command_id",
-                (
-                    execution.execution_id,
-                    CommandKind.CANCEL.value,
-                    CommandStatus.APPLYING.value,
-                ),
-            ).fetchall()
+            rows = connection.rows(
+                "commands",
+                order=("submitted_at", "command_id"),
+                execution_id=execution.execution_id,
+                kind=CommandKind.CANCEL.value,
+                status=CommandStatus.APPLYING.value,
+            )
             commands = [self.executions._command(row) for row in rows]
         if not commands:
             return

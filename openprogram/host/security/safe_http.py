@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import math
 import os
 import re
 import socket
@@ -10,6 +11,8 @@ import ssl
 import tempfile
 import threading
 from collections import deque
+from collections.abc import Callable
+from contextvars import ContextVar
 from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
@@ -73,6 +76,11 @@ class ConsumerSpec:
     credential_headers: frozenset[str]
     allow_owner_exceptions: bool
     sdk_disposition: SDKDisposition | None = None
+    # False for a large asset whose body may take long on a slow link: the
+    # overall deadline then covers reaching the response only, and the body
+    # ends only when it goes silent for the read timeout, never while its
+    # bytes are still coming (after magpie's stall, yetone/magpie, MIT).
+    deadline_covers_body: bool = True
 
 
 _HTTP_SCHEMES = frozenset({"http", "https"})
@@ -80,6 +88,7 @@ _HTTPS_SCHEME = frozenset({"https"})
 _PUBLIC_PORTS = frozenset({80, 443})
 _READ_METHODS = frozenset({"GET", "HEAD"})
 _API_METHODS = frozenset({"GET", "HEAD", "POST"})
+_ALL_METHODS = frozenset({"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"})
 _ANY_MIME = ("application/", "audio/", "image/", "text/", "video/")
 _CREDENTIAL_HEADERS = frozenset(
     {"authorization", "cookie", "proxy-authorization", "x-api-key"}
@@ -275,11 +284,17 @@ def _callback(consumer: str) -> ConsumerSpec:
     )
 
 
+def _owner_download(consumer: str) -> ConsumerSpec:
+    """A model tool's fetch in the owner's own turn: the address is the owner's call."""
+    return replace(_download(consumer, URLTrustClass.OWNER_TOOL), allowed_ports=None, allowed_methods=_ALL_METHODS)
+
+
 _SPECS = (
     replace(
         _download("tool.web_fetch", URLTrustClass.UNTRUSTED_PUBLIC),
         max_decoded_body_bytes=5 * 1024 * 1024 + 1,
     ),
+    replace(_owner_download("tool.web_fetch.owner"), max_decoded_body_bytes=5 * 1024 * 1024 + 1),
     _api("tool.web_search.fixed_api", URLTrustClass.FIXED_PUBLIC_SERVICE),
     _api("tool.web_search.configured_api", URLTrustClass.CONFIGURED_SERVICE),
     _api("tool.image_api.fixed", URLTrustClass.FIXED_PUBLIC_SERVICE),
@@ -287,6 +302,10 @@ _SPECS = (
     _api("tool.voice_api.fixed", URLTrustClass.FIXED_PUBLIC_SERVICE),
     replace(
         _download("tool.image_result.download", URLTrustClass.UNTRUSTED_PUBLIC),
+        accepted_mime_prefixes=("image/", "application/octet-stream"),
+    ),
+    replace(
+        _owner_download("tool.image_result.download.owner"),
         accepted_mime_prefixes=("image/", "application/octet-stream"),
     ),
     replace(
@@ -368,8 +387,10 @@ _SPECS = (
     _download("plugins.marketplace", URLTrustClass.CONFIGURED_SERVICE),
     _download("plugins.autoupdate", URLTrustClass.FIXED_PUBLIC_SERVICE),
     _download("updater.github", URLTrustClass.FIXED_PUBLIC_SERVICE),
+    # The Office pack is about 700 MB: on a slow link it takes longer than
+    # any fixed deadline, so it runs while bytes keep coming.
     replace(_download("office.assets", URLTrustClass.FIXED_PUBLIC_SERVICE),
-            max_decoded_body_bytes=732695641),
+            max_decoded_body_bytes=732695641, deadline_covers_body=False),
     # The pinned Electron archive a complete self-update build packages.
     replace(_download("self_update.electron", URLTrustClass.FIXED_PUBLIC_SERVICE),
             max_decoded_body_bytes=512 * 1024 * 1024),
@@ -448,7 +469,7 @@ if any(
 CONSUMER_REGISTRY = MappingProxyType({spec.consumer: spec for spec in _SPECS})
 
 _AMBIENT_PROXY_TRUST = frozenset(
-    {URLTrustClass.UNTRUSTED_PUBLIC, URLTrustClass.FIXED_PUBLIC_SERVICE}
+    {URLTrustClass.UNTRUSTED_PUBLIC, URLTrustClass.FIXED_PUBLIC_SERVICE, URLTrustClass.OWNER_TOOL}
 )
 _PROVIDER_PROXY_PREFIXES = ("provider.", "webui.model_listing.")
 
@@ -918,6 +939,63 @@ class _LimitedResponse(httpx.Response):
             raise
 
 
+@dataclass(frozen=True)
+class ObservedRequest:
+    """One request a managed transport sent, as an observer sees it.
+
+    ``url`` is the origin and path only: a query can carry a key. A request
+    that got an answer has its ``status``; one that did not has ``error``,
+    the exception's type name.
+    """
+
+    consumer: str
+    method: str
+    url: str
+    elapsed_ms: int
+    status: int | None = None
+    error: str | None = None
+
+
+RequestObserver = Callable[[ObservedRequest], None]
+_request_observer: ContextVar[RequestObserver | None] = ContextVar(
+    "safe_http_request_observer", default=None
+)
+
+
+@contextmanager
+def observing_requests(observer: RequestObserver) -> Iterator[None]:
+    """Tell ``observer`` of every request a managed transport sends in this
+    context (and in tasks and threads started from it with its context)."""
+    token = _request_observer.set(observer)
+    try:
+        yield
+    finally:
+        _request_observer.reset(token)
+
+
+def _observe(
+    observer: RequestObserver,
+    consumer: str,
+    request: httpx.Request,
+    started: float,
+    *,
+    status: int | None = None,
+    error: BaseException | None = None,
+) -> None:
+    url = request.url
+    try:
+        observer(ObservedRequest(
+            consumer=consumer,
+            method=request.method,
+            url=f"{url.scheme}://{url.netloc.decode('ascii', 'replace')}{url.path}",
+            elapsed_ms=int((monotonic() - started) * 1000),
+            status=status,
+            error=type(error).__name__ if error is not None else None,
+        ))
+    except Exception:  # an observer never fails the request it watches
+        pass
+
+
 class _ManagedTransportBase:
     def __init__(
         self,
@@ -1206,6 +1284,19 @@ class ManagedHTTPTransport(_ManagedTransportBase, httpx.BaseTransport):
         pool.close()
 
     def handle_request(self, request: httpx.Request) -> httpx.Response:
+        observer = _request_observer.get()
+        if observer is None:
+            return self._send(request)
+        started = monotonic()
+        try:
+            response = self._send(request)
+        except BaseException as exc:
+            _observe(observer, self._consumer, request, started, error=exc)
+            raise
+        _observe(observer, self._consumer, request, started, status=response.status_code)
+        return response
+
+    def _send(self, request: httpx.Request) -> httpx.Response:
         decision = self._evaluate(request.method, str(request.url))
         headers, extensions = self._request_metadata(request, decision)
         core_request = httpcore.Request(
@@ -1227,9 +1318,7 @@ class ManagedHTTPTransport(_ManagedTransportBase, httpx.BaseTransport):
         spec = CONSUMER_REGISTRY[self._consumer]
         try:
             _validate_response_headers(response.headers, spec, decision.origin)
-            deadline = request.extensions.get("safe_overall_deadline")
-            if deadline is None:
-                deadline = monotonic() + _OVERALL_TIMEOUT
+            deadline = _body_deadline(request, spec)
             return _LimitedResponse(
                 status_code=response.status,
                 headers=response.headers,
@@ -1326,6 +1415,19 @@ class AsyncManagedHTTPTransport(_ManagedTransportBase, httpx.AsyncBaseTransport)
         await pool.aclose()
 
     async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        observer = _request_observer.get()
+        if observer is None:
+            return await self._send(request)
+        started = monotonic()
+        try:
+            response = await self._send(request)
+        except BaseException as exc:
+            _observe(observer, self._consumer, request, started, error=exc)
+            raise
+        _observe(observer, self._consumer, request, started, status=response.status_code)
+        return response
+
+    async def _send(self, request: httpx.Request) -> httpx.Response:
         decision = self._evaluate(request.method, str(request.url))
         headers, extensions = self._request_metadata(request, decision)
         core_request = httpcore.Request(
@@ -1347,9 +1449,7 @@ class AsyncManagedHTTPTransport(_ManagedTransportBase, httpx.AsyncBaseTransport)
         spec = CONSUMER_REGISTRY[self._consumer]
         try:
             _validate_response_headers(response.headers, spec, decision.origin)
-            deadline = request.extensions.get("safe_overall_deadline")
-            if deadline is None:
-                deadline = monotonic() + _OVERALL_TIMEOUT
+            deadline = _body_deadline(request, spec)
             return _LimitedResponse(
                 status_code=response.status,
                 headers=response.headers,
@@ -1375,6 +1475,14 @@ class AsyncManagedHTTPTransport(_ManagedTransportBase, httpx.AsyncBaseTransport)
         self._active_pools.clear()
         for pool in pools:
             await pool.aclose()
+
+
+def _body_deadline(request: httpx.Request, spec: ConsumerSpec) -> float:
+    """When reading ``request``'s response body has to stop."""
+    if not spec.deadline_covers_body:
+        return math.inf
+    deadline = request.extensions.get("safe_overall_deadline")
+    return monotonic() + _OVERALL_TIMEOUT if deadline is None else deadline
 
 
 def _timeout() -> httpx.Timeout:
@@ -1885,6 +1993,9 @@ def raise_for_status_sanitized(response: httpx.Response) -> None:
 
 
 __all__ = [
+    "ObservedRequest",
+    "RequestObserver",
+    "observing_requests",
     "AuditEvent",
     "AsyncDecisionNetworkBackend",
     "AsyncManagedHTTPTransport",

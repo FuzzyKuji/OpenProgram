@@ -1,37 +1,18 @@
 .panel { display: flex; flex-direction: column; min-height: 0; height: 100%; color: var(--text); font-size: var(--right-panel-text-size, var(--fs-sm)); line-height: var(--right-panel-line-height, 1.5); font-family: var(--font-sans); }
-.back { max-width: 100%; justify-content: flex-start; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-weight: 400; }
 .notice { margin: 0; padding: 0 16px 12px; color: var(--text-secondary); font-size: var(--right-panel-meta-size, var(--fs-sm)); }
 .error { margin: 8px; color: var(--accent-red); font-size: var(--right-panel-meta-size, var(--fs-sm)); }
 /* The view host already leaves 12px under the nav; the first label adds
    4px so it sits 16px below the nav like every other section label. */
 .scroll > :first-child > .sectionHeader { padding-top: 4px; }
-.count { padding: 0 4px; color: var(--text-secondary); font-size: var(--right-panel-meta-size, var(--fs-xs)); }
-.day { margin: 10px 8px 2px; color: var(--text-muted); font-size: var(--fs-2xs); }
 
 /* A row: bare glyph, name over a status line, a chevron. No frame at rest;
    hover lifts it into the raised card the file cards use. */
-.row { display: flex; align-items: center; gap: 10px; width: 100%; height: auto; min-height: var(--ui-button-h); padding: 7px 8px; border: 0; border-radius: var(--radius-xl); justify-content: flex-start; font: inherit; font-weight: 400; line-height: 1.4; color: inherit; text-align: left; cursor: pointer; transition: box-shadow var(--motion-medium), background-color var(--motion-medium); }
+.row { display: flex; align-items: center; gap: 10px; width: 100%; height: auto; min-height: var(--ui-button-h); padding: 7px 8px; border: 0; border-radius: var(--ui-list-radius); justify-content: flex-start; font: inherit; font-weight: 400; line-height: 1.4; color: inherit; text-align: left; cursor: pointer; transition: box-shadow var(--motion-medium), background-color var(--motion-medium); }
 .panel .row { position: relative; z-index: 1; }
 /* The panel is the input surface itself, so the lifted card is tinted a
-   step toward the text colour to show its edge; solid, so the line stays under it. */
-.row:hover { background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-input)); box-shadow: var(--composer-shadow-focus); color: inherit; }
+   step toward the text colour to show its edge. */
+.row:hover { background: var(--row-raised-bg); box-shadow: var(--composer-shadow-focus); color: inherit; }
 .row:focus-visible { outline: 2px solid var(--accent-blue); outline-offset: -2px; }
-/* A sub-agent under the branch that started it. The line hangs from the
-   centre of that branch's glyph (17px into its row), one indent (24px) to
-   the left: an elbow from just under that glyph into this row's glyph, a
-   straight run on to the next sibling, and the runs of the rows above that still have siblings below. */
-/* The line is solid (mixed into the panel's own colour, not translucent),
-   so where two pieces meet the shade never doubles. Rows sit above it: a
-   hovered row lifts into a card the line passes under, never over. */
-.panel { --branch-line: color-mix(in srgb, var(--text-muted) 38%, var(--color-sidebar)); --branch-indent: 24px; --branch-x: calc(19px - var(--branch-indent)); }
-/* The pieces meet end to end and never overlap, so the translucent line
-   keeps one shade: the first child's elbow starts just under its parent's
-   glyph, a later sibling's at its own top, and the run on to the next
-   sibling starts where the elbow's corner begins to curve. */
-.branch::before { content: ""; position: absolute; left: var(--branch-x); top: 0; height: 50%; width: calc(6px - var(--branch-x)); border-left: 1.5px solid var(--branch-line); border-bottom: 1.5px solid var(--branch-line); border-bottom-left-radius: var(--radius-md); pointer-events: none; }
-.branch[data-first="1"]::before { top: -15px; height: calc(50% + 15px); }
-.branch[data-last="0"]::after { content: ""; position: absolute; left: var(--branch-x); top: calc(50% - 8px); bottom: 0; border-left: 1.5px solid var(--branch-line); pointer-events: none; }
-.guide { position: absolute; top: 0; bottom: 0; left: calc(var(--branch-x) - var(--up) * var(--branch-indent)); border-left: 1.5px solid var(--branch-line); pointer-events: none; }
 .name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 400; color: var(--text-bright); }
 .current { flex: none; padding: 0 6px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--accent-blue) 14%, transparent); color: color-mix(in srgb, var(--accent-blue) 80%, var(--text-primary)); font-size: var(--fs-2xs); font-weight: 400; line-height: 1.6; }
 /* A program's command under its title. */
@@ -67,44 +48,5 @@
 .status[data-tone="err"] { color: var(--accent-red); }
 .status :global(.indicator-dot.is-muted) { --dot-color: var(--text-muted); }
 
-.note { margin: 10px 8px 0; color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.55; }
-.empty { margin: 4px 8px; color: var(--text-muted); font-size: var(--right-panel-meta-size, var(--fs-xs)); }
-
-.kind { display: flex; align-items: center; gap: 6px; color: var(--text-muted); font-size: var(--right-panel-meta-size, var(--fs-xs)); }
-.kind .glyph { width: 14px; height: 14px; }
-.title { margin: 0; color: var(--text-bright); font-weight: 400; font-size: var(--fs-chat); line-height: 1.4; font-family: var(--font-sans); overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }
-.head .status { margin-top: 2px; font-size: var(--fs-xs); }
-
-/* What needs the reader: a soft tint, no border, its actions as raised pills. */
-.issue { margin: 14px 8px 0; padding: 12px; border-radius: var(--radius-xl); background: color-mix(in srgb, var(--accent-yellow) 9%, transparent); }
-.issueTitle { margin: 0; color: color-mix(in srgb, var(--accent-yellow) 85%, var(--text-primary)); font-weight: 400; font-size: var(--fs-sm); line-height: 1.45; font-family: var(--font-sans); overflow-wrap: anywhere; }
-.issueText { margin: 4px 0 0; color: var(--text-secondary); font-size: var(--fs-xs); line-height: 1.55; }
-.choices { margin: 6px 0 0; color: var(--text-primary); font-size: var(--fs-xs); line-height: 1.55; overflow-wrap: anywhere; }
-.actions[data-inline="1"] { margin: 14px 8px 0; }
-
-.sectionRow .section { margin-right: 0; }
 .countBadge { position: absolute; top: -5px; right: -7px; min-width: 15px; height: 15px; padding: 0 4px; border-radius: var(--radius-md); background: var(--accent-red); color: var(--ink-on-fill); font-size: var(--fs-2xs); line-height: 15px; text-align: center; box-shadow: 0 0 0 2px var(--color-sidebar); pointer-events: none; }
 .status[data-tone="run"] { color: var(--accent-blue); }
-.section { margin: 18px 8px 4px; color: var(--text-muted); font-weight: 400; font-size: var(--fs-xs); line-height: 1.4; font-family: var(--font-sans); }
-.facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 14px; margin: 16px 8px 0; font-size: var(--fs-xs); }
-.facts dt { color: var(--text-muted); }
-.facts dd { margin: 0; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
-.link { max-width: 100%; padding: 0; border: 0; background: none; font: inherit; color: inherit; text-align: left; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-decoration: underline; text-decoration-color: color-mix(in srgb, var(--text-primary) 25%, transparent); text-underline-offset: 3px; cursor: pointer; }
-
-/* A task reads as prose; only commands and output are monospace. */
-.prose, .code { margin: 0 8px; color: var(--text-primary); overflow-wrap: anywhere; }
-.prose { font-size: var(--fs-sm); line-height: 1.6; white-space: pre-wrap; }
-.code { font-size: var(--fs-xs); line-height: 1.6; font-family: var(--font-mono); white-space: pre-wrap; }
-.prose[data-open="0"] { display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; overflow: hidden; }
-.code[data-open="0"] { display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; overflow: hidden; }
-
-/* A program page's progress: count and percent, the bar, then three
-   figures (elapsed, speed, left; or took, ended, exit code). */
-.progress { display: grid; gap: 8px; margin: 14px 8px 0; padding: 12px; border-radius: var(--radius-xl); background: color-mix(in srgb, var(--text-primary) 3.5%, transparent); }
-.progressCount { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-bright); font-weight: 400; font-size: var(--fs-title); line-height: 1.3; }
-.progressPercent { flex: none; color: var(--text-secondary); font-size: var(--fs-xs); }
-.progressStage { margin-top: -4px; color: var(--text-muted); font-size: var(--fs-xs); }
-.progressLast { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); font-family: var(--font-mono); font-size: var(--fs-2xs); }
-.stats dt { color: var(--text-muted); font-size: var(--fs-2xs); }
-.stats dd { margin: 1px 0 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); font-size: var(--fs-sm); font-weight: 400; }
-.section .live { margin-left: 8px; padding: 1px 6px; border-radius: var(--radius-full); background: color-mix(in srgb, var(--accent-green) 14%, transparent); color: color-mix(in srgb, var(--accent-green) 80%, var(--text-primary)); font-size: var(--fs-2xs); font-weight: 400; }

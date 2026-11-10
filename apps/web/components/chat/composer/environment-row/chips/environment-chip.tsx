@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { ChevronRight } from "lucide-react";
 
 import { SolarIcon } from "@/components/solar-icons";
 import { HoverTip, TipBody } from "@/components/ui/tooltip";
@@ -143,7 +144,8 @@ export function EnvironmentChip() {
           >
             <SolarIcon
               name={environmentIconName(env?.kind)}
-              size={14}
+              size={16}
+              fit="fill"
               style={{ color: iconColor }}
               aria-hidden="true"
             />
@@ -178,7 +180,7 @@ export function EnvironmentChip() {
               aria-disabled={locked || undefined}
               onClick={() => choose(item.id)}
             >
-              <SolarIcon name={environmentIconName(item.kind)} size={16} aria-hidden="true" />
+              <SolarIcon name={environmentIconName(item.kind)} size={16} fit="fill" aria-hidden="true" />
               <span className="flex min-w-0 flex-1 items-center gap-[6px]">
                 <span className="truncate">{item.name}</span>
                 {item.kind !== "local" ? (
@@ -198,9 +200,9 @@ export function EnvironmentChip() {
             onClick={() => setOpen(false)}
             className={`${itemCls(false)} no-underline`}
           >
-            <SolarIcon name="settings-minimalistic" size={16} aria-hidden="true" />
+            <SolarIcon name="settings-minimalistic" size={16} fit="fill" aria-hidden="true" />
             <span className="flex-1 truncate">{text("Add environments", "添加环境")}</span>
-            <SolarIcon name="alt-arrow-right" size={14} className="text-text-muted" />
+            <ChevronRight className="menu-row-chevron size-4 shrink-0 text-text-muted" aria-hidden="true" />
           </a>
         </div>
       </PopoverContent>

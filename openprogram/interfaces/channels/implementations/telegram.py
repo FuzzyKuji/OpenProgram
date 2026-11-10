@@ -23,6 +23,16 @@ _log = logging.getLogger(__name__)
 
 
 TELEGRAM_API = "https://api.telegram.org"
+#: 401 = token 被撤销, 404 = URL 里的 token 不存在. 409 (另一个轮询者) 会过去, 继续重试.
+_TOKEN_REJECTED_STATUSES = frozenset({401, 404})
+#: 消息字段 → 没带文件名 / MIME 时用的默认值.
+_MEDIA_FIELDS = (
+    ("voice", "voice.ogg", "audio/ogg"),
+    ("audio", "audio.mp3", "audio/mpeg"),
+    ("video", "video.mp4", "video/mp4"),
+    ("video_note", "video_note.mp4", "video/mp4"),
+    ("animation", "animation.mp4", "video/mp4"),
+)
 
 
 class TelegramChannel(Channel):
@@ -42,6 +52,8 @@ class TelegramChannel(Channel):
         self.token = token
         self.base = f"{TELEGRAM_API}/bot{token}"
         self.offset = 0
+        # 进程内去重在重启后就没了; 启动前发的消息被编辑时不能当新消息.
+        self.started_at = time.time()
         # 群聊语义 — 显式账号配置 (accounts.ACCOUNT_SETTINGS), 不是隐式
         # 行为. `openprogram channels accounts set telegram <key> <value>`
         # 修改, 重启 worker 生效.
@@ -80,6 +92,14 @@ class TelegramChannel(Channel):
                         f"{self.base}/getUpdates",
                         params={"offset": self.offset, "timeout": 25},
                     )
+                if r.status_code in _TOKEN_REJECTED_STATUSES:
+                    # 正常 return = 永久停止, 换了凭据 worker 才会重新拉起.
+                    _log.error(
+                        "[%s] bot token rejected (HTTP %s) — run `openprogram "
+                        "channels accounts login telegram --id %s`.",
+                        tag, r.status_code, self.account_id,
+                    )
+                    return
                 data = r.json() if r.is_success else {}
                 if not data.get("ok"):
                     _log.warning("[%s] API error %s", tag, r.status_code)
@@ -112,6 +132,8 @@ class TelegramChannel(Channel):
     def _handle_update(self, upd: dict) -> None:
         msg = upd.get("message") or upd.get("edited_message")
         if not msg:
+            return
+        if not upd.get("message") and float(msg.get("date") or 0) < int(self.started_at):
             return
         chat = msg.get("chat", {}) or {}
         chat_id = chat.get("id")
@@ -178,8 +200,8 @@ class TelegramChannel(Channel):
 
     @staticmethod
     def _parse_attachments(msg: dict) -> tuple:
-        """photo (取最大尺寸) 和 document → Attachment 元组. 下载时经
-        getFile 解析 URL (_attachments._resolve_telegram_file)."""
+        """photo (取最大尺寸)、document 和音视频 → Attachment 元组. 下载时
+        经 getFile 解析 URL (_attachments._resolve_telegram_file)."""
         from openprogram.interfaces.channels._message import Attachment
         out = []
         photos = msg.get("photo") or []
@@ -191,8 +213,19 @@ class TelegramChannel(Channel):
                 file_id=str(biggest.get("file_id") or ""),
                 size=int(biggest.get("file_size") or 0),
             ))
+        for key, default_name, default_mime in _MEDIA_FIELDS:
+            media = msg.get(key)
+            if media:
+                out.append(Attachment(
+                    name=str(media.get("file_name") or default_name),
+                    mime=str(media.get("mime_type") or default_mime),
+                    file_id=str(media.get("file_id") or ""),
+                    size=int(media.get("file_size") or 0),
+                    voice=key == "voice",
+                ))
         doc = msg.get("document")
-        if doc:
+        # Bot API 给 GIF 同时发 animation 和指向同一文件的 document.
+        if doc and not msg.get("animation"):
             out.append(Attachment(
                 name=str(doc.get("file_name") or "file"),
                 mime=str(doc.get("mime_type") or ""),

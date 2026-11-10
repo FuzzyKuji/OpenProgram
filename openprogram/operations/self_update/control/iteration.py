@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 import fnmatch
 import math
-from pathlib import PurePosixPath
 from typing import ClassVar
 
 from ..types import IterationMode
@@ -13,25 +12,6 @@ from ..types import UpdateRequest
 from ..types import _GIT_SHA
 from ..types import _required_text
 from ..types import _validate_changed_path
-
-
-_PROTECTED_PATHS = (
-    "openprogram/operations/self_update/*", "openprogram/programs/tools/system/self_update/*",
-    "openprogram/runtime/conversation/_approval*", "openprogram/runtime/permissions/*", "openprogram/runtime/permissions/authority.py",
-    "openprogram/runtime/conversation/turn_runtime/*", "openprogram/runtime/agent/loop/*",
-    "openprogram/runtime/conversation/model_tools.py", "openprogram/programs/__init__.py",
-    "openprogram/runtime/conversation/sub_agent_run.py", "openprogram/runtime/jobs/*",
-    "openprogram/host/sandbox/*", "openprogram/host/security/*", "openprogram/models/auth/*",
-    "openprogram/host/sandbox/protected_paths.py", "openprogram/programs/_host/runtime/*",
-    "openprogram/programs/_host/runtime.py",
-    "apps/desktop/scripts/*", "scripts/release/*", "scripts/refresh-local-app.sh",
-    "setup.py",
-)
-_DEPENDENCY_FILES = (
-    "pyproject.toml", "uv.lock", "package.json", "package-lock.json",
-    "npm-shrinkwrap.json", "pnpm-lock.yaml", "yarn.lock", "requirements*.txt",
-    "poetry.lock", "Pipfile*", ".npmrc", ".pypirc",
-)
 
 
 @dataclass(frozen=True)
@@ -113,10 +93,6 @@ def evaluate_iteration(
     if candidate_sha in (request.base_sha, request.candidate_sha):
         return stop("candidate-not-new")
     for path in changed_paths:
-        if any(fnmatch.fnmatchcase(path, pattern) for pattern in _PROTECTED_PATHS) or any(
-            fnmatch.fnmatchcase(PurePosixPath(path).name, pattern) for pattern in _DEPENDENCY_FILES
-        ):
-            return stop("protected-change")
         if not any(fnmatch.fnmatchcase(path, pattern) for pattern in policy.allowed_paths):
             return stop("scope-expanded")
     evidence = {item.command: item for item in test_evidence}

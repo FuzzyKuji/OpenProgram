@@ -283,7 +283,7 @@ export function ProjectMenu({
                 className={itemCls(false)}
                 onClick={() => !busy && activeProject && confirmFolder(activeProject.id)}
               >
-                <SolarIcon name="check-circle" size={14} className="opacity-70" />
+                <SolarIcon name="check-circle" size={16} fit="fill" className="opacity-70" />
                 <span className="flex-1">{text("Use the folder at this location", "就是这个位置的文件夹")}</span>
               </div>
             ) : null}
@@ -291,7 +291,7 @@ export function ProjectMenu({
               className={itemCls(false)}
               onClick={() => !busy && activeProject && locateFolder(activeProject.id)}
             >
-              <SolarIcon name="folder-open" size={14} className="opacity-70" />
+              <SolarIcon name="folder-open" size={16} fit="fill" className="opacity-70" />
               <span className="flex-1">{text("Locate folder…", "定位文件夹…")}</span>
             </div>
           </>
@@ -309,9 +309,12 @@ export function ProjectMenu({
   }
 
   return (
-    <div className={MENU_PANEL}>
-      <div className={GROUP_LABEL}>{text("Recent", "最近")}</div>
+    // Only the project list scrolls; the "Recent" label and "Open folder…"
+    // stay in place however many projects there are.
+    <div className={cn(MENU_PANEL, "overflow-hidden")}>
+      <div className={cn(GROUP_LABEL, "shrink-0")}>{text("Recent", "最近")}</div>
 
+      <div className="project-menu-list -mx-1 flex min-h-0 flex-1 flex-col overflow-y-auto px-1">
       {/* 目录已不存在的项目仍然列出（静默消失会让用户以为项目丢了），
           点击它走定位修复而不是选中——选一个死路径当主目录没有意义。 */}
       {list.map((p) => {
@@ -350,7 +353,7 @@ export function ProjectMenu({
               <SolarIcon
                 motionPreset="none"
                 name="danger-triangle"
-                size={14}
+                size={16}
                 className={`${CHECK_SLOT} text-accent-orange`}
                 aria-label={text("Folder unavailable", "目录不可用")}
               />
@@ -362,11 +365,12 @@ export function ProjectMenu({
           </div>
         );
       })}
+      </div>
 
       <div className={MENU_SEPARATOR} />
 
-      <div className={itemCls(false)} onClick={() => !busy && openFolder()}>
-        <SolarIcon name="folder-with-files" size={14} className="opacity-70" />
+      <div className={cn(itemCls(false), "shrink-0")} onClick={() => !busy && openFolder()}>
+        <SolarIcon name="folder-with-files" size={16} fit="fill" className="opacity-70" />
         <span className="flex-1">{text("Open folder…", "打开文件夹…")}</span>
       </div>
 
@@ -534,9 +538,9 @@ export function ProjectBadge() {
             {/* Warning triangle replaces the folder icon when the bound
                 directory is gone — the menu then offers the repair. */}
             {missing ? (
-              <SolarIcon motionPreset="none" name="danger-triangle" size={14} />
+              <SolarIcon name="danger-triangle" size={16} fit="fill" />
             ) : (
-              <SolarIcon name="folder-open" size={14} />
+              <SolarIcon name="folder-open" size={16} fit="fill" />
             )}
           </span>
           {/* Always show the project name — "Default" for the unbound

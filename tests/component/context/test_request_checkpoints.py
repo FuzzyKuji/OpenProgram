@@ -5,8 +5,8 @@ import pytest
 
 from openprogram.runtime.agent.loop import agent_loop
 from openprogram.runtime.agent.loop.types import AgentContext, AgentLoopConfig
-from openprogram.runtime.context.request_compaction import RequestCompactor
-from openprogram.runtime.context.summarize import Summarizer
+from openprogram.runtime.context.compaction.request import RequestCompactor
+from openprogram.runtime.context.compaction.summarize import Summarizer
 from openprogram.runtime.context.tokens import _text_tokens, estimate_history_tokens
 from openprogram.models.providers.types import (
     AssistantMessage, Context, EventDone, Model, SimpleStreamOptions,
@@ -194,7 +194,7 @@ def test_checkpoint_reuses_append_only_prefix_and_rechecks_model(monkeypatch):
 
 
 def test_summary_keeps_call_credentials_but_not_main_request_identity(monkeypatch):
-    from openprogram.runtime.context.bounded_summary import summarize_text
+    from openprogram.runtime.context.compaction.bounded_summary import summarize_text
     async def summary(m, context, options):
         assert options.api_key == 'fixture'
         assert options.idempotency_key is None and options.session_id is None
@@ -228,7 +228,7 @@ def test_evidence_then_checkpoint_cache_tracks_original_prefix(monkeypatch):
 
 
 def test_overflow_chunk_retry_covers_each_source_character(monkeypatch):
-    from openprogram.runtime.context.bounded_summary import summarize_text
+    from openprogram.runtime.context.compaction.bounded_summary import summarize_text
     original = ''.join(f'record-{i:05d};' for i in range(1000))
     pieces, options_seen = [], []
     attempts = 0

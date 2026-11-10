@@ -10,7 +10,7 @@ from openprogram.state.store.session.nodes import Call, ROLE_CODE
 from openprogram.runtime.context.nodes import render_context
 from openprogram.runtime.context.render import render_dag_messages
 from openprogram.runtime.context.tokens import estimate_history_tokens
-from openprogram.runtime.context.summarize import Summarizer
+from openprogram.runtime.context.compaction.summarize import Summarizer
 from openprogram.state.store.session.session_node_writer import SessionNodeWriter
 from openprogram.state.store.session.session_store import SessionStore
 
@@ -213,3 +213,192 @@ def test_multiple_assistant_messages_keep_two_user_turns(tmp_path, monkeypatch):
         assert all(f'a{i}_{j}' in ids for i in (1, 2) for j in range(3))
     finally:
         store.close()
+
+
+def _install_summary(store, eng, monkeypatch, during=None):
+    async def summarize(**kwargs):
+        if during:
+            during()
+        return 'recap'
+
+    monkeypatch.setattr(eng.summarizer, '_llm_summary', summarize)
+    return asyncio.run(eng.compact(agent=None, session_id='compact', model=None))
+
+
+def test_a_write_on_another_branch_keeps_the_paid_summary(conversation, monkeypatch):
+    def side_write():
+        SessionNodeWriter(conversation, 'compact', advance_head=False).append(Call(
+            id='side', role='llm', name='side', predecessor='a3', output='on a side branch',
+        ))
+
+    result = _install_summary(conversation, DefaultContextEngine(), monkeypatch, side_write)
+    assert result.summary_id and not result.no_op
+    assert conversation.get_session('compact')['head_id'] == 'a7'
+
+
+def test_a_change_to_a_covered_node_refuses_the_summary(conversation, monkeypatch):
+    result = _install_summary(
+        conversation, DefaultContextEngine(), monkeypatch,
+        lambda: conversation.update_node('compact', 'a0', output='rewritten'),
+    )
+    assert result.no_op and 'changed' in result.error
+
+
+def test_a_concurrent_summary_refuses_the_second(conversation, monkeypatch):
+    def other_compaction():
+        from openprogram.runtime.context.persistence import default_persister, rendered_history
+        history = rendered_history(conversation, 'compact')
+        assert default_persister.insert_summary_node(
+            'compact', summary_text='first', cut_idx=4, history=history)
+
+    result = _install_summary(conversation, DefaultContextEngine(), monkeypatch, other_compaction)
+    assert result.no_op and 'changed' in result.error
+
+
+def _reports(count, start=0):
+    return [{'role': 'assistant', 'content': f'report {i}', 'always_on_report': f'r{i}',
+             '_context_tokens': 3000} for i in range(start, start + count)]
+
+
+def test_a_run_of_reports_before_the_next_message_can_be_folded():
+    history = [
+        {'role': 'user', 'content': 'watch this', '_context_tokens': 50},
+        {'role': 'assistant', 'content': 'watching', '_context_tokens': 50},
+        *_reports(10),
+        {'role': 'user', 'content': 'what happened?', '_context_tokens': 30},
+    ]
+    summarizer = Summarizer()
+    cut = summarizer.find_cut_index(history, keep_recent_tokens=9000)
+    assert history[cut].get('always_on_report')
+    assert sum(m['_context_tokens'] for m in history[cut:]) <= 9000
+    # The first boundary whose tail fits, so nothing that fits is folded.
+    assert sum(m['_context_tokens'] for m in history[cut - 1:]) > 9000
+
+
+def test_reports_after_the_last_message_can_be_folded():
+    history = [
+        {'role': 'user', 'content': 'watch this', '_context_tokens': 50},
+        {'role': 'assistant', 'content': 'watching', '_context_tokens': 50},
+        *_reports(10),
+    ]
+    cut = Summarizer().find_cut_index(history, keep_recent_tokens=12000)
+    assert cut == len(history) - 4
+
+
+def test_a_conversation_without_reports_cuts_where_it_did():
+    history = [
+        {'role': 'user', 'content': 'only request', '_context_tokens': 50},
+        *[{'role': 'assistant', 'content': f'step {i}', '_context_tokens': 3000} for i in range(10)],
+    ]
+    assert Summarizer().find_cut_index(history, keep_recent_tokens=9000) == 0
+
+
+def test_reports_in_a_real_conversation_fold_into_a_summary(tmp_path, monkeypatch):
+    store = SessionStore(tmp_path / 'sessions')
+    monkeypatch.setattr('openprogram.runtime.context.session_db.default_db', lambda: store)
+    store.create_session('compact', 'main')
+    store.append_message('compact', {'id': 'u0', 'role': 'user', 'content': 'watch this', 'predecessor': None})
+    previous = 'u0'
+    for i in range(10):
+        store.append_message('compact', {
+            'id': f'r{i}', 'role': 'assistant', 'content': f'report {i} ' + ('detail ' * 4000),
+            'predecessor': previous, 'always_on_report': f'report{i}', 'status': 'done',
+        })
+        previous = f'r{i}'
+    store.append_message('compact', {'id': 'u1', 'role': 'user', 'content': 'next', 'predecessor': previous})
+
+    result = _install_summary(store, DefaultContextEngine(), monkeypatch)
+    assert result.summary_id
+    graph = SessionNodeWriter(store, 'compact').load()
+    ids = render_context(graph, head_id='u1', frame_entry_seq=-1)
+    assert result.summary_id in ids and 'u0' not in ids and 'r9' in ids and 'u1' in ids
+    store.close()
+
+
+def test_overflow_installs_a_summary_and_the_retry_is_smaller(conversation, monkeypatch):
+    from openprogram.runtime.context.compaction.reactive import reactive_compact
+    eng = DefaultContextEngine()
+
+    async def summarize(**kwargs):
+        return 'recap of the older turns'
+
+    monkeypatch.setattr(eng.summarizer, '_llm_summary', summarize)
+    monkeypatch.setattr('openprogram.runtime.context.resolve_engine_for', lambda _agent: eng)
+    _, _, before = rendered(conversation)
+    events = []
+    retry_history = reactive_compact(
+        agent_profile={}, session_id='compact', model=None, on_event=events.append,
+    )
+    assert retry_history and retry_history[0].get('covers_ids')
+    kinds = [event['data']['type'] for event in events]
+    assert 'reactive_compact_done' in kinds and 'reactive_snip' not in kinds
+    # The retry renders from the DAG, so this is the request it sends.
+    _, _, after = rendered(conversation)
+    assert estimate_history_tokens(after) < estimate_history_tokens(before)
+
+
+def test_an_over_budget_turn_sends_no_snip_event(monkeypatch):
+    from types import SimpleNamespace
+    from openprogram.runtime.conversation.turn_runtime import loop_runner
+
+    prepared = []
+
+    class Engine:
+        def on_session_start(self, _session_id): ...
+        def prepare(self, **kwargs):
+            prepared.append(kwargs['history'])
+            return SimpleNamespace(agent_messages=[], history_dicts=kwargs['history'], context_window=100)
+        def should_auto_compact(self, _prep):
+            return True
+        async def compact(self, **_kwargs):
+            return SimpleNamespace(summary_id=None)
+
+    monkeypatch.setattr('openprogram.runtime.context.resolve_engine_for', lambda _agent: Engine())
+    monkeypatch.setattr('openprogram.runtime.context.system_prompt_node.record_system_prompt', lambda *_a: None)
+    db = SimpleNamespace(get_session=lambda _sid: {}, get_branch=lambda *_a: [])
+    req = SimpleNamespace(session_id='s', history_override=None, background=False, run_note=None, user_msg_id='u')
+    # Several whole turns, far over the window: the shape the old fallback cut.
+    turns = [message for i in range(8) for message in (
+        {'role': 'user', 'content': f'request {i}'}, {'role': 'assistant', 'content': f'answer {i}'})]
+    events = []
+    context = loop_runner._new_turn_agent_context(
+        req, turns, events.append,
+        db=db, agent_profile={}, model=None, tools=[], system_prompt='p',
+        recordable_system_prompt='p', runtime_contract=None, assistant_msg_id=None,
+    )
+    assert context.messages == []
+    assert events == []
+    assert prepared == [turns]
+
+
+def test_overflow_recovery_closes_the_clients_its_summary_built(conversation, monkeypatch):
+    from openprogram.runtime.context.compaction.reactive import reactive_compact
+    eng = DefaultContextEngine()
+
+    async def summarize(**kwargs):
+        return 'recap of the older turns'
+
+    closed_while_open = []
+    monkeypatch.setattr(eng.summarizer, '_llm_summary', summarize)
+    monkeypatch.setattr('openprogram.runtime.context.resolve_engine_for', lambda _agent: eng)
+    monkeypatch.setattr('openprogram.models.providers.utils.http_client.shutdown_loop_clients',
+                        lambda loop: closed_while_open.append(not loop.is_closed()))
+    assert reactive_compact(agent_profile={}, session_id='compact', model=None, on_event=lambda _event: None)
+    assert closed_while_open == [True]
+
+
+def test_a_conversation_summary_marks_cancelled_requests_and_attributes_claims(monkeypatch):
+    from openprogram.runtime.context.compaction import bounded_summary, prompts
+
+    assert 'cancelled' in prompts.SUMMARY_RULES and 'the assistant said' in prompts.SUMMARY_RULES
+    seen = {}
+
+    async def capture(source, model, options, *, instruction, max_tokens, **kwargs):
+        seen['instruction'] = instruction
+        return 'recap'
+
+    monkeypatch.setattr(bounded_summary, 'summarize_text', capture)
+    text = asyncio.run(Summarizer()._llm_summary(
+        prefix=[{'role': 'user', 'content': 'never mind, cancel that'}],
+        model=None, previous_summary=None, cancel_event=None))
+    assert text == 'recap' and prompts.SUMMARY_RULES in seen['instruction']

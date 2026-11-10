@@ -1,23 +1,22 @@
-"""Session storage — one git repo per conversation.
+"""Session storage — one append-only log per conversation.
 
 Group ① of ``store/`` (see ``store/README.md``). The original job of the
-package: persist the conversation DAG as a per-session git repo and serve
+package: persist the conversation DAG as each session's log and serve
 the ``SessionStore`` query API over it.
 
 Modules:
   * ``session_store``    — SessionStore: the public 22-method API + the
                            process-wide ``default_store()`` singleton.
-  * ``git_session``      — GitSession: thin wrapper over the ``git`` CLI
-                           for one session repo.
+  * ``session_log``      — SessionLog: one session's append-only records.
   * ``memory_index``     — SessionMemoryIndex: in-memory DAG index.
-  * ``session_node_writer``  — by-node DAG writes onto one session repo.
+  * ``session_node_writer``  — by-node DAG writes onto one session.
   * ``_msg_adapter``     — message-dict ⇄ Call-node translation.
   * ``search``           — cross-session message search (ripgrep).
 
 Importable straight from this sub-package, e.g.
 ``from openprogram.state.store.session import SessionStore``.
 """
-from .git_session import GitSession
+from .session_log import SessionLog
 from .memory_index import SessionMemoryIndex
 from .session_node_writer import SessionNodeWriter
 # Provenance read-layer — the LLM-free seam memory maps from (cheap to
@@ -26,7 +25,6 @@ from .provenance import (
     Provenance,
     iter_nodes_since,
     node_provenance,
-    session_commits,
     project_commits,
     session_project_id,
 )
@@ -45,7 +43,7 @@ def __getattr__(name):
 
 
 __all__ = [
-    "GitSession",
+    "SessionLog",
     "SessionMemoryIndex",
     "SessionNodeWriter",
     "SessionStore",
@@ -53,7 +51,6 @@ __all__ = [
     "Provenance",
     "iter_nodes_since",
     "node_provenance",
-    "session_commits",
     "project_commits",
     "session_project_id",
 ]

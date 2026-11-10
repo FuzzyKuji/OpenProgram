@@ -133,7 +133,6 @@ def test_parent_threads_canonical_id_with_or_without_precreate(monkeypatch, tmp_
                 admission.execution_id,
                 expected_version=admission.status_version,
                 owner_id="unit-test",
-                ttl_seconds=30,
             )
             active, running = service.attempts.activate(
                 attempt.attempt_id,
@@ -209,6 +208,7 @@ def test_parent_threads_canonical_id_with_or_without_precreate(monkeypatch, tmp_
         "word_count",
         {"text": "hi"},
         "s1",
+        client_request_id="req-function",
         origin_window_id="window-2",
         surface_ref={
             "version": 1,
@@ -228,6 +228,7 @@ def test_parent_threads_canonical_id_with_or_without_precreate(monkeypatch, tmp_
     node = tops[0]
     assert (node.metadata or {}).get("status") == "running"
     assert node.input == {"text": "hi"}
+    assert node.metadata["client_request_id"] == "req-function"
     assert node.metadata["surface_origin"] == {
         "version": 1,
         "window_id": "window-2",

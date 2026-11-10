@@ -37,6 +37,12 @@ OWNER_PRINCIPAL_ID = f"owner/install/{OWNER_SUFFIX}"
 LOCAL_ORIGIN = "http://127.0.0.1:18100"
 
 
+def assert_public_health(body: dict) -> None:
+    """Before authentication /healthz says it is alive and which release it is, nothing else."""
+    assert set(body) == {"status", "version"}
+    assert body["status"] == "ok" and isinstance(body["version"], str)
+
+
 def _state(
     *,
     host: str = "127.0.0.1",
@@ -312,6 +318,19 @@ def test_scheduler_shell_is_public_before_cookie_bootstrap():
         # The fixture has no Scheduler route, so 404 proves auth middleware
         # allowed the frontend shell path instead of returning 401.
         assert client.get("/scheduler").status_code == 404
+
+
+def test_every_frontend_page_is_public_before_cookie_bootstrap():
+    # A page loaded before sign-in must get the shell, which says it isn't
+    # signed in; a missing route answered a bare authentication_required.
+    from openprogram.interfaces.server.owner_auth import _PUBLIC_FRONTEND_ROUTES
+
+    shell = Path(__file__).resolve().parents[4] / "apps" / "web" / "app" / "(shell)"
+    pages = {"/" + str(p.parent.relative_to(shell)).split(os.sep)[0] for p in shell.rglob("page.tsx")}
+    assert pages and pages <= _PUBLIC_FRONTEND_ROUTES
+    state = _state()
+    with TestClient(_app(state), base_url=LOCAL_ORIGIN) as client:
+        assert client.get("/agents").status_code == 404
 
 
 def test_static_docs_are_public_but_keep_host_and_method_guards():
@@ -639,7 +658,7 @@ def test_create_app_enforces_owner_auth_and_public_health(monkeypatch):
     app = create_app(owner_auth=state, port=18100)
     assert app.state.owner_auth is state
     with TestClient(app, base_url=LOCAL_ORIGIN) as client:
-        assert client.get("/healthz").json() == {"status": "ok"}
+        assert_public_health(client.get("/healthz").json())
         assert client.get("/api/diagnostics").status_code == 401
         detailed = client.get("/api/diagnostics", headers=_bearer(state))
         assert detailed.status_code == 200

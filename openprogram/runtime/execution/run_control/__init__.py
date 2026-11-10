@@ -23,6 +23,7 @@ from openprogram.runtime.execution.run_control.binding import (
 from openprogram.runtime.execution.run_control.cancellation import (
     admit_child_execution,
     cancel_execution,
+    cancel_execution_for_reason,
     cancel_session_executions,
     child_execution_admission,
     mark_cancelled,
@@ -48,6 +49,7 @@ __all__ = [
     "ExecutionSpawnRefused",
     "admit_child_execution",
     "cancel_execution",
+    "cancel_execution_for_reason",
     "cancel_session_executions",
     "child_execution_admission",
     "current_token",

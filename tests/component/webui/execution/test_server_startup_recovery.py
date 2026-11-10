@@ -114,7 +114,7 @@ def test_legacy_dag_recovery_does_not_block_public_lifespan(
             assert entered.wait(timeout=30)
             response = client.get("/healthz")
             assert response.status_code == 200
-            assert response.json() == {"status": "ok"}
+            assert response.json() .get("status") == "ok"
     finally:
         released.set()
 
@@ -191,7 +191,7 @@ def test_legacy_dag_recovery_waits_on_real_session_lock_after_health(
             assert entered.wait(timeout=30)
             response = client.get("/healthz")
             assert response.status_code == 200
-            assert response.json() == {"status": "ok"}
+            assert response.json() .get("status") == "ok"
             assert not finished.wait(timeout=0.1)
             session_lock.release()
             assert finished.wait(timeout=30)
@@ -276,7 +276,6 @@ def test_dag_recovery_preserves_canonical_paused_execution_after_wait_resolution
         current.execution_id,
         expected_version=current.status_version,
         owner_id="current-worker",
-        ttl_seconds=30,
         attempt_id="current-attempt",
     )
     _current_attempt, current = current_attempts.activate(

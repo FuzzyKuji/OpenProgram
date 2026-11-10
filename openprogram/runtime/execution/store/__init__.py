@@ -5,7 +5,6 @@ from .shared import (
     ExecutionConflict,
     ExecutionStoreError,
     MAX_AGENT_STATE_BLOB_BYTES,
-    ProjectionConflict,
     _store_for_path,
     default_store,
 )
@@ -16,7 +15,6 @@ __all__ = [
     "ExecutionStore",
     "ExecutionStoreError",
     "MAX_AGENT_STATE_BLOB_BYTES",
-    "ProjectionConflict",
     "_store_for_path",
     "default_store",
 ]

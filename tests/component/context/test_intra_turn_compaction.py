@@ -165,7 +165,7 @@ def test_one_user_message_multiple_tool_rounds(monkeypatch):
 
 
 def test_complete_groups_cache_and_original_evidence(monkeypatch):
-    from openprogram.runtime.context.request_compaction import RequestCompactor
+    from openprogram.runtime.context.compaction.request import RequestCompactor
     from openprogram.models.providers.types import (
         Context,
         SimpleStreamOptions,
@@ -358,7 +358,7 @@ def test_function_runtime_compacts_its_tool_continuation(monkeypatch):
 
 def test_native_schema_is_part_of_fixed_input_budget():
     import pytest
-    from openprogram.runtime.context.request_compaction import RequestCompactor
+    from openprogram.runtime.context.compaction.request import RequestCompactor
     from openprogram.models.providers.types import (
         Context,
         SimpleStreamOptions,
@@ -389,7 +389,7 @@ def test_native_schema_is_part_of_fixed_input_budget():
 @pytest.mark.parametrize("mode", ["raised", "aborted", "signal"])
 def test_cancelled_summary_never_changes_raw_messages(monkeypatch, mode):
     import pytest
-    from openprogram.runtime.context.request_compaction import RequestCompactor
+    from openprogram.runtime.context.compaction.request import RequestCompactor
     from openprogram.models.providers.types import (
         Context,
         SimpleStreamOptions,
@@ -592,7 +592,7 @@ def test_fallback_rechecks_actual_model_window(monkeypatch):
 
 
 def test_default_output_uses_model_capacity_without_compacting_short_input():
-    from openprogram.runtime.context.request_compaction import RequestCompactor
+    from openprogram.runtime.context.compaction.request import RequestCompactor
     from openprogram.models.providers.types import Context, SimpleStreamOptions
 
     model = Model(
@@ -613,7 +613,7 @@ def test_default_output_uses_model_capacity_without_compacting_short_input():
 
 @pytest.mark.parametrize("requested", [None, 2000])
 def test_bedrock_thinking_cannot_expand_resolved_total_limit(monkeypatch, requested):
-    from openprogram.runtime.context.request_compaction import RequestCompactor
+    from openprogram.runtime.context.compaction.request import RequestCompactor
     from openprogram.models.providers.types import Context, SimpleStreamOptions
     from openprogram.models.providers.adapters.amazon_bedrock import amazon_bedrock
 
@@ -682,3 +682,28 @@ def test_context_bind_publishes_writer_for_direct_runtime_and_restores(tmp_path)
     finally:
         runtime.close()
         store.close()
+
+
+def test_whole_prefix_request_summary_keeps_the_summary_rules(monkeypatch):
+    from openprogram.models.providers.types import Context, SimpleStreamOptions, ToolResultMessage
+    from openprogram.runtime.context.compaction import bounded_summary, prompts
+    from openprogram.runtime.context.compaction.request import RequestCompactor
+
+    model = Model(id="fixture", name="fixture", api="openai-completions", provider="openai",
+                  base_url="https://example.invalid", context_window=6000, max_tokens=512)
+    messages = [UserMessage(content="Only analyze.", timestamp=0)]
+    for index in range(12):
+        tool_id = f"x{index}"
+        messages.append(AssistantMessage(content=[ToolCall(id=tool_id, name="check", arguments={"text": "large input " * 300})],
+                                         api=model.api, provider=model.provider, model=model.id, timestamp=0))
+        messages.append(ToolResultMessage(tool_call_id=tool_id, tool_name="check",
+                                          content=[TextContent(text="evidence")], timestamp=0))
+    seen = []
+
+    async def capture(source, used_model, options, *, instruction, max_tokens, remaining=None):
+        seen.append(instruction)
+        return "short"
+
+    monkeypatch.setattr(bounded_summary, "summarize_text", capture)
+    asyncio.run(RequestCompactor().prepare(Context(messages=messages), model, SimpleStreamOptions()))
+    assert any(prompts.SUMMARY_RULES in instruction for instruction in seen)

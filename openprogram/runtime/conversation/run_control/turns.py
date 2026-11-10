@@ -216,9 +216,6 @@ def is_turn_running(session_id: str) -> bool:
     block, so presence here means a turn is executing right now.
     send_message uses this to decide direct delivery vs. inbox queueing.
     """
-    # ponytail: channel-worker turns don't register a token, so they are
-    # invisible here; register one there if channel sessions ever need
-    # busy-queueing.
     with _cancel_flags_lock:
         return any(key[0] == session_id for key in _current_tokens)
 
@@ -242,6 +239,15 @@ def is_cancelled(
         if execution_id is None or bound.execution_id == execution_id:
             return bound.is_cancelled()
     return False
+
+
+def cancelled_execution_ids(session_id: str) -> set[str]:
+    """The executions of this session a Stop has reached and that have not ended."""
+    with _cancel_flags_lock:
+        return {
+            execution_id for (owner, execution_id), token in _current_tokens.items()
+            if owner == session_id and execution_id and token.is_cancelled()
+        }
 
 
 def clear_cancel(session_id: str) -> None:

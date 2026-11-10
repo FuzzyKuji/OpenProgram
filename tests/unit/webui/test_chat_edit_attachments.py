@@ -5,7 +5,7 @@ import json
 from types import SimpleNamespace
 
 import pytest
-from openprogram.interfaces.server import context_git_routes as routes
+from openprogram.interfaces.server.routes import chat_branches as routes
 
 
 @pytest.mark.parametrize('payload', ['bad', [None], [{'data': 1}], [{}] * 21])

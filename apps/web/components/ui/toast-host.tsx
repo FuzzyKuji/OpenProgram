@@ -14,7 +14,7 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 
-import { TOAST_EVENT, type ToastAction, type ToastDetail, type ToastLink, type ToastTone } from "@/lib/format-utils/toast";
+import { TOAST_DISMISS_EVENT, TOAST_EVENT, type ToastAction, type ToastDetail, type ToastLink, type ToastTone } from "@/lib/format-utils/toast";
 import { useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import { toastAnchor, toastCentreX } from "./toast-anchor";
 import styles from "./toast-host.module.css";
@@ -26,6 +26,8 @@ interface Item {
   link?: ToastLink;
   action?: ToastAction;
   sessionId?: string;
+  uniformWidth?: boolean;
+  key?: string;
 }
 
 let _seq = 0;
@@ -48,17 +50,23 @@ export function ToastHost() {
       const id = ++_seq;
       setItems((cur) => [
         ...cur,
-        { id, message: d.message, tone: d.tone ?? "info", link: d.link, action: d.action, sessionId: d.sessionId },
+        { id, message: d.message, tone: d.tone ?? "info", link: d.link, action: d.action, sessionId: d.sessionId, uniformWidth: d.uniformWidth, key: d.key },
       ]);
       timers.current[id] = setTimeout(() => {
         setItems((cur) => cur.filter((x) => x.id !== id));
         delete timers.current[id];
       }, d.duration ?? 3500);
     }
+    function onDismiss(e: Event) {
+      const key = (e as CustomEvent<string>).detail;
+      setItems((cur) => cur.filter((x) => x.key !== key));
+    }
     window.addEventListener(TOAST_EVENT, onToast);
+    window.addEventListener(TOAST_DISMISS_EVENT, onDismiss);
     const snapshot = timers.current;
     return () => {
       window.removeEventListener(TOAST_EVENT, onToast);
+      window.removeEventListener(TOAST_DISMISS_EVENT, onDismiss);
       Object.values(snapshot).forEach(clearTimeout);
     };
   }, []);
@@ -101,10 +109,11 @@ export function ToastHost() {
           className={
             styles.toast +
             (it.tone === "warn" ? " " + styles.warn : "") +
-            (it.tone === "error" ? " " + styles.error : "")
+            (it.tone === "error" ? " " + styles.error : "") +
+            (it.uniformWidth ? " w-[520px] justify-between" : "")
           }
         >
-          <span>{it.message}</span>
+          <span className={styles.message}>{it.message}</span>
           {it.link ? (
             // `pointer-events: auto` (the host is none) so only the link
             // is clickable. A plain anchor — full nav to the settings

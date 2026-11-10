@@ -18,9 +18,9 @@ def _verifying(tmp_path, monkeypatch):
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
     updates = SelfUpdateStore()
     updates.create(_request())
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING):
         updates.transition("su_test", phase)
-    executions = ExecutionStore(tmp_path / "executions.db")
+    executions = ExecutionStore(tmp_path / "run-state")
     revision = executions.create_revision(manifest={"entrypoint": "test"})
     execution = executions.create_execution(
         execution_id=JOB_ID, run_id="run", session_id="session", revision_id=revision.revision_id,
@@ -28,7 +28,7 @@ def _verifying(tmp_path, monkeypatch):
     )
     attempts = AttemptStore(executions)
     leased, execution = attempts.lease(JOB_ID, expected_version=execution.status_version,
-                                       owner_id="worker", ttl_seconds=300)
+                                       owner_id="worker")
     attempt, _ = attempts.activate(leased.attempt_id, generation=leased.generation,
                                    expected_execution_version=execution.status_version)
     cancelled = []

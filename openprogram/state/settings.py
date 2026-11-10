@@ -23,7 +23,7 @@ import re
 from decimal import Decimal, InvalidOperation
 import ipaddress
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Callable, Optional
+from typing import TYPE_CHECKING, Any, Callable, Literal, Optional
 from urllib.parse import urlsplit
 
 from pydantic import (
@@ -203,6 +203,7 @@ class OutboundURLSettings(BaseModel):
         default=(), max_length=64
     )
     policy_proxy: PolicyProxySetting | None = None
+    model_tools: Literal["open", "strict"] = "open"
 
     @model_validator(mode="after")
     def _unique_exceptions(self):
@@ -443,6 +444,12 @@ def _coerce(widget: str, value: Any) -> Any:
     return str(value)
 
 
+def _validate_auto_compact_percent(v: Any) -> Optional[str]:
+    if not isinstance(v, int) or not 50 <= v <= 95:
+        return "must be a whole number from 50 to 95"
+    return None
+
+
 def _validate_limit(v: Any) -> Optional[str]:
     """A collaboration budget: any whole number ≥ 0, where 0 = no limit."""
     try:
@@ -619,6 +626,17 @@ SETTINGS: list[SettingSpec] = [
              "that explicitly asserts target-policy enforcement.",
     ),
     SettingSpec(
+        key="security.outbound_url.model_tools",
+        path=("security", "outbound_url", "model_tools"),
+        group="Security", label="Model tool fetches", widget="enum",
+        apply=APPLY_LIVE, default="open", choices=lambda: ["open", "strict"],
+        help="What web_fetch and image downloads may reach in the owner's own "
+             "turns. `open` (default) reaches any address, including this "
+             "machine and the private network. `strict` blocks private "
+             "addresses and unusual ports. Everyone else's turns are always "
+             "strict.",
+    ),
+    SettingSpec(
         key="voice.engine", path=("voice", "engine"),
         group="Voice", label="Speech-to-text engine", widget="enum",
         apply=APPLY_LIVE, default="auto",
@@ -647,6 +665,21 @@ SETTINGS: list[SettingSpec] = [
         apply=APPLY_LIVE, default="", validate=_validate_vm_url,
         help="Base URL of an OSWorld-compatible server (GET /screenshot, POST /execute), "
              "e.g. http://192.168.64.2:5000. Set it to give computer_use_agent its vm target; empty turns it off.",
+    ),
+    SettingSpec(
+        key="computer_use.refused_apps", path=("computer_use", "refused_apps"),
+        group="Computer use", label="Refused apps", widget="json",
+        apply=APPLY_LIVE, default=[],
+        validate=lambda v: (None if isinstance(v, list) and all(isinstance(x, str) for x in v)
+                            else "must be a JSON list of app names or bundle ids"),
+        help="Applications computer_use_agent refuses to read or operate, as a JSON list of names or bundle ids. "
+             "Empty by default. For example com.apple.keychainaccess.",
+    ),
+    SettingSpec(
+        key="computer_use.refuse_password_fields", path=("computer_use", "refuse_password_fields"),
+        group="Computer use", label="Refuse password fields", widget="toggle",
+        apply=APPLY_LIVE, default=False,
+        help="When on, computer_use_agent will not type into password fields. Off by default.",
     ),
     SettingSpec(
         key="computer_use.chrome_extension_token", path=("computer_use", "chrome_extension_token"),
@@ -792,6 +825,28 @@ SETTINGS: list[SettingSpec] = [
              'in order, for example ["anthropic/claude-sonnet-5-5"].',
     ),
     SettingSpec(
+        key="context.auto_compact_percent", path=("context", "auto_compact_percent"),
+        group="Models", label="Summarize long conversations at (% full)", widget="number",
+        apply=APPLY_LIVE, default=80, minimum=50,
+        validate=_validate_auto_compact_percent,
+        help="When a conversation fills this much of what the model can hold, "
+             "its older messages are replaced by a short summary so it can "
+             "keep going. Lower: each message uses fewer tokens, but the model "
+             "loses details sooner. Higher: the model remembers more, but each "
+             "message uses more tokens. Most people can leave this at 80.",
+    ),
+    SettingSpec(
+        key="models.prompt_cache_ttl", path=("models", "prompt_cache_ttl"),
+        group="Models", label="Anthropic conversation cache", widget="enum",
+        apply=APPLY_LIVE, default="5m",
+        choices=lambda: ["5m", "1h"],
+        help="Only matters when you use Anthropic models. Between messages, "
+             "Anthropic can keep your conversation ready so the next message "
+             "costs less. 5 minutes suits back-and-forth chats. 1 hour costs "
+             "more up front and is worth it if you often return to a "
+             "conversation after a break of more than five minutes.",
+    ),
+    SettingSpec(
         key="privacy.redact_requests", path=("privacy", "redact_requests"),
         group="Models", label="Redact secrets in requests", widget="toggle",
         apply=APPLY_LIVE, default=False,
@@ -813,11 +868,11 @@ SETTINGS: list[SettingSpec] = [
     SettingSpec(
         key="agent.max_spawn_depth", path=("agent", "max_spawn_depth"),
         group="Agent", label="Max spawn depth", widget="number",
-        apply=APPLY_LIVE, default=1, validate=_validate_limit,
+        apply=APPLY_LIVE, default=0, validate=_validate_limit,
         help="How many generations of NEW agents one chain may create. "
-             "1 (default) = you spawn workers and a worker does the work "
-             "itself; 2 lets a worker spawn its own worker. 0 = no "
-             "limit. Only creating an agent counts, so an agent that "
+             "0 (default) = no limit. 1 = you spawn workers and a worker "
+             "does the work itself; 2 lets a worker spawn its own worker. "
+             "Only creating an agent counts, so an agent that "
              "reads a worker's result can still create the next wave. A "
              "spawn past the limit is refused with a message telling the "
              "agent to do the work itself.",
@@ -825,25 +880,23 @@ SETTINGS: list[SettingSpec] = [
     SettingSpec(
         key="agent.max_messages", path=("agent", "max_messages"),
         group="Agent", label="Max messages per chain", widget="number",
-        apply=APPLY_LIVE, default=8, validate=_validate_limit,
+        apply=APPLY_LIVE, default=0, validate=_validate_limit,
         help="How many messages one collaboration chain may pass in "
              "total — spawns, send_message deliveries, and agent(to=…) "
              "dispatches all count, and a reply coming back counts too, "
-             "so A↔B ping-pong stops at the ceiling. 8 by default, "
-             "0 = no limit.",
+             "so A↔B ping-pong stops at the ceiling. 0 (default) = no "
+             "limit.",
     ),
     SettingSpec(
         key="agent.max_spawn_fanout", path=("agent", "max_spawn_fanout"),
         group="Agent", label="Max spawn fan-out", widget="number",
-        apply=APPLY_LIVE, default=8, validate=_validate_limit,
+        apply=APPLY_LIVE, default=0, validate=_validate_limit,
         help="How many agents ONE turn may create, counted per (session, "
              "turn). The chain budgets bound how deep and how far a chain "
-             "goes, not how wide one turn opens it. 8 by default = two "
-             "widths of the task pool, so a turn can fill the pool and "
-             "keep one wave queued; the next spawn is refused and points "
-             "the agent at the ones it already has. 0 = no limit. Raise "
-             "OPENPROGRAM_JOB_WORKERS with it or the extra agents only "
-             "queue longer.",
+             "goes, not how wide one turn opens it. 0 (default) = no limit; "
+             "the task pool still bounds how many run at once. A spawn past "
+             "the limit is refused and points the agent at the ones it "
+             "already has.",
     ),
     *[
         SettingSpec(
@@ -955,13 +1008,10 @@ SETTINGS: list[SettingSpec] = [
                             else "must be a JSON list of glob patterns"),
         help="Globs a sandboxed command cannot write even inside the "
              "working directory, as a JSON list — the paths that arrange "
-             "for code to run later outside the sandbox. The directory "
-             "the function watcher auto-imports is always blocked and is "
-             "not listed here, because a `.py` dropped there executes in "
-             "the agent process within seconds. Empty otherwise: adding "
-             "`**/.git/hooks/**` closes the next escape of that shape and "
-             "also makes `git init` and `git clone` fail, since both "
-             "write that directory.",
+             "for code to run later outside the sandbox. Shell startup "
+             "files, the repository's git hooks and config, editor task folders and "
+             "OpenProgram's state folder are always blocked too. Empty "
+             "otherwise.",
     ),
     SettingSpec(
         key="sandbox.network", path=("sandbox", "network"), group="Sandbox",
@@ -1165,6 +1215,22 @@ def get_settings(
         # The settings list still renders without the tool rows.
         _log.debug("tool toggle rows unavailable", exc_info=True)
     return rows
+
+
+def setting_value(key: str) -> Any:
+    """One setting's stored value, or its default when none is stored or
+    the stored one is not valid for it (a hand-edited config)."""
+    spec = _BY_KEY[key]
+    raw = _get_at(user_config.read_config(), spec.path, spec.default)
+    try:
+        value = _coerce(spec.widget, raw)
+    except (TypeError, ValueError):
+        return spec.default
+    if spec.validate is not None and spec.validate(value):
+        return spec.default
+    if spec.widget == "enum" and spec.choices is not None and value not in spec.choices():
+        return spec.default
+    return value
 
 
 def set_setting(key: str, value: Any) -> dict:

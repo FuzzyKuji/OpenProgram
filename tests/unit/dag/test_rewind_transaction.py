@@ -184,7 +184,7 @@ def test_incomplete_intent_recovers_committed_state(store, tmp_path):
         expected_head_id=assistants[-1],
         target_head_id="ROOT",
         get_head=lambda: store.get_session("s-recover")["head_id"],
-        compare_and_set_head=lambda expected, new: store.compare_and_set_head(
+        compare_and_set_head=lambda expected, new, rollback=False: store.compare_and_set_head(
             "s-recover", expected, new,
         ),
         idempotency_key=key,

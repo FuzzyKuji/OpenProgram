@@ -245,19 +245,6 @@ def _build_tools(context: Context, model: Model) -> list[dict[str, Any]] | None:
     ]
 
 
-def _make_empty_assistant(model: Model) -> AssistantMessage:
-    return AssistantMessage(
-        role="assistant",
-        content=[],
-        api=model.api,
-        provider=model.provider,
-        model=model.id,
-        usage=Usage(),
-        stop_reason="stop",
-        timestamp=int(time.time() * 1000),
-    )
-
-
 async def stream_simple(
     model: Model,
     context: Context,
@@ -451,7 +438,7 @@ async def stream_simple(
     if service_tier:
         params["service_tier"] = service_tier
 
-    partial = _make_empty_assistant(model)
+    partial = AssistantMessage.empty(model)
     content_blocks: list[Any] = []
     text_index = -1
     thinking_index = -1
@@ -666,6 +653,7 @@ async def stream_simple(
                     network_wait_allowed,
                     network_wait_delay,
                     network_wait_started,
+                    retry_error_text,
                 )
                 unreachable = is_network_unreachable(e)
                 if network_wait is not None and not unreachable:
@@ -702,6 +690,7 @@ async def stream_simple(
                     retry_event = EventRetry(
                         attempt=int(network_wait["probes"]), max_attempts=None,
                         reason="network_wait", delay_ms=round(sleep_s * 1000),
+                        error=retry_error_text(e),
                     )
                 else:
                     recovery = current_recovery.get()
@@ -713,6 +702,7 @@ async def stream_simple(
                     retry_event = EventRetry(
                         attempt=_attempt + 2, max_attempts=attempts,
                         reason="transport", delay_ms=round(sleep_s * 1000),
+                        error=retry_error_text(e),
                     )
                     _log.info(
                         "stream retry: attempt %s/%s after %.1fs — %s",
@@ -729,7 +719,7 @@ async def stream_simple(
                 actual_tier = None
                 finish_reason = None
                 finished_at = None
-                partial = _make_empty_assistant(model)
+                partial = AssistantMessage.empty(model)
                 yield retry_event
                 await _sleep_unless_aborted(sleep_s, _user_cancelled)
 

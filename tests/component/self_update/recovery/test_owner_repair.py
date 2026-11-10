@@ -345,7 +345,7 @@ def test_public_aborted_repair_checks_old_app_without_activation(live, installat
     store.transition(record.request.update_id, UpdatePhase.NEEDS_MANUAL_RECOVERY)
     request = replace(record.request, update_id="su_aborted_owner")
     store.create(request)
-    store.transition(request.update_id, UpdatePhase.STAGING)
+    store.transition(request.update_id, UpdatePhase.BUILDING)
     store.transition(request.update_id, UpdatePhase.READY, detail={"transaction_dir": str(transaction)})
     enter_maintenance(request.update_id)
     supervisor._abort(store, request.update_id, UpdatePhase.READY, "quiescence timed out")

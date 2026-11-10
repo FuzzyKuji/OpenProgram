@@ -82,6 +82,23 @@
   color: var(--accent-red);
   white-space: nowrap;
 }
+/* A retry the reply waits on (retry-status.tsx): part of the sentence,
+   orange while it answers a failure; the seconds keep their width. */
+.tl-retry {
+  flex: none;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.tl-retry.is-failure { color: var(--accent-orange); }
+.tl-toggle:hover .tl-retry.is-failure { color: var(--accent-orange); }
+/* The retry row's body: the failure as the provider worded it. */
+.tl-retry-error {
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  word-break: break-word;
+}
 /* A stopped turn's last row carries a tag, centred on the line like the
    diff pill. */
 .tl-stopped {

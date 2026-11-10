@@ -12,7 +12,7 @@ from .shared import _READ_MAX_BYTES
 from .shared import _WRITE_MAX_BYTES
 from .shared import _open
 from .shared import _resolve_entry
-from .query import _resolve
+from .shared import _resolve
 
 def _read_file(project_id: str, path: str) -> dict:
     target, error = _resolve(project_id, path)

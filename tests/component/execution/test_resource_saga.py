@@ -55,9 +55,7 @@ def test_execution_written_crash_replays_one_admission_without_duplicate_capacit
 
     assert len(store.list_resource_intents(execution_id="job-1")) == 2
     assert ResourceSaga(store, governor, owner_id="saga-owner").reconcile() == 2
-    assert governor.ledger.connection().execute(
-        "SELECT COUNT(*) FROM job_admissions WHERE job_id = 'job-1'"
-    ).fetchone()[0] == 1
+    assert governor.ledger.run_tables().handle.count("job_admissions", job_id="job-1") == 1
 
 
 def test_governor_preparing_crash_leaves_pending_intent_for_startup_replay(saga_parts):
@@ -73,9 +71,7 @@ def test_governor_preparing_crash_leaves_pending_intent_for_startup_replay(saga_
         ResourceSaga(store, governor, owner_id="saga-owner", fault_hook=crash).reconcile()
 
     ResourceSaga(store, governor, owner_id="saga-owner").reconcile()
-    row = governor.ledger.connection().execute(
-        "SELECT state FROM job_admissions WHERE job_id = 'job-1'"
-    ).fetchone()
+    row = governor.ledger.run_tables().handle.first("job_admissions", job_id="job-1")
     assert row["state"] == "queued"
 
 
@@ -111,9 +107,7 @@ def test_claim_and_release_replay_are_fenced_and_idempotent(saga_parts):
     )
     saga.reconcile()
     saga.reconcile()
-    row = governor.ledger.connection().execute(
-        "SELECT state, lease_generation FROM job_admissions WHERE job_id = 'job-1'"
-    ).fetchone()
+    row = governor.ledger.run_tables().handle.first("job_admissions", job_id="job-1")
     assert row["state"] == "released"
     assert row["lease_generation"] == generation
 

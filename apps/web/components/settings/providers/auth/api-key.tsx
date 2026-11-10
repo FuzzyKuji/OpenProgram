@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { useTranslation } from "@/lib/i18n";
+import { showToast } from "@/lib/format-utils/toast";
 import { normalizeSecretReplacement } from "@/lib/net/auth/secret-replacement";
 
 import styles from "../provider-pane.module.css";
@@ -59,8 +60,12 @@ export function ApiKey({
         onChanged();
         loadPreview();
         onSaved?.();
+      } else {
+        showToast(d.error || text("Could not save the key.", "无法保存密钥。"), { tone: "error" });
       }
-    } catch { /* ignore */ }
+    } catch {
+      showToast(text("Could not save the key.", "无法保存密钥。"), { tone: "error" });
+    }
   }
 
   return (

@@ -271,3 +271,34 @@ def test_full_turn_user_assistant_tool_assistant():
         "user", "assistant",                # code Call's synthesized pair
         "assistant",                        # final llm
     ]
+
+
+# Sub-agent reports (attach nodes)
+
+
+def _attach(g, output, **attach):
+    return g.add(Call(role=ROLE_LLM, output=output,
+                      metadata={"function": "attach", "display": "runtime", "attach": attach}))
+
+
+def test_background_report_names_its_sender_and_transcript_address():
+    g = Graph()
+    u = g.add(Call(role=ROLE_USER, output="check the logs"))
+    a = _attach(g, "the log is clean", session_id="s1", head_id="h9", label="scout",
+                prompt="read the worker log", status="completed")
+    msgs = render_dag_messages(g, [u.id, a.id])
+    assert _roles(msgs) == ["user", "user"]
+    report = _texts(msgs)[1]
+    assert report.startswith('[Report from sub-agent "scout"]')
+    assert "Task: read the worker log" in report
+    assert "Final reply (completed):\nthe log is clean" in report
+    assert 'read_conversation(session_id="s1", head_id="h9")' in report
+
+
+def test_running_report_says_so_and_sync_report_is_left_to_the_tool_result():
+    g = Graph()
+    running = _attach(g, "", session_id="s1", label="scout", status="running")
+    sync = _attach(g, "done", session_id="s1", head_id="h1", delivery="tool_result", status="completed")
+    msgs = render_dag_messages(g, [running.id, sync.id])
+    assert len(msgs) == 1
+    assert "Still running" in _texts(msgs)[0] and "read_conversation" not in _texts(msgs)[0]

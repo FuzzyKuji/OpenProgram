@@ -553,8 +553,3 @@ def all_errors() -> dict[str, str]:
             if p.error:
                 out.setdefault(p.name, p.error)
         return out
-
-
-def clear_error(name: str) -> None:
-    with _lock:
-        _errors.pop(name, None)

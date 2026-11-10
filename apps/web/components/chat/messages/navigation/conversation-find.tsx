@@ -12,9 +12,8 @@ import { buttonVariants } from "@/components/ui/button";
 import { useTranslation } from "@/lib/i18n";
 import { wsRequest } from "@/lib/net/ws/ws-request";
 import { useSessionStore } from "@/lib/session-store";
-import { useSessionHistory } from "@/lib/chat/history/session-history";
 import { captureHistoryAnchor } from "@/lib/chat/history/history-viewport";
-import { loadSessionHistoryWindow, retrySessionHistory } from "@/lib/runtime-bridge/session/session-history-loader";
+import { loadSessionHistoryWindow } from "@/lib/runtime-bridge/session/session-history-loader";
 import {
   chatOwnsFind, clearHighlights, locate, messageRow, normalizeMatches, paintHighlights, step, textRanges,
   totalOccurrences, type FindMatch,
@@ -31,17 +30,9 @@ function findButton() {
 }
 
 async function searchSession(sessionId: string, query: string): Promise<FindMatch[] | null> {
-  const ask = () => wsRequest<SearchReply>("search_session", {
-    session_id: sessionId,
-    history_snapshot: useSessionHistory.getState().pages[sessionId]?.snapshot,
-    query,
+  const reply = await wsRequest<SearchReply>("search_session", {
+    session_id: sessionId, query,
   }, "session_search_results", { requestId: true }, 15000);
-  let reply = await ask();
-  if (reply?.error_code === "invalid_request") {
-    // The server keeps few snapshots per connection; renew this one and ask again.
-    if (!(await retrySessionHistory(sessionId))) return null;
-    reply = await ask();
-  }
   if (!reply || reply.error_code || reply.id !== sessionId) return null;
   return normalizeMatches(reply.matches);
 }

@@ -15,7 +15,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from openprogram.state import attachments
-from openprogram.state.store.session.git_session import GitSession
+from openprogram.state.store.session.session_log import SessionLog
 from openprogram.state.store.session.migration import migrate_session
 from openprogram.state.store.session.session_store import SessionStore
 
@@ -175,15 +175,12 @@ def test_raw_rebases_legacy_session_attachment_after_real_migration(
     source = project / ".openprogram" / "sessions" / "s1"
     old_attachment = source / "workdir" / "attachments" / "report.pdf"
     old_attachment.parent.mkdir(parents=True)
-    GitSession(source)._ensure_init()
-    (source / "meta.json").write_text('{"id":"s1"}', encoding="utf-8")
+    log = SessionLog(source)
+    log.write_meta({"id": "s1"})
     marker = attachments.format_marker(
         "report.pdf", old_attachment, len(b"legacy"), mime="application/pdf",
     )
-    (source / "history" / "0001-u-u1.json").write_text(
-        json.dumps({"id": "u1", "role": "user", "content": marker}),
-        encoding="utf-8",
-    )
+    log.write_history(1, "user", "u1", {"id": "u1", "role": "user", "content": marker})
     old_attachment.write_bytes(b"legacy")
 
     monkeypatch.setenv("OPENPROGRAM_PROJECT_ROOT", str(project))
@@ -203,7 +200,7 @@ def test_raw_rebases_legacy_session_attachment_after_real_migration(
     dest = state / "projects" / "p1" / "chats" / "s1"
     current_attachment = dest / "workdir" / "attachments" / "report.pdf"
     assert current_attachment.read_bytes() == b"legacy"
-    assert str(old_attachment) in (dest / "history" / "0001-u-u1.json").read_text()
+    assert str(old_attachment) in (dest / "main.jsonl").read_text()
 
     # A stale source copy may still exist after migration. The public route
     # must prefer the canonical session attachment rather than serving it.
@@ -245,7 +242,7 @@ def test_raw_rebases_legacy_session_attachment_after_real_migration(
             block.text for block in (denied_result.content or [])
             if getattr(block, "text", None) is not None
         )
-        assert denied_text.startswith("Error: sandbox policy: blocked")
+        assert denied_text.startswith("[blocked by sandbox]") and "blocked" in denied_text
     finally:
         reset_current_session_id(token)
 

@@ -24,11 +24,11 @@
 import { useState } from "react";
 
 import { useTranslation } from "@/lib/i18n";
-import { useSessionStore } from "@/lib/session-store";
 import { absRawFileUrl } from "@/lib/files/files-shared";
 import { extractAttachmentMentions } from "@/lib/chat/send/attachment-marker";
 import { AttachmentPreview } from "./attachment-preview";
 import type { RecordingInfo } from "../../recording/recording-card";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 export interface ParsedAttachment {
   /** Original wire representation, preserved by the message editor. */
@@ -103,6 +103,7 @@ export function parseAttachments(
         steps: Number(recordingAttr(attrs, "steps")) || 0,
         duration_ms: Number(recordingAttr(attrs, "duration_ms")) || 0,
         images: Number(recordingAttr(attrs, "images")) || 0,
+        ...(includeRaw ? { raw: _m } : {}),
       });
     }
     return "";
@@ -185,8 +186,8 @@ function FileGlyph() {
  *  stays a plain label — there is nothing to open. */
 export function AttachmentChips({ items, sessionId: ownerSessionId }: { items: ParsedAttachment[]; sessionId?: string | null }) {
   const { text } = useTranslation();
-  const focusedSessionId = useSessionStore((s) => s.currentSessionId);
-  const sessionId = ownerSessionId === undefined ? focusedSessionId : ownerSessionId;
+  const rowSessionId = useRowSessionId();
+  const sessionId = ownerSessionId === undefined ? rowSessionId : ownerSessionId;
   const [open, setOpen] = useState<ParsedAttachment | null>(null);
   if (items.length === 0) return null;
   return (

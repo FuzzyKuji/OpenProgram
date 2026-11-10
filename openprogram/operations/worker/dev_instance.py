@@ -18,6 +18,8 @@ import json
 import os
 import subprocess
 import urllib.request
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 DEV_PROFILE = "dev"
@@ -30,10 +32,28 @@ STABLE_BRANCH = "stable"
 DEV_BRANCH = "dev"
 APP_PATH = Path("/Applications/OpenProgram.app")
 SOURCE_REPO_FILE = "source-repo"
+# How long a promotion waits for the stable instance to go quiet.
+STABLE_QUIET_WAIT_SECONDS = 600
+# Inside the stable worker the calling turn cannot end while it waits, so
+# waiting longer than a moment only delays the same answer.
+STABLE_QUIET_WAIT_FROM_WORKER_SECONDS = 5
+_NAMED_WORK_LIMIT = 10
 
 
 class InstanceError(Exception):
     """A deploy or promotion was refused; the message says why."""
+
+
+class NotServedError(InstanceError):
+    """Only the commit the development instance serves can be promoted."""
+
+
+class StableBusyError(InstanceError):
+    """The stable instance stayed busy, so nothing was promoted."""
+
+
+class RefreshFailedError(InstanceError):
+    """``stable`` moved, but installing it into the App failed twice."""
 
 
 def stable_state_dir() -> Path:
@@ -254,33 +274,109 @@ def deploy_dev(ref: str = DEV_BRANCH) -> str:
     return revision
 
 
-def promote(revision: str | None = None) -> str:
+@contextmanager
+def _stable_profile() -> Iterator[None]:
+    """Read the stable instance's stores, whichever profile called promotion."""
+    from openprogram.state.paths import get_active_profile, set_active_profile
+
+    caller = get_active_profile()
+    set_active_profile(None)
+    try:
+        yield
+    finally:
+        set_active_profile(caller)
+
+
+def _inside_worker(worker_pid: int | None) -> bool:
+    """Whether this process descends from ``worker_pid``, as a chat's shell command does."""
+    if worker_pid is None:
+        return False
+    try:
+        table = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5).stdout
+    except (OSError, subprocess.SubprocessError):
+        return False
+    parents = {int(pid): int(parent) for pid, parent in (line.split() for line in table.splitlines() if line.strip())}
+    current, seen = os.getpid(), set()
+    while current in parents and current not in seen:
+        if current == worker_pid:
+            return True
+        seen.add(current)
+        current = parents[current]
+    return False
+
+
+def _stable_worker_pid() -> int | None:
+    """The live stable worker's pid; the lock file alone can outlive a crash."""
+    from openprogram.operations.worker.lock import is_held_by, read_holder_pid
+
+    pid = read_holder_pid()
+    return pid if pid is not None and is_held_by(pid) else None
+
+
+def _named(work: list[str]) -> str:
+    extra = len(work) - _NAMED_WORK_LIMIT
+    return "; ".join(work[:_NAMED_WORK_LIMIT]) + (f"; and {extra} more" if extra > 0 else "")
+
+
+def _wait_until_stable_quiet(on_wait: Callable[[str], None] | None = None) -> None:
+    """Return once nothing is running on stable; a restart would interrupt it."""
+    import time
+
+    from openprogram.operations.self_update.control.supervisor import _wait_for_quiescence, active_work
+
+    try:
+        with _stable_profile():
+            worker = _stable_worker_pid()
+            if worker is None:
+                # No restart can interrupt anything, and rows a crashed
+                # worker left "running" must not block the promotion that
+                # repairs it: they only clear when a worker starts.
+                return
+            work = active_work()
+            if not work:
+                return
+            from_worker = _inside_worker(worker)
+            seconds = STABLE_QUIET_WAIT_FROM_WORKER_SECONDS if from_worker else STABLE_QUIET_WAIT_SECONDS
+            if on_wait:
+                on_wait(f"waiting up to {seconds} s for the stable instance to finish: {_named(work)}")
+            if _wait_for_quiescence(time.time() + seconds):
+                return
+            work = active_work()
+    except Exception as exc:  # noqa: BLE001 - unknown is not quiet; the owner gets a refusal, not a traceback.
+        raise InstanceError(f"could not tell whether the stable instance is busy: {exc}") from exc
+    if not work:
+        return
+    hint = ("this command runs inside the stable worker, so a conversation's own turn counts as running; "
+            "run it from outside the stable App or use the self_update tool"
+            if from_worker else "let that work finish or stop it, then promote again")
+    raise StableBusyError(f"the stable instance is still busy after {seconds} s, so nothing was promoted: "
+                          f"{_named(work)}; {hint}")
+
+
+def promote(revision: str | None = None, *, wait_for_stable: bool = True,
+            on_wait: Callable[[str], None] | None = None) -> str:
     """Fast-forward ``stable`` to what dev serves and install it into the App.
 
     Refused unless the commit is exactly the one the development instance
     is serving, that instance is healthy, and the move is a fast-forward.
-    The stable profile is backed up first.
+    The refresh restarts the stable worker, so it then waits, bounded, for
+    stable to go quiet, refuses by naming what still runs, and checks the
+    conditions again since the wait can outlast them.
+    ``wait_for_stable=False`` is for the self-update controller alone: it has
+    already waited, and a repair after a failed promotion must not wait on
+    stable's work. The stable profile is backed up next. A failed refresh is
+    run once more; its installer leaves the previous App in place, so a retry
+    starts clean.
     """
     repo = source_repo()
-    served = dev_revision()
-    if not served or served.endswith("-dirty"):
-        raise InstanceError("the development instance serves no clean commit; deploy one first")
-    target = _ref(repo, revision) if revision else served
-    if not target:
-        raise InstanceError(f"unknown revision: {revision}")
-    if target != served:
-        raise InstanceError(
-            f"only the commit the development instance serves can be promoted ({served[:10]}); "
-            f"deploy {target[:10]} to it first")
-    if not healthy(DEV_PORT):
-        raise InstanceError("the development instance is not healthy; promote after it serves the commit")
-    current = _ref(repo, STABLE_BRANCH)
-    if current and current != target and subprocess.run(
-            ["git", "-C", str(repo), "merge-base", "--is-ancestor", current, target]).returncode != 0:
-        raise InstanceError(f"{target[:10]} does not contain stable ({current[:10]}); promotion only fast-forwards")
+    target, current = _promotion_target(repo, revision)
+    if wait_for_stable:
+        _wait_until_stable_quiet(on_wait)
+        target, current = _promotion_target(repo, target)
 
     from openprogram.operations.backup import create_backup
-    archive = create_backup(label="pre-promote")
+    with _stable_profile():
+        archive = create_backup(label="pre-promote")
     if archive:
         prune_promote_backups(Path(archive).parent)
 
@@ -290,9 +386,36 @@ def promote(revision: str | None = None) -> str:
     tree = _managed_worktree(repo, stable_state_dir() / "release-source", target)
     # The development instance already built this commit; the refresh reuses
     # that build when its recorded revision matches.
-    _run(tree / "scripts" / "refresh-local-app.sh", tree,
-         {"OPENPROGRAM_PREBUILT_DIR": str(dev_artifacts_dir())})
+    script, env = tree / "scripts" / "refresh-local-app.sh", {"OPENPROGRAM_PREBUILT_DIR": str(dev_artifacts_dir())}
+    try:
+        _run(script, tree, env)
+    except InstanceError:
+        try:
+            _run(script, tree, env)
+        except InstanceError as exc:
+            raise RefreshFailedError(f"stable moved to {target[:10]} but the App refresh failed twice: {exc}") from exc
     return target
+
+
+def _promotion_target(repo: Path, revision: str | None) -> tuple[str, str | None]:
+    """The commit to promote and the current ``stable`` tip, or the reason not to."""
+    served = dev_revision()
+    if not served or served.endswith("-dirty"):
+        raise InstanceError("the development instance serves no clean commit; deploy one first")
+    target = _ref(repo, revision) if revision else served
+    if not target:
+        raise InstanceError(f"unknown revision: {revision}")
+    if target != served:
+        raise NotServedError(
+            f"only the commit the development instance serves can be promoted ({served[:10]}); "
+            f"deploy {target[:10]} to it first")
+    if not healthy(DEV_PORT):
+        raise InstanceError("the development instance is not healthy; promote after it serves the commit")
+    current = _ref(repo, STABLE_BRANCH)
+    if current and current != target and subprocess.run(
+            ["git", "-C", str(repo), "merge-base", "--is-ancestor", current, target]).returncode != 0:
+        raise InstanceError(f"{target[:10]} does not contain stable ({current[:10]}); promotion only fast-forwards")
+    return target, current
 
 
 PROMOTE_BACKUPS_KEPT = 5

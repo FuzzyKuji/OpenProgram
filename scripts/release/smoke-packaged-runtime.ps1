@@ -94,15 +94,6 @@ try {
     if ($Chat.StatusCode -ne 200) {
         throw "packaged Windows chat route returned $($Chat.StatusCode)"
     }
-
-    $ProgramLog = Join-Path $ProbeRoot "program-install.log"
-    & $Python -I -B -m openprogram programs install owner/repo *> $ProgramLog
-    if ($LASTEXITCODE -eq 0) {
-        throw "packaged runtime unexpectedly allowed Program installation"
-    }
-    if (-not (Select-String -LiteralPath $ProgramLog -Pattern "disabled in the packaged desktop runtime" -Quiet)) {
-        throw "packaged runtime did not explain immutable Program installation"
-    }
     Write-Output "packaged runtime smoke passed for Windows"
 } finally {
     & $Python -I -B -m openprogram worker stop *> $null

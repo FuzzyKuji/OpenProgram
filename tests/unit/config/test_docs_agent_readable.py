@@ -40,3 +40,24 @@ def test_raw_visualization_uses_configured_origin_and_retains_readability(monkey
     assert 'raw-readability.css' in text
     assert 'raw-readability.js' in text
     assert '<body>Figure</body>' in text
+
+
+def test_html_documents_publish_a_markdown_rendition_and_advertise_it(tmp_path, monkeypatch):
+    from scripts.docs_site import generate_reference
+
+    (tmp_path / 'start').mkdir()
+    (tmp_path / 'start/topic.html').write_text(
+        '<title>Topic</title><h1>Topic</h1><p>Body</p>', encoding='utf-8')
+    (tmp_path / 'start/topic.zh.html').write_text(
+        '<title>主题</title><h1>主题</h1><p>正文</p>', encoding='utf-8')
+    monkeypatch.setattr(build, 'DOCS_ROOT', tmp_path)
+    monkeypatch.setattr(build, 'OUT_ROOT', tmp_path / '_site')
+    monkeypatch.setattr(build, 'SITE_ORIGIN', 'https://example.org')
+    monkeypatch.setattr(generate_reference, 'generate_all', lambda: None)
+    monkeypatch.setattr(build, 'format_gate', dict)  # the pages here are minimal on purpose
+    assert build.build() == 0
+    for name, text in (('topic.html', '# Topic\n\nBody\n'), ('topic.zh.html', '# 主题\n\n正文\n')):
+        assert (tmp_path / '_site/start' / f'{name}.md').read_text(encoding='utf-8') == text
+        links = Links((tmp_path / '_site/start' / name).read_text(encoding='utf-8')).links
+        assert {'rel': 'alternate', 'type': 'text/markdown',
+                'href': f'https://example.org/docs/start/{name}.md'} in links

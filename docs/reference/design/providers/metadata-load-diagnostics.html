@@ -1,44 +1,26 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram · Provider metadata loading diagnostics</title>
-<style>
-body{margin:0;background:#101319;color:#e6e9ef;font:15px/1.65 system-ui,-apple-system,"PingFang SC",sans-serif}main{max-width:900px;margin:auto;padding:42px 26px 80px}h1{font-size:29px}h2{margin-top:38px;border-top:1px solid #303641;padding-top:22px}code,pre{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}code{background:#191e27;padding:2px 5px;border-radius:4px}table{border-collapse:collapse;width:100%}th,td{border:1px solid #303641;padding:9px;text-align:left;vertical-align:top}th{background:#1a202a}pre{background:#171c24;border:1px solid #303641;padding:14px;overflow:auto}.note{border-left:4px solid #6ba7ff;background:#172131;padding:12px 15px}.muted{color:#a7afbc}
-</style>
-</head>
-<body><main>
-<p class="muted">OpenProgram · Provider reliability</p>
-<h1>Provider metadata loading diagnostics</h1>
-<p>Distinguish expected absence from corrupt local configuration when the provider list becomes empty or an endpoint is missing. This change adds local warnings only; it does not change fallbacks, return values or provider selection.</p>
-
-<h2>Boundaries</h2>
-<table>
-<thead><tr><th>Input state</th><th>Return behavior</th><th>Logging behavior</th></tr></thead>
+<title>Provider metadata diagnostics</title>
+<meta name="description" content="Which provider metadata load failures log a warning, and what the warning contains.">
+<h1>Provider metadata diagnostics</h1>
+<table class="stack">
+<thead><tr><th scope="col">Input</th><th scope="col">Returns</th><th scope="col">Log</th></tr></thead>
 <tbody>
-<tr><td><code>provider.json</code> missing</td><td>Keep the existing missing-entry/alias fallback</td><td>No log; some providers have no directory of their own</td></tr>
-<tr><td><code>provider.json</code> unreadable, invalid JSON, or a non-object top-level value</td><td>Return an empty endpoint; the caller continues its existing fallback</td><td>Warning: source, path, error_type; do not log file contents</td></tr>
-<tr><td><code>models_dev.json</code> missing</td><td>Return an empty cache</td><td>No log; this is expected on first run or before any successful fetch</td></tr>
-<tr><td><code>models_dev.json</code> unreadable, invalid JSON, or a non-object top-level value</td><td>Return an empty cache and retain the short failure TTL</td><td>Warning: source, path, error_type; do not log file contents</td></tr>
-<tr><td>models.dev network request failure</td><td>Continue by trying the disk cache</td><td>Add no network warning in this task, avoiding duplicate logs for expected offline operation</td></tr>
+<tr><th scope="row"><code translate="no">provider.json</code> missing</th><td>existing missing-entry or alias fallback</td><td>none: some providers have no directory</td></tr>
+<tr><th scope="row"><code translate="no">provider.json</code> unreadable, invalid or not an object</th><td>empty endpoint; the caller's fallback continues</td><td>one warning</td></tr>
+<tr><th scope="row"><code translate="no">models_dev.json</code> missing</th><td>empty cache</td><td>none: expected before a first fetch</td></tr>
+<tr><th scope="row"><code translate="no">models_dev.json</code> unreadable, invalid or not an object</th><td>empty cache, short failure TTL</td><td>one warning</td></tr>
+<tr><th scope="row">models.dev network failure</th><td>tries the disk cache</td><td>none: normal offline</td></tr>
 </tbody>
 </table>
-
-<h2>Implementation locations</h2>
-<p><code>openprogram/models/providers/catalog/metadata.py</code> shared <code>provider.json</code> reader validates structure and emits warnings; <code>_endpoints()</code> and <code>shipped_provider_ids()</code> reuse it to avoid inconsistent diagnostics between catch branches. <code>openprogram/models/providers/catalog/sources/models_dev.py::_read_disk_cache()</code> handles cache diagnostics.</p>
-<pre>warning("provider metadata load failed", extra={
+<pre translate="no" tabindex="0"><code>warning("provider metadata load failed", extra={
   "source": "provider_json" | "models_dev_cache",
   "path": str(path) | "&lt;unresolved&gt;",
   "error_type": type(error).__name__,
-})</pre>
-<div class="note">Use the stable value <code>&lt;unresolved&gt;</code> only when computing the cache path itself fails. Logs must contain no traceback, JSON contents, provider credentials, HTTP response bodies or exception messages. Corrupt files remain at their original paths for inspection; this task does not delete, rewrite or quarantine them.</div>
-
-<h2>Acceptance</h2>
-<ul>
-<li>Invalid JSON, unreadable files and incorrect top-level types each return the existing empty value and emit one warning.</li>
-<li>Missing files produce no warning.</li>
-<li>Warnings contain only the stable event name, source, path and error_type, with no traceback, exception message or file contents.</li>
-<li>Normal provider endpoints, shipped-provider enumeration and models.dev cache behavior remain unchanged.</li>
-</ul>
-</main></body></html>
+})</code></pre>
+<p class="note"><code translate="no">&lt;unresolved&gt;</code> only when computing the cache path fails. Never a traceback, exception message, file contents, credentials or response bodies. Corrupt files stay in place for inspection. Warnings change no fallback or return value.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">File</th><th scope="col">Function</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">providers/catalog/metadata.py</code></th><td>Shared <code translate="no">provider.json</code> reader, used by <code translate="no">_endpoints()</code> and <code translate="no">shipped_provider_ids()</code></td></tr>
+<tr><th scope="row"><code translate="no">providers/catalog/sources/models_dev.py</code></th><td><code translate="no">_read_disk_cache()</code></td></tr>
+</tbody>
+</table>

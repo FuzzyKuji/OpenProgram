@@ -33,6 +33,7 @@ import httpx
 
 from openprogram.host.security.safe_http import safe_client
 from openprogram.host.security.url_policy import URLPolicyError, normalize_origin
+from openprogram.programs.tools.web._owner_fetch import owner_open
 from openprogram.programs._authoring.helpers import read_bool_param, read_int_param, read_string_param
 from openprogram.programs._host.runtime import ToolReturn, function
 import logging
@@ -65,14 +66,13 @@ CHROME_UA = (
 HONEST_UA = "openprogram-web-fetch/1.0"
 
 # Appended to policy refusals so the model can tell the user what to change.
-_POLICY_HINTS = {
-    "NON_GLOBAL_ADDRESS": (
-        " (the host is local or resolves to a private, loopback or reserved "
-        "address; web_fetch only reads public sites. A fake-IP proxy such as "
-        "Clash is supported when its HTTP(S)_PROXY or system proxy route "
-        "covers the host)"
-    ),
-    "METADATA_ADDRESS": " (cloud metadata endpoints are never fetched)",
+# What the address checks of ``security.outbound_url.model_tools`` refuse. Any
+# other URLPolicyError is a malformed URL and goes back as an ordinary error.
+_ADDRESS_BLOCKS = {
+    "NON_GLOBAL_ADDRESS": "the host is local or resolves to a private, loopback or reserved address",
+    "METADATA_ADDRESS": "the host is a cloud metadata endpoint",
+    "PORT_FORBIDDEN": "the port is not one model tools may use",
+    "METHOD_FORBIDDEN": "the HTTP method is not one model tools may use",
 }
 
 
@@ -227,7 +227,8 @@ def _fetch_with_cf_fallback(
     — being transparent is the right move when the spoof doesn't buy us
     anything anyway.
     """
-    with safe_client("tool.web_fetch") as client:
+    client_context = safe_client("tool.web_fetch.owner") if owner_open() else safe_client("tool.web_fetch")
+    with client_context as client:
         for ua in (CHROME_UA, HONEST_UA):
             body = bytearray()
             final_url = url
@@ -322,8 +323,10 @@ def execute(
             f"Error: network error {type(e).__name__} for {normalize_origin(url)}"
         )
     except URLPolicyError as e:
-        hint = _POLICY_HINTS.get(e.reason, "")
-        return f"Error: failed to fetch {e.safe_url}: {type(e).__name__}: {e}{hint}"
+        if e.reason in _ADDRESS_BLOCKS:
+            from openprogram.runtime.permissions import refusal
+            raise refusal.outbound_url(f"web_fetch {e.safe_url}", _ADDRESS_BLOCKS[e.reason]) from e
+        return f"Error: failed to fetch {e.safe_url}: {type(e).__name__}: {e}"
     except Exception as e:
         try:
             safe_url = normalize_origin(url)

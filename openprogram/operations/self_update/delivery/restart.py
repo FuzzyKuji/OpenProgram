@@ -5,6 +5,8 @@ from __future__ import annotations
 import asyncio
 import logging
 
+from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
+
 from ..control.maintenance import load_maintenance
 from ..control.projection import _optional
 from ..control.projection import _records
@@ -67,14 +69,29 @@ def reconcile(runner) -> None:
         )
     for record in records:
         try:
-            if marker and record.state.phase is UpdatePhase.READY:
+            if _checkpoint_due(store, record, marker):
                 _pause(store, record, runner)
-            elif marker is None and is_terminal(record.state.phase):
+            elif marker is None and (is_terminal(record.state.phase) or _reopened(store, record)):
                 _resume(store, record, runner)
         except Exception:
             _log.exception(
                 "self-update execution recovery failed for %s", record.request.update_id
             )
+
+
+def _checkpoint_due(store, record, marker) -> bool:
+    """A paused task needs a marker on legacy_app and a request on versions."""
+    from ..control.switch import CHECKPOINT_REQUESTED
+
+    if record.state.phase is UpdatePhase.READY:
+        return bool(marker)
+    return record.state.phase in {UpdatePhase.QUIESCING, UpdatePhase.ACTIVATING} and (
+        store.root / record.request.update_id / CHECKPOINT_REQUESTED).exists()
+
+
+def _reopened(store, record) -> bool:
+    """On versions, admission reopens inside ``verifying``, before commit."""
+    return record.state.phase is UpdatePhase.VERIFYING and bool(record.request.controller_version)
 
 
 def _service(runner, execution_id):
@@ -87,22 +104,26 @@ def _service(runner, execution_id):
 
 def _pause(store, record, runner):
     from openprogram.runtime.execution.model import ExecutionStatus
+    from openprogram.runtime.execution.process_owner import owned_by_another_process
+    from openprogram.runtime.execution.restart import is_check_in
 
     executions = runner._execution_store
     with store._locked():
         marker = load_maintenance(store)
-        if marker is None or marker["update_id"] != record.request.update_id:
+        if not _checkpoint_due(store, store._load_unlocked(record.request.update_id), marker):
             return
-        if (
-            store._load_unlocked(record.request.update_id).state.phase
-            is not UpdatePhase.READY
-        ):
+        if marker is not None and marker["update_id"] != record.request.update_id:
             return
         path, manifest = _load(store, record)
         for execution in executions.list_nonterminal():
+            # A turn another process owns does not stop with this one, and what
+            # this process holds for it may be long out of date.
             if (
                 execution.status is ExecutionStatus.RUNNING
                 and execution.capabilities.pause
+                and not owned_by_another_process(execution.owner_lease)
+                # What this manifest pauses is continued after the update.
+                and not is_check_in(executions, execution.execution_id)
             ):
                 manifest["executions"].setdefault(
                     execution.execution_id,
@@ -354,7 +375,7 @@ def _replan(store, record, runner, execution):
                     prompt=prompt,
                     authority=authority,
                     permission=dict(
-                        mode=values.get("permission_mode", "ask"),
+                        mode=values.get("permission_mode") or DEFAULT_PERMISSION,
                         rules=deepcopy(values.get("permission_rules")),
                     ),
                 )
@@ -425,7 +446,7 @@ def replan_permission_snapshot(executions, job):
         ):
             raise ValueError("replan owner changed")
         permission = dict(
-            mode=values.get("permission_mode", "ask"),
+            mode=values.get("permission_mode") or DEFAULT_PERMISSION,
             rules=values.get("permission_rules"),
         )
         if (

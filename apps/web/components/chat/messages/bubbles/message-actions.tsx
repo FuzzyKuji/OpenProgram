@@ -7,7 +7,9 @@ import { useActionIconAnimation } from "./use-action-icon-animation";
  *
  * Sits in the message's `.message-actions-footer`, revealed on hover
  * (`.message:hover .message-actions`). Holds a timestamp badge and Copy,
- * then per role: a user message has Edit and Rewind to here, a reply has
+ * then per role: a user message has Edit (a new version of the message,
+ * files untouched), Rewind to here (lib/chat/rewind/rewind-actions.ts) and
+ * Fork from here; a reply has
  * Regenerate and Pin as chapter (which pins the turn above it: the pin is
  * stored on that turn's user message, lib/chat/transcript/chapter-pin.ts);
  * last the `< N/M >` sibling-version navigator. Quoting is the
@@ -27,12 +29,15 @@ import {
   type ReactNode,
 } from "react";
 
-import { useSessionStore, type ChatMsg } from "@/lib/session-store";
+import { selectRow, selectViewRows, useSessionStore, type ChatMsg } from "@/lib/session-store";
 import { useTranslation } from "@/lib/i18n";
 import { showToast } from "@/lib/format-utils/toast";
 import { copyText } from "@/lib/clipboard";
+import { forkFromMessage, requestRewind } from "@/lib/chat/rewind/rewind-actions";
+import { disabledReason, isRewindable } from "@/lib/chat/rewind/rewind-logic";
+import { useForkDisabled, useRewindAllowed, useRewindDisabled } from "@/lib/chat/rewind/use-rewind-disabled";
 import { setRunActive } from "@/lib/runtime-bridge/session/chat-handlers";
-import { getSocket, runtimeState } from "@/lib/runtime-bridge/state";
+import { runtimeState } from "@/lib/runtime-bridge/state";
 import { sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
 import { cn } from "@/lib/utils";
 import { buttonVariants } from "@/components/ui/button";
@@ -40,6 +45,7 @@ import { HoverTip, TipBody } from "@/components/ui/tooltip";
 import { formatMessageTime } from "@/lib/chat/transcript/message-time";
 import { turnUserMessageId } from "@/lib/chat/transcript/chapter";
 import { setTurnChapter } from "@/lib/chat/transcript/chapter-pin";
+import { GitFork } from "lucide-react";
 import {
   BookmarkIcon,
   CheckIcon,
@@ -48,6 +54,7 @@ import {
   SquarePenIcon,
   UndoIcon,
 } from "@/components/animated-icons";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 /** Commands go out as they are; a `load_session` goes through the managed
  *  session read, since the transcript applies only the reply to a read it
@@ -65,6 +72,7 @@ export const SVG = {
   retry: <RefreshCwIcon />,
   pencil: <SquarePenIcon />,
   undo: <UndoIcon />,
+  fork: <GitFork aria-hidden />,
   pin: <BookmarkIcon />,
   chevL: (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -100,10 +108,14 @@ const ACTION_BUTTON_CLASS = buttonVariants({ variant: "ghost", size: "icon-xs" }
 
 /** A message action whose whole button controls its shared animated icon.
  *  The label shows as a HoverTip (never a native title) and stays the
- *  button's aria-label. */
+ *  button's aria-label. `detail` is the tip's second line. With
+ *  `disabledReason` the button is disabled and the tip is that one line,
+ *  on a wrapper because a disabled button gets no pointer events. */
 export function ActionButton({
   icon,
   title,
+  detail,
+  disabledReason,
   onClick,
   disabled,
   extraClass,
@@ -111,29 +123,36 @@ export function ActionButton({
 }: {
   icon: ReactNode;
   title: string;
+  detail?: string;
+  disabledReason?: string;
   onClick: () => void;
   disabled?: boolean;
   extraClass?: string;
   /** A toggle's state, exposed as aria-pressed. */
   pressed?: boolean;
 }) {
-  const { ref, handlers } = useActionIconAnimation(disabled);
+  const off = disabled || Boolean(disabledReason);
+  const { ref, handlers } = useActionIconAnimation(off);
   const node = isValidElement(icon)
     ? cloneElement(icon as ReactElement, { ref } as Record<string, unknown>)
     : icon;
+  const button = (
+    <button
+      type="button"
+      className={cn(ACTION_BUTTON_CLASS, "message-action-btn", extraClass)}
+      aria-label={title}
+      aria-description={disabledReason ? undefined : detail}
+      aria-pressed={pressed}
+      disabled={off}
+      onClick={onClick}
+      {...handlers}
+    >
+      {node}
+    </button>
+  );
   return (
-    <HoverTip label={<TipBody title={title} />}>
-      <button
-        type="button"
-        className={cn(ACTION_BUTTON_CLASS, "message-action-btn", extraClass)}
-        aria-label={title}
-        aria-pressed={pressed}
-        disabled={disabled}
-        onClick={onClick}
-        {...handlers}
-      >
-        {node}
-      </button>
+    <HoverTip label={disabledReason ? <TipBody title={disabledReason} /> : <TipBody title={title} detail={detail} />}>
+      {disabledReason ? <span className="inline-flex" tabIndex={0}>{button}</span> : button}
     </HoverTip>
   );
 }
@@ -197,8 +216,7 @@ export function MessageActions({
   sessionIdOverride?: string;
 }) {
   const { text: tr } = useTranslation();
-  const focusedSessionId = useSessionStore((s) => s.currentSessionId);
-  const sessionId = sessionIdOverride ?? focusedSessionId;
+  const sessionId = useRowSessionId(sessionIdOverride);
   const [copied, setCopied] = useState(false);
   const [busy, setBusy] = useState(false);
   // One pin request at a time; the store already shows the new state, so
@@ -208,12 +226,18 @@ export function MessageActions({
   // Both reads are scalars, so streaming deltas elsewhere do not re-render.
   const turnUserId = useSessionStore((s) =>
     msg.role === "assistant" && sessionId
-      ? turnUserMessageId(s.messageOrder?.[sessionId], s.messagesById ?? {}, msg.id)
+      ? turnUserMessageId(s.messageOrder?.[sessionId], selectViewRows(sessionId)(s), msg.id)
       : undefined,
   );
   const chapterPinned = useSessionStore((s) =>
-    Boolean(turnUserId && s.messagesById?.[turnUserId]?.chapterPinnedAt),
+    Boolean(selectRow(sessionId, turnUserId)(s)?.chapterPinnedAt),
   );
+  const sent = Boolean(sessionId) && isRewindable(msg);
+  const rewindAllowed = useRewindAllowed(sessionId);
+  const rewindable = sent && rewindAllowed;
+  const rewindCause = useRewindDisabled(rewindable ? sessionId : null);
+  const forkCause = useForkDisabled(sent ? sessionId : null, msg.id);
+  const rewindDisabled = rewindCause ? disabledReason(rewindCause, tr) : undefined;
 
   function copy() {
     const text = msg.content || "";
@@ -234,10 +258,6 @@ export function MessageActions({
     postJson("/api/chat/retry", { session_id: sessionId, msg_id: msg.id })
       .then(() => {
         if (useSessionStore.getState().currentSessionId === sessionId) setRunActive(true);
-        // The turn result must NOT be pushed onto the pre-fork mirror:
-        // flag the session so the result handler reloads wholesale
-        // (chat-handlers self-heal) — this load and the stream race.
-        runtimeState._pendingBranchReload[sessionId] = true;
         wsSend({ action: "load_session", session_id: sessionId });
       })
       .catch((err) => {
@@ -263,84 +283,6 @@ export function MessageActions({
     });
   }
 
-  function rewindToHere() {
-    if (!sessionId || !msg.id || busy) return;
-    setBusy(true);
-    const ok = wsSend({
-      action: "rewind",
-      session_id: sessionId,
-      target_msg_id: msg.id,
-    });
-    if (!ok) {
-      setBusy(false);
-      return;
-    }
-    const ws = getSocket();
-    if (!ws) {
-      setBusy(false);
-      return;
-    }
-    // Every exit path — reply, wrong session, timeout — runs through
-    // `finish` so the listener is always detached and `busy` always
-    // clears. A rewind that errors server-side without ever emitting a
-    // frame used to leave this row's buttons disabled until a reload.
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const finish = () => {
-      ws.removeEventListener("message", onMsg);
-      if (timer) clearTimeout(timer);
-      setBusy(false);
-    };
-    function onMsg(ev: MessageEvent) {
-      try {
-        const data = JSON.parse(ev.data);
-        if (data?.type !== "rewind_result") return;
-        const d = data?.data ?? {};
-        // Match on the session the frame belongs to: a rewind running in
-        // another conversation emits the same frame type, and answering
-        // to it here would reload + prefill the wrong chat.
-        if (d.session_id && d.session_id !== sessionId) return;
-        finish();
-        const errors: string[] = d.errors ?? [];
-        // `new_head_id` decides success: the backend moves HEAD whenever
-        // it is set, and a non-empty `errors` then only means some files
-        // failed to restore. Treating that as overall failure would leave
-        // the transcript on a head the server no longer has.
-        if (d.new_head_id) {
-          const n = d.turns_reverted ?? 0;
-          if (errors.length) {
-            showToast(
-              tr(
-                `Rewound ${n} turn${n === 1 ? "" : "s"}, but ${errors.length} file${errors.length === 1 ? "" : "s"} failed to restore: ${errors[0]}`,
-                `已回退 ${n} 轮，但 ${errors.length} 个文件恢复失败：${errors[0]}`,
-              ),
-              { tone: "warn" },
-            );
-          } else {
-            showToast(tr(`Rewound ${n} turn${n === 1 ? "" : "s"}`, `已回退 ${n} 轮对话`));
-          }
-          // Prefill composer with the rewound user message
-          if (d.user_text) {
-            useSessionStore.getState().setComposerInputFor(sessionId!, d.user_text);
-          }
-          // Reload session so rewound messages disappear
-          wsSend({ action: "load_session", session_id: sessionId });
-        } else {
-          const err = d.error ?? (errors.length ? errors.join("; ") : "unknown error");
-          showToast(tr(`Rewind failed: ${err}`, `回退失败：${err}`));
-        }
-      } catch {
-        /* ignore */
-      }
-    }
-    ws.addEventListener("message", onMsg);
-    // ponytail: fixed 30s ceiling. A rewind touching thousands of backed-up
-    // files could in principle outrun it; make it adaptive if that shows up.
-    timer = setTimeout(() => {
-      finish();
-      showToast(tr("Rewind timed out", "回退超时，未收到结果"), { tone: "error" });
-    }, 30_000);
-  }
-
   function checkout(targetId: string | undefined, dir: -1 | 1) {
     if (!sessionId || !targetId || busy) return;
     setBusy(true);
@@ -351,9 +293,9 @@ export function MessageActions({
     // target branch (its content backfills); on failure we revert the
     // label + re-enable the nav.
     const store = useSessionStore.getState();
-    const prevIdx = msg.siblingIndex;
-    store.updateMessage(sessionId, msg.id, {
-      siblingIndex: (msg.siblingIndex ?? 0) + dir,
+    store.applyLocalChange(sessionId, {
+      kind: "overlay_set", rowId: msg.id,
+      fields: { siblingIndex: (msg.siblingIndex ?? 0) + dir }, clear: ["until_read"],
     });
     postJson("/api/chat/checkout", { session_id: sessionId, msg_id: targetId })
       .then(() => {
@@ -362,11 +304,7 @@ export function MessageActions({
       })
       .catch((err) => {
         console.error("[message-actions] checkout failed:", err);
-        if (useSessionStore.getState().messagesById[msg.id]) {
-          useSessionStore
-            .getState()
-            .updateMessage(sessionId, msg.id, { siblingIndex: prevIdx });
-        }
+        useSessionStore.getState().applyLocalChange(sessionId, { kind: "overlay_clear", rowId: msg.id });
         showToast(tr("Version switch failed.", "版本切换失败。"), { tone: "error" });
         setBusy(false);
       });
@@ -408,12 +346,24 @@ export function MessageActions({
           onClick={onEdit}
         />
       ) : null}
-      {msg.role === "user" ? (
+      {rewindable ? (
         <ActionButton
           icon={SVG.undo}
           title={tr("Rewind to here", "回退到这里")}
-          disabled={busy}
-          onClick={rewindToHere}
+          detail={tr(
+            "Takes this message and everything after it out of the conversation.",
+            "把这条消息及之后的内容撤出对话。",
+          )}
+          disabledReason={rewindDisabled}
+          onClick={() => void requestRewind(sessionId!, msg.id, msg.content ?? "")}
+        />
+      ) : null}
+      {sent && !forkCause ? (
+        <ActionButton
+          icon={SVG.fork}
+          title={tr("Fork from here", "从这里分叉")}
+          detail={tr("Starts a new conversation from this point. This one stays as it is.", "从这里开启新对话，这段对话保持不变。")}
+          onClick={() => void forkFromMessage(sessionId!, msg.id)}
         />
       ) : null}
       {total > 1 ? (

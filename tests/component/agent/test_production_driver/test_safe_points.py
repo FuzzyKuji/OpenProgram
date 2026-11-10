@@ -63,7 +63,6 @@ def test_app_control_safe_point_waits_before_tool_effect_and_resumes_once(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="system-public",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -235,7 +234,6 @@ def test_forced_app_control_uses_durable_system_wait_before_subprocess(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="forced-system",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -325,7 +323,6 @@ def test_production_driver_consumes_running_steer_fifo_at_provider_safe_point(tm
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="owner-steer",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -476,7 +473,6 @@ def test_production_pause_precedes_steer_and_paused_steer_is_next_activation_inp
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="owner-pause-steer",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -641,33 +637,9 @@ def test_long_turn_pause_continue_uses_current_decision_cursor(tmp_path):
     assert snapshot_one.can_continue is True
     unresolved = control.effects.list_unresolved(execution.execution_id)
     assert unresolved == []
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    from openprogram.runtime.execution.projections import ExecutionProjectionReadModel
+    from openprogram.runtime.execution.event_effects import ExecutionEventEffects
 
-    state = AgentCheckpointV1.load(
-        store, ExecutionCheckpointStore(store).get(paused.checkpoint_head_id)
-    )
-    assert "turn_display_ref" in state.payload
-    display = state.read_json_ref(
-        store,
-        execution.execution_id,
-        state.payload["turn_display_ref"],
-    )
-    assert display[0]["tool_call_id"] == "call-0"
-    assert display[0]["result"] == "clicked-0"
-    assert (
-        display[LONG_TURN_DECISIONS - 1]["tool_call_id"]
-        == f"call-{LONG_TURN_DECISIONS - 1}"
-    )
-    assert (
-        display[LONG_TURN_DECISIONS - 1]["result"]
-        == f"clicked-{LONG_TURN_DECISIONS - 1}"
-    )
-    assert len(state.payload["terminal_effect_receipts"]) <= 2
-    projected = ExecutionProjectionReadModel(store)._checkpoint_blocks(
-        paused,
-        state.payload["turn"]["assistant_message_id"],
-    )
+    projected = ExecutionEventEffects(store)._checkpoint_blocks(paused, "user-anchor_reply")
     assert any(
         block.get("tool_call_id") == "call-0" and block.get("result") == "clicked-0"
         for block in projected
@@ -701,7 +673,6 @@ def test_long_turn_pause_continue_uses_current_decision_cursor(tmp_path):
         checkpoint=checkpoint,
         request=request,
     )
-    assert len(continuation.state.payload["terminal_effect_receipts"]) <= 2
     hook2 = driver._safe_point_hook(
         captured["attempt"],
         request,
@@ -760,15 +731,7 @@ def test_long_turn_pause_continue_uses_current_decision_cursor(tmp_path):
     assert paused_again.checkpoint_head_id != paused.checkpoint_head_id
     assert store.get_command("pause-long-2").status is CommandStatus.APPLIED
     assert _committed_tool_ids(store, execution.execution_id) == second_tools
-    second_state = AgentCheckpointV1.load(
-        store,
-        ExecutionCheckpointStore(store).get(paused_again.checkpoint_head_id),
-    )
-    second_display = second_state.read_json_ref(
-        store,
-        execution.execution_id,
-        second_state.payload["turn_display_ref"],
-    )
+    second_display = ExecutionEventEffects(store)._checkpoint_blocks(paused_again, "user-anchor_reply")
     assert any(
         block.get("tool_call_id") == "call-0" and block.get("result") == "clicked-0"
         for block in second_display
@@ -796,401 +759,6 @@ def test_long_turn_pause_continue_uses_current_decision_cursor(tmp_path):
     assert resumed.command.status is CommandStatus.APPLIED
     assert resumed.execution.status is ExecutionStatus.RUNNING
     assert _committed_tool_ids(store, execution.execution_id) == second_tools
-
-
-def test_pause_during_dispatched_nonrepeatable_tool_stays_reconciliation(tmp_path):
-    from openprogram.runtime.execution.effects import EffectStatus
-
-    store, attempts, control, driver, request, snapshot, execution, active, hook = (
-        _prepare_long_turn(tmp_path, "exec-uncertain-tool")
-    )
-    _provider_tool_decision(hook, snapshot, 0)
-    assert (
-        hook(
-            "provider.before",
-            {
-                "resolved_snapshot": snapshot,
-                "context": {"messages": ["in-flight-tool"]},
-                "supports_idempotency_key": True,
-            },
-        )
-        is False
-    )
-    assert (
-        hook(
-            "provider.after",
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": [
-                        {
-                            "type": "toolCall",
-                            "id": "call-inflight",
-                            "name": "web_use",
-                            "arguments": {"n": "inflight"},
-                        }
-                    ],
-                    "api": "fake",
-                    "provider": "fake",
-                    "model": "fake",
-                },
-                "provider_request_id": "request-inflight",
-                "usage": {},
-                "tool_call_ids": ["call-inflight"],
-                "next_tool_index": 0,
-            },
-        )
-        is False
-    )
-    assert (
-        hook(
-            "tool.before",
-            {
-                "tool_call_id": "call-inflight",
-                "arguments": {"n": "inflight"},
-            },
-        )
-        is False
-    )
-    assert hook("tool.started", {"tool_call_id": "call-inflight"}) is False
-    unresolved = control.effects.list_unresolved(execution.execution_id)
-    assert len(unresolved) == 1
-    assert unresolved[0].metadata.get("kind") == "tool.before"
-    assert unresolved[0].status is EffectStatus.DISPATCHED
-    pausing = asyncio.run(
-        control.request_pause(
-            command_id="pause-uncertain-tool",
-            execution_id=execution.execution_id,
-            expected_version=store.get_execution(execution.execution_id).status_version,
-            actor={"surface": "test"},
-        )
-    )
-    finished = control.finish_attempt(
-        attempt_id=active.attempt_id,
-        generation=active.generation,
-        expected_execution_version=pausing.execution.status_version,
-        target=ExecutionStatus.COMPLETED,
-        outcome="completed",
-        command_id="pause-uncertain-tool",
-    )
-    assert finished.execution.status is ExecutionStatus.RECONCILIATION_REQUIRED
-    assert finished.command is not None
-    assert finished.command.status is CommandStatus.APPLYING
-    still = control.effects.get(unresolved[0].effect_id)
-    assert still is not None and still.status is EffectStatus.DISPATCHED
-
-
-def test_legacy_checkpoint_continue_keeps_completed_tool_history(tmp_path):
-    from openprogram.runtime.execution.agent_checkpoint import (
-        AgentCheckpointV1,
-        canonical_json_bytes,
-        decode_turn_display,
-    )
-    from openprogram.runtime.conversation.checkpoint import AgentContinuation
-    from openprogram.runtime.execution.checkpoints import ExecutionCheckpointStore
-    from openprogram.runtime.execution.effects import (
-        EffectClassification,
-        EffectStatus,
-        EffectStore,
-    )
-    from openprogram.runtime.execution.projections import ExecutionProjectionReadModel
-    from openprogram.models.providers.types import (
-        AssistantMessage,
-        TextContent,
-        ToolCall,
-        ToolResultMessage,
-    )
-
-    store, _attempts, control, driver, request, snapshot, execution, active, _hook = (
-        _prepare_long_turn(tmp_path, "exec-legacy-display")
-    )
-    decision = AssistantMessage(
-        content=[
-            ToolCall(id="call-finished", name="web_use", arguments={"n": "old"}),
-            ToolCall(id="call-pending", name="web_use", arguments={"n": "suffix"}),
-        ],
-        api="fake",
-        provider="fake",
-        model="fake",
-        timestamp=1,
-        stop_reason="toolUse",
-    )
-    finished_result = ToolResultMessage(
-        tool_call_id="call-finished",
-        tool_name="web_use",
-        content=[TextContent(text="second:ok")],
-        timestamp=1,
-    )
-    effects = EffectStore(store)
-    provider = effects.register(
-        effect_id="effect_legacy_provider",
-        execution_id=execution.execution_id,
-        attempt_id=active.attempt_id,
-        action_id="provider-legacy",
-        classification=EffectClassification.IDEMPOTENT,
-        idempotency_key="provider-legacy",
-        metadata={"kind": "provider.before"},
-    )
-    effects.mark_dispatched(provider.effect_id, expected_status=EffectStatus.PLANNED)
-    effects.resolve(
-        provider.effect_id,
-        expected_status=EffectStatus.DISPATCHED,
-        outcome=EffectStatus.COMMITTED,
-        receipt={"provider_request_id": "legacy-provider"},
-        attempt_id=active.attempt_id,
-        generation=active.generation,
-    )
-    tool_effect = effects.register(
-        effect_id="effect_legacy_tool",
-        execution_id=execution.execution_id,
-        attempt_id=active.attempt_id,
-        action_id="tool-finished-legacy",
-        classification=EffectClassification.NONREPEATABLE,
-        idempotency_key=None,
-        metadata={"kind": "tool.before"},
-    )
-    effects.mark_dispatched(tool_effect.effect_id, expected_status=EffectStatus.PLANNED)
-    pausing = asyncio.run(
-        control.request_pause(
-            command_id="pause-legacy-display",
-            execution_id=execution.execution_id,
-            expected_version=store.get_execution(execution.execution_id).status_version,
-            actor={"surface": "test"},
-        )
-    )
-    terminal_receipt = {
-        "tool_call_id": "call-finished",
-        "is_error": False,
-        "result_hash": "legacy",
-    }
-    legacy = AgentCheckpointV1.build(
-        safe_point={
-            "kind": "agent.tool.action.after",
-            "step_id": "after_tool:tool-finished-legacy",
-            "phase": "after_tool",
-            "sentinel": "resume-from-checkpoint",
-        },
-        frontier=[
-            {
-                "step_id": "after_tool:tool-finished-legacy",
-                "phase": "after_tool",
-                "branch_id": "main",
-            }
-        ],
-        turn={
-            "user_message_id": "user-anchor",
-            "assistant_message_id": "user-anchor_reply",
-            "base_history_head_id": "user-anchor",
-        },
-        assistant_message=decision.model_dump(mode="json"),
-        tool_results=[finished_result.model_dump(mode="json")],
-        resolved_snapshot=snapshot,
-        provider_action_id="provider-legacy",
-        tool_call_ids=["call-finished", "call-pending"],
-        next_tool_index=1,
-        repeat_failures={},
-        completed_actions=[
-            {
-                "action_id": "provider-legacy",
-                "input_hash": "legacy-context",
-                "result": decision.model_dump(mode="json"),
-            },
-            {
-                "action_id": "tool-finished-legacy",
-                "input_hash": "legacy-tool",
-                "result": finished_result.model_dump(mode="json"),
-            },
-        ],
-        terminal_effect_receipts=[
-            {
-                "effect_id": "effect_legacy_provider",
-                "frontier_step_id": "after_provider:provider-legacy",
-                "action_id": "provider-legacy",
-                "outcome": "committed",
-                "receipt": {"provider_request_id": "legacy-provider"},
-            },
-            {
-                "effect_id": "effect_legacy_tool",
-                "frontier_step_id": "after_tool:tool-finished-legacy",
-                "action_id": "tool-finished-legacy",
-                "outcome": "committed",
-                "receipt": dict(terminal_receipt),
-            },
-        ],
-    )
-    assert "turn_display_ref" not in legacy.payload
-    control.commit_agent_safe_point(
-        execution_id=execution.execution_id,
-        attempt_id=active.attempt_id,
-        generation=active.generation,
-        expected_version=pausing.execution.status_version,
-        safe_point_kind="agent.tool.action.after",
-        frontier=tuple(legacy.payload["frontier"]),
-        state_refs={},
-        effect_id=tool_effect.effect_id,
-        terminal_receipt=terminal_receipt,
-        receipt_blob=canonical_json_bytes(terminal_receipt),
-        agent_checkpoint=legacy,
-        command_id="pause-legacy-display",
-        managed_action_id="tool-finished-legacy",
-    )
-    paused = store.get_execution(execution.execution_id)
-    assert paused is not None and paused.status is ExecutionStatus.PAUSED
-    seeded = decode_turn_display(
-        AgentCheckpointV1.load(
-            store, ExecutionCheckpointStore(store).get(paused.checkpoint_head_id)
-        ),
-        store=store,
-        execution_id=execution.execution_id,
-    )
-    finished_card = next(
-        block for block in seeded if block.get("tool_call_id") == "call-finished"
-    )
-    pending_card = next(
-        block for block in seeded if block.get("tool_call_id") == "call-pending"
-    )
-    assert finished_card.get("result") == "second:ok"
-    assert "result" not in pending_card
-    assert "declined" not in str(pending_card)
-    assert "expired" not in str(pending_card)
-
-    captured = {}
-
-    async def activate(attempt, activation):
-        captured["attempt"] = attempt
-        captured["activation"] = activation
-
-    continued = asyncio.run(
-        control.request_continue(
-            command_id="continue-legacy-display",
-            execution_id=execution.execution_id,
-            expected_version=paused.status_version,
-            actor={"surface": "test"},
-            activator=activate,
-        )
-    )
-    assert continued.command.status is CommandStatus.APPLIED
-    continuation = AgentContinuation.from_checkpoint(
-        store=store,
-        checkpoint=captured["activation"].checkpoint,
-        request=request,
-    )
-    assert "turn_display_ref" not in continuation.state.payload
-    hook = driver._safe_point_hook(
-        captured["attempt"],
-        request,
-        threading.Event(),
-        continuation=continuation,
-    )
-    assert (
-        hook(
-            "tool.before",
-            {
-                "tool_call_id": "call-pending",
-                "arguments": {"n": "suffix"},
-            },
-        )
-        is False
-    )
-    assert (
-        hook(
-            "tool.after",
-            {
-                "tool_call_id": "call-pending",
-                "is_error": False,
-                "result": {
-                    "role": "toolResult",
-                    "tool_call_id": "call-pending",
-                    "content": [{"type": "text", "text": "suffix-ok"}],
-                },
-                "tool_call_ids": ["call-finished", "call-pending"],
-                "next_tool_index": 2,
-            },
-        )
-        is False
-    )
-    _provider_tool_decision(hook, snapshot, "new")
-    assert (
-        hook(
-            "provider.before",
-            {
-                "resolved_snapshot": snapshot,
-                "context": {"messages": ["legacy-pause"]},
-                "supports_idempotency_key": True,
-            },
-        )
-        is False
-    )
-    asyncio.run(
-        control.request_pause(
-            command_id="pause-after-legacy-continue",
-            execution_id=execution.execution_id,
-            expected_version=store.get_execution(execution.execution_id).status_version,
-            actor={"surface": "test"},
-        )
-    )
-    assert (
-        hook(
-            "provider.after",
-            {
-                "message": {
-                    "role": "assistant",
-                    "content": [{"type": "text", "text": "done"}],
-                    "api": "fake",
-                    "provider": "fake",
-                    "model": "fake",
-                    "timestamp": 1,
-                },
-                "provider_request_id": "after-legacy",
-                "usage": {},
-                "tool_call_ids": [],
-                "next_tool_index": 0,
-            },
-        )
-        is True
-    )
-    paused_again = store.get_execution(execution.execution_id)
-    assert paused_again is not None and paused_again.status is ExecutionStatus.PAUSED
-    new_state = AgentCheckpointV1.load(
-        store,
-        ExecutionCheckpointStore(store).get(paused_again.checkpoint_head_id),
-    )
-    assert "turn_display_ref" in new_state.payload
-    display = new_state.read_json_ref(
-        store,
-        execution.execution_id,
-        new_state.payload["turn_display_ref"],
-    )
-    assert any(
-        block.get("tool_call_id") == "call-finished"
-        and block.get("result") == "second:ok"
-        for block in display
-    )
-    assert any(
-        block.get("tool_call_id") == "call-pending"
-        and block.get("result") == "suffix-ok"
-        for block in display
-    )
-    assert any(
-        block.get("tool_call_id") == "call-new" and block.get("result") == "clicked-new"
-        for block in display
-    )
-    projected = ExecutionProjectionReadModel(store)._checkpoint_blocks(
-        paused_again,
-        new_state.payload["turn"]["assistant_message_id"],
-    )
-    assert any(
-        block.get("tool_call_id") == "call-finished"
-        and block.get("result") == "second:ok"
-        for block in projected
-    )
-    assert any(
-        block.get("tool_call_id") == "call-new" and block.get("result") == "clicked-new"
-        for block in projected
-    )
-    tool_ids = _committed_tool_ids(store, execution.execution_id)
-    assert tool_ids.count("tool-finished-legacy") == 1
-    assert len(tool_ids) == len(set(tool_ids))
 
 
 def test_function_suspension_retains_pending_agent_tool_slot(tmp_path, monkeypatch):
@@ -1358,7 +926,6 @@ def _pause_admission_owner(tmp_path, monkeypatch, program_fn=_pause_admission_pr
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="owned-function",
-        ttl_seconds=30,
     )
     active, execution = attempts.activate(
         leased.attempt_id,
@@ -1386,18 +953,21 @@ def _pause_admission_owner(tmp_path, monkeypatch, program_fn=_pause_admission_pr
     )
 
 
-def _pause_admission_effects(store, execution_id):
-    from openprogram.runtime.execution.effects import EffectStore
-
-    with store._connect() as connection:
-        rows = connection.execute(
-            "SELECT * FROM effects WHERE execution_id = ? ORDER BY created_at",
-            (execution_id,),
-        ).fetchall()
-    return [EffectStore(store)._record(row) for row in rows]
+def _function_steps(store, execution_id):
+    log = store.function_log(execution_id)
+    log.unresolved()  # read what has been appended
+    return list(log._steps.values())
 
 
-def test_function_pause_racing_admission_resumes_same_cursor_once(
+def _request_pause(store, control, execution_id, command_id):
+    current = store.get_execution(execution_id)
+    asyncio.run(control.request_pause(
+        command_id=command_id, execution_id=execution_id,
+        expected_version=current.status_version, actor={"surface": "test"},
+    ))
+
+
+def test_function_pause_while_a_step_starts_stops_after_it_and_resumes_past_it(
     tmp_path, monkeypatch
 ):
     import pytest
@@ -1406,232 +976,109 @@ def test_function_pause_racing_admission_resumes_same_cursor_once(
         FunctionSuspended,
         function_execution,
     )
-    from openprogram.runtime.execution.effects import EffectStore, EffectStatus
+    from openprogram.runtime.execution.effects import EffectStore
+    from openprogram.runtime.execution.function_log import COMMITTED, FunctionLog
 
-    # Repeat both deterministic scheduling windows with isolated owners.
-    for window in ("register", "mark_dispatched"):
-        with monkeypatch.context() as scoped:
-            folder = tmp_path / window
-            folder.mkdir()
-            store, active, control, program = _pause_admission_owner(folder, scoped)
-            original = getattr(EffectStore, window)
-            pauses = []
+    store, active, control, program = _pause_admission_owner(tmp_path, monkeypatch)
+    original = FunctionLog.start_step
+    pauses = []
 
-            def before_admission(self, *args, **kwargs):
-                step = (
-                    kwargs["metadata"]["function_step"]["step"]
-                    if window == "register"
-                    else self.get(args[0]).metadata["function_step"]["step"]
-                )
-                if step == "second" and not pauses:
-                    pauses.append(step)
-                    current = store.get_execution(active.execution_id)
-                    asyncio.run(
-                        control.request_pause(
-                            command_id="owned-pause",
-                            execution_id=current.execution_id,
-                            expected_version=current.status_version,
-                            actor={"surface": "test"},
-                        )
-                    )
-                return original(self, *args, **kwargs)
+    def pause_while_starting(self, **kwargs):
+        if kwargs["identity"]["step"] == "second" and not pauses:
+            pauses.append(True)
+            _request_pause(store, control, active.execution_id, "owned-pause")
+        return original(self, **kwargs)
 
-            scoped.setattr(EffectStore, window, before_admission)
-            with pytest.raises(FunctionSuspended) as suspended:
-                with function_execution(
-                    store,
-                    attempt_id=active.attempt_id,
-                    generation=active.generation,
-                    call_key="same-call",
-                ):
-                    program(str(folder))
-            assert type(suspended.value) is FunctionSuspended
-            paused = store.get_execution(active.execution_id)
-            assert paused.status is ExecutionStatus.PAUSED
-            assert (folder / "dispatches").read_text().splitlines() == ["first"]
-            effects = _pause_admission_effects(store, active.execution_id)
-            assert effects[0].status is EffectStatus.COMMITTED
-            assert not EffectStore(store).list_unresolved(active.execution_id)
-            if window == "mark_dispatched":
-                intent = effects[1]
-                assert intent.status is EffectStatus.NOT_COMMITTED
-                assert intent.attempt_id == active.attempt_id
-                assert intent.receipt == {
-                    "outcome": "not_started",
-                    "execution_started": False,
-                    "pause_before_dispatch": True,
-                }
-            else:
-                assert len(effects) == 1
-            asyncio.run(
-                control.request_continue(
-                    command_id="owned-continue",
-                    execution_id=paused.execution_id,
-                    expected_version=paused.status_version,
-                    actor={"surface": "test"},
-                )
-            )
-            resumed = store.get_execution(active.execution_id)
-            for _ in range(2):
-                with function_execution(
-                    store,
-                    attempt_id=resumed.current_attempt_id,
-                    generation=resumed.owner_lease["generation"],
-                    call_key="same-call",
-                ):
-                    assert program(str(folder)) == "firstsecond"
-            assert (folder / "dispatches").read_text().splitlines() == [
-                "first",
-                "second",
-            ]
-            assert [
-                e.status for e in _pause_admission_effects(store, active.execution_id)
-            ].count(EffectStatus.COMMITTED) == 2
+    monkeypatch.setattr(FunctionLog, "start_step", pause_while_starting)
+    with pytest.raises(FunctionSuspended) as suspended:
+        with function_execution(
+            store, attempt_id=active.attempt_id, generation=active.generation, call_key="same-call",
+        ):
+            program(str(tmp_path))
+    assert type(suspended.value) is FunctionSuspended
+    paused = store.get_execution(active.execution_id)
+    assert paused.status is ExecutionStatus.PAUSED
+    assert (tmp_path / "dispatches").read_text().splitlines() == ["first", "second"]
+    assert not EffectStore(store).list_unresolved(active.execution_id)
+    asyncio.run(control.request_continue(
+        command_id="owned-continue", execution_id=paused.execution_id,
+        expected_version=paused.status_version, actor={"surface": "test"},
+    ))
+    resumed = store.get_execution(active.execution_id)
+    for _ in range(2):
+        with function_execution(
+            store, attempt_id=resumed.current_attempt_id,
+            generation=resumed.owner_lease["generation"], call_key="same-call",
+        ):
+            assert program(str(tmp_path)) == "firstsecond"
+    assert (tmp_path / "dispatches").read_text().splitlines() == ["first", "second"]
+    assert [step.status for step in _function_steps(store, active.execution_id)].count(COMMITTED) == 2
 
 
-def test_function_cancel_wins_admission_pause_race(tmp_path, monkeypatch):
+def test_function_cancel_wins_over_a_pause_at_the_boundary(tmp_path, monkeypatch):
     import pytest
 
     from openprogram.runtime.agent.durable_steps import function_execution
     from openprogram.host.cancellation import CancelledError
-    from openprogram.runtime.execution.effects import EffectStore, EffectStatus
 
-    for window in ("register", "mark_dispatched"):
-        with monkeypatch.context() as scoped:
-            folder = tmp_path / window
-            folder.mkdir()
-            store, active, control, program = _pause_admission_owner(folder, scoped)
-            original = getattr(EffectStore, window)
-
-            def cancel_before_admission(self, *args, **kwargs):
-                current = store.get_execution(active.execution_id)
-                asyncio.run(
-                    control.request_pause(
-                        command_id="pause",
-                        execution_id=current.execution_id,
-                        expected_version=current.status_version,
-                        actor={"surface": "test"},
-                    )
-                )
-                current = store.get_execution(active.execution_id)
-                asyncio.run(
-                    control.request_cancel(
-                        command_id="cancel",
-                        execution_id=current.execution_id,
-                        expected_version=current.status_version,
-                        actor={"surface": "test"},
-                        reason_code="user_cancel",
-                    )
-                )
-                return original(self, *args, **kwargs)
-
-            scoped.setattr(EffectStore, window, cancel_before_admission)
-            with pytest.raises(CancelledError):
-                with function_execution(
-                    store,
-                    attempt_id=active.attempt_id,
-                    generation=active.generation,
-                    call_key="cancelled-call",
-                ):
-                    program(str(folder))
-            assert (
-                store.get_execution(active.execution_id).status
-                is ExecutionStatus.CANCELLING
-            )
-            assert not (folder / "dispatches").exists()
-            effects = _pause_admission_effects(store, active.execution_id)
-            assert all(e.status is EffectStatus.NOT_COMMITTED for e in effects)
-            assert all(e.receipt["pause_before_dispatch"] is False for e in effects)
+    store, active, control, program = _pause_admission_owner(tmp_path, monkeypatch)
+    _request_pause(store, control, active.execution_id, "pause")
+    current = store.get_execution(active.execution_id)
+    asyncio.run(control.request_cancel(
+        command_id="cancel", execution_id=current.execution_id,
+        expected_version=current.status_version, actor={"surface": "test"}, reason_code="user_cancel",
+    ))
+    with pytest.raises(CancelledError):
+        with function_execution(
+            store, attempt_id=active.attempt_id, generation=active.generation, call_key="cancelled-call",
+        ):
+            program(str(tmp_path))
+    assert store.get_execution(active.execution_id).status is ExecutionStatus.CANCELLING
+    assert not (tmp_path / "dispatches").exists()
+    assert _function_steps(store, active.execution_id) == []
 
 
-def test_function_unrelated_admission_conflicts_are_not_suspensions(
-    tmp_path, monkeypatch
-):
-    import pytest
-
-    from openprogram.runtime.agent.durable_steps import function_execution
-    from openprogram.runtime.execution.effects import EffectStore, EffectConflict
-
-    for code in ("admission_closed", "idempotency_collision", "stale_attempt"):
-        with monkeypatch.context() as scoped:
-            folder = tmp_path / code
-            folder.mkdir()
-            store, active, _control, program = _pause_admission_owner(folder, scoped)
-            conflict = EffectConflict(code, "owned non-pause failure")
-
-            def fail_registration(self, **kwargs):
-                raise conflict
-
-            scoped.setattr(EffectStore, "register", fail_registration)
-            with pytest.raises(EffectConflict) as caught:
-                with function_execution(
-                    store,
-                    attempt_id=active.attempt_id,
-                    generation=active.generation,
-                    call_key="failed-call",
-                ):
-                    program(str(folder))
-            assert caught.value is conflict
-            assert (
-                store.get_execution(active.execution_id).status
-                is ExecutionStatus.RUNNING
-            )
-            assert not (folder / "dispatches").exists()
-
-
-def test_function_pause_after_dispatch_keeps_committed_effect(tmp_path, monkeypatch):
+def test_function_pause_after_a_step_starts_keeps_its_result(tmp_path, monkeypatch):
     import pytest
 
     from openprogram.runtime.agent.durable_steps import (
         FunctionSuspended,
         function_execution,
     )
-    from openprogram.runtime.execution.effects import EffectStore, EffectStatus
+    from openprogram.runtime.execution.function_log import COMMITTED, FunctionLog
 
     store, active, control, program = _pause_admission_owner(tmp_path, monkeypatch)
-    original = EffectStore.mark_dispatched
+    original = FunctionLog.start_step
     pauses = []
 
-    def pause_after_admission(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
+    def pause_after_start(self, **kwargs):
+        original(self, **kwargs)
         if not pauses:
-            pauses.append(result.effect_id)
-            current = store.get_execution(active.execution_id)
-            asyncio.run(
-                control.request_pause(
-                    command_id="after-dispatch",
-                    execution_id=current.execution_id,
-                    expected_version=current.status_version,
-                    actor={"surface": "test"},
-                )
-            )
-        return result
+            pauses.append(True)
+            _request_pause(store, control, active.execution_id, "after-dispatch")
 
-    monkeypatch.setattr(EffectStore, "mark_dispatched", pause_after_admission)
+    monkeypatch.setattr(FunctionLog, "start_step", pause_after_start)
     with pytest.raises(FunctionSuspended):
         with function_execution(
-            store,
-            attempt_id=active.attempt_id,
-            generation=active.generation,
-            call_key="after-call",
+            store, attempt_id=active.attempt_id, generation=active.generation, call_key="after-call",
         ):
             program(str(tmp_path))
-    effects = _pause_admission_effects(store, active.execution_id)
-    assert len(effects) == 1 and effects[0].status is EffectStatus.COMMITTED
-    assert "pause_before_dispatch" not in effects[0].receipt
+    steps = _function_steps(store, active.execution_id)
+    assert len(steps) == 1 and steps[0].status == COMMITTED
     assert (tmp_path / "dispatches").read_text().splitlines() == ["first"]
 
 
-def test_function_stale_owner_at_registration_still_fails(tmp_path, monkeypatch):
+def test_function_stale_owner_before_a_step_still_fails(tmp_path, monkeypatch):
     import pytest
 
     from openprogram.runtime.agent.durable_steps import function_execution
-    from openprogram.runtime.execution.effects import EffectConflict, EffectStore
+    from openprogram.runtime.execution.attempts import AttemptConflict
+    from openprogram.runtime.execution.function_log import FunctionLog
 
     store, active, _control, program = _pause_admission_owner(tmp_path, monkeypatch)
-    original = EffectStore.register
+    original = FunctionLog.add_node
 
-    def finish_owner_before_registration(self, **kwargs):
+    def finish_owner_first(self, *args, **kwargs):
         current = store.get_execution(active.execution_id)
         AttemptStore(store).finish(
             active.attempt_id,
@@ -1640,18 +1087,14 @@ def test_function_stale_owner_at_registration_still_fails(tmp_path, monkeypatch)
             target=ExecutionStatus.FAILED,
             outcome="owned test owner ended",
         )
-        return original(self, **kwargs)
+        return original(self, *args, **kwargs)
 
-    monkeypatch.setattr(EffectStore, "register", finish_owner_before_registration)
-    with pytest.raises(EffectConflict) as caught:
+    monkeypatch.setattr(FunctionLog, "add_node", finish_owner_first)
+    with pytest.raises(AttemptConflict):
         with function_execution(
-            store,
-            attempt_id=active.attempt_id,
-            generation=active.generation,
-            call_key="stale-call",
+            store, attempt_id=active.attempt_id, generation=active.generation, call_key="stale-call",
         ):
             program(str(tmp_path))
-    assert caught.value.code == "stale_attempt"
     assert store.get_execution(active.execution_id).status is ExecutionStatus.FAILED
     assert not (tmp_path / "dispatches").exists()
 
@@ -1674,6 +1117,7 @@ def test_function_pause_after_dispatch_keeps_unknown_effect_for_reconciliation(
 
     from openprogram.runtime.agent.durable_steps import function_execution
     from openprogram.runtime.execution.effects import EffectStore, EffectStatus
+    from openprogram.runtime.execution.function_log import FunctionLog
     from openprogram.runtime.execution.state_machine import InvalidCommand
 
     store, active, control, program = _pause_admission_owner(
@@ -1681,22 +1125,13 @@ def test_function_pause_after_dispatch_keeps_unknown_effect_for_reconciliation(
         monkeypatch,
         _pause_admission_unknown_program,
     )
-    original = EffectStore.mark_dispatched
+    original = FunctionLog.start_step
 
-    def pause_after_admission(self, *args, **kwargs):
-        result = original(self, *args, **kwargs)
-        current = store.get_execution(active.execution_id)
-        asyncio.run(
-            control.request_pause(
-                command_id="pause-unknown",
-                execution_id=current.execution_id,
-                expected_version=current.status_version,
-                actor={"surface": "test"},
-            )
-        )
-        return result
+    def pause_after_start(self, **kwargs):
+        original(self, **kwargs)
+        _request_pause(store, control, active.execution_id, "pause-unknown")
 
-    monkeypatch.setattr(EffectStore, "mark_dispatched", pause_after_admission)
+    monkeypatch.setattr(FunctionLog, "start_step", pause_after_start)
     with pytest.raises(RuntimeError, match="owned connection lost"):
         with function_execution(
             store,
@@ -1705,7 +1140,7 @@ def test_function_pause_after_dispatch_keeps_unknown_effect_for_reconciliation(
             call_key="unknown-call",
         ):
             program(str(tmp_path))
-    effects = _pause_admission_effects(store, active.execution_id)
+    effects = EffectStore(store).list_unresolved(active.execution_id)
     assert len(effects) == 1 and effects[0].status is EffectStatus.DISPATCHED
     assert not effects[0].receipt
     recovered = control.recover_owner_loss(
@@ -1724,10 +1159,7 @@ def test_function_pause_after_dispatch_keeps_unknown_effect_for_reconciliation(
             )
         )
     assert (tmp_path / "dispatches").read_text().splitlines() == ["unconfirmed"]
-    assert (
-        _pause_admission_effects(store, active.execution_id)[0].status
-        is EffectStatus.DISPATCHED
-    )
+    assert EffectStore(store).list_unresolved(active.execution_id)[0].status is EffectStatus.DISPATCHED
 
 
 def test_app_control_granted_before_the_boundary_still_records_the_tool_intent(
@@ -1743,7 +1175,6 @@ def test_app_control_granted_before_the_boundary_still_records_the_tool_intent(
     from openprogram.runtime.conversation.production_driver import AgentProductionDriver
     from openprogram.runtime.execution.control import RuntimeControlService
     from openprogram.runtime.execution.driver import DriverRegistry
-    from openprogram.runtime.execution.effects import EffectStore
     from openprogram.runtime.execution.waits import DurableWaitStore
     from openprogram.models.providers.types import Model
 
@@ -1753,7 +1184,6 @@ def test_app_control_granted_before_the_boundary_still_records_the_tool_intent(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="system-granted",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -1816,7 +1246,9 @@ def test_app_control_granted_before_the_boundary_still_records_the_tool_intent(
     assert payload["pre_wait"] is None
     assert DurableWaitStore(store).list_open(execution_id=execution.execution_id) == []
     assert hook("tool.started", {"tool_call_id": "gui-call"}) is False
+    from openprogram.runtime.context.session_db import default_db
     assert [
-        effect.metadata.get("kind")
-        for effect in EffectStore(store).list_unresolved(execution.execution_id)
-    ] == ["tool.before"]
+        record["data"]["tool_call_id"]
+        for record in default_db().read_turn_records(execution.session_id, execution.execution_id)
+        if record["type"] == "turn.tool_started"
+    ] == ["gui-call"]

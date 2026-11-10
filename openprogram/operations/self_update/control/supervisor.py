@@ -23,6 +23,7 @@ from openprogram.host._platform import locking
 from openprogram.operations.self_update.control.maintenance import enter_maintenance
 from openprogram.operations.self_update.control.maintenance import leave_maintenance
 from openprogram.operations.self_update.store import SelfUpdateStore
+from openprogram.operations.self_update.trial.sandbox import _sandbox_profile
 from openprogram.operations.self_update.delivery.activation import PLAN_FILE
 from openprogram.operations.self_update.delivery.activation import load_plan
 from openprogram.operations.self_update.delivery.package_protocol import validate_reopen_package
@@ -34,7 +35,7 @@ from openprogram.operations.self_update.types import (
     UpdateRecord,
     _validate_update_id,
 )
-from openprogram.state.store.session.git_session import atomic_write_text
+from openprogram.state.store.session.atomic_file import atomic_write_text
 
 
 @dataclass(frozen=True)
@@ -87,91 +88,13 @@ def _controller_lock(update_dir: Path) -> Iterator[bool]:
         os.close(descriptor)
 
 
-def _wait_for_staging(store: SelfUpdateStore, update_id: str) -> UpdateRecord | None:
+def _wait_for_build(store: SelfUpdateStore, update_id: str) -> UpdateRecord | None:
     record = store.load(update_id)
     deadline = record.request.created_at + record.request.timeout_seconds
     while record.state.phase is UpdatePhase.PREPARING and time.time() < deadline:
         time.sleep(0.2)
         record = store.load(update_id)
-    return record if record.state.phase is UpdatePhase.STAGING else None
-
-
-def _sandbox_profile(
-    candidate: Path,
-    artifact_root: Path,
-    build_home: Path,
-    build_tmp: Path,
-    *,
-    loopback_port: int | None = None,
-    trusted_input: Path | None = None,
-) -> str:
-    def quoted(path: Path) -> str:
-        return json.dumps(str(path))
-
-    rules = [
-        "(version 1)",
-        "(deny default)",
-        "(allow file-read*)",
-        "(allow process-exec process-fork)",
-        "(allow process-info* (target same-sandbox))",
-        "(allow signal (target same-sandbox))",
-        "(allow ipc-posix-sem ipc-posix-shm)",
-        "(allow sysctl-read (sysctl-name-prefix \"hw.\"))",
-        # uname reads all four fields even when the caller only requests -s.
-        '(allow sysctl-read (sysctl-name "kern.ostype") (sysctl-name "kern.osrelease") '
-        '(sysctl-name "kern.version") (sysctl-name "kern.hostname"))',
-        '(allow sysctl-read (sysctl-name "machdep.cpu.brand_string"))',
-        "(deny network*)",
-        f"(deny file-read* (subpath {quoted(Path.home() / '.openprogram')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / '.ssh')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / '.aws')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / '.gnupg')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / '.claude')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / '.config')}))",
-        f"(deny file-read* (literal {quoted(Path.home() / '.claude.json')}))",
-        f"(deny file-read* (literal {quoted(Path.home() / '.netrc')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / 'Library/Keychains')}))",
-        f"(deny file-read* (subpath {quoted(Path.home() / 'Library/Application Support/OpenProgram/local-signing')}))",
-        '(allow file-ioctl file-read-data file-write-data (literal "/dev/null"))',
-        '(allow file-read-data (literal "/dev/zero"))',
-        '(allow file-read-data (literal "/dev/random"))',
-        '(allow file-read-data (literal "/dev/urandom"))',
-        f"(allow file-write* (subpath {quoted(candidate)}))",
-        f"(allow file-write* (subpath {quoted(artifact_root)}))",
-        f"(allow file-write* (subpath {quoted(build_home)}))",
-        f"(allow file-write* (subpath {quoted(build_tmp)}))",
-        # Agent worktrees live under ~/.openprogram/worktrees by default.
-        f"(allow file-read* (subpath {quoted(candidate)}))",
-        f"(allow file-read* (subpath {quoted(artifact_root)}))",
-        f"(allow file-read* (subpath {quoted(build_home)}))",
-        f"(allow file-read* (subpath {quoted(build_tmp)}))",
-        '(deny file-read* (subpath "/Applications/OpenProgram.app"))',
-        '(deny file-read* (regex #".*/\\.env($|/).*$"))',
-    ]
-    protected_root = (Path.home() / ".openprogram").resolve()
-    metadata_paths: set[Path] = set()
-    readable_roots = [candidate, artifact_root, build_home, build_tmp]
-    if trusted_input is not None:
-        readable_roots.append(trusted_input.parent)
-    for root in readable_roots:
-        current = root.resolve()
-        if not current.is_relative_to(protected_root):
-            continue
-        while current.is_relative_to(protected_root):
-            metadata_paths.add(current)
-            if current == protected_root:
-                break
-            current = current.parent
-    for path in sorted(metadata_paths):
-        rules.append(f"(allow file-read-metadata (literal {quoted(path)}))")
-    if trusted_input is not None:
-        rules.append(f"(allow file-read* (literal {quoted(trusted_input)}))")
-    if loopback_port is not None:
-        if type(loopback_port) is not int or not 1024 <= loopback_port <= 65535 or loopback_port == 18100:
-            raise ValueError("invalid packaged smoke port")
-        rules.append(f'(allow network* (local ip "localhost:{loopback_port}") '
-                     f'(remote ip "localhost:{loopback_port}"))')
-    return "\n".join(rules) + "\n"
+    return record if record.state.phase is UpdatePhase.BUILDING else None
 
 
 def _reserve_loopback_port() -> int:
@@ -373,14 +296,14 @@ def _build_candidate(_record: UpdateRecord, _update_dir: Path) -> Artifact:
         _validate_candidate_snapshot,
         _validate_registered_worktree,
     )
-    from openprogram.state.store.session.git_session import atomic_write_text
+    from openprogram.state.store.session.atomic_file import atomic_write_text
     from openprogram.state.worktree.manager import get_manager
 
     record = _record
     update_dir = _update_dir
     worktree = get_manager().get_worktree(record.request.worktree_id)
-    if worktree is None or worktree.parent_session != record.request.session_id:
-        raise RuntimeError("candidate worktree ownership changed")
+    if worktree is None:
+        raise RuntimeError("candidate worktree is no longer registered")
     source = _recorded_path(worktree.source_repo, "source repo")
     candidate = _recorded_path(worktree.worktree_path, "candidate worktree")
     _validate_registered_worktree(
@@ -569,7 +492,11 @@ def _tree_digest(root: Path) -> str:
     return digest.hexdigest()
 
 
-def _wait_for_quiescence(deadline: float) -> bool:
+def _running_work():
+    """Yield a description of each piece of work that blocks a worker restart.
+
+    Lazy, because polling only needs to know whether there is a first one.
+    """
     from openprogram.runtime.jobs.store import list_jobs
     from openprogram.runtime.jobs.types import JobStatus
     from openprogram.state.store import default_store
@@ -577,44 +504,54 @@ def _wait_for_quiescence(deadline: float) -> bool:
     from openprogram.runtime.execution.store import default_store as execution_store
     from openprogram.runtime.jobs.resource_governance import ResourceGovernor
     from openprogram.models.usage.ledger import default_ledger
-    governor = ResourceGovernor(default_ledger)
 
-    while time.time() < deadline:
-        # Canonical rows are read from SQLite on every poll. SessionStore's
-        # list index is process-local and cannot observe another worker's writes.
-        executions = execution_store()
-        active = executions.list_nonterminal()
-        if governor.has_live_jobs() or any(item.current_attempt_id is not None or item.status.value in {
-            "running", "pausing", "cancelling",
-        } for item in active):
-            time.sleep(0.2)
+    # The supervisor is its own process, so each poll reads the Worker's
+    # logs again. SessionStore's list index is process-local too.
+    executions = execution_store().fresh_view()
+    if ResourceGovernor(default_ledger).has_live_jobs():
+        yield "background jobs holding a run slot"
+    active = [item for item in executions.list_nonterminal() if item.current_attempt_id is not None or item.status.value in {
+        "running", "pausing", "cancelling",
+    }]
+    for item in active:
+        yield f"execution {item.execution_id} ({item.status.value}) in conversation {item.session_id}"
+    sessions = default_store()
+    # Refresh the legacy projection inventory as well. Canonical paused
+    # foreground turns can legitimately retain a running session summary.
+    from openprogram.state.store import SessionStore
+    if isinstance(sessions, SessionStore):
+        fresh = SessionStore(sessions.root_path)
+        try:
+            inventory = fresh.list_sessions(include_archived=True, limit=100_000)
+        finally:
+            fresh.close()
+    else:
+        inventory = sessions.list_sessions(include_archived=True, limit=100_000)
+    for session in inventory:
+        history = executions.list_for_session(session["id"])
+        if session.get("status") == "running" and not history:
+            yield f"a turn in conversation {session['id']}"
+        try:
+            jobs = list_jobs(session["id"], status_filter={JobStatus.RUNNING}, limit=100_000, lock_timeout=1.0)
+        except TimeoutError:
+            # A held lock must not stall the poll past its deadline, and
+            # what cannot be read is not known to be quiet.
+            yield f"conversation {session['id']} (locked by another process)"
             continue
-        sessions = default_store()
-        # Refresh the legacy projection inventory as well. Canonical paused
-        # foreground turns can legitimately retain a running session summary.
-        from openprogram.state.store import SessionStore
-        if isinstance(sessions, SessionStore):
-            fresh = SessionStore(sessions.root_path)
-            try:
-                inventory = fresh.list_sessions(include_archived=True, limit=100_000)
-            finally:
-                fresh.close()
-        else:
-            inventory = sessions.list_sessions(include_archived=True, limit=100_000)
-        busy = False
-        for session in inventory:
-            history = executions.list_for_session(session["id"])
-            if session.get("status") == "running" and not history:
-                busy = True
-                break
-            for job in list_jobs(session["id"], status_filter={JobStatus.RUNNING}, limit=100_000):
-                canonical = executions.get_execution(job.id)
-                if canonical is None or canonical.current_attempt_id is not None:
-                    busy = True
-                    break
-            if busy:
-                break
-        if not busy:
+        for job in jobs:
+            canonical = executions.get_execution(job.id)
+            if canonical is None or canonical.current_attempt_id is not None:
+                yield f"job {job.id} in conversation {session['id']}"
+
+
+def active_work() -> list[str]:
+    """What is running right now, by the rule ``_wait_for_quiescence`` waits on."""
+    return list(dict.fromkeys(_running_work()))
+
+
+def _wait_for_quiescence(deadline: float) -> bool:
+    while time.time() < deadline:
+        if next(_running_work(), None) is None:
             return True
         time.sleep(0.2)
     return False
@@ -730,7 +667,7 @@ def _abort(
     phase: UpdatePhase,
     error: Exception | str,
 ) -> None:
-    if phase in {UpdatePhase.PREPARING, UpdatePhase.STAGING, UpdatePhase.READY}:
+    if phase in {UpdatePhase.PREPARING, UpdatePhase.BUILDING, UpdatePhase.READY}:
         try:
             store.transition(
                 update_id,
@@ -1043,12 +980,12 @@ def run_supervisor(
         if record.state.phase in {UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING}:
             return _resume_activated(store, update_id, installer_sha256)
         if record.state.phase is UpdatePhase.PREPARING:
-            record = _wait_for_staging(store, update_id)
+            record = _wait_for_build(store, update_id)
             if record is None:
                 current = store.load(update_id)
                 _abort(store, update_id, current.state.phase, "turn release timed out")
                 return 1
-        if record.state.phase not in {UpdatePhase.STAGING, UpdatePhase.READY}:
+        if record.state.phase not in {UpdatePhase.BUILDING, UpdatePhase.READY}:
             return 1
 
         try:
@@ -1064,7 +1001,7 @@ def run_supervisor(
                 state = store.transition(
                     update_id,
                     UpdatePhase.READY,
-                    expected_phase=UpdatePhase.STAGING,
+                    expected_phase=UpdatePhase.BUILDING,
                     detail={
                         "artifact_path": str(artifact.path),
                         "artifact_sha256": artifact.sha256,
@@ -1147,10 +1084,13 @@ def run_supervisor(
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Run one OpenProgram self-update")
-    parser.add_argument("--state-root", required=True, type=Path)
-    parser.add_argument("--installer-sha256", required=True)
+    parser.add_argument("--state-root", type=Path)
+    parser.add_argument("--installer-sha256")
     parser.add_argument("update_id")
     args = parser.parse_args(argv)
+    if args.installer_sha256 is None:
+        from .switch import run
+        return run(args.update_id)
     try:
         return run_supervisor(
             args.update_id,

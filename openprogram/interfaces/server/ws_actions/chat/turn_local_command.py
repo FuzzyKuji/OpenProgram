@@ -14,6 +14,7 @@ import json
 
 from .turn_request import _ChatRequest
 from .turn_request import _send_chat_error
+from .turn_request import _client_request_id
 from .turn_request import _with_client_request_id
 
 # ``_validate_local_surface`` result when the Page context was rejected.
@@ -107,6 +108,9 @@ async def _run_local_invocation(ws, _invoke: dict, session_id: str,
             "window_id"
         ]
         _run_options["surface_ref"] = _validated_surface
+    _request_id = _client_request_id.get()
+    if _request_id:
+        _run_options["client_request_id"] = _request_id
     _run = run_agent_method_call(
         _name, _kwargs, session_id, **_run_options,
     )
@@ -122,15 +126,21 @@ async def _run_local_invocation(ws, _invoke: dict, session_id: str,
             "Function execution was not admitted.",
         )
         return
-    await ws.send_text(json.dumps({
-        "type": "chat_ack",
-        "data": _with_client_request_id({
-            "session_id": _run.get("session_id", session_id),
-            "msg_id": _run.get("msg_id", ""),
-            "execution_id": _run["execution_id"],
-            "function_run": True,
-        }),
-    }))
+    from .turn import _join_and_read
+    _first_read, _end_parking = await _join_and_read(ws, _run.get("session_id", session_id))
+    try:
+        await ws.send_text(json.dumps({
+            "type": "chat_ack",
+            "data": _with_client_request_id({
+                **_first_read,
+                "session_id": _run.get("session_id", session_id),
+                "msg_id": _run.get("msg_id", ""),
+                "execution_id": _run["execution_id"],
+                "function_run": True,
+            }),
+        }))
+    finally:
+        _end_parking()
 
 
 async def _run_local_command(ws, req: _ChatRequest) -> bool:

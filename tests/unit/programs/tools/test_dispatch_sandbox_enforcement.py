@@ -62,7 +62,7 @@ def test_declared_read_path_blocks_and_skips_body(tmp_path):
 
     result = _run(probe_read.execute("c", {"path": str(target)}, None, None))
     assert result.is_error is True
-    assert _text(result).startswith("Error: sandbox policy:")
+    assert _text(result).startswith("[blocked by sandbox]")
     assert called == []
 
 
@@ -123,7 +123,7 @@ def test_undeclared_path_param_falls_back_to_write(tmp_path):
 
     result = _run(custom_helper.execute("c", {"path": str(target)}, None, None))
     assert result.is_error is True
-    assert _text(result).startswith("Error: sandbox policy:")
+    assert _text(result).startswith("[blocked by sandbox]")
     assert called == []
 
 

@@ -16,7 +16,9 @@ installDom({ pathname: "/chat" });
 const { createElement } = await import("react");
 const { packRailRow, unpackRailRow } = await import("../../../components/chat/messages/navigation/message-rail-row.ts");
 const { MessageRail } = await import("../../../components/chat/messages/navigation/message-rail.tsx");
-const { useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { selectRow, useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { transcriptRows } = await import("../../_support/transcript-rows.mjs");
+const transcript = transcriptRows(useSessionStore, selectRow);
 
 const rows = [
   {
@@ -73,17 +75,17 @@ test("packing is deterministic, so an unchanged transcript compares equal", () =
 
 describe("message rail", () => {
   function seed(ids, pinned = []) {
-    const messagesById = {};
+    const seeded = {};
     const order = [];
     for (const id of ids) {
-      messagesById[id] = {
+      seeded[id] = {
         id, role: "user", content: `question ${id}`,
         ...(pinned.includes(id) ? { chapterPinnedAt: 1_700_000_000 } : {}),
       };
-      messagesById[`${id}_reply`] = { id: `${id}_reply`, role: "assistant", content: `answer ${id}`, status: "done" };
+      seeded[`${id}_reply`] = { id: `${id}_reply`, role: "assistant", content: `answer ${id}`, status: "done" };
       order.push(id, `${id}_reply`);
     }
-    useSessionStore.setState({ currentSessionId: "s1", messagesById, messageOrder: { s1: order } });
+    useSessionStore.setState({ currentSessionId: "s1", rowsByView: { s1: seeded }, messageOrder: { s1: order } });
   }
 
   test("draws one tick per user message and drops folded covered originals", async () => {
@@ -110,11 +112,11 @@ describe("message rail", () => {
     seed(["u1", "u2"]);
     const view = await render(createElement(MessageRail, {}));
     try {
-      await view.act(() => useSessionStore.getState().updateMessage("s1", "u1", { chapterPinnedAt: 1_700_000_001 }));
+      await view.act(() => transcript.patchRow("s1", "u1", { chapterPinnedAt: 1_700_000_001 }));
       const [first, second] = view.container.querySelectorAll(".msg-rail-dash");
       assert.equal(first.classList.contains("chapter"), true);
       assert.equal(second.classList.contains("chapter"), false);
-      await view.act(() => useSessionStore.getState().updateMessage("s1", "u1", { chapterPinnedAt: undefined }));
+      await view.act(() => transcript.patchRow("s1", "u1", { chapterPinnedAt: undefined }));
       assert.equal(view.container.querySelector(".msg-rail-dash").classList.contains("chapter"), false);
     } finally { await view.unmount(); }
   });

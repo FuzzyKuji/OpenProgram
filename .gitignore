@@ -15,27 +15,6 @@ build/
 # Local scratch / agent artifacts
 tmp/
 
-# Runtime/generated artifacts — generated functions live in third_party/
-# (the framework-provided buildin/meta functions are always tracked)
-openprogram/programs/tools/third_party/*.py
-!openprogram/programs/tools/third_party/__init__.py
-!openprogram/programs/tools/third_party/llm_call_example.py
-!openprogram/programs/tools/third_party/sentiment.py
-!openprogram/programs/tools/third_party/sentiment_v2.py
-!openprogram/programs/tools/third_party/word_count.py
-!openprogram/programs/tools/third_party/test.py
-!openprogram/programs/tools/third_party/test_framework.py
-!openprogram/programs/tools/third_party/test_resume.py
-
-# Scratch skill
-skills/init-research/
-
-# Runtime test logs (historical — current default is ~/.agentic/logs/,
-# outside the workspace; keep entries here in case someone sets
-# AGENTIC_LOGS_DIR back to these paths)
-openprogram/runtime/agent/logs/
-openprogram/logs/
-
 # Full upstream clones kept locally for reference while designing new
 # tools/providers. Not committed — too large and rot against upstream.
 references/openclaw/
@@ -74,19 +53,17 @@ openprogram/webui/_frontend/
 
 # macOS Finder duplicates ("foo 2.py", "foo 3.json") — never source
 * [0-9].*
-apps/cli/vendor/ink/package-lock.json
 
 # Per-user webui runtime state (favourites, folders, icons) — not code
 openprogram/webui/functions_meta.json
 openprogram/webui/programs_meta.json
+
 .agent_cron_test/
 .agent_tmp/
 .cron-test.log
 .cron-test/
-.claude/
-
-# fetched per-provider model lists (runtime, user-specific — not source)
-openprogram/models/providers/_catalog/fetched/
+.claude/*
+!.claude/settings.json
 
 # local agent working notes
 .codegraph/
@@ -118,3 +95,5 @@ apps/web/public/document-assets/
 # Local verification evidence; authoritative design lives under docs/reference/design.
 /reports/durable-tool-results.md
 /reports/content-security/
+apps/desktop/build/seed/
+apps/desktop/build/thin-shell.json

@@ -38,7 +38,7 @@ beforeEach(() => {
     fetches.push(String(url));
     return { json: async () => ({ total_used: 1, window: 10 }) };
   };
-  useSessionStore.setState({ messagesById: {}, messageOrder: {}, compactionUi: {}, tokens: {}, contextWindow: {}, heads: {} });
+  useSessionStore.setState({ rowsByView: {}, messageOrder: {}, compactionUi: {}, tokens: {}, contextWindow: {}, heads: {} });
 });
 afterEach(async () => { await view?.unmount(); view = undefined; setSocket(null); });
 
@@ -46,7 +46,7 @@ const compactButton = () => [...document.querySelectorAll("button")]
   .find((button) => /Compact conversation|Compacting…/.test(button.textContent));
 function seedEvents(sessionId, rows) {
   useSessionStore.setState({
-    messagesById: Object.fromEntries(rows.map((row) => [row.id, row])),
+    rowsByView: { [sessionId]: Object.fromEntries(rows.map((row) => [row.id, row])) },
     messageOrder: { [sessionId]: rows.map((row) => row.id) },
   });
 }

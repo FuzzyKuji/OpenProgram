@@ -184,6 +184,13 @@
   margin-right: 8px;
   vertical-align: 1px;
 }
+.statusHint {
+  font-size: var(--fs-2xs);
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin-top: 2px;
+  font-family: var(--font-sans);
+}
 .dotGreen {
   background: var(--accent-green);
   box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 50%, transparent);

@@ -4,7 +4,7 @@ When agent A (session A) messages a branch in session B, B's reply must be
 delivered back to A's session, not B's. This is carried by the Job's
 ``caller_session_id`` and used by ``_dispatch_followup``.
 
-See docs/reference/design/runtime/collaboration/agent-collaboration.md (C4).
+See docs/reference/design/runtime/collaboration/agent-collaboration.html (C4).
 """
 from __future__ import annotations
 
@@ -35,6 +35,7 @@ def _runner_without_background_threads():
     runner = JobRunner.__new__(JobRunner)
     runner._lock = threading.Lock()
     runner._followup_locks = {}
+    runner._execution_store = SimpleNamespace(get_job_agent_input=lambda _job_id: None)
     return runner
 
 

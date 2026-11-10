@@ -1,6 +1,6 @@
 """Serve the Next.js static export (``apps/web/out/``) from the worker itself.
 
-Single-port architecture (docs/reference/design/cli/single-port.md): the
+Single-port architecture (docs/reference/design/cli/single-port.html): the
 FastAPI backend is the sole origin. ``mount_frontend`` registers, LAST in
 ``create_app()``, a catch-all GET that serves files from ``apps/web/out/`` and
 falls back to the SPA shell for client-routed paths — so every /api, /ws,

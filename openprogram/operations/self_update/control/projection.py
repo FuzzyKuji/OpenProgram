@@ -14,6 +14,7 @@ from ..types import ConcurrentUpdateError
 from ..types import CorruptUpdateStateError
 from ..types import UpdateNotFoundError
 from ..types import UpdatePhase
+from ..types import DEFAULT_APP_PATH
 from ..types import is_terminal
 from ..types import _validate_update_id
 from ..verification.verification_channel import _check_signature
@@ -51,15 +52,19 @@ def _runtime(store, record):
     request, state = record.request, record.state
     key = {
         UpdatePhase.PREPARING: "previous_system_gate",
-        UpdatePhase.STAGING: "previous_system_gate",
+        UpdatePhase.BUILDING: "previous_system_gate",
+        UpdatePhase.TRIAL: "previous_system_gate",
         UpdatePhase.READY: "previous_system_gate",
+        UpdatePhase.QUIESCING: "previous_system_gate",
         UpdatePhase.VERIFYING: "system_gate",
         UpdatePhase.SUCCEEDED: "committed_system_gate",
         UpdatePhase.ROLLED_BACK: "restored_system_gate",
     }.get(state.phase)
     gate = state.detail.get(key) if key else None
     earliest, latest = request.created_at, state.updated_at
-    expected = request.candidate_sha if state.phase in {UpdatePhase.VERIFYING, UpdatePhase.SUCCEEDED} else None
+    # A candidate rebased onto the development line lands under another SHA.
+    landed = state.detail.get("landed_sha", request.candidate_sha)
+    expected = landed if state.phase in {UpdatePhase.VERIFYING, UpdatePhase.SUCCEEDED} else None
     if state.phase is UpdatePhase.ROLLED_BACK:
         intent = load_rollback_intent(store, record)
         if intent is None:
@@ -128,10 +133,26 @@ def _verifier(store, record):
                 evidence_id=f"verifier:{record.state.attempt}:{_digest(receipt)}")
 
 
-def _rollback_available(record, runtime):
+def _version_rollback_available(store) -> bool:
+    """On versions, a rollback needs a retained version to go back to."""
+    from ..versions import layout as paths
+    from ..versions import pointer
+
+    layout = paths.for_state(store.root.parent)
+    try:
+        target = pointer.read(layout).fallback()
+    except pointer.PointerError:
+        return False
+    return target is not None and layout.version(target[0]).is_dir()
+
+
+def _rollback_available(store, record, runtime):
     from .commit_intent import read_journal
     from .supervisor import _validate_transaction_path
+    from .switch import owns
 
+    if owns(record):
+        return record.state.phase in {UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING} and _version_rollback_available(store)
     if (record.state.phase is not UpdatePhase.VERIFYING or runtime is None
             or record.state.detail.get("rollback_available") is not True):
         return False
@@ -181,11 +202,19 @@ def _project(store, record):
         phase=state.phase.value, attempt=state.attempt, state_revision=state.revision,
         created_at=request.created_at, updated_at=state.updated_at,
         candidate_revision=request.candidate_sha, changed_paths=list(request.changed_paths),
-        target_app=request.app_path, last_verified_runtime=runtime,
-        rollback_available=_rollback_available(record, runtime),
+        target_app=DEFAULT_APP_PATH, last_verified_runtime=runtime,
+        rollback_available=_rollback_available(store, record, runtime),
         verifier_verdict=None if verifier is None else verifier["verdict"], verifier=verifier,
         diagnosis=stage(diagnostic), source_repair_result=repair_summary, iteration=iteration,
     )
+    from .dev_stable import result_summary
+    outcome = result_summary(record)
+    if outcome is not None:
+        result["dev_stable"] = outcome
+    from .switch import result_summary as version_summary
+    versions = version_summary(record)
+    if versions is not None:
+        result["versions"] = versions
     result["snapshot_id"] = _digest(result)
     return _bounded(result)
 
@@ -203,13 +232,13 @@ def _exists(store):
     return True
 
 
-def _scoped_record(store, session_id, update_id):
+def _scoped_record(store, session_id, update_id, *, owner=False):
     record = (store._load_active_unlocked(read_only=True) if update_id is None
               else store._load_unlocked(update_id, read_only=True))
     if record is None:
         raise UpdateNotFoundError("no active self-update")
-    if record.request.session_id != session_id:
-        raise ProjectionAccessError("self-update belongs to another origin session")
+    if not owner and record.request.session_id != session_id:
+        raise ProjectionAccessError("this update was started in another conversation")
     if not is_terminal(record.state.phase):
         active = store._load_active_unlocked(read_only=True)
         if active is None or active.request.update_id != record.request.update_id:
@@ -217,14 +246,14 @@ def _scoped_record(store, session_id, update_id):
     return record
 
 
-def read_status(store: SelfUpdateStore, *, session_id: str, update_id: str | None = None) -> dict:
+def read_status(store: SelfUpdateStore, *, session_id: str, update_id: str | None = None, owner: bool = False) -> dict:
     _session(session_id)
     if update_id is not None:
         _validate_update_id(update_id)
     if not _exists(store):
         raise UpdateNotFoundError("no self-update exists")
     with store._locked(read_only=True):
-        return _project(store, _scoped_record(store, session_id, update_id))
+        return _project(store, _scoped_record(store, session_id, update_id, owner=owner))
 
 
 def read_evidence(store: SelfUpdateStore, *, session_id: str, update_id: str, evidence_id: str):

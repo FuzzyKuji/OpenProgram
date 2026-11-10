@@ -83,10 +83,12 @@ def glob_tool(pattern: str, path: str | None = None) -> str:
             "$HOME or `/`."
         )
 
-    from openprogram.host.sandbox import validate_read_path, read_denier
+    from openprogram.host.sandbox import validate_read_path
+    from .file_safety import read_denier
     violation = validate_read_path(root)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("glob", violation)
     # os.path.join discards root when pattern is absolute; `..` walks out.
     if os.path.isabs(pattern) or any(
         part == ".." for part in pattern.replace("\\", "/").split("/")

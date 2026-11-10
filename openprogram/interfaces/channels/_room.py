@@ -10,7 +10,11 @@
   ``require_mention``, 房间里用 ``/activation`` 覆盖.
 * **memory** — ``on`` / ``read`` / ``off``: 这个房间的轮次能不能读、写
   主人的记忆. 默认 ``on`` (沿用 agent 自己的记忆设置), ``/memory`` 收窄.
-  群成员都是 paired 发言人, 记忆读取会把主人的记忆带进群里.
+  记忆读取会把主人的记忆带进群里, 群里可能有只能聊天的人.
+
+* **名单覆盖** — 这个房间自己的 ``group_full_access`` / ``group_chat_only``
+  (平台 user id 列表). 只要出现过, 这个房间就不再看账号级名单 (见
+  :mod:`._access`). 只由本机 CLI 改, 聊天消息碰不到.
 
 覆盖值持久化在账号目录的 ``rooms.json``.
 * **pending history** — 被门槛拦下 (或超出限流) 的消息带着发言人留在
@@ -30,6 +34,7 @@ import json
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from dataclasses import dataclass
 
 HISTORY_LIMIT = 50
@@ -40,8 +45,23 @@ SEEN_LIMIT = 512
 ACTIVATION_MODES = ("mention", "always", "ambient")
 MEMORY_MODES = ("on", "read", "off")
 
+#: 群聊访问级别 → 名单的存储 key (账号级在 access.json, 房间覆盖在 rooms.json).
+GROUP_USER_KEYS = {"full": "group_full_access", "chat": "group_chat_only"}
+
 #: 文本命令. 群里不 @机器人 也生效 (命令本身就是对机器人说的).
-COMMANDS = ("/new", "/reset", "/activation", "/memory", "/answer", "/decline")
+COMMANDS = ("/new", "/reset", "/activation", "/memory", "/answer", "/decline",
+            "/stop", "/help")
+
+HELP_TEXT = "\n".join((
+    "可用命令：",
+    "/stop 停止正在进行的任务",
+    "/new 或 /reset 开始新对话",
+    "/activation 查看或切换群里的回应方式（仅群聊）",
+    "/memory 查看或收窄这个群的记忆（仅群聊）",
+    "/answer <问题编号> <选项> 回答提问或审批",
+    "/decline <问题编号> 拒绝提问或审批",
+    "/help 显示这份列表",
+))
 
 PENDING_HEADER = "[earlier messages in this chat]"
 #: ambient 房间里没点名机器人的消息, 文本第一行是这个.
@@ -138,18 +158,113 @@ def memory_override(mode: str) -> dict | None:
     return {"off": {"mode": "off"}, "read": {"mode": "read_only"}}.get(mode)
 
 
+def _write_rooms(platform: str, account_id: str, rooms: dict) -> None:
+    from openprogram.models.auth.credentials import _private_atomic_write
+    from openprogram.state.paths import get_state_dir
+
+    payload = json.dumps(rooms, indent=2, sort_keys=True).encode("utf-8")
+    _private_atomic_write(
+        _rooms_path(platform, account_id),
+        lambda handle: handle.write(payload),
+        root=get_state_dir(),
+    )
+
+
+@contextmanager
+def _rooms_file_lock(platform: str, account_id: str):
+    """Held across a read-modify-write: the CLI and the worker both write rooms.json."""
+    from openprogram.models.auth.credentials import _private_file_lock
+    from openprogram.state.paths import get_state_dir
+
+    with _private_file_lock(_rooms_path(platform, account_id), root=get_state_dir(), timeout=10):
+        yield
+
+
 def _set_room_value(platform: str, account_id: str, chat_id: str,
                     key: str, value: str) -> None:
-    with _lock:
+    with _rooms_file_lock(platform, account_id):
         rooms = _read_rooms(platform, account_id)
         room = rooms.get(str(chat_id))
         room = dict(room) if isinstance(room, dict) else {}
         room[key] = value
         rooms[str(chat_id)] = room
-        path = _rooms_path(platform, account_id)
-        tmp = path.with_suffix(".tmp")
-        tmp.write_text(json.dumps(rooms, indent=2, sort_keys=True), encoding="utf-8")
-        tmp.replace(path)
+        _write_rooms(platform, account_id, rooms)
+
+
+# ---------------------------------------------------------------------------
+# Per-room user lists
+# ---------------------------------------------------------------------------
+
+def _user_ids(value) -> list[str]:
+    return [str(item).strip() for item in value if str(item).strip()] if isinstance(value, list) else []
+
+
+def room_user_lists(platform: str, account_id: str, chat_id: str) -> dict[str, list[str]] | None:
+    """This room's own lists by storage key, or None when it has none."""
+    room = _read_rooms(platform, account_id).get(str(chat_id))
+    if not isinstance(room, dict) or not any(key in room for key in GROUP_USER_KEYS.values()):
+        return None
+    return {key: _user_ids(room.get(key)) for key in GROUP_USER_KEYS.values()}
+
+
+def set_room_user(platform: str, account_id: str, chat_id: str,
+                  user_id: str, access: str) -> None:
+    """Put ``user_id`` on this room's ``access`` list, off the other one."""
+    with _rooms_file_lock(platform, account_id):
+        rooms = _read_rooms(platform, account_id)
+        room = rooms.get(str(chat_id))
+        room = dict(room) if isinstance(room, dict) else {}
+        for level, key in GROUP_USER_KEYS.items():
+            kept = [uid for uid in _user_ids(room.get(key)) if uid != user_id]
+            room[key] = sorted([*kept, user_id]) if level == access else kept
+        rooms[str(chat_id)] = room
+        _write_rooms(platform, account_id, rooms)
+
+
+def remove_room_user(platform: str, account_id: str, chat_id: str, user_id: str) -> bool:
+    """Take ``user_id`` off this room's lists. The lists stay, even when empty."""
+    with _rooms_file_lock(platform, account_id):
+        rooms = _read_rooms(platform, account_id)
+        room = rooms.get(str(chat_id))
+        if not isinstance(room, dict):
+            return False
+        room = dict(room)
+        removed = False
+        for key in GROUP_USER_KEYS.values():
+            if key in room and user_id in _user_ids(room[key]):
+                room[key] = [uid for uid in _user_ids(room[key]) if uid != user_id]
+                removed = True
+        if removed:
+            rooms[str(chat_id)] = room
+            _write_rooms(platform, account_id, rooms)
+        return removed
+
+
+def drop_room_chat_user(platform: str, account_id: str, user_id: str) -> None:
+    """Take ``user_id`` off every room's chat list."""
+    key = GROUP_USER_KEYS["chat"]
+    with _rooms_file_lock(platform, account_id):
+        rooms = _read_rooms(platform, account_id)
+        changed = False
+        for chat_id, room in rooms.items():
+            if isinstance(room, dict) and user_id in _user_ids(room.get(key)):
+                rooms[chat_id] = {**room, key: [uid for uid in _user_ids(room[key]) if uid != user_id]}
+                changed = True
+        if changed:
+            _write_rooms(platform, account_id, rooms)
+
+
+def clear_room_users(platform: str, account_id: str, chat_id: str) -> bool:
+    """Drop this room's own lists, so the account's lists apply again."""
+    with _rooms_file_lock(platform, account_id):
+        rooms = _read_rooms(platform, account_id)
+        room = rooms.get(str(chat_id))
+        if not isinstance(room, dict) or not any(key in room for key in GROUP_USER_KEYS.values()):
+            return False
+        room = {key: value for key, value in room.items() if key not in GROUP_USER_KEYS.values()}
+        rooms[str(chat_id)] = room
+        _write_rooms(platform, account_id, rooms)
+        return True
 
 
 # ---------------------------------------------------------------------------
@@ -168,6 +283,13 @@ def take_pending(key: tuple[str, str, str]) -> list[PendingEntry]:
     with _lock:
         queue = _pending.pop(key, None)
     return list(queue or ())
+
+
+def restore_pending(key: tuple[str, str, str], entries: list[PendingEntry]) -> None:
+    """Put back entries a turn took but never ran, ahead of anything newer."""
+    with _lock:
+        newer = list(_pending.get(key) or ())
+        _pending[key] = deque([*entries, *newer], maxlen=HISTORY_LIMIT)
 
 
 def clear_pending(key: tuple[str, str, str]) -> None:
@@ -212,6 +334,14 @@ def allow_turn(key: tuple[str, str, str], now: float | None = None) -> bool:
             return False
         stamps.append(now)
         return True
+
+
+def give_back_turn(key: tuple[str, str, str]) -> None:
+    """Undo one :func:`allow_turn` for a message that turned out to start nothing."""
+    with _lock:
+        stamps = _turns.get(key)
+        if stamps:
+            stamps.pop()
 
 
 def first_delivery(platform: str, account_id: str, chat_id: str, message_id: str) -> bool:

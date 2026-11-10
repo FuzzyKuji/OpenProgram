@@ -13,10 +13,19 @@
  * listener on the document sees every element's scroll — and drops them
  * once it leaves the DOM. `initOverlayScrollbars()` is called once by
  * AppShell on mount.
+ *
+ * The thumb paints above everything, so a box inside a dialog keeps its
+ * thumb above the dialog. A box that carries `data-scrollbar-layer="content"`
+ * keeps its thumb in the content layer instead (`.overlay-thumb-content`,
+ * base/scrollbar.css): above its rows, under a control floating on its
+ * edge such as the width handle on the Agents page's divider.
  */
 
 const FADE_DELAY = 900;
 const MIN_THUMB = 32;
+// A scroll this soon after the box changed size is the content settling at
+// its new size, not someone scrolling.
+const RESIZE_SCROLL_MS = 200;
 
 type Axis = "y" | "x";
 
@@ -110,6 +119,7 @@ function axisThumb(el: HTMLElement, axis: Axis, eager: boolean) {
     if (thumb) return thumb;
     const t = document.createElement("div");
     t.className = axis === "y" ? "overlay-thumb" : "overlay-thumb overlay-thumb-x";
+    if (el.dataset.scrollbarLayer === "content") t.classList.add("overlay-thumb-content");
     t.style.display = "none";
     t.addEventListener("mousedown", (e) => {
       if (e.button !== 0 || !model.overflows()) return;
@@ -222,13 +232,25 @@ function install(el: HTMLElement, axes: Axis[], scrolling = false): () => void {
   }
 
   // Only a scroll reveals the thumb (macOS style): entering the box,
-  // resizing it or the window, and content changes just re-measure it.
-  const onScroll = () => schedule(true);
+  // resizing it or the window, and content changes just re-measure it. A
+  // resize re-wraps the text and so moves the offset too, once a frame
+  // through a whole sidebar drag; those scrolls measure, they do not reveal.
+  let size = `${el.clientWidth}x${el.clientHeight}`;
+  let resizedAt = -Infinity;
+  const onScroll = () => schedule(performance.now() - resizedAt > RESIZE_SCROLL_MS);
   const onMeasure = () => schedule(false);
+  const onResize = () => {
+    const next = `${el.clientWidth}x${el.clientHeight}`;
+    if (next !== size) {
+      size = next;
+      resizedAt = performance.now();
+    }
+    onMeasure();
+  };
   el.addEventListener("scroll", onScroll, { passive: true });
   el.addEventListener("overlay-scrollbar:measure", onMeasure);
 
-  const resize = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onMeasure) : null;
+  const resize = typeof ResizeObserver !== "undefined" ? new ResizeObserver(onResize) : null;
   resize?.observe(el);
   const mutations = typeof MutationObserver !== "undefined" ? new MutationObserver(onMeasure) : null;
   mutations?.observe(el, { childList: true, subtree: true });
@@ -277,7 +299,8 @@ export function initOverlayScrollbars(): void {
     if (!(el instanceof HTMLElement) || installed.has(el)) return;
     // A canvas ghost is a still copy of a leaving pane, gone in a moment.
     if (el.closest("[data-canvas-ghost]")) return;
-    install(el, ["y", "x"], true);
+    // A box whose first scroll comes from a sidebar drag is no scroll either.
+    install(el, ["y", "x"], !document.querySelector('.rail-resize-handle[data-resizing="true"]'));
   }, { capture: true, passive: true });
   // A box that left the DOM takes its thumbs with it. rAF-coalesced so a
   // burst of React commits costs one pass.

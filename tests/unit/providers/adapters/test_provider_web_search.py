@@ -1,6 +1,6 @@
 """Provider-side web search: capability, request tools, stream blocks, replay.
 
-Contract: docs/reference/design/providers/web-search.md ("Wire contract").
+Contract: docs/reference/design/providers/web-search.html ("Wire contract").
 """
 import asyncio
 from types import SimpleNamespace as NS

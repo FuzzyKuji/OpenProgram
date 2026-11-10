@@ -13,8 +13,15 @@ from typing import Any, Mapping
 import uuid
 
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
+# Files tagged with ``protocol`` are read by two generations of code at once:
+# the old controller and the candidate's worker. A reader ignores keys it does
+# not know in such a file instead of calling it corrupt.
+PROTOCOL_VERSION = 1
+_READABLE_SCHEMAS = frozenset({1, SCHEMA_VERSION})
+# Only the legacy_app and dev_stable backends still build into a fixed App path.
 DEFAULT_APP_PATH = "/Applications/OpenProgram.app"
+UPDATE_KINDS = ("change", "undo_to", "undo_commit", "official")
 _UPDATE_ID = re.compile(r"^su_[A-Za-z0-9][A-Za-z0-9_-]{0,63}$")
 _GIT_SHA = re.compile(r"^[0-9a-f]{40}$")
 
@@ -49,8 +56,10 @@ class ConcurrentUpdateError(SelfUpdateError):
 
 class UpdatePhase(str, Enum):
     PREPARING = "preparing"
-    STAGING = "staging"
+    BUILDING = "building"
+    TRIAL = "trial"
     READY = "ready"
+    QUIESCING = "quiescing"
     ACTIVATING = "activating"
     VERIFYING = "verifying"
     SUCCEEDED = "succeeded"
@@ -75,13 +84,22 @@ TERMINAL_PHASES = frozenset(
 
 VALID_TRANSITIONS = frozenset(
     {
-        (UpdatePhase.PREPARING, UpdatePhase.STAGING),
+        (UpdatePhase.PREPARING, UpdatePhase.BUILDING),
+        (UpdatePhase.PREPARING, UpdatePhase.TRIAL),  # undo_to reuses a built version.
         (UpdatePhase.PREPARING, UpdatePhase.ABORTED),
-        (UpdatePhase.STAGING, UpdatePhase.READY),
-        (UpdatePhase.STAGING, UpdatePhase.ABORTED),
-        (UpdatePhase.READY, UpdatePhase.ACTIVATING),
+        (UpdatePhase.BUILDING, UpdatePhase.TRIAL),
+        (UpdatePhase.BUILDING, UpdatePhase.READY),  # dev_stable and legacy_app have no trial phase.
+        (UpdatePhase.BUILDING, UpdatePhase.ABORTED),
+        (UpdatePhase.TRIAL, UpdatePhase.READY),
+        (UpdatePhase.TRIAL, UpdatePhase.ABORTED),
+        (UpdatePhase.READY, UpdatePhase.BUILDING),
+        (UpdatePhase.READY, UpdatePhase.QUIESCING),
+        (UpdatePhase.READY, UpdatePhase.ACTIVATING),  # dev_stable and legacy_app.
         (UpdatePhase.READY, UpdatePhase.ABORTED),
+        (UpdatePhase.QUIESCING, UpdatePhase.ACTIVATING),
+        (UpdatePhase.QUIESCING, UpdatePhase.ABORTED),
         (UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING),
+        (UpdatePhase.ACTIVATING, UpdatePhase.ABORTED),
         (UpdatePhase.ACTIVATING, UpdatePhase.ROLLED_BACK),
         (UpdatePhase.ACTIVATING, UpdatePhase.NEEDS_MANUAL_RECOVERY),
         (UpdatePhase.VERIFYING, UpdatePhase.SUCCEEDED),
@@ -91,12 +109,29 @@ VALID_TRANSITIONS = frozenset(
 )
 
 
+# The verifier runs against the trial instance, and on backends without a
+# trial against the switched instance.
+VERIFIER_PHASES = frozenset({UpdatePhase.TRIAL, UpdatePhase.VERIFYING})
+
+
 def is_terminal(phase: UpdatePhase) -> bool:
     return phase in TERMINAL_PHASES
 
 
 def can_transition(source: UpdatePhase, target: UpdatePhase) -> bool:
     return (source, target) in VALID_TRANSITIONS
+
+
+def parse_phase(value: Any) -> UpdatePhase:
+    """A stored phase; ``staging`` is what schema 1 called ``building``."""
+    return UpdatePhase("building" if value == "staging" else value)
+
+
+def known_keys(data: Mapping[str, Any], expected: set[str] | frozenset[str]) -> Mapping[str, Any]:
+    """``data`` without the keys only a newer writer knows, in a protocol file."""
+    if "protocol" not in data:
+        return data
+    return {key: value for key, value in data.items() if key in expected}
 
 
 def mint_update_id() -> str:
@@ -223,7 +258,11 @@ class UpdateRequest:
     iteration_policy: IterationPolicy = field(default_factory=IterationPolicy)
     created_at: float = field(default_factory=time.time)
     timeout_seconds: int = 1800
-    app_path: str = DEFAULT_APP_PATH
+    kind: str = "change"
+    controller_version: str = ""
+    task: str = ""
+    candidate_version: str = ""
+    rebases: int = 0
 
     def __post_init__(self) -> None:
         _validate_update_id(self.update_id)
@@ -281,14 +320,21 @@ class UpdateRequest:
             or not 1 <= self.timeout_seconds <= 86400
         ):
             raise ValueError("timeout_seconds must be between 1 and 86400")
-        if self.app_path != DEFAULT_APP_PATH:
-            raise ValueError(f"app_path must be {DEFAULT_APP_PATH}")
+        if self.kind not in UPDATE_KINDS:
+            raise ValueError(f"kind must be one of {', '.join(UPDATE_KINDS)}")
+        for name in ("controller_version", "task", "candidate_version"):
+            value = getattr(self, name)
+            if not isinstance(value, str) or len(value) > 256:
+                raise ValueError(f"{name} must be a string of at most 256 characters")
+        if isinstance(self.rebases, bool) or not isinstance(self.rebases, int) or self.rebases < 0:
+            raise ValueError("rebases must be a non-negative integer")
         if not isinstance(self.iteration_policy, IterationPolicy):
             raise ValueError("iteration_policy must be an IterationPolicy")
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": SCHEMA_VERSION,
+            "protocol": PROTOCOL_VERSION,
             "update_id": self.update_id,
             "created_at": self.created_at,
             "session_id": self.session_id,
@@ -306,7 +352,11 @@ class UpdateRequest:
                 "assertions": list(self.assertions),
             },
             "timeout_seconds": self.timeout_seconds,
-            "app_path": self.app_path,
+            "kind": self.kind,
+            "controller_version": self.controller_version,
+            "task": self.task,
+            "candidate_version": self.candidate_version,
+            "rebases": self.rebases,
             "iteration_policy": self.iteration_policy.to_dict(),
         }
 
@@ -328,10 +378,15 @@ class UpdateRequest:
             "pre_update_evidence",
             "acceptance",
             "timeout_seconds",
-            "app_path",
             "iteration_policy",
         }
-        if set(data) != expected or data.get("schema") != SCHEMA_VERSION:
+        schema = data.get("schema")
+        if schema == SCHEMA_VERSION:
+            expected |= {"protocol", "kind", "controller_version", "task", "candidate_version", "rebases"}
+        elif schema == 1:
+            expected |= {"app_path"}
+        data = known_keys(data, expected)
+        if set(data) != expected or schema not in _READABLE_SCHEMAS:
             raise CorruptUpdateStateError("unsupported or malformed request schema")
         acceptance = data.get("acceptance")
         if not isinstance(acceptance, Mapping) or set(acceptance) != {
@@ -373,7 +428,11 @@ class UpdateRequest:
                 assertions=tuple(acceptance["assertions"]),
                 iteration_policy=IterationPolicy.from_dict(data["iteration_policy"]),
                 timeout_seconds=int(data["timeout_seconds"]),
-                app_path=data["app_path"],
+                kind=data.get("kind", "change"),
+                controller_version=data.get("controller_version", ""),
+                task=data.get("task", ""),
+                candidate_version=data.get("candidate_version", ""),
+                rebases=data.get("rebases", 0),
             )
         except (KeyError, TypeError, ValueError) as exc:
             raise CorruptUpdateStateError("malformed request data") from exc
@@ -439,6 +498,7 @@ class UpdateState:
     def to_dict(self) -> dict[str, Any]:
         return {
             "schema": SCHEMA_VERSION,
+            "protocol": PROTOCOL_VERSION,
             "update_id": self.update_id,
             "phase": self.phase.value,
             "revision": self.revision,
@@ -462,7 +522,11 @@ class UpdateState:
             "detail",
             "last_event",
         }
-        if set(data) != expected or data.get("schema") != SCHEMA_VERSION:
+        schema = data.get("schema")
+        if schema == SCHEMA_VERSION:
+            expected |= {"protocol"}
+        data = known_keys(data, expected)
+        if set(data) != expected or schema not in _READABLE_SCHEMAS:
             raise CorruptUpdateStateError("unsupported or malformed state schema")
         try:
             dispatch = data["dispatch"]
@@ -483,7 +547,7 @@ class UpdateState:
                 raise ValueError("invalid state field types")
             state = cls(
                 update_id=_validate_update_id(data["update_id"]),
-                phase=UpdatePhase(data["phase"]),
+                phase=parse_phase(data["phase"]),
                 revision=int(data["revision"]),
                 updated_at=float(data["updated_at"]),
                 attempt=int(data["attempt"]),

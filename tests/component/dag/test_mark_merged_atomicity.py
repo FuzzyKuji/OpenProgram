@@ -1,3 +1,4 @@
+from openprogram.state.store.session.session_log import SessionLog
 import json
 import threading
 from pathlib import Path
@@ -42,7 +43,7 @@ def test_concurrent_mark_merged_preserves_both_heads(
     assert not second.is_alive()
 
     assert store.merged_heads("s1") == {"head-a", "head-b"}
-    on_disk = json.loads((root / "default" / "chats" / "s1" / "meta.json").read_text(encoding="utf-8"))
+    on_disk = SessionLog(root / "default" / "chats" / "s1").read_meta()
     assert set(on_disk["merged_heads"]) == {"head-a", "head-b"}
 
 

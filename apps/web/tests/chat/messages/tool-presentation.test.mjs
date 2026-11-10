@@ -46,6 +46,7 @@ test('every tool glyph is a vendored Solar Bold Duotone icon', async () => {
 test('JSON results are summarised instead of printed raw', () => {
   assert.equal(summarizeResult('{"ok": true, "title": "Google", "url": "https://google.com"}', en), 'Google · https://google.com');
   assert.equal(summarizeResult('{"ok": false, "error": "timeout"}', en), 'timeout');
+  assert.equal(summarizeResult('{"progress": "Building the new version…", "phase": "building"}', en), 'Building the new version…');
   assert.equal(summarizeResult('[1, 2, 3]', en), '3 items');
   assert.equal(summarizeResult('{"ok": true, "pages": [1, 2]}', en), '2 items');
   assert.equal(summarizeResult('plain\nsecond line', en), 'plain');

@@ -374,16 +374,6 @@ _ERROR_FINISH_REASONS = {
 }
 
 
-def map_stop_reason(reason: Any) -> "StopReason":
-    """Map a Gemini FinishReason (enum or string) to our StopReason."""
-    reason_str = str(reason).upper() if reason is not None else "STOP"
-    if reason_str in _FINISH_REASON_MAP:
-        return _FINISH_REASON_MAP[reason_str]
-    if reason_str in _ERROR_FINISH_REASONS:
-        return "error"
-    return "stop"
-
-
 def map_stop_reason_string(reason: str) -> "StopReason":
     """Map a raw finish reason string to StopReason."""
     return _FINISH_REASON_MAP.get(reason.upper(), "error")

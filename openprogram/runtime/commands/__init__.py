@@ -23,7 +23,7 @@ list anywhere:
   dispatches every ``/slash`` through ``dispatch.invoke``; ``/help``
   is rendered from ``list_all()``.
 
-See ``docs/reference/design/cli/slash-commands.md`` for the full design.
+See ``docs/reference/design/cli/slash-commands.html`` for the full design.
 """
 from __future__ import annotations
 

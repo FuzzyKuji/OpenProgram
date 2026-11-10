@@ -154,28 +154,6 @@ def list_sessions() -> list[dict]:
     return results
 
 
-def cleanup_stale_sessions(max_age: float = 3600):
-    """Remove sessions older than max_age seconds."""
-    if not os.path.isdir(_sessions_dir()):
-        return
-    now = time.time()
-    for name in os.listdir(_sessions_dir()):
-        if not _SESSION_ID_RE.fullmatch(name):
-            continue
-        session = Session(name)
-        if not session.exists():
-            continue
-        meta = session.read_meta()
-        if not meta or "created" not in meta:
-            continue
-        try:
-            created = float(meta["created"])
-        except (TypeError, ValueError):
-            continue
-        if now - created > max_age:
-            session.cleanup()
-
-
 def run_with_session(func, *args, **kwargs):
     """Run a function with session-based follow-up support.
 

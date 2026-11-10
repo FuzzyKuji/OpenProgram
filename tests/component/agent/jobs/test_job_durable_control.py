@@ -48,7 +48,7 @@ def durable_job(tmp_path, store_fixture, monkeypatch):
 
     execution_db = tmp_path / "execution.sqlite3"
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path", lambda: execution_db,
+        "openprogram.state.paths.get_run_state_path", lambda: execution_db,
     )
     ledger = UsageLedger(tmp_path / "usage.sqlite3")
     class _SafePointResult:
@@ -153,8 +153,7 @@ def test_background_spawn_has_one_canonical_execution_and_no_inner_exec_identity
     assert identities <= {job_id}
 
 
-def test_abandoned_provider_only_job_requeues_same_authorized_resource_admission(durable_job, monkeypatch):
-    from openprogram.runtime.execution.effects import EffectClassification, EffectStatus, EffectStore
+def test_abandoned_job_with_no_model_answer_requeues_same_authorized_resource_admission(durable_job, monkeypatch):
     from openprogram.runtime.execution.restart import reconcile
     runner, _ledger, execution_store, _db = durable_job
     # Exercise startup's consumer synchronously, without the fixture's live
@@ -172,20 +171,14 @@ def test_abandoned_provider_only_job_requeues_same_authorized_resource_admission
     original = store.get_job_agent_input(job_id)
     control = runner._execution_control
     leased, reserved = control.attempts.lease(job_id, expected_version=execution.status_version,
-                                             owner_id="abandoned-worker", ttl_seconds=30)
+                                             owner_id="abandoned-worker")
     active, _ = control.attempts.activate(leased.attempt_id, generation=leased.generation,
                                         expected_execution_version=reserved.status_version)
-    effects = EffectStore(store)
-    effects.register(effect_id="provider-interrupted", execution_id=job_id, attempt_id=active.attempt_id,
-                     action_id="provider", classification=EffectClassification.NONREPEATABLE,
-                     idempotency_key=None, metadata={"kind": "provider.before"})
-    effects.mark_dispatched("provider-interrupted", expected_status=EffectStatus.PLANNED)
     recovered = control.recover_owner_loss(job_id, only_if_abandoned=True)
     assert recovered.execution.status.value == "paused"
     reconcile(runner)
     assert store.get_job_agent_input(job_id) == original
     assert len(store.list_for_session(execution.session_id)) == 1
-    assert effects.get("provider-interrupted").status is EffectStatus.NOT_COMMITTED
     commands = store.list_commands(job_id)
     from openprogram.runtime.execution.model import CommandKind
     assert any(c.kind is CommandKind.CONTINUE and c.actor.get("surface") == "worker-restart" for c in commands)
@@ -257,30 +250,6 @@ def test_resource_dto_contains_canonical_snapshot_and_reconnect_cursor(durable_j
     }
 
 
-def test_job_projection_rebuilds_from_execution_sequence_and_not_job_row(durable_job):
-    runner, _ledger, execution_store, _db = durable_job
-    job_id, execution = _execution(runner, execution_store)
-    from openprogram.runtime.execution.outbox import ProjectionDispatcher
-    from openprogram.runtime.execution.projections import (
-        ExecutionProjectionReadModel,
-        projection_handlers,
-    )
-
-    dispatcher = ProjectionDispatcher(
-        execution_store(), projection_handlers(execution_store()),
-    )
-    result = dispatcher.drain(owner_id="job-projection-test", max_batches=1)
-    assert result.delivered > 0
-    projection = ExecutionProjectionReadModel(execution_store()).get_current(
-        "job", job_id,
-    )
-    assert projection is not None
-    assert projection.event_sequence == execution.status_version
-    assert projection.payload["job"]["execution_id"] == job_id
-    assert projection.payload["execution"]["capabilities"]["pause"] is True
-    assert projection.payload["event_cursor"]["next_sequence"] == execution.status_version + 1
-
-
 def test_ws_pause_uses_complete_execution_command_update_envelope(durable_job, monkeypatch):
     runner, _ledger, execution_store, _db = durable_job
     job_id, execution = _execution(runner, execution_store)
@@ -334,9 +303,7 @@ def test_queued_pause_releases_reservation_and_continue_uses_initial_handoff(
     continue_frame = _command_frame(ws)
     assert continue_frame["command"]["status"] in {"accepted", "applying", "applied"}
     assert continue_frame["execution"]["execution_id"] == job_id
-    assert ledger.connection().execute(
-        "SELECT COUNT(*) FROM job_admissions WHERE job_id = ?", (job_id,),
-    ).fetchone()[0] == 1
+    assert ledger.run_tables().handle.count("job_admissions", job_id=job_id) == 1
 
 
 def test_queued_initial_step_consumes_one_provider_action_and_returns_paused(
@@ -523,11 +490,8 @@ def test_restart_requeues_claimed_resume_before_attempt_without_error_projection
         admission_id=job.admission_id, command_id=command.command_id,
     )
     assert claim is not None
-    with ledger.immediate() as connection:
-        connection.execute(
-            "UPDATE job_admissions SET owner_instance_id = ?, lease_expires_at = 0 WHERE job_id = ?",
-            ("worker_999999_dead", job_id),
-        )
+    with ledger.run_tables().transaction() as connection:
+        connection.update("job_admissions", {"owner_instance_id": "worker_999999_dead"}, job_id=job_id)
     from openprogram.runtime.jobs.runner import JobRunner
     from openprogram.runtime.jobs.resource_governance import ResourceGovernor
 
@@ -540,11 +504,8 @@ def test_restart_requeues_claimed_resume_before_attempt_without_error_projection
         recovered = execution_store().get_execution(job_id)
         assert recovered is not None and recovered.status.value == "paused"
         assert execution_store().get_command(command.command_id).status.value == "accepted"
-        row = ledger.connection().execute(
-            "SELECT state, resume_command_id FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
-        assert tuple(row) == ("queued", command.command_id)
+        row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert (row["state"], row["resume_command_id"]) == ("queued", command.command_id)
         projection = restarted.get_job(job_id)
         assert projection is not None and projection.status.value != "errored"
     finally:
@@ -609,7 +570,6 @@ def test_restart_replays_cross_db_intents_without_minting_another_execution(
         assert recovered.status.value == "paused"
         assert restarted.get_job(job_id).id == job_id
         assert restarted.get_job_resource_view(job_id).to_dict()["execution_id"] == job_id
-        assert db.exists()
     finally:
         restarted.shutdown()
 
@@ -699,6 +659,38 @@ def test_child_deferred_and_borrowed_relations_preserve_caller_dag_identity(
     assert resumed_input is not None
     assert json.loads(resumed_input.input_ref.removeprefix("job-input-v1:"))["job_context"]["caller"]["node_id"] == "caller-msg"
     assert parent.execution_id != resumed_id
+
+
+def test_a_waited_on_child_ended_by_a_restart_updates_its_card_and_says_why(durable_job, monkeypatch):
+    from openprogram.operations.self_update.control import maintenance
+    from openprogram.runtime.execution import ExecutionStatus, restart
+
+    runner, _ledger, execution_store, _db = durable_job
+    monkeypatch.setattr(restart, "window_seconds", lambda: -1)
+    monkeypatch.setattr(maintenance, "maintenance_blocks", lambda *_: False)
+    store = execution_store()
+    parent_id, parent = _execution(runner, execution_store, caller_msg_id="root-msg")
+    child_id = _spawn(runner, prompt="child turn", parent_job_id=parent_id, caller_msg_id="caller-msg", caller_session_id="p1")
+    child = store.get_execution(child_id)
+    with store._transaction() as connection:
+        paused = store._transition_execution(
+            connection, child_id, expected_version=child.status_version,
+            target=ExecutionStatus.PAUSED, reason_code="restart_pending",
+        )
+        restart.record_intent(store, connection, paused, interrupted_at=time.time() - 1, seconds=-1)
+    store.transition_execution(
+        parent_id, expected_version=parent.status_version, target=ExecutionStatus.FAILED, reason_code="test",
+    )
+    cards, statuses = [], []
+    monkeypatch.setattr(runner, "_update_attach_card", lambda job, **_: cards.append(job.id))
+    monkeypatch.setattr(runner, "_broadcast_job_status", lambda job: statuses.append(job.id))
+
+    restart.reconcile(runner)
+    runner._reconcile_resources()
+
+    job = runner.get_job(child_id)
+    assert job.status.value == "errored" and job.error
+    assert child_id in cards and child_id in statuses
 
 
 def test_runtime_control_rejects_forged_project_session_attempt_and_capability(

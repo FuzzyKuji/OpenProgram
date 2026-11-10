@@ -13,7 +13,7 @@ const mocks = {
     '@/lib/runtime-bridge/dom/markdown-render': 'export const typesetMath=e=>{globalThis.auditMathText=e.textContent};',
     '@/lib/i18n': 'export const useTranslation=()=>({t:x=>x,text:x=>x});',
     '@/components/ui/button': 'export const Button=()=>null;',
-    '@/lib/session-store': 'export const useSessionStore=selector=>selector(globalThis.auditState);',
+    '@/lib/session-store': 'export const useSessionStore=selector=>selector(globalThis.auditState); export const selectViewRows=()=>state=>state.rowsById;',
     '@/lib/chat/history/chat-scroll': 'export const whenAreaScrollSettles=()=>{};',
     '@/lib/files/files-shared': 'export const absRawFileUrl=()=>{throw Error("No file access expected")};',
     '@/lib/nav/shallow-nav': 'export const pushPath=()=>{};',
@@ -55,10 +55,10 @@ test('untrusted message previews and skill fetch render text without injected el
         host = document.createElement('div');
         document.body.append(host);
         root = createRoot(host);
-        globalThis.auditState = { currentSessionId: 'synthetic', setComposerInput() { }, messageOrder: { synthetic: ['u1', 'a1', 'u2'] }, messagesById: {
-                u1: { id: 'u1', role: 'user', content: '**ordinary user** <form data-audit="rail-user"><input value="synthetic"></form>' },
-                a1: { id: 'a1', role: 'assistant', status: 'completed', content: '$<input data-audit="rail-assistant" value="synthetic">$' },
-                u2: { id: 'u2', role: 'user', content: 'second message' }
+        globalThis.auditState = { currentSessionId: 'synthetic', setComposerInput() { }, messageOrder: { synthetic: ['u1', 'a1', 'u2'] }, rowsById: {
+                u1: { id: 'u1', role: 'user', rowKind: 'user', content: '**ordinary user** <form data-audit="rail-user"><input value="synthetic"></form>' },
+                a1: { id: 'a1', role: 'assistant', rowKind: 'assistant', status: 'completed', content: '$<input data-audit="rail-assistant" value="synthetic">$' },
+                u2: { id: 'u2', role: 'user', rowKind: 'user', content: 'second message' }
             } };
         const { MessageRail } = await import(new URL('components/chat/messages/navigation/message-rail.tsx', base));
         await act(() => root.render(createElement(MessageRail)));

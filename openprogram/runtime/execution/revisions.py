@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
 import time
 import uuid
 from dataclasses import dataclass
@@ -18,6 +17,7 @@ from typing import Any, Mapping, Sequence
 from .checkpoints import CheckpointManifest, ExecutionCheckpointStore
 from .model import _json, _snapshot_json, _thaw_json
 from .store import ExecutionConflict, ExecutionStore
+from .store.run_tables import TableHandle
 
 
 _ARTIFACT_PREFIX = "revision-artifact://sha256/"
@@ -218,23 +218,32 @@ class RevisionControlService:
         ]
 
     def _agent_program_content(self, checkpoint: CheckpointManifest) -> dict[str, str]:
-        from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1, AgentCheckpointError
-        try:
-            state = AgentCheckpointV1.load(self.executions, checkpoint)
-        except AgentCheckpointError as exc:
-            raise ExecutionConflict(exc.code, str(exc)) from exc
         source = self.executions.get_execution_input(checkpoint.execution_id)
         if source is None or source.entrypoint != "openprogram.runtime.conversation.production_driver:AgentProductionDriver":
             raise ExecutionConflict("unsupported_instruction_branch", "checkpoint has no Agent program")
-        return {"entrypoint": source.entrypoint,
-                "source_hash": state.payload["resolved_model_system_tool_snapshot_ref"]["sha256"]}
+        return {"entrypoint": source.entrypoint, "source_hash": self._agent_snapshot_hash(checkpoint)}
+
+    def _agent_snapshot_hash(self, checkpoint: CheckpointManifest) -> str:
+        """Identify the model, prompt and tools the checkpoint's turn resolved."""
+        import hashlib
+        from .agent_journal import load_journal
+        from .runtime_contract import canonical_json_bytes
+
+        pointer = checkpoint.state_refs.get("agent_journal")
+        execution = self.executions.get_execution(checkpoint.execution_id)
+        if not isinstance(pointer, Mapping) or execution is None or not execution.session_id:
+            raise ExecutionConflict("checkpoint_schema_invalid", "checkpoint names no journal position")
+        state = load_journal(execution.session_id, pointer)
+        if not state.snapshot:
+            raise ExecutionConflict("checkpoint_schema_invalid", "journal has no resolved snapshot")
+        return hashlib.sha256(canonical_json_bytes(state.snapshot)).hexdigest()
 
     def instruction_editor(self, changes: Sequence[Mapping[str, Any]]) -> dict[str, Any] | None:
         if len(changes) != 2 or {item["target"] for item in changes} != {"agent.program", "agent.additional_instructions"}:
             return None
         change = next(item for item in changes if item["target"] == "agent.additional_instructions")
         with self.executions._connect() as connection:
-            row = connection.execute("SELECT * FROM revision_artifacts WHERE artifact_ref = ?", (change["after_ref"],)).fetchone()
+            row = connection.get("revision_artifacts", change["after_ref"])
         if row is None or row["kind"] != "prompt":
             return None
         content = self._artifact(row).content
@@ -247,11 +256,11 @@ class RevisionControlService:
     def published_instructions(self, revision_id: str) -> tuple[RevisionManifest, str] | None:
         """Read only text bound to the immutable published revision."""
         with self.executions._connect() as connection:
-            row = connection.execute("SELECT * FROM revision_manifests WHERE revision_id = ?", (revision_id,)).fetchone()
+            row = connection.first("revision_manifests", revision_id=revision_id)
             if row is None:
                 return None
             manifest = self._manifest(row)
-            validation = connection.execute("SELECT draft_id FROM revision_validations WHERE validation_id = ?", (manifest.validation_id,)).fetchone()
+            validation = connection.get("revision_validations", manifest.validation_id)
             draft = self.get_draft(validation["draft_id"]) if validation else None
             editor = self.instruction_editor(draft.changes) if draft else None
             return (manifest, editor["instructions"]) if editor else None
@@ -278,16 +287,13 @@ class RevisionControlService:
         content_hash = _hash({"kind": kind, "content": value})
         artifact_ref = f"{_ARTIFACT_PREFIX}{content_hash}"
         with self.executions._transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM revision_artifacts WHERE artifact_ref = ?", (artifact_ref,)
-            ).fetchone()
+            row = connection.get("revision_artifacts", artifact_ref)
             if row is None:
                 now = time.time()
-                connection.execute(
-                    "INSERT INTO revision_artifacts (artifact_ref, kind, content_hash, content_json, created_at) "
-                    "VALUES (?, ?, ?, ?, ?)",
-                    (artifact_ref, kind, content_hash, encoded, now),
-                )
+                connection.insert("revision_artifacts", {
+                    "artifact_ref": artifact_ref, "kind": kind, "content_hash": content_hash,
+                    "content_json": encoded, "created_at": now,
+                })
                 return RevisionArtifact(artifact_ref, kind, content_hash, value, now)
             return self._artifact(row)
 
@@ -323,23 +329,20 @@ class RevisionControlService:
                 changes=tuple(normalized_changes), frontier_mapping=tuple(normalized_mapping),
                 requested_by=actor, draft_version=1, status="draft", created_at=now, updated_at=now,
             )
-            connection.execute(
-                "INSERT INTO revision_drafts (draft_id, project_binding_json, source_execution_id, base_revision_id, "
-                "base_revision_hash, source_checkpoint_id, changes_json, frontier_mapping_json, requested_by_json, "
-                "draft_version, status, created_at, updated_at, published_manifest_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)",
-                (draft.draft_id, _json(binding), source_execution_id, base_revision_id, base.content_hash,
-                 source_checkpoint_id, _json(normalized_changes), _json(normalized_mapping), _json(actor), 1,
-                 "draft", now, now),
-            )
+            connection.insert("revision_drafts", {
+                "draft_id": draft.draft_id, "project_binding_json": _json(binding),
+                "source_execution_id": source_execution_id, "base_revision_id": base_revision_id,
+                "base_revision_hash": base.content_hash, "source_checkpoint_id": source_checkpoint_id,
+                "changes_json": _json(normalized_changes), "frontier_mapping_json": _json(normalized_mapping),
+                "requested_by_json": _json(actor), "draft_version": 1, "status": "draft",
+                "created_at": now, "updated_at": now, "published_manifest_id": None,
+            })
             return draft
 
     def validate_draft(self, *, draft_id: str, expected_draft_version: int) -> RevisionValidation:
         with self.executions._transaction() as connection:
             draft = self._require_draft(connection, draft_id, expected_draft_version)
-            existing = connection.execute(
-                "SELECT * FROM revision_validations WHERE draft_id = ? AND draft_version = ?",
-                (draft_id, expected_draft_version),
-            ).fetchone()
+            existing = connection.first("revision_validations", draft_id=draft_id, draft_version=expected_draft_version)
             if existing is not None:
                 return self._validation(existing)
             self._verify_draft_binding(connection, draft)
@@ -370,12 +373,12 @@ class RevisionControlService:
                 draft_version=draft.draft_version, report_hash=report_hash, report=report,
                 compatible_checkpoint_id=checkpoint.checkpoint_id, proof_hash=proof_hash, created_at=now,
             )
-            connection.execute(
-                "INSERT INTO revision_validations (validation_id, draft_id, draft_version, report_hash, report_json, "
-                "compatible_checkpoint_id, proof_hash, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'valid', ?)",
-                (validation.validation_id, draft.draft_id, draft.draft_version, report_hash, _json(report),
-                 checkpoint.checkpoint_id, proof_hash, now),
-            )
+            connection.insert("revision_validations", {
+                "validation_id": validation.validation_id, "draft_id": draft.draft_id,
+                "draft_version": draft.draft_version, "report_hash": report_hash, "report_json": _json(report),
+                "compatible_checkpoint_id": checkpoint.checkpoint_id, "proof_hash": proof_hash,
+                "status": "valid", "created_at": now,
+            })
             return validation
 
     def replace_draft(
@@ -394,10 +397,10 @@ class RevisionControlService:
             self._require_artifacts(connection, normalized_changes)
             now = time.time()
             next_version = draft.draft_version + 1
-            connection.execute(
-                "UPDATE revision_drafts SET changes_json = ?, frontier_mapping_json = ?, draft_version = ?, updated_at = ? WHERE draft_id = ?",
-                (_json(normalized_changes), _json(normalized_mapping), next_version, now, draft_id),
-            )
+            connection.update("revision_drafts", {
+                "changes_json": _json(normalized_changes), "frontier_mapping_json": _json(normalized_mapping),
+                "draft_version": next_version, "updated_at": now,
+            }, draft_id=draft_id)
             return RevisionDraft(
                 draft_id=draft.draft_id, project_binding=draft.project_binding,
                 source_execution_id=draft.source_execution_id, base_revision_id=draft.base_revision_id,
@@ -416,10 +419,7 @@ class RevisionControlService:
             if actor_value != draft.requested_by:
                 raise ExecutionConflict("draft_authorization_denied", "only the draft author can discard the draft")
             now = time.time()
-            connection.execute(
-                "UPDATE revision_drafts SET status = 'discarded', updated_at = ? WHERE draft_id = ?",
-                (now, draft_id),
-            )
+            connection.update("revision_drafts", {"status": "discarded", "updated_at": now}, draft_id=draft_id)
             return RevisionDraft(
                 draft_id=draft.draft_id, project_binding=draft.project_binding,
                 source_execution_id=draft.source_execution_id, base_revision_id=draft.base_revision_id,
@@ -440,10 +440,7 @@ class RevisionControlService:
         with self.executions._transaction() as connection:
             draft = self._require_draft(connection, draft_id, expected_draft_version)
             validation = self._require_validation(connection, validation_id, draft)
-            existing = connection.execute(
-                "SELECT * FROM revision_approvals WHERE draft_id = ? AND draft_version = ?",
-                (draft_id, expected_draft_version),
-            ).fetchone()
+            existing = connection.first("revision_approvals", draft_id=draft_id, draft_version=expected_draft_version)
             if existing is not None:
                 approval = self._approval(existing)
                 if approval.validation_id != validation_id or approval.actor != approver or approval.policy_version != policy_version:
@@ -460,13 +457,12 @@ class RevisionControlService:
                 validation_report_hash=validation.report_hash, project_binding=draft.project_binding,
                 policy_version=policy_version, status=status, actor=approver, created_at=now,
             )
-            connection.execute(
-                "INSERT INTO revision_approvals (approval_id, draft_id, draft_version, validation_id, "
-                "validation_report_hash, project_binding_json, policy_version, status, actor_json, created_at) "
-                "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (approval.approval_id, draft_id, draft.draft_version, validation_id, validation.report_hash,
-                 _json(draft.project_binding), policy_version, status, _json(approver), now),
-            )
+            connection.insert("revision_approvals", {
+                "approval_id": approval.approval_id, "draft_id": draft_id, "draft_version": draft.draft_version,
+                "validation_id": validation_id, "validation_report_hash": validation.report_hash,
+                "project_binding_json": _json(draft.project_binding), "policy_version": policy_version,
+                "status": status, "actor_json": _json(approver), "created_at": now,
+            })
             return approval
 
     def publish_draft(
@@ -516,19 +512,18 @@ class RevisionControlService:
                 approval_id=approval.approval_id, proof_hash=validation.proof_hash,
                 created_by=publisher, published_at=now,
             )
-            connection.execute(
-                "INSERT INTO revision_manifests (manifest_id, revision_id, source_execution_id, source_checkpoint_id, "
-                "compatible_checkpoint_id, parent_revision_id, content_hash, manifest_json, validation_id, approval_id, "
-                "proof_hash, created_by_json, published_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (result.manifest_id, result.revision_id, result.source_execution_id, result.source_checkpoint_id,
-                 result.compatible_checkpoint_id, result.parent_revision_id, result.content_hash,
-                 _json(manifest_data), validation.validation_id, approval.approval_id, result.proof_hash,
-                 _json(publisher), now),
-            )
-            connection.execute(
-                "UPDATE revision_drafts SET status = 'published', published_manifest_id = ?, updated_at = ? WHERE draft_id = ?",
-                (result.manifest_id, now, draft_id),
-            )
+            connection.insert("revision_manifests", {
+                "manifest_id": result.manifest_id, "revision_id": result.revision_id,
+                "source_execution_id": result.source_execution_id, "source_checkpoint_id": result.source_checkpoint_id,
+                "compatible_checkpoint_id": result.compatible_checkpoint_id,
+                "parent_revision_id": result.parent_revision_id, "content_hash": result.content_hash,
+                "manifest_json": _json(manifest_data), "validation_id": validation.validation_id,
+                "approval_id": approval.approval_id, "proof_hash": result.proof_hash,
+                "created_by_json": _json(publisher), "published_at": now,
+            })
+            connection.update("revision_drafts", {
+                "status": "published", "published_manifest_id": result.manifest_id, "updated_at": now,
+            }, draft_id=draft_id)
             return result
 
     def get_manifest(self, manifest_id: str) -> RevisionManifest | None:
@@ -538,35 +533,23 @@ class RevisionControlService:
     def get_draft(self, draft_id: str) -> RevisionDraft | None:
         """Read a draft without treating its terminal status as an error."""
         with self.executions._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM revision_drafts WHERE draft_id = ?", (draft_id,)
-            ).fetchone()
+            row = connection.get("revision_drafts", draft_id)
             return self._draft(row) if row is not None else None
 
     def list_drafts_for_execution(self, execution_id: str) -> list[RevisionDraft]:
         """Return all revision drafts rooted at one source execution."""
         with self.executions._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM revision_drafts WHERE source_execution_id = "
-                "? ORDER BY created_at, draft_id",
-                (execution_id,),
-            ).fetchall()
+            rows = connection.rows("revision_drafts", source_execution_id=execution_id, order=("created_at", "draft_id"))
             return [self._draft(row) for row in rows]
 
     def get_validation(self, validation_id: str) -> RevisionValidation | None:
         with self.executions._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM revision_validations WHERE validation_id = ?",
-                (validation_id,),
-            ).fetchone()
+            row = connection.get("revision_validations", validation_id)
             return self._validation(row) if row is not None else None
 
     def get_approval(self, approval_id: str) -> RevisionApproval | None:
         with self.executions._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM revision_approvals WHERE approval_id = ?",
-                (approval_id,),
-            ).fetchone()
+            row = connection.get("revision_approvals", approval_id)
             return self._approval(row) if row is not None else None
 
     def draft_state(
@@ -578,22 +561,12 @@ class RevisionControlService:
         callers still authorize the source execution before receiving it.
         """
         with self.executions._connect() as connection:
-            row = connection.execute(
-                "SELECT * FROM revision_drafts WHERE draft_id = ?", (draft_id,)
-            ).fetchone()
+            row = connection.get("revision_drafts", draft_id)
             if row is None:
                 return None
             draft = self._draft(row)
-            validation_row = connection.execute(
-                "SELECT * FROM revision_validations WHERE draft_id = ? "
-                "AND draft_version = ? ORDER BY created_at DESC LIMIT 1",
-                (draft_id, draft.draft_version),
-            ).fetchone()
-            approval_row = connection.execute(
-                "SELECT * FROM revision_approvals WHERE draft_id = ? "
-                "AND draft_version = ? ORDER BY created_at DESC LIMIT 1",
-                (draft_id, draft.draft_version),
-            ).fetchone()
+            validation_row = connection.first("revision_validations", draft_id=draft_id, draft_version=draft.draft_version, order="-created_at")
+            approval_row = connection.first("revision_approvals", draft_id=draft_id, draft_version=draft.draft_version, order="-created_at")
             manifest = (
                 self._get_manifest(connection, draft.published_manifest_id)
                 if draft.published_manifest_id else None
@@ -606,7 +579,7 @@ class RevisionControlService:
             )
 
     def require_fork_manifest(
-        self, connection: sqlite3.Connection, *, manifest_id: str, source_execution_id: str,
+        self, connection: TableHandle, *, manifest_id: str, source_execution_id: str,
         checkpoint_id: str, proof_hash: str,
     ) -> RevisionManifest:
         if not isinstance(manifest_id, str) or not manifest_id.startswith("manifest_"):
@@ -621,15 +594,11 @@ class RevisionControlService:
             raise ExecutionConflict("revision_manifest_checkpoint_mismatch", "revision manifest checkpoint does not match")
         if manifest.proof_hash != proof_hash:
             raise ExecutionConflict("revision_manifest_proof_mismatch", "revision manifest proof does not match")
-        validation_row = connection.execute(
-            "SELECT * FROM revision_validations WHERE validation_id = ?", (manifest.validation_id,)
-        ).fetchone()
+        validation_row = connection.get("revision_validations", manifest.validation_id)
         if validation_row is None:
             raise ExecutionConflict("revision_manifest_invalid", "revision manifest validation is missing")
         validation = self._validation(validation_row)
-        draft_row = connection.execute(
-            "SELECT * FROM revision_drafts WHERE draft_id = ?", (validation.draft_id,)
-        ).fetchone()
+        draft_row = connection.get("revision_drafts", validation.draft_id)
         if draft_row is None:
             raise ExecutionConflict("revision_manifest_invalid", "revision manifest draft is missing")
         draft = self._draft(draft_row)
@@ -687,13 +656,13 @@ class RevisionControlService:
             seen.add(old)
         return result
 
-    def _require_artifacts(self, connection: sqlite3.Connection, changes: Sequence[Mapping[str, Any]]) -> None:
+    def _require_artifacts(self, connection: TableHandle, changes: Sequence[Mapping[str, Any]]) -> None:
         for change in changes:
-            artifact = connection.execute("SELECT kind FROM revision_artifacts WHERE artifact_ref = ?", (change["after_ref"],)).fetchone()
+            artifact = connection.get("revision_artifacts", change["after_ref"])
             if artifact is None or artifact["kind"] != change["kind"]:
                 raise ExecutionConflict("artifact_not_found", "revision change artifact is unavailable or has the wrong type")
 
-    def _verify_draft_binding(self, connection: sqlite3.Connection, draft: RevisionDraft) -> None:
+    def _verify_draft_binding(self, connection: TableHandle, draft: RevisionDraft) -> None:
         source = self.executions._require_execution(connection, draft.source_execution_id)
         base = self.executions._get_revision(connection, draft.base_revision_id)
         checkpoint = self.checkpoints._get(connection, draft.source_checkpoint_id)
@@ -701,15 +670,11 @@ class RevisionControlService:
             raise ExecutionConflict("base_revision_mismatch", "draft base revision no longer matches source execution")
         if checkpoint is None or checkpoint.execution_id != source.execution_id or checkpoint.revision_id != source.revision_id:
             raise ExecutionConflict("invalid_checkpoint", "draft checkpoint is unavailable")
-        unresolved = connection.execute(
-            "SELECT 1 FROM effects WHERE execution_id = ? AND status IN ('dispatched', 'uncertain') LIMIT 1",
-            (source.execution_id,),
-        ).fetchone()
-        if unresolved is not None:
+        if self.executions._first_unresolved_effect(connection, source.execution_id) is not None:
             raise ExecutionConflict("unresolved_effect", "source execution has an unresolved effect")
         self._require_artifacts(connection, draft.changes)
 
-    def _compatible_checkpoint_and_proof(self, connection: sqlite3.Connection, draft: RevisionDraft) -> tuple[CheckpointManifest, list[dict[str, Any]]]:
+    def _compatible_checkpoint_and_proof(self, connection: TableHandle, draft: RevisionDraft) -> tuple[CheckpointManifest, list[dict[str, Any]]]:
         checkpoint = self.checkpoints._get(connection, draft.source_checkpoint_id)
         assert checkpoint is not None
         if self.instruction_editor(draft.changes) is not None:
@@ -723,40 +688,19 @@ class RevisionControlService:
         raise ExecutionConflict("compatible_checkpoint_required", "no checkpoint has a proven compatible prefix")
 
     def _agent_instruction_proof(self, connection, draft, checkpoint) -> list[dict[str, Any]]:
-        """Prove unchanged Agent runtime and every already-completed effect."""
-        from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
+        """Prove the runtime is unchanged and the checkpoint's journal is complete."""
         program = next(item for item in draft.changes if item["target"] == "agent.program")
         prompt = next(item for item in draft.changes if item["target"] == "agent.additional_instructions")
         content = self._agent_program_content(checkpoint)
-        row = connection.execute("SELECT * FROM revision_artifacts WHERE artifact_ref = ?", (program["after_ref"],)).fetchone()
+        row = connection.get("revision_artifacts", program["after_ref"])
         if (program["kind"] != "program_artifact" or prompt["kind"] != "prompt"
                 or program["before_hash"] != draft.base_revision_hash
                 or prompt["before_hash"] != content["source_hash"]
                 or row is None or self._artifact(row).content != content or draft.frontier_mapping):
             raise ExecutionConflict("invalid_instruction_revision", "instructions must preserve the Agent program and runtime")
-        state = AgentCheckpointV1.load(self.executions, checkpoint)
-        allowed_executions = set()
-        current = self.executions._require_execution(connection, checkpoint.execution_id)
-        while current is not None and current.execution_id not in allowed_executions:
-            allowed_executions.add(current.execution_id)
-            current = (self.executions._get_execution(connection, current.parent_execution_id)
-                       if current.parent_execution_id else None)
-        proof = [{"kind": "agent_checkpoint", "checkpoint_id": checkpoint.checkpoint_id,
-                  "checkpoint_hash": checkpoint.state_refs["agent_checkpoint"]["sha256"],
+        proof = [{"kind": "journal_checkpoint", "checkpoint_id": checkpoint.checkpoint_id,
+                  "checkpoint_hash": checkpoint.content_hash,
                   "runtime_contract_hash": content["source_hash"], "reuse_decision": "reuse"}]
-        receipts = {item["action_id"]: item for item in state.payload["terminal_effect_receipts"]}
-        for action in state.payload["completed_actions"]:
-            receipt = receipts.get(action["action_id"])
-            effect = (connection.execute("SELECT * FROM effects WHERE effect_id = ?", (receipt["effect_id"],)).fetchone()
-                      if receipt else None)
-            if (effect is None or effect["execution_id"] not in allowed_executions
-                    or effect["action_id"] != action["action_id"]
-                    or effect["status"] != receipt["outcome"]
-                    or effect["status"] not in {"committed", "not_committed", "compensated"}):
-                raise ExecutionConflict("checkpoint_effect_proof_required", "Agent action lacks a matching terminal effect")
-            proof.append({"kind": "agent_action", "action_id": action["action_id"],
-                          "input_hash": action["input_hash"], "effect_id": receipt["effect_id"],
-                          "receipt_hash": receipt["receipt_ref"]["sha256"], "reuse_decision": "reuse"})
         return proof
 
     def _proof(self, checkpoint: CheckpointManifest, mapping: Mapping[str, Mapping[str, Any]]) -> list[dict[str, Any]] | None:
@@ -790,20 +734,23 @@ class RevisionControlService:
             })
         return proof if reusable else None
 
-    def _runtime_contract(self, connection: sqlite3.Connection, draft: RevisionDraft) -> RevisionArtifact:
+    def _runtime_contract(self, connection: TableHandle, draft: RevisionDraft) -> RevisionArtifact:
         content = {"artifact_refs": [change["after_ref"] for change in draft.changes]}
         # The generated contract is schema-versioned and derives only from validated refs.
         content_hash = _hash({"kind": "runtime_contract", "content": content})
         ref = f"{_ARTIFACT_PREFIX}{content_hash}"
-        row = connection.execute("SELECT * FROM revision_artifacts WHERE artifact_ref = ?", (ref,)).fetchone()
+        row = connection.get("revision_artifacts", ref)
         if row is not None:
             return self._artifact(row)
         now = time.time()
-        connection.execute("INSERT INTO revision_artifacts (artifact_ref, kind, content_hash, content_json, created_at) VALUES (?, 'runtime_contract', ?, ?, ?)", (ref, content_hash, _json(content), now))
+        connection.insert("revision_artifacts", {
+            "artifact_ref": ref, "kind": "runtime_contract", "content_hash": content_hash,
+            "content_json": _json(content), "created_at": now,
+        })
         return RevisionArtifact(ref, "runtime_contract", content_hash, content, now)
 
-    def _require_draft(self, connection: sqlite3.Connection, draft_id: str, expected_version: int | None) -> RevisionDraft:
-        row = connection.execute("SELECT * FROM revision_drafts WHERE draft_id = ?", (draft_id,)).fetchone()
+    def _require_draft(self, connection: TableHandle, draft_id: str, expected_version: int | None) -> RevisionDraft:
+        row = connection.get("revision_drafts", draft_id)
         if row is None:
             raise ExecutionConflict("draft_not_found", "revision draft does not exist")
         draft = self._draft(row)
@@ -813,8 +760,8 @@ class RevisionControlService:
             raise ExecutionConflict("draft_not_editable", "revision draft is already published or discarded")
         return draft
 
-    def _require_validation(self, connection: sqlite3.Connection, validation_id: str, draft: RevisionDraft) -> RevisionValidation:
-        row = connection.execute("SELECT * FROM revision_validations WHERE validation_id = ?", (validation_id,)).fetchone()
+    def _require_validation(self, connection: TableHandle, validation_id: str, draft: RevisionDraft) -> RevisionValidation:
+        row = connection.get("revision_validations", validation_id)
         if row is None:
             raise ExecutionConflict("validation_not_found", "revision validation does not exist")
         result = self._validation(row)
@@ -822,8 +769,8 @@ class RevisionControlService:
             raise ExecutionConflict("validation_stale", "revision validation does not match the draft")
         return result
 
-    def _require_approval(self, connection: sqlite3.Connection, approval_id: str, draft: RevisionDraft, validation: RevisionValidation) -> RevisionApproval:
-        row = connection.execute("SELECT * FROM revision_approvals WHERE approval_id = ?", (approval_id,)).fetchone()
+    def _require_approval(self, connection: TableHandle, approval_id: str, draft: RevisionDraft, validation: RevisionValidation) -> RevisionApproval:
+        row = connection.get("revision_approvals", approval_id)
         if row is None:
             raise ExecutionConflict("approval_not_found", "revision approval does not exist")
         result = self._approval(row)
@@ -832,25 +779,25 @@ class RevisionControlService:
         return result
 
     @staticmethod
-    def _artifact(row: sqlite3.Row) -> RevisionArtifact:
+    def _artifact(row: Mapping[str, Any]) -> RevisionArtifact:
         return RevisionArtifact(str(row["artifact_ref"]), str(row["kind"]), str(row["content_hash"]), _snapshot_json(json.loads(row["content_json"])), float(row["created_at"]))
 
     @staticmethod
-    def _draft(row: sqlite3.Row) -> RevisionDraft:
+    def _draft(row: Mapping[str, Any]) -> RevisionDraft:
         return RevisionDraft(str(row["draft_id"]), _snapshot_json(json.loads(row["project_binding_json"])), str(row["source_execution_id"]), str(row["base_revision_id"]), str(row["base_revision_hash"]), str(row["source_checkpoint_id"]), tuple(_snapshot_json(json.loads(row["changes_json"]))), tuple(_snapshot_json(json.loads(row["frontier_mapping_json"]))), _snapshot_json(json.loads(row["requested_by_json"])), int(row["draft_version"]), str(row["status"]), float(row["created_at"]), float(row["updated_at"]), row["published_manifest_id"])
 
     @staticmethod
-    def _validation(row: sqlite3.Row) -> RevisionValidation:
+    def _validation(row: Mapping[str, Any]) -> RevisionValidation:
         return RevisionValidation(str(row["validation_id"]), str(row["draft_id"]), int(row["draft_version"]), str(row["report_hash"]), _snapshot_json(json.loads(row["report_json"])), str(row["compatible_checkpoint_id"]), str(row["proof_hash"]), float(row["created_at"]))
 
     @staticmethod
-    def _approval(row: sqlite3.Row) -> RevisionApproval:
+    def _approval(row: Mapping[str, Any]) -> RevisionApproval:
         return RevisionApproval(str(row["approval_id"]), str(row["draft_id"]), int(row["draft_version"]), str(row["validation_id"]), str(row["validation_report_hash"]), _snapshot_json(json.loads(row["project_binding_json"])), str(row["policy_version"]), str(row["status"]), _snapshot_json(json.loads(row["actor_json"])), float(row["created_at"]))
 
     @staticmethod
-    def _manifest(row: sqlite3.Row) -> RevisionManifest:
+    def _manifest(row: Mapping[str, Any]) -> RevisionManifest:
         return RevisionManifest(str(row["manifest_id"]), str(row["revision_id"]), str(row["source_execution_id"]), str(row["source_checkpoint_id"]), str(row["compatible_checkpoint_id"]), str(row["parent_revision_id"]), str(row["content_hash"]), _snapshot_json(json.loads(row["manifest_json"])), str(row["validation_id"]), str(row["approval_id"]), str(row["proof_hash"]), _snapshot_json(json.loads(row["created_by_json"])), float(row["published_at"]))
 
-    def _get_manifest(self, connection: sqlite3.Connection, manifest_id: str) -> RevisionManifest | None:
-        row = connection.execute("SELECT * FROM revision_manifests WHERE manifest_id = ?", (manifest_id,)).fetchone()
+    def _get_manifest(self, connection: TableHandle, manifest_id: str) -> RevisionManifest | None:
+        row = connection.get("revision_manifests", manifest_id)
         return self._manifest(row) if row is not None else None

@@ -37,8 +37,8 @@ def test_bound_session_is_not_written_into_workdir(tmp_path, monkeypatch):
     proj = projects.project_for_session("s1")
     assert proj is not None and not proj.is_default
     nested = store.root_path / proj.id / "chats" / "s1"
-    assert (nested / "meta.json").is_file()
-    assert (nested / "history").is_dir()
+    assert (nested / "main.jsonl").is_file()
+    assert (nested / "main.jsonl").is_file()
     assert not (workdir / ".openprogram" / "sessions" / "s1").exists()
     assert store.get_session("s1")["title"] == "notes"
 
@@ -83,7 +83,7 @@ def test_copied_session_markers_do_not_auto_adopt_after_original_gone(
     (copy / '.openprogram' / 'project.json').unlink()
     marker = copy / ".openprogram" / "sessions" / "s1"
     marker.mkdir(parents=True, exist_ok=True)
-    (marker / "meta.json").write_text('{"id":"s1"}', encoding="utf-8")
+    (marker / "main.jsonl").touch()
     shutil.rmtree(original)
     other = projects.resolve_project(copy)
     assert other.id != proj.id
@@ -116,8 +116,8 @@ def test_apply_default_workdir_does_not_fallback_when_bound_folder_missing(
             self.workdir = path
 
     rt = Runtime()
-    assert (store.root_path / "default" / "chats" / "s1" / "history").is_dir() or (
-        store.root_path / proj.id / "chats" / "s1" / "history").is_dir()
+    assert (store.root_path / "default" / "chats" / "s1" / "main.jsonl").is_file() or (
+        store.root_path / proj.id / "chats" / "s1" / "main.jsonl").is_file()
     assert _workdir.project_workdir_for("s1") is None
     assert _workdir.apply_default_workdir(rt, "s1") is None
     assert rt.workdir is None

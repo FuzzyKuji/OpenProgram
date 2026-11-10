@@ -22,15 +22,17 @@ def interrupted_chat(store, *, kind="tool.before", graceful=False):
     )
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(admission.execution_id, expected_version=admission.status_version,
-                                     owner_id="abandoned-worker", ttl_seconds=30)
+                                     owner_id="abandoned-worker")
     active, _ = attempts.activate(leased.attempt_id, generation=leased.generation,
                                  expected_execution_version=reserved.status_version)
-    effects = EffectStore(store)
-    effect = effects.register(effect_id="unknown-write", execution_id=admission.execution_id,
-        attempt_id=active.attempt_id, action_id="original-call",
-        classification=EffectClassification.NONREPEATABLE, idempotency_key=None,
-        metadata={"kind": kind, "payload": {"tool_name": "bash", "tool_call_id": "original-call"}})
-    effects.mark_dispatched(effect.effect_id, expected_status=EffectStatus.PLANNED)
+    effect = None
+    if kind is not None:
+        effects = EffectStore(store)
+        effect = effects.register(effect_id="unknown-write", execution_id=admission.execution_id,
+            attempt_id=active.attempt_id, action_id="original-call",
+            classification=EffectClassification.NONREPEATABLE, idempotency_key=None,
+            metadata={"kind": kind, "payload": {"tool_name": "bash", "tool_call_id": "original-call"}})
+        effects.mark_dispatched(effect.effect_id, expected_status=EffectStatus.PLANNED)
     if graceful:
         from openprogram.runtime.execution.restart import prepare_shutdown
         prepare_shutdown(SimpleNamespace(_execution_store=store, _execution_control=adapter.entry.control))
@@ -207,15 +209,15 @@ def test_durable_admission_key_rejects_changed_authority(runtime):
 
 @pytest.mark.parametrize("failure", ["continuation_contract_mismatch", "credentials_unavailable"])
 def test_only_incompatible_checkpoint_falls_back_to_new_chat(runtime, monkeypatch, failure):
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointError
+    from openprogram.runtime.execution.runtime_contract import RuntimeContractError
     from openprogram.runtime.execution import default_control_service
     from openprogram.runtime.execution.restart import reconcile
     goals, chat, store = runtime
     monkeypatch.setattr("openprogram.runtime.execution.restart.window_seconds", lambda: -1)
-    admission, _ = interrupted_chat(store, kind="provider.before")
+    admission, _ = interrupted_chat(store, kind=None)
     service = default_control_service()
     async def incompatible(*args):
-        raise AgentCheckpointError(failure, "saved runtime differs")
+        raise RuntimeContractError(failure, "saved runtime differs")
     service.activator = incompatible
     calls = []
     done = threading.Event()

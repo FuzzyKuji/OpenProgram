@@ -1,7 +1,7 @@
 """会话主工作目录的语义：第一轮定格、缺失不回退、relocate 留痕。
 
-设计：docs/reference/design/runtime/session/operations.md "Main project
-binding" + docs/reference/design/runtime/session/additional-working-directories.md。
+设计：docs/reference/design/runtime/session/operations.html "Main project
+binding" + docs/reference/design/runtime/session/additional-working-directories.html。
 锁四件事：
   1. 有轮次的会话改绑别的项目 → 被拒（FROZEN_ERROR）；同项目重绑仍放行
      （草稿转正后 chat_ack 的幂等 bind 走这条路）；
@@ -278,7 +278,7 @@ def test_relocate_rewrites_session_locations(env, tmp_path: Path, monkeypatch):
     P.relocate_project(proj.id, new)
 
     assert Path(store._locations["s1"]) == nested
-    assert (store._session_dir("s1") / "history").is_dir()
+    assert (store._session_dir("s1") / "main.jsonl").is_file()
     assert not (new / ".openprogram" / "sessions" / "s1").exists()
 
 
@@ -300,7 +300,7 @@ def test_stale_location_heals_from_project_registry(env, tmp_path: Path,
 
     healed = store._session_dir("s1")
     assert healed == nested
-    assert (healed / "history").is_dir()
+    assert (healed / "main.jsonl").is_file()
 
 
 def test_resolve_project_claims_moved_folder(env, tmp_path: Path, monkeypatch):
@@ -320,7 +320,7 @@ def test_resolve_project_claims_moved_folder(env, tmp_path: Path, monkeypatch):
     assert Path(claimed.path) == new.resolve()
     nested = store.root_path / proj.id / "chats" / "s1"
     assert Path(store._locations["s1"]) == nested
-    assert (nested / "history").is_dir()
+    assert (nested / "main.jsonl").is_file()
 
 
 def test_resolve_project_does_not_claim_a_copy(env, tmp_path: Path, monkeypatch):

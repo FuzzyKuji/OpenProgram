@@ -77,7 +77,6 @@ def _windows_powershell() -> str:
 
 def _invocation(command: str, cwd: str | None = None, *,
                 policy: _sandbox.SandboxPolicy | None = None,
-                force_sandbox: bool = False,
                 ) -> tuple[str | list[str], bool, dict | None, bool]:
     """Return ``(args, shell, env, sandboxed)`` for the host run. POSIX: the command
     string via the host shell (unchanged). Windows: a real bash via
@@ -96,8 +95,7 @@ def _invocation(command: str, cwd: str | None = None, *,
     security setting turns into a placebo.
     """
     if policy is None:
-        policy = (_sandbox.resolve_policy(required=True) if force_sandbox
-                  else _sandbox.resolve_policy())
+        policy = _sandbox.resolve_policy()
     from openprogram.host.sandbox.recoverable_delete import (
         TRASH_ENV,
         prepare_child_env,
@@ -117,8 +115,7 @@ def _invocation(command: str, cwd: str | None = None, *,
         if reason is None:
             args, shell = _sandbox.wrap_command(command, cwd or os.getcwd(), policy)
             return (args, shell, prepared_env, True)
-        if (force_sandbox
-                or policy.network_domains is not None
+        if (policy.network_domains is not None
                 or _sandbox.unavailable_policy() == _sandbox.UNAVAILABLE_POLICY_REFUSE):
             raise _sandbox.SandboxUnavailable(
                 f"sandbox.mode is on but the sandbox cannot run here: {reason}. "

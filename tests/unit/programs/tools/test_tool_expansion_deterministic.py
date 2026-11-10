@@ -4,7 +4,7 @@ to a different order/set across turns, the whole prompt cache misses every
 turn (silently, no error). These tests lock the property: same intent →
 byte-identical tool name sequence.
 
-Design: docs/reference/design/runtime/agent-configuration/tool-toggle-management.md §4.2 (hard constraint),
+Design: docs/reference/design/runtime/agent-configuration/tool-toggle-management.html §4.2 (hard constraint),
 §6 step 1.
 """
 from __future__ import annotations

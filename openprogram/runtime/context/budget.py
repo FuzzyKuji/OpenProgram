@@ -38,6 +38,15 @@ from openprogram.runtime.context.tokens import (
 DEFAULT_OUTPUT_RESERVE = 16_384
 
 
+def output_reserve_for(context_window: int, requested: int | None = None) -> int:
+    """The room kept for the reply in a window: ``requested`` (or
+    :data:`DEFAULT_OUTPUT_RESERVE`), never more than a quarter of the
+    window. Some agents legitimately want a 64K output cap, but taking it
+    from a 100K window leaves no room for history."""
+    reserve = requested if requested is not None else DEFAULT_OUTPUT_RESERVE
+    return min(reserve, max(4096, context_window // 4))
+
+
 class BudgetAllocator:
     """Compute a per-turn BudgetAllocation from the live state.
 
@@ -66,12 +75,10 @@ class BudgetAllocator:
         sys_tokens = self._estimate_text(system_prompt)
         hist_tokens = estimate_history_tokens(history)
         tools_tokens = self._estimate_provider_tools(tools or [])
-        out_reserve = (output_reserve if output_reserve is not None
-                       else self._default_output_reserve)
-        # Clamp the reserve: never give back more than 25% of the
-        # window. Some agents legitimately want a 64K output cap, but
-        # taking it from a 100K window leaves no room for history.
-        out_reserve = min(out_reserve, max(4096, context_window // 4))
+        out_reserve = output_reserve_for(
+            context_window,
+            output_reserve if output_reserve is not None else self._default_output_reserve,
+        )
 
         return BudgetAllocation(
             context_window=context_window,

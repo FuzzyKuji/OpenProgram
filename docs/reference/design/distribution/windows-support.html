@@ -1,0 +1,141 @@
+<title>Windows support</title>
+<meta name="description" content="Windows support levels, what each one guarantees, and where it is implemented.">
+<h1>Windows support</h1>
+<table class="stack" id="levels">
+<caption>Independently useful levels</caption>
+<thead><tr><th scope="col">Level</th><th scope="col">Contract</th></tr></thead>
+<tbody>
+<tr><th scope="row">W0</th><td>Community fixes accepted, known gaps documented, unsupported entries fail with a message. No promise</td></tr>
+<tr><th scope="row">W1</th><td>Native CLI and server, Ink and browser UI, MCP tokens, Windows CI contracts. Rich fallback without raw input. Sandbox execution and Desktop are outside W1</td></tr>
+<tr><th scope="row">W2</th><td>Release archives, PowerShell and Command Prompt installers, Windows <code translate="no">doctor</code> checks. Works without a certificate and where Smart App Control refuses the App installer</td></tr>
+<tr><th scope="row">W3</th><td>Electron Desktop with updates. Signed when a certificate exists. Otherwise an <code translate="no">-unsigned.exe</code> installer whose limits the user is told up front: SmartScreen needs <strong>More info → Run anyway</strong>, and Smart App Control has no per-app exception</td></tr>
+<tr><th scope="row">W4</th><td>Optional WSL2 and bubblewrap isolation. The native CLI never depends on WSL</td></tr>
+<tr><th scope="row">Thin shell</th><td>Shell, seed, <code translate="no">openprogram-launcher.exe</code>, Shift check, the seed branch of <code translate="no">install-release.ps1</code></td></tr>
+<tr><th scope="row">Local refresh</th><td>Native publication with compensating rollback</td></tr>
+</tbody>
+</table>
+
+<h2>Engineering rules</h2>
+<ul>
+<li>Platform behaviour lives in <code translate="no">openprogram/host/_platform/</code> (filesystem, locking, processes, process ownership, terminal, environment) or an adapter it selects.</li>
+<li>Prefer capability detection. Unsupported features fail at their entry point, not with a late <code translate="no">NotImplementedError</code>.</li>
+<li>A weaker replacement for a POSIX safety property is an explicit, documented decision.</li>
+<li>A fix is incomplete until a Windows CI contract covers it.</li>
+<li>POSIX <code translate="no">0600</code>, <code translate="no">0700</code> are not Windows requirements: the profile's inherited ACL stays, and no step removes inheritance or rewrites entries. Atomic replace and process-safe locks are still required.</li>
+</ul>
+
+<h2 id="w1">W1: native CLI and server</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Area</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Source installer</th><td>Checkout <code translate="no">.venv</code>, npm lockfile, Web and Ink builds, selected extras, <code translate="no">openprogram.cmd</code> on user PATH. <code translate="no">-Minimal</code>: Python CLI and server only</td></tr>
+<tr><th scope="row">Launchers</th><td>One <code translate="no">openprogram.cmd</code>: PowerShell prefers a <code translate="no">.ps1</code> of the same name and the default Restricted policy refuses it, so installers delete old ones. PowerShell scripts: UTF-8 with BOM. Batch: BOM-free UTF-8 with an ASCII code-page preamble, delayed expansion off, percent signs escaped, caller code page restored, exit status kept. Installers run as <code translate="no">powershell.exe -ExecutionPolicy Bypass -File</code> for that process only; no machine execution-policy or locale changes</td></tr>
+<tr><th scope="row">Ink</th><td>Capability-based on every OS. Windows Terminal and ConPTY run full-screen; MinTTY and others fall back to Rich with stdio restored. Tokenizer splits control bytes from printable spans; bracketed paste stays one event</td></tr>
+<tr><th scope="row">MCP tokens</th><td>Unique temp file plus atomic hard link. Reads revalidate the file and its ancestors</td></tr>
+<tr><th scope="row">Processes</th><td>PowerShell CIM, not WMIC. Liveness and creation time from read-only native queries; signal zero is never used. Persistent workers: least-privilege per-user Task Scheduler</td></tr>
+<tr><th scope="row">File journals</th><td>Shared cross-process lock. Apply and rollback keep separate guard files</td></tr>
+<tr><th scope="row">Checkpoints, backup, restore</th><td>Path-based fallback without descriptor-relative operations: rejects symlinks and junctions, revalidates parents, binary atomic writes</td></tr>
+<tr><th scope="row">Workspace review</th><td>Reads Git metadata and objects in bounded batches; Git invocations do not grow with changed files</td></tr>
+<tr><th scope="row">Shell tools</th><td>Git Bash when installed, otherwise Windows PowerShell; never <code translate="no">cmd.exe</code>. No-window processes. Git Bash source goes through a temporary environment variable; PowerShell gets UTF-16 source and emits UTF-8; Python children default to UTF-8</td></tr>
+<tr><th scope="row">Program discovery</th><td>Direct metadata lookups, not a full import-to-distribution map per connection</td></tr>
+<tr><th scope="row">Session store shutdown</th><td>Cancels timers, waits for in-flight writes outside locks, flushes the latest snapshot. Failed writes stay dirty. No threads: save synchronously</td></tr>
+<tr><th scope="row">LF edits</th><td>Match CRLF files and keep the ending; duplicates rejected; mixed endings need exact text</td></tr>
+</tbody>
+</table>
+<details>
+<summary>Self-update and CI</summary>
+<p>Journal reads are portable, but the in-conversation controller exists only on macOS. Chat prepare and retry check the capability in <code translate="no">host/_platform/environment.py</code> before creating state, and point to the CLI and Desktop updaters. Status and cancellation are not gated. Native candidate tests and activation remain unimplemented.</p>
+<p>Push and pull-request checks supersede older runs on the same branch. Installation acceptance and scheduled smoke runs use unique groups. Both architectures run in every matrix. The core job covers compatibility seams, checkpoints, backup, upgrade, installer contract and Task Scheduler; the smoke job does a full PowerShell install, starts the worker, runs <code translate="no">doctor</code> and stops it.</p>
+</details>
+
+<h2 id="w2">W2: release installer</h2>
+<p>A native runner builds <code translate="no">OpenProgram-&lt;version&gt;-runtime-windows-x86_64.zip</code> with its SHA-256 file; arm64 is built when <code translate="no">OPENPROGRAM_RELEASE_WINDOWS_ARM64</code> is on. One <code translate="no">runtime/</code> root. <code translate="no">tui.ink</code> is recorded only after an Ink startup probe succeeds.</p>
+<ol>
+<li><code translate="no">install.ps1</code> (or <code translate="no">install.cmd</code>, which fetches it) resolves a stable release, stops and names the platform when the release manifest has no package for it, and hands off to the installer from that immutable tag.</li>
+<li>Check free space, download with resume, validate the checksum and every ZIP entry; reject links and reparse points.</li>
+<li>Verify capabilities and cold-start a worker in isolated staging state, under an exclusive per-runtime lock.</li>
+<li>Move the verified candidate into its version directory.</li>
+<li>Atomically replace the <code translate="no">.cmd</code> launcher, keeping <code translate="no">openprogram.previous.cmd</code>.</li>
+</ol>
+<p>Managed upgrades select the Windows ZIP and tagged PowerShell installer through the compatibility seam. A failure while piped into <code translate="no">iex</code> sets the exit code and throws, so the window stays open.</p>
+<details>
+<summary>Activation and extraction details</summary>
+<ul>
+<li>Versions stay in directories and the previous launcher is retained. Cached versions are revalidated.</li>
+<li>The launcher is prepared and snapshotted first. A failed replacement restores it; a failed restore keeps the original at a reported path.</li>
+<li>ZIP names are validated before writing; files stream through extended-length paths, checking expanded bytes and lengths. Inspection and cleanup use the same APIs. The long-path registry value is untouched.</li>
+<li>PowerShell passes <code translate="no">NullString</code> for the .NET replace, because PowerShell 5 otherwise binds <code translate="no">$null</code> as an invalid empty path.</li>
+<li>Build helpers restore workspace, toolchain, download and browser-cache environment, including on failure.</li>
+<li><code translate="no">doctor</code> reports long-path and Defender state as read-only advice.</li>
+</ul>
+</details>
+
+<h2 id="w3">W3: Desktop</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Area</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Build</th><td>x64 per-user NSIS, assisted, from the thin shell and a seed unpacked in the App (arm64 follows the W2 switch). The Release job requires the seed to be inside the App</td></tr>
+<tr><th scope="row">Signing</th><td>With <code translate="no">WINDOWS_CSC_LINK</code> and <code translate="no">WINDOWS_CSC_KEY_PASSWORD</code>: <code translate="no">OpenProgram.exe</code> and the installer Authenticode Valid, or the job fails. Without them: both must be NotSigned and the installer is renamed <code translate="no">-unsigned.exe</code></td></tr>
+<tr><th scope="row">Runtime</th><td>Sealed versions under <code translate="no">%USERPROFILE%\.openprogram\runtime</code>, unpacked from the seed on first start behind a progress page. Terminal: Windows PowerShell, else <code translate="no">COMSPEC</code>, via <code translate="no">node-pty</code> ConPTY. Browser import from normal paths</td></tr>
+<tr><th scope="row">Updater</th><td>Takes a sealed version through <code translate="no">openprogram upgrade --json</code>. The file <code translate="no">OpenProgram-&lt;version&gt;-win-&lt;arch&gt;.exe</code>, or <code translate="no">-unsigned.exe</code>, is offered only when the release needs a newer shell. The running App's own signature fixes the update line: NotSigned is accepted only on an unsigned-built App, after size and SHA-256 passed; a signed App requires Valid and the same publisher. Failure deletes the candidate. Visible user handoff: <a href="automatic-updates.html">Automatic updates</a></td></tr>
+<tr><th scope="row">CI</th><td>x64 and arm64 install dependencies and native PTY, run Desktop contracts and Web tests</td></tr>
+</tbody>
+</table>
+<details>
+<summary>Runtime preparation and version preflight</summary>
+<p>Local <code translate="no">dist:win</code> packaging with a full runtime:</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Build</th><td>Unique staging directory under an exclusive lock</td></tr>
+<tr><th scope="row">Old payload</th><td>Stays until the replacement is ready and matches the Desktop version</td></tr>
+<tr><th scope="row">On failure</th><td>Old payload restored, or its backup kept at a reported path</td></tr>
+<tr><th scope="row">Deep or read-only files</th><td>Extended paths</td></tr>
+<tr><th scope="row">Directory links</th><td>Removed without following</td></tr>
+<tr><th scope="row">Installed App</th><td>Not replaced</td></tr>
+</tbody>
+</table>
+<p><code translate="no">verify-release-version.py --installed-app</code> takes the install directory or EXE, reads PE version metadata without launching, and requires agreement with the runtime manifest and embedded Python package metadata. A zero fourth component is normalized; nonzero is not dropped.</p>
+</details>
+
+<h2 id="local-refresh">Local refresh publication</h2>
+<p><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/scripts/release/windows-refresh-transaction.ps1"><code translate="no">windows-refresh-transaction.ps1</code></a> publishes ordered, already-verified sibling source and destination pairs for the App, CLI runtime and launchers. Loading it has no side effects.</p>
+<details>
+<summary>Transaction contract</summary>
+<ul>
+<li>Paths must not overlap; drive-relative paths and redirected ancestors are rejected. Extended paths, no ACL or machine changes.</li>
+<li>One exclusive OS lock in the first destination's parent. Payload inspection happens under it.</li>
+<li>Four callbacks: quiesce old, verify published, quiesce failed, restore old service. Each must return exactly Boolean true.</li>
+<li>A flushed JSON journal records every source, destination and backup. Publish in order, compensate in reverse.</li>
+<li>Success keeps originals and a receipt; no runtime tree is deleted. A failed shutdown or rollback keeps the journal and refuses later attempts.</li>
+<li>Compensating, not crash-atomic: recovery must inspect recorded paths, not trust the last flags.</li>
+<li>Still to build: freeze the checkout, one wheel for App and CLI, verify before stopping the worker, validate on the default profile and port, coordinate with CLI and Desktop install locks.</li>
+</ul>
+</details>
+
+<h2 id="w4">W4: command sandbox</h2>
+<p>The seam finds a real WSL2 distribution, verifies Bash and bubblewrap, probes a namespace, and translates paths with <code translate="no">wslpath</code>. Bubblewrap gives the Linux boundaries: read-only root, writable workspace roots, deny paths, PID/IPC/UTS namespaces, private temp, and a network namespace unless policy allows network.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"><code translate="no">sandbox.mode</code></th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">off</code> (default)</th><td>Sandboxed only in a conversation with Sandbox on</td></tr>
+<tr><th scope="row"><code translate="no">auto</code></th><td>Every conversation, once the probe succeeds; otherwise native and unsandboxed</td></tr>
+<tr><th scope="row"><code translate="no">workspace-write</code></th><td>Fail-closed: reports the missing WSL2 or bubblewrap at the entry point</td></tr>
+</tbody>
+</table>
+<p class="note">No probe changes ACLs, ownership, modes, Defender or WSL settings. AppContainer needs per-application capability and ACL work. Job Objects give CPU and process limits but no filesystem or network boundary.</p>
+
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Level</th><th scope="col">Status</th></tr></thead>
+<tbody>
+<tr><th scope="row">W1</th><td>Present; Windows jobs are the merge gate</td></tr>
+<tr><th scope="row">W2</th><td>Implemented. Installers parse under PowerShell 7 and pass with stand-in tools; no real Windows install has run, and neither has the Release job. v1.0.0 publishes no Windows files</td></tr>
+<tr><th scope="row">W3</th><td>Implemented, first published with v1.1.0. Only NSIS builds with a placeholder seed have been made, from macOS; the App has never launched on Windows. A Release run and one real-Windows pass are the gate</td></tr>
+<tr><th scope="row">W4</th><td>Implemented; native AppContainer and quotas are future work</td></tr>
+<tr><th scope="row">Thin shell</th><td>Implemented, never run on Windows</td></tr>
+<tr><th scope="row">Local refresh</th><td>Primitive only: orchestration, crash recovery, installed-App acceptance open</td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="installation-packaging.html">Installation and packaging</a></p>

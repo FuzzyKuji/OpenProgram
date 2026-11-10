@@ -97,7 +97,7 @@ def test_mcp_outside_writes_are_denied_before_allow_and_bypass(
         reset_worktree(token)
 
     assert result.is_error is True
-    assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
+    assert result.details["reason_code"] == "AUTHORITY_CAPABILITY_DENIED"
     assert calls == []
 
 
@@ -201,7 +201,8 @@ def test_mcp_cannot_keep_worktree_before_authority_or_bypass(
     result = _run(wrapped, {"worktree_id": "wt-1"})
 
     assert result.is_error is True
-    assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
+    expected = "AUTHORITY_CAPABILITY_DENIED" if authority_kind == "paired" else "IDENTITY_SCOPE"
+    assert result.details["reason_code"] == expected
     assert calls == []
     assert events == []
     assert get_question_registry().list_pending("mcp-session") == []

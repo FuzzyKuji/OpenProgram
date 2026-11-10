@@ -250,7 +250,11 @@ async function loadTranscript() {
   // Reduced motion: folds and the summary expander switch without animating.
   installDom({ pathname: "/chat", media: (query) => query.includes("prefers-reduced-motion: reduce") });
   const { createElement } = await import("react");
-  const { MessageList } = await import("../../../components/chat/messages/list/message-list.tsx");
+  const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
+  const { MessageList: List } = await import("../../../components/chat/messages/list/message-list.tsx");
+  // The list asks useAgents whether this is an always-on conversation.
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+  const MessageList = (props) => createElement(QueryClientProvider, { client }, createElement(List, props));
   const { useSessionStore } = await import("../../../lib/session-store/index.ts");
   const { loadSessionData } = await import("../../../lib/runtime-bridge/session/conversations.ts");
   const { runtimeState } = await import("../../../lib/runtime-bridge/state.ts");
@@ -258,19 +262,23 @@ async function loadTranscript() {
 }
 const transcript = loadTranscript();
 
-function seedTranscript(useSessionStore, rows, extra = {}) {
+/** The kind the server sends with each row (transcript/rows.py). */
+const kindOf = (row) => row.rowKind ?? (row.role !== "system" ? row.role
+  : row.slot === "card" ? "compaction_card" : row.kind ? "system_event" : "system_text");
+function seedTranscript(useSessionStore, given, extra = {}) {
+  const rows = given.map((row) => ({ ...row, rowKind: kindOf(row) }));
   useSessionStore.setState({
     currentSessionId: "mw", activeChatKey: "mw", runningTasks: {},
-    messagesById: Object.fromEntries(rows.map((row) => [row.id, row])),
+    rowsByView: { mw: Object.fromEntries(rows.map((row) => [row.id, row])) },
     messageOrder: { mw: rows.map((row) => row.id) },
     ...extra,
   });
 }
 const T = 1_700_000_000;
 const compactedRows = () => [
-  { id: "u1", role: "user", content: "first question", timestamp: T },
-  { id: "a1", role: "assistant", content: "first answer", status: "done", timestamp: T },
-  { id: "card", role: "system", kind: "compaction", slot: "card", coversIds: ["u1", "a1"], summarisedCount: 2,
+  { id: "u1", role: "user", content: "first question", timestamp: T, coveredBy: "card" },
+  { id: "a1", role: "assistant", content: "first answer", status: "done", timestamp: T, coveredBy: "card" },
+  { id: "card", role: "system", kind: "compaction", slot: "card", summarisedCount: 2,
     content: "Summary of the **early** talk", timestamp: T },
   { id: "ev", role: "system", kind: "compaction", slot: "event", summarisedCount: 2, tokensBefore: 900, tokensAfter: 300,
     content: "", timestamp: T },
@@ -363,24 +371,4 @@ test("no pending reply is shown once the last row is not the user's", async () =
   } finally { await view.unmount(); }
 });
 
-test("a session load rebuilds the fold card and divider from the active summary", async () => {
-  const { useSessionStore, loadSessionData, runtimeState } = await transcript;
-  runtimeState.currentSessionId = "focused-elsewhere";
-  loadSessionData({
-    id: "peer-session",
-    messages: [
-      { id: "u1", role: "user", content: "old" },
-      { id: "a1", role: "assistant", content: "old reply" },
-      { id: "u2", role: "user", content: "new" },
-    ],
-    graph: [{ id: "sum", covers_ids: ["u1", "a1"], summarised_count: 2, preview: "the summary" }],
-  });
-  const state = useSessionStore.getState();
-  const order = state.messageOrder["peer-session"];
-  const card = state.messagesById.sum_card;
-  assert.equal(card.slot, "card");
-  assert.deepEqual(card.coversIds, ["u1", "a1"]);
-  assert.equal(card.content, "the summary");
-  assert.equal(order.indexOf("sum_card"), order.indexOf("a1") + 1);
-  assert.equal(state.messagesById.sum_ui.slot, "event");
-});
+

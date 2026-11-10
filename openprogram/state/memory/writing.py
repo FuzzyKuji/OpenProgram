@@ -21,6 +21,7 @@ from .backend import MemoryWriteFailureCode, WriteFailure
 from .project_layer import written_elsewhere
 from .management import load_memory_config, organize_topics
 from .management.agent import _run_agent
+from .management.workspace import foreign_source
 from .management.api import render_writer_task
 from .management.transaction import (
     TransactionError,
@@ -116,6 +117,7 @@ def _records(
             speaker_display=authority.get(
                 "speaker_display", message.get("speaker_display")
             ),
+            from_owner=not authority or authority.get("authority_tier") == "owner",
         ))
     return rows
 
@@ -163,6 +165,24 @@ def write_session(
     Returns False without calling a model when the session holds nothing
     new, or when the batch is below the threshold. Both are ordinary.
     """
+    from openprogram.models.usage import usage_scope
+    from openprogram.models.usage.event import CALL_KIND_MEMORY
+
+    with usage_scope(call_kind=CALL_KIND_MEMORY, session_id=session_id):
+        return _write_session(
+            session_id, messages,
+            token_threshold=token_threshold, force=force, model=model,
+        )
+
+
+def _write_session(
+    session_id: str,
+    messages: list[dict[str, Any]],
+    *,
+    token_threshold: int,
+    force: bool,
+    model: str | None,
+) -> bool:
     from . import store
 
     records = _records(session_id, messages)
@@ -242,7 +262,7 @@ def write_session(
     # rather than becoming a bare False, because a caller that cannot
     # tell "not enough to write yet" from "somebody else holds the
     # lock" has nothing truthful to report about either.
-    with workspace_write_lock(root, timeout_s=1.0):
+    with workspace_write_lock(root, timeout_s=1.0), foreign_source(not all(r.from_owner for r in pending)):
         wrote = runtime.process(
             pending,
             writer,
@@ -299,7 +319,20 @@ def _eligible_session_branches(
     ]
     if not branches and fallback is not None:
         branches.append((None, fallback))
-    return branches
+    return [branch for branch in branches if not _scheduled_branch(branch[1])]
+
+
+def _scheduled_branch(rows: list[dict[str, Any]]) -> bool:
+    """Whether a branch ends in a run the scheduler started.
+
+    Routine runs are not memory sources, whether they finished or were
+    cut off. A branch the owner went on to reply on ends in their own row
+    and stays eligible.
+    """
+    last_user = next(
+        (row for row in reversed(rows) if row.get("role") == "user"), None
+    )
+    return last_user is not None and last_user.get("source") == "scheduler"
 
 
 def _force_branches(
@@ -406,10 +439,15 @@ def write(session_id: str, messages=None, *, token_threshold: int, force=False):
     if force and session_id:
         _, branches = _force_branches(session_id, messages)
         rows = [row for _, branch in branches for row in branch]
+    elif not force and _scheduled_branch(rows):
+        # The per-turn pass reads the checked-out path, and the owner can
+        # have a task's branch open when any turn finishes.
+        return None
     policies = {}
     outer = current()
     for row in rows:
-        if not eligible(row):
+        # A report is never a source, so it names no destination either.
+        if row.get("always_on_report") or not eligible(row):
             continue
         raw = node_policy(row)
         policy = from_snapshot(raw) if raw else None

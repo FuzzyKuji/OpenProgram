@@ -518,6 +518,14 @@ class AuthStore:
         try:
             d = json.loads(raw)
         except json.JSONDecodeError as e:
+            # Unreadable is unknown, not empty: read the last good copy.
+            from openprogram.state.last_good import load_json
+
+            d = load_json(path, raw_bytes)
+            if isinstance(d, dict):
+                pool = CredentialPool.from_dict(d)
+                self._fstat[key] = (st.st_mtime, st.st_size)
+                return pool
             raise AuthCorruptCredentialError(
                 f"{path} is not valid JSON: {e}",
                 provider_id=key[0],

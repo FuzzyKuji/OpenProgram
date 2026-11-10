@@ -53,7 +53,7 @@ import { refreshHistoryContextRange } from "../dag";
 import { chatAckIsActive, useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import { visibleSessionIds } from "@/lib/tabs/navigation/shell-session";
 import { writeChatScroll } from "@/lib/chat/history/chat-scroll";
-import { useSessionStore } from "@/lib/session-store";
+import { selectRow, useSessionStore } from "@/lib/session-store";
 import {
   warmContextBreakdown,
   writeContextBreakdownCache,
@@ -68,13 +68,20 @@ import {
   hasPendingUserText,
   rejectPendingUserText,
 } from "@/lib/chat/send/pending-user-text";
-import { shouldHydrateTranscriptForTreeUpdate } from "./transcript-hydration";
 import { frameNamesPendingSend } from "@/lib/net/ws/unacked-sends";
 import {
   shouldHonorRunningTaskClear,
   type ClearedTaskIdentity,
 } from "@/lib/chat/decisions/running-task-clear";
 import { translateText } from "@/lib/i18n";
+import { isBeingStopped, isOpen } from "../../chat/transcript/row-status.ts";
+import { appendLocalNotice } from "@/lib/chat/transcript/apply-read";
+import { stopOverlay } from "@/lib/chat/transcript/apply-transcript-update";
+import type { TurnWindow, WireTurn } from "@/lib/chat/history/history-window";
+import { applyFirstRead } from "./transcript-updates";
+
+/** The compaction-started notice each session is showing. */
+const compactionNotices = new Map<string, string>();
 
 /** The app's single draft-channel-choice host (module-level, backed by
  *  `runtimeState._pendingChannelChoice`). */
@@ -109,6 +116,8 @@ interface ChatAckData {
   session_id?: string;
   client_request_id?: string;
   msg_id?: string;
+  /** The reply row the server writes for this turn. */
+  reply_id?: string;
   execution_id?: string;
   status_version?: number;
   /** Effective permission mode the backend adopted for this turn. */
@@ -123,12 +132,15 @@ interface ChatAckData {
   /** Set when a Job (sub-agent or a message from another conversation)
    *  accepted its own turn in this session. */
   job_id?: string;
+  /** What the view holds, for a socket that held no view of this session. */
+  first_read?: { turns: WireTurn[]; window: TurnWindow };
 }
 
 export function wsHandleChatAck(data: ChatAckData): void {
   // A Job's turn is not the conversation's: it neither runs the session
   // nor consumes the composer's pending text (see wsHandleChatResponse).
   if (data.job_id) return;
+  if (data.session_id && data.first_read) applyFirstRead(data.session_id, data.first_read);
   if (data.session_id && data.function_run) settleFunctionRetry(data.session_id, data.retry_request_id);
   if (data.session_id) {
     const sid = data.session_id;
@@ -220,12 +232,13 @@ export function wsHandleChatAck(data: ChatAckData): void {
     const stoppedOptimistically = Boolean(optimisticStop);
     if (optimisticStop) {
       delete runtimeState._optimisticStops[sid];
-      const replyId = data.execution_id || (data.msg_id ? `${data.msg_id}_reply` : "");
-      if (replyId && useSessionStore.getState().messagesById[replyId]) {
-        useSessionStore.getState().updateMessage(sid, replyId, { status: "cancelled" });
+      const replyId = data.execution_id || data.reply_id || "";
+      const commandId = crypto.randomUUID();
+      const cancels = Boolean(data.execution_id && typeof data.status_version === "number");
+      if (replyId) {
+        useSessionStore.getState().applyLocalChange(sid, stopOverlay(replyId, cancels ? [{ until_command_rejected: commandId }] : []));
       }
       if (data.execution_id && typeof data.status_version === "number") {
-        const commandId = crypto.randomUUID();
         runtimeState._optimisticCancels[commandId] = {
           sessionId: sid,
           task: {
@@ -278,20 +291,6 @@ export function wsHandleChatAck(data: ChatAckData): void {
     });
     if (isActive && !stoppedOptimistically) setRunActive(true);
   }
-
-  // Function dispatch (Retry): the top-level code node is already on disk
-  // (pre-created at dispatch time), so hydrate the transcript NOW rather
-  // than waiting ~1.85s for the spawned child's first tree_update. The
-  // tree_update path (hydrateTranscriptForTreeUpdate) stays as the fallback
-  // and is a no-op once this load_session lands the card. Guarded on
-  // function_run so a plain chat ack is untouched.
-  if (data.function_run && data.session_id === runtimeState.currentSessionId) {
-    runtimeState.__reloadOnTaskClear.add(data.session_id);
-    const sock = getSocket();
-    if (sock && sock.readyState === WebSocket.OPEN) {
-      requestSessionLoad({ action: "load_session", session_id: data.session_id }, true);
-    }
-  }
 }
 
 interface ChatResponseData {
@@ -305,6 +304,12 @@ export function wsHandleChatResponse(data: ChatResponseData): void {
   // own turn, not the conversation's: no running-state, unread or reply
   // bookkeeping here. chat-stream keeps them for the agent's step row.
   if (data.job_id) return;
+  // A bound chat's reply did not reach its channel conversation. The turn
+  // itself is finished and unaffected; only the user needs to know.
+  if (data.type === "channel_delivery_failed") {
+    showChannelDeliveryFailure(data);
+    return;
+  }
   if (data.type === "error" && typeof data.retry_request_id === "string") {
     settleFunctionRetry(data.session_id || "", data.retry_request_id, String(data.content || "Retry failed"));
     return;
@@ -392,21 +397,6 @@ type ExecutionCommandFrame = {
     };
   };
 };
-
-const executionMessageStatuses = new Set([
-  "pending", "running", "streaming", "done", "completed", "error",
-  "cancelled", "cancelling", "interrupted",
-]);
-
-function messageStatusForExecution(status: unknown): string {
-  const value = String(status || "").toLowerCase();
-  if (value === "cancelled") return "cancelled";
-  if (value === "completed") return "completed";
-  if (value === "failed" || value === "reconciliation_required") return "error";
-  if (value === "interrupted") return "interrupted";
-  if (value === "cancelling") return "cancelling";
-  return "running";
-}
 
 /** Apply the canonical exact-command acknowledgement before its paired
  * `execution.updated` frame. A stale rejection carries the authoritative
@@ -507,17 +497,8 @@ export function handleExecutionCommandUpdated(frame: unknown): void {
     cancelling: false,
   };
   store.setRunningTaskFor(snapshotSessionId, ownsForeground ? restoredTask : null, "never");
-  const messageId = pending.messageId || executionId;
-  if (store.messagesById[messageId]) {
-    const messageStatus = messageStatusForExecution(
-      snapshot?.status ?? pending.previousMessageStatus,
-    );
-    if (executionMessageStatuses.has(messageStatus)) {
-      store.updateMessage(snapshotSessionId, messageId, {
-        status: messageStatus as never,
-      });
-    }
-  }
+  // The row keeps its server status; only what was drawn over it goes.
+  store.applyLocalChange(snapshotSessionId, { kind: "overlay_command_rejected", commandId });
   if (snapshotSessionId === runtimeState.currentSessionId) {
     runtimeState.isPaused = String(snapshot?.status || "") === "paused";
     setRunning(ownsForeground);
@@ -586,6 +567,22 @@ export function markSessionReadLocally(sessionId: string): void {
   if (conv) conv.unread = false;
   const summary = useSessionStore.getState().conversations[sessionId];
   if (summary?.unread) useSessionStore.getState().upsertConversation({ ...summary, unread: false });
+}
+
+/** The window was hidden or shown. A hidden one keeps its focus but stops
+ *  counting as on screen. Coming back to a window whose open chat finished
+ *  meanwhile puts the chat on screen again, so its dot clears like on opening
+ *  it. The flag goes first: the server ignores a read from a hidden window. */
+export function windowVisibilityChanged(): void {
+  const sock = getSocket();
+  const open = sock && sock.readyState === WebSocket.OPEN;
+  const hidden = document.visibilityState === "hidden";
+  if (open) sock.send(JSON.stringify({ action: "set_window_hidden", hidden }));
+  const sessionId = runtimeState.currentSessionId;
+  if (hidden || !sessionId) return;
+  if (!useSessionStore.getState().conversations[sessionId]?.unread) return;
+  markSessionReadLocally(sessionId);
+  if (open) sock.send(JSON.stringify({ action: "mark_session_read", session_id: sessionId }));
 }
 
 /** 上一条 sessions_list 消息里的会话 id 集合（首条到达前为 null）。 */
@@ -753,6 +750,7 @@ export function handleRunningTask(rt: unknown): void {
   const t = rt as {
     session_id?: string;
     msg_id?: string;
+    reply_id?: string;
     func_name?: string;
     started_at?: number;
     display_params?: string;
@@ -768,21 +766,18 @@ export function handleRunningTask(rt: unknown): void {
   const sid = t.session_id;
   const mid = t.msg_id;
   const store = useSessionStore.getState();
-  const replyId = mid ? mid + "_reply" : "";
   const priorTask = sid ? store.runningTasks[sid] : undefined;
+  const replyId = t.reply_id || (priorTask?.msg_id === mid ? priorTask?.reply_id : undefined) || "";
   const executionId = t.execution_id || priorTask?.execution_id || replyId;
   const statusVersion = typeof t.status_version === "number"
     ? t.status_version
     : priorTask?.status_version;
-  const targetId = executionId && store.messagesById[executionId]
-    ? executionId
-    : replyId && store.messagesById[replyId]
-      ? replyId
-      : mid || "";
-  const current = targetId ? store.messagesById[targetId] : undefined;
+  const current = sid && executionId
+    ? selectRow(sid, executionId)(store) ?? (replyId ? selectRow(sid, replyId)(store) : undefined)
+    : undefined;
   // Stop already marked this turn cancelled and released occupancy.
   // A late running_task for the same msg_id must not revive the slot.
-  if (current?.status === "cancelling" || current?.status === "cancelled") {
+  if (isBeingStopped(current?.status)) {
     return;
   }
 
@@ -795,127 +790,16 @@ export function handleRunningTask(rt: unknown): void {
     setRunning(true);
   }
 
-  // 2) Mark the in-flight assistant message as "running" in the
-  //    React store so its bubble shows the waiting indicator. The
-  //    backend has already persisted the assistant placeholder + any
-  //    tool rows that fired before the refresh; the WS load gave us
-  //    the message but with status="done" (placeholder content is
-  //    empty). Without this patch, the chat looked finished even
-  //    though the turn was still running server-side.
+  // 2) Remember the slot. Which row runs is the server's: its status arrives on the row.
   if (!sid || !mid) return;
-  store.updateMessage(sid, targetId, { status: "running" });
   store.setRunningTaskFor(sid, {
     session_id: sid,
     msg_id: mid,
+    reply_id: replyId || undefined,
     func_name: t.func_name,
     started_at: t.started_at,
     execution_id: executionId,
     status_version: statusVersion,
-  });
-}
-
-/** Hydrate the transcript when a function run's FIRST tree_update lands.
- *
- *  Runs dispatched via POST /api/function (fn-form, welcome button,
- *  retry) stream NO transcript placeholder — the code node is persisted
- *  server-side only, so a user watching the session sees either a blank
- *  transcript (fresh run) or the stale previous version (retry) for the
- *  whole run. ``running_task`` fires BEFORE the code node exists, so
- *  hydrating on it races and loads the old branch; the first
- *  ``tree_update`` carries the code node's own id in ``tree.path`` and
- *  proves it is persisted (and HEAD has moved to it at append). Hydrate
- *  once per run: the pending card appears — for a retry, replacing the
- *  old version — and later tree_updates fill it live. One more hydrate
- *  fires on completion (running_task_clear) for the final result state.
- */
-const hydratedTreePaths = new Set<string>();
-
-/** Forget which runs were already hydrated. Called on every
- *  `session_loaded` (use-ws.ts): a fresh transcript is the natural drain
- *  point — every tree-structure change (session switch, branch checkout,
- *  rewind, attach/merge `session_reload`) funnels into a `load_session`
- *  whose reply is that frame. A card the reload delivered is still
- *  deduped by the `messagesById` guard below; a path genuinely missing
- *  again after the tree changed must be allowed to re-hydrate. Also
- *  keeps the set from growing without bound across sessions. */
-export function clearHydratedTreePaths(): void {
-  hydratedTreePaths.clear();
-}
-
-const terminalFunctionStatuses = new Set([
-  "cancelled",
-  "completed",
-  "done",
-  "error",
-  "failed",
-  "interrupted",
-  "succeeded",
-  "timeout",
-]);
-
-/** A terminal persisted head proves a function run finished before its HTTP
- *  acknowledgement registered the completion reload. `run_active=false` is
- *  insufficient: it can precede the final node write by a few milliseconds. */
-export function settleFunctionReloadAfterSessionLoad(
-  sessionId: string,
-  headStatus: unknown,
-): void {
-  if (
-    typeof headStatus === "string"
-    && terminalFunctionStatuses.has(headStatus.trim().toLowerCase())
-  ) {
-    runtimeState.__reloadOnTaskClear.delete(sessionId);
-  }
-}
-
-function hydrateTranscriptForTreeUpdate(data: ChatResponseData): void {
-  const sid = (data as { session_id?: string }).session_id;
-  const path = ((data as { tree?: { path?: string } }).tree || {}).path;
-  if (!sid || !path) return;
-  const store = useSessionStore.getState();
-  if (
-    !shouldHydrateTranscriptForTreeUpdate({
-      currentSessionId: runtimeState.currentSessionId,
-      sessionId: sid,
-      path,
-      messageId: typeof data.msg_id === "string" ? data.msg_id : undefined,
-      messagesById: store.messagesById,
-      messageOrder: store.messageOrder,
-      hydratedPaths: hydratedTreePaths,
-    })
-  ) {
-    return;
-  }
-  runtimeState.__reloadOnTaskClear.add(sid);
-  const sock = getSocket();
-  if (sock && sock.readyState === WebSocket.OPEN) {
-    requestSessionLoad({ action: "load_session", session_id: sid }, true);
-  }
-}
-
-/** The turn is over: its reply rows stop being live. A running_task can
- *  land after the turn's result (the server still holds the slot while it
- *  finalizes) and stamp the finished reply "running" again; left there,
- *  every later session load keeps the row as in-flight progress
- *  (session-load.ts retainChangedRows) — even once the server has deleted
- *  it — and it trails under whatever the transcript shows next. */
-function settleClearedTurnRows(
-  sessionId: string,
-  cleared: ClearedTaskIdentity | undefined,
-  current: { msg_id?: string; execution_id?: string } | undefined,
-): void {
-  const store = useSessionStore.getState();
-  const ids = new Set<string>();
-  for (const task of [cleared, current]) {
-    if (task?.execution_id) ids.add(task.execution_id);
-    if (task?.msg_id) ids.add(task.msg_id + "_reply");
-  }
-  const owned = new Set(store.messageOrder[sessionId] ?? []);
-  ids.forEach((id) => {
-    const row = owned.has(id) ? store.messagesById[id] : undefined;
-    if (row && (row.status === "running" || row.status === "streaming" || row.status === "pending" || row.status === "paused")) {
-      store.updateMessage(sessionId, id, { status: "done" });
-    }
   });
 }
 
@@ -929,7 +813,6 @@ export function handleRunningTaskClear(
   if (!cleared?.force && !shouldHonorRunningTaskClear(current, cleared)) {
     return false;
   }
-  settleClearedTurnRows(sessionId, cleared, current);
   store.setRunningTaskFor(sessionId, null, "always");
   // Nothing of the finished turn stays on the user's screen: the control
   // overlay over an app it operated closes with the turn.
@@ -945,18 +828,6 @@ export function handleRunningTaskClear(
   // legacy single-task / button state so the composer un-locks.
   if ((store.activeChatKey ?? store.currentSessionId) === sessionId) {
     setRunning(false);
-  }
-  // One-shot reload requested by the Function-call Retry button: the
-  // retried run is a sibling branch whose HEAD lands at run completion,
-  // so re-hydrate now — the branch view then renders only the active
-  // version and the old run moves behind the < N/M > switcher.
-  if (runtimeState.__reloadOnTaskClear.delete(sessionId)) {
-    if (runtimeState.currentSessionId === sessionId) {
-      const sock = getSocket();
-      if (sock && sock.readyState === WebSocket.OPEN) {
-        requestSessionLoad({ action: "load_session", session_id: sessionId }, true);
-      }
-    }
   }
   return true;
 }
@@ -975,6 +846,26 @@ export function clearSendPlaceholder(sessionId: string): boolean {
   return true;
 }
 
+/** Toast that a bound chat's reply did not reach its channel conversation
+ *  (a `channel_delivery_failed` frame); the turn itself is unaffected. */
+function showChannelDeliveryFailure(data: ChatResponseData): void {
+  const label = data.channel === "wechat"
+    ? translateText("WeChat", "微信")
+    : String(data.channel_label || data.channel || "") || translateText("the channel", "渠道");
+  const kind = String(data.error_kind || "unknown");
+  showToast(
+    translateText(
+      `The reply was not delivered to ${label} (${kind}).`,
+      `回复没有发到${label}（${kind}）。`,
+    ),
+    {
+      tone: "error",
+      duration: 8000,
+      ...(typeof data.session_id === "string" ? { sessionId: data.session_id } : {}),
+    },
+  );
+}
+
 /** Toast an error frame that names no turn. Returns true when it rejected
  *  this client's pending send for the session, which it then settles. */
 function settleUnscopedChatError(data: ChatResponseData): boolean {
@@ -988,10 +879,13 @@ function settleUnscopedChatError(data: ChatResponseData): boolean {
   if (!rejectsSend) return false;
   const store = useSessionStore.getState();
   const pendingId = getPendingUserMessageId(sid);
-  if (pendingId && store.messagesById[pendingId]) {
-    store.updateMessage(sid, pendingId, {
-      status: "error", rawType: "error",
-      ...(typeof data.reason === "string" ? { errorReason: data.reason } : {}),
+  if (pendingId && selectRow(sid, pendingId)(store)) {
+    store.applyLocalChange(sid, {
+      kind: "local_patch", rowId: pendingId,
+      fields: {
+        status: "error", rawType: "error", ...(content ? { errorDetail: content } : {}),
+        ...(typeof data.reason === "string" ? { errorReason: data.reason } : {}),
+      },
     });
   }
   rejectPendingUserText(sid);
@@ -1002,6 +896,14 @@ function settleUnscopedChatError(data: ChatResponseData): boolean {
 }
 
 /* ===== handleChatResponse (bookkeeping) ========================== */
+
+function removeCompactionNotice(sid: string): void {
+  const noticeId = compactionNotices.get(sid);
+  compactionNotices.delete(sid);
+  if (noticeId) {
+    useSessionStore.getState().applyLocalChange(sid, { kind: "local_remove", rowId: noticeId });
+  }
+}
 
 export function handleChatResponse(data: ChatResponseData): void {
   const type = data.type;
@@ -1022,9 +924,12 @@ export function handleChatResponse(data: ChatResponseData): void {
       useSessionStore.getState().setCompactionUi(sid, {
         running: true,
       });
-      useSessionStore.getState().appendMessage(sid, {
-        id: "compaction_started_" + Date.now().toString(36),
+      const noticeId = "compaction_started_" + Date.now().toString(36);
+      compactionNotices.set(sid, noticeId);
+      appendLocalNotice(sid, {
+        id: noticeId,
         role: "system",
+        rowKind: "system_event",
         kind: "compaction",
         content: translateText("Compacting context…", "正在压缩上下文…"),
         status: "done",
@@ -1037,18 +942,22 @@ export function handleChatResponse(data: ChatResponseData): void {
     // Context tab 的明暗靠 /context-range 的 node_ids，不刷新就停在压缩前
     // 的旧集合上 → 整图全暗。
     if (targetsActive && sid) {
-      refreshHistoryContextRange(sid);
+      refreshHistoryContextRange(sid, { changed: true });
       if (!data.no_op) void fetchBranches(sid, { force: true });
     }
     if (sid) {
       useSessionStore.getState().setCompactionUi(sid, {
         running: false,
       });
+      // Every ending takes the in-progress notice away; local notices
+      // survive reads, so nothing else would remove it.
+      removeCompactionNotice(sid);
       const noOp = Boolean(data.no_op);
       if (noOp) {
-        useSessionStore.getState().appendMessage(sid, {
+        appendLocalNotice(sid, {
           id: "compaction_finished_" + Date.now().toString(36),
           role: "system",
+          rowKind: "system_event",
           kind: "compaction",
           content: translateText(
             "Context unchanged; no smaller summary was applied.",
@@ -1057,6 +966,7 @@ export function handleChatResponse(data: ChatResponseData): void {
           status: "done",
         });
       } else {
+        // The read brings the summary card that takes this notice's place.
         const sock = getSocket();
         if (sock && sock.readyState === WebSocket.OPEN) {
           requestSessionLoad({ action: "load_session", session_id: sid }, true);
@@ -1068,10 +978,12 @@ export function handleChatResponse(data: ChatResponseData): void {
   if (type === "compaction_failed") {
     if (sid) {
       useSessionStore.getState().setCompactionUi(sid, { running: false });
+      removeCompactionNotice(sid);
       const err = String((data as { error?: unknown }).error ?? "");
-      useSessionStore.getState().appendMessage(sid, {
+      appendLocalNotice(sid, {
         id: "compaction_failed_" + Date.now().toString(36),
         role: "system",
+        rowKind: "system_event",
         kind: "compaction",
         content: err
           ? translateText("Context compaction failed: ", "上下文压缩失败：") + err
@@ -1098,8 +1010,8 @@ export function handleChatResponse(data: ChatResponseData): void {
     const store = useSessionStore.getState();
     if (sid) {
       const pendingId = getPendingUserMessageId(sid);
-      if (pendingId && store.messagesById[pendingId]?.status === "pending") {
-        store.updateMessage(sid, pendingId, { status: "done" });
+      if (pendingId && selectRow(sid, pendingId)(store)?.status === "pending") {
+        store.applyLocalChange(sid, { kind: "local_patch", rowId: pendingId, fields: { status: "done" } });
       }
       clearPendingUserText(sid);
       clearPendingFirstAck(sid);
@@ -1107,9 +1019,10 @@ export function handleChatResponse(data: ChatResponseData): void {
       clearSendPlaceholder(sid);
     }
     if (sid && content) {
-      store.appendMessage(sid, {
+      appendLocalNotice(sid, {
         id: "local_cmd_" + Date.now().toString(36),
         role: "system",
+        rowKind: "system_text",
         content,
         status: (data as { error?: unknown }).error ? "error" : "done",
       });
@@ -1121,7 +1034,6 @@ export function handleChatResponse(data: ChatResponseData): void {
     return;
   }
   if (type === "stream_event" || type === "tree_update" || type === "user_message") {
-    if (type === "tree_update" && targetsActive) hydrateTranscriptForTreeUpdate(data);
     return;
   }
 
@@ -1178,49 +1090,6 @@ export function handleChatResponse(data: ChatResponseData): void {
   // retry-race bug it caused).
   if (sid && runtimeState.conversations[sid]) {
     const conv = runtimeState.conversations[sid] as { title?: string };
-    // Self-heal after a fork: retry/edit moved the branch, and this
-    // result may have raced the load_session that repaints the view.
-    // Writing the reply into the old branch's view would stack the
-    // two dialogues — reload wholesale instead.
-    if (runtimeState._pendingBranchReload[sid]) {
-      delete runtimeState._pendingBranchReload[sid];
-      const sock = getSocket();
-      if (sock && sock.readyState === WebSocket.OPEN) {
-        requestSessionLoad({ action: "load_session", session_id: sid }, true);
-      }
-      return;
-    }
-    // Runtime (function-call) results stay store-owned via the
-    // chat-stream reducer / tree hydration — writing a second row here
-    // would double the Function-call card. Plain replies upsert: the
-    // focused session already streamed the row (patch it final), a
-    // background session gets it appended so its transcript is whole
-    // without a reload.
-    if (!isRuntimeResult && type !== "error") {
-      const st = useSessionStore.getState();
-      // The result envelope's msg_id is the USER turn's id; the reply
-      // row is minted as ``<user_msg_id>_reply`` everywhere (dispatcher,
-      // stream reducer, DAG). Resolve to the reply row — patching the
-      // raw msg_id would overwrite the user's own bubble.
-      const ridRaw = String((data as { msg_id?: unknown }).msg_id || "");
-      const rid = !ridRaw
-        ? ""
-        : ridRaw.endsWith("_reply") ? ridRaw : ridRaw + "_reply";
-      const content = data.content || "";
-      const blocks =
-        Array.isArray(data.blocks) && (data.blocks as unknown[]).length
-          ? data.blocks
-          : undefined;
-      if (rid && st.messagesById[rid]) {
-        // A terminal envelope may omit ordered blocks. Preserve the stream's
-        // existing timeline instead of overwriting it with undefined.
-        st.updateMessage(sid, rid, { content, ...(blocks ? { blocks } : {}) } as never);
-      } else if (rid) {
-        st.appendMessage(sid, {
-          id: rid, role: "assistant", content, blocks, status: "done",
-        } as never);
-      }
-    }
     if (targetsActive) updateContextStats();
 
     // Conversation title — sidebar metadata, not transcript state.
@@ -1228,7 +1097,7 @@ export function handleChatResponse(data: ChatResponseData): void {
       const st = useSessionStore.getState();
       const firstId = (st.messageOrder[sid] ?? [])[0];
       const seed = firstId
-        ? String(st.messagesById[firstId]?.content || "")
+        ? String(selectRow(sid, firstId)(st)?.content || "")
         : String(data.content || "");
       if (seed) {
         conv.title = seed.slice(0, 50);
@@ -1341,7 +1210,7 @@ function handleContextStats(data: ContextStatsData, sid: string | null): void {
       },
       sid,
     );
-    refreshHistoryContextRange(sid);
+    refreshHistoryContextRange(sid, { changed: true });
   }
 }
 

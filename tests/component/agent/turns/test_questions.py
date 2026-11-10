@@ -33,7 +33,7 @@ def _execution(monkeypatch, tmp_path):
     )
     leased, reserved = AttemptStore(store).lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="test", ttl_seconds=30,
+        owner_id="test",
     )
     AttemptStore(store).activate(
         leased.attempt_id, generation=leased.generation,

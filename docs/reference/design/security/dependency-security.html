@@ -1,78 +1,70 @@
-<!doctype html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Dependency security design</title>
-  <style>
-    :root { color-scheme: light dark; --bg: #fff; --fg: #172033; --muted: #596579; --line: #d7dde8; --code: #eef2f6; }
-    @media (prefers-color-scheme: dark) { :root { --bg: #171a21; --fg: #edf1f7; --muted: #aeb8c8; --line: #394354; --code: #252c38; } }
-    body { margin: 0 auto; max-width: 980px; padding: 40px 24px 100px; background: var(--bg); color: var(--fg); font: 16px/1.6 system-ui, sans-serif; }
-    h1 { font-size: 28px; margin: 0 0 8px; } h2 { margin-top: 36px; font-size: 21px; }
-    p, li { max-width: 900px; } code { padding: 2px 4px; background: var(--code); border-radius: 3px; }
-    table { border-collapse: collapse; width: 100%; margin: 14px 0; } th, td { border-bottom: 1px solid var(--line); padding: 9px 8px; text-align: left; vertical-align: top; } th { font-weight: 650; }
-    .status { color: var(--muted); } a { color: inherit; }
-  </style>
-</head>
-<body>
-  <main>
-    <h1>Dependency security design</h1>
-    <p class="status">Scope: npm manifests and lockfiles, with a shared record for the parallel Python dependency workstream. The source and installed-App boundaries are recorded separately.</p>
+<title>Dependency security design</title>
+<meta name="description" content="How npm and Python dependencies are kept outside advisory ranges, and what proves it.">
+<meta name="covers" content="package-lock.json uv.lock pyproject.toml">
+<h1>Dependency security</h1>
+<p>Every advisory is fixed in the resolved graph or named with its parent chain. Nothing is dismissed.</p>
 
-    <h2>Current implementation and verified gap</h2>
-    <p>The repository uses npm workspaces for <code>apps/web</code>, <code>apps/desktop</code>, and <code>apps/cli</code>. The Web application is an App Router application with <code>output: "export"</code>; its generated files are served by the Python worker. The desktop shell uses Electron and electron-builder. The root lockfile contains runtime, build, and optional dependency graphs for all workspaces.</p>
-    <p>The canonical Dependabot inventory at <code>/tmp/openprogram-completion-audit/dependabot-open.json</code> records 194 open alerts at the base: 154 npm alerts across 18 package names and 40 pip alerts across <code>uv.lock</code>. The npm baseline has 6 critical, 54 high, 78 medium, and 16 low alerts; 55 records are direct and 99 are transitive. The ignored report <code>reports/content-security/npm-dependency-security-baseline.md</code> records the exact advisories, ranges, versions, and commands. Range reconciliation treats comma-separated GitHub ranges as semver conjunctions and fails on parse errors.</p>
+<h2>Current versions and why</h2>
+<table class="stack">
+<thead><tr><th scope="col">Area</th><th scope="col">Now</th><th scope="col">Decision</th></tr></thead>
+<tbody>
+<tr><th scope="row">Next.js</th><td>16.4.4, <code translate="no">eslint</code> 9, direct lint script</td><td>Static export stays: <code translate="no">output: "export"</code>, <code translate="no">dynamic = "force-static"</code> on the manifest route, <code translate="no">next build --webpack</code>. No Next server in the packaged path.</td></tr>
+<tr><th scope="row">Electron</th><td>45.2.1, macOS 13 minimum</td><td>Packaging must replace the installed Electron bundle before local App acceptance</td></tr>
+<tr><th scope="row">Raster annotations</th><td>Fabric 7.4.0 directly, as a transparent layer over the native canvas</td><td>Replaces <code translate="no">tui-image-editor</code> and its vulnerable Fabric 4 chain. Crop and rotate flatten annotations; select, move, resize and text edit stay available before export.</td></tr>
+<tr><th scope="row">React</th><td>18 for root and Web, 19 for CLI</td><td>Unchanged by security upgrades</td></tr>
+<tr><th scope="row">Node</th><td><code translate="no">&gt;=22.12.0</code>, npm <code translate="no">&gt;=10</code></td><td>Root engines, CI bootstrap and developer setup share the minimum</td></tr>
+<tr><th scope="row">Transitive npm</th><td>One root lockfile for <code translate="no">apps/web</code>, <code translate="no">apps/desktop</code>, <code translate="no">apps/cli</code></td><td>Refresh compatible paths; remove unmaintained chains with no fixed release (<code translate="no">tar</code>, <code translate="no">form-data</code>, <code translate="no">postcss</code>, <code translate="no">extract-zip</code>, legacy HTTP packages)</td></tr>
+<tr><th scope="row">Python</th><td><code translate="no">uv.lock</code>, a separate workstream</td><td>Same inventory, evidence and gate. Intel macOS supports BM25, the optional embedding wheel is unavailable on Intel, macOS arm64 embedding wheels need Python 3.14 or newer.</td></tr>
+</tbody>
+</table>
 
-    <h2>Reference corpus and framework comparison</h2>
-    <p>Fixed versions come from the GitHub advisory records and package registries. Registry metadata is checked with <code>npm view</code> before changing the lockfile. The selected framework versions require Node 22.12 or newer, so the root engine contract, CI bootstrap, and developer setup must use the same minimum.</p>
-    <table>
-      <thead><tr><th>Area</th><th>Existing capability</th><th>Absent capability or risk</th><th>Decision</th></tr></thead>
-      <tbody>
-        <tr><td>Next.js</td><td>App Router, static export, client-side runtime APIs, no Next server in the packaged path.</td><td>The installed 14.2.35 matched the affected ranges for current Next advisories, and Next 16 removes <code>next lint</code>.</td><td>Use Next 16.4.4 with <code>eslint</code> 9 and a direct lint script. Keep static export through <code>dynamic = "force-static"</code> for the manifest route and the existing webpack build.</td></tr>
-        <tr><td>Electron</td><td>Native shell, preload isolation, packaged runtime, worker URL on loopback.</td><td>Electron 37.10.3 matched the affected lock/direct records.</td><td>Use Electron 45.2.1. Its package and unpacked app declare macOS 13 as the minimum; desktop checks cover the source API surface. Packaging must replace the installed Electron bundle before local App acceptance.</td></tr>
-        <tr><td>Raster annotations</td><td>Image crop, rotate, draw, text, shape, save, undo, redo, and selection/drag editing.</td><td><code>tui-image-editor</code> carried the vulnerable Fabric 4 chain and the replacement must preserve annotation interaction.</td><td>Remove <code>tui-image-editor</code> and use maintained Fabric 7.4.0 directly as a transparent annotation layer over the native canvas. Crop and rotate flatten annotations into the image; selection, movement, resize, and text editing remain available before export.</td></tr>
-        <tr><td>Transitive npm graph</td><td>One npm lockfile pins reproducible workspace dependencies.</td><td>Old nested <code>tar</code>, <code>form-data</code>, <code>postcss</code>, <code>extract-zip</code>, and legacy HTTP packages remained in the graph.</td><td>Refresh compatible transitive paths and remove unmaintained chains where the graph has no fixed release. The final lock is checked against every advisory range, including package-absent records.</td></tr>
-        <tr><td>Python graph</td><td><code>uv.lock</code> is independently managed by the Python dependency workstream.</td><td>AnyIO, torch, setuptools, and other pip advisories must be reconciled with their exact fixed ranges.</td><td>Keep the same inventory, evidence, and full-gate contract; the parallel owner supplies Python version changes and evidence before integration.</td></tr>
-      </tbody>
-    </table>
-    <p>Official references: <a href="https://nextjs.org/docs/app/guides/upgrading/version-16">Next.js 16 upgrade guide</a>, <a href="https://github.com/vercel/next.js/releases/tag/v16.3.5">Next.js 16.3.5 release</a>, <a href="https://www.electronjs.org/blog/electron-44-0">Electron 44 release</a>, <a href="https://github.com/fabricjs/fabric.js/security/advisories/GHSA-hfvx-25r5-qc3w">Fabric advisory GHSA-hfvx-25r5-qc3w</a>, <a href="https://github.com/fabricjs/fabric.js/security/advisories/GHSA-w22m-hvvm-xmwx">Fabric advisory GHSA-w22m-hvvm-xmwx</a>, and the per-advisory links recorded in the ignored baseline and reconciliation reports.</p>
+<h2>Rules</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Rule</th><th scope="col">Detail</th></tr></thead>
+<tbody>
+<tr><th scope="row">Fixed version</th><td>The advisory's first patched version or a later compatible stable release, from GitHub advisories and <code translate="no">npm view</code></td></tr>
+<tr><th scope="row">Verification</th><td>Both <code translate="no">npm audit --json</code> and the advisory-range inventory. Comma-separated GitHub ranges are semver conjunctions; parse errors fail. Package-absent records are checked too.</td></tr>
+<tr><th scope="row">Never</th><td><code translate="no">npm audit fix --force</code>, which can pick unrelated majors. Dismissing an alert because a page is static or a dependency is development-only.</td></tr>
+<tr><th scope="row">No fixed release</th><td>Trace every parent, remove the chain where possible, otherwise record parent chain, reason and tested alternative</td></tr>
+<tr><th scope="row">Failure</th><td>A clean install, audit, typecheck, build or affected test failure blocks completion and is recorded with its command. The old manifest stays in Git until the minimum source change is proven.</td></tr>
+<tr><th scope="row">Evidence</th><td>Ignored reports under <code translate="no">reports/content-security/</code>, with exact advisories, ranges, versions and commands</td></tr>
+</tbody>
+</table>
 
-    <h2>Adopted, modified, and rejected choices</h2>
-    <ul>
-      <li>Adopt the advisory's first patched version or a later compatible stable release. Verify the resulting installed graph with both <code>npm audit --json</code> and the canonical inventory ranges.</li>
-      <li>Modify the direct framework upgrade to preserve the static export. Web and root React remain on the existing React 18 contract; the CLI keeps its existing React 19 contract. Only the Next compatibility files and Node engine contract change.</li>
-      <li>Reject <code>npm audit fix --force</code> as an implementation method because its result can choose unrelated major versions without compatibility evidence.</li>
-      <li>Reject dismissing alerts because the Web page is statically exported or a dependency is marked development-only. The complete declared graph is audited; applicability is recorded as evidence rather than used to suppress upgrades.</li>
-      <li>For <code>extract-zip</code> and legacy <code>request</code>, the inventory has no usable fixed release for some records. Trace every parent, remove the affected chain where possible, and record any remaining package-absent record with its parent chain and tested alternative.</li>
-    </ul>
+<h2>Boundaries</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Boundary</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Resolution</th><td>All through the root lockfile. Nested entries only when a parent requires them.</td></tr>
+<tr><th scope="row">Build</th><td><code translate="no">npm ci --ignore-scripts</code>, then workspace checks</td></tr>
+<tr><th scope="row">Runtime</th><td>Exported Web assets, Electron main and preload, the Python worker serving them. Untrusted input reaches package CLIs and archive extractors only through product validation.</td></tr>
+<tr><th scope="row">Installed App</th><td>Package resolution does not update <code translate="no">/Applications/OpenProgram.app</code>. Acceptance inspects its actual <code translate="no">process.versions.electron</code>; source checks do not establish it.</td></tr>
+</tbody>
+</table>
 
-    <h2>Target architecture and boundaries</h2>
-    <p>All package resolution goes through the root npm lockfile. Direct workspace manifests declare the supported framework and shell versions; nested package entries are accepted only when their parent package requires them. The build boundary is <code>npm ci --ignore-scripts</code> followed by workspace checks. The runtime boundary is the exported Web assets, Electron main/preload code, and the Python worker that serves those assets. Untrusted input must not be passed to package CLIs or archive extractors without the existing product validation.</p>
-    <p>Electron package resolution does not update an existing <code>/Applications/OpenProgram.app</code> by itself. The supported local path is to package the current checkout with the trusted runtime base, install the resulting app over the single default App, then run <code>scripts/refresh-local-app.sh</code> once. Verification must inspect the installed app's actual <code>process.versions.electron</code>; source-only checks do not establish the installed runtime version.</p>
-    <p>The Python dependency workstream owns <code>uv.lock</code> and records its host policy in the shared report: Intel macOS supports BM25, the optional embedding wheel is unavailable on Intel, and macOS arm64 embedding wheels require Python 3.14 or newer. The current verification host is macOS 15.7.3.</p>
-    <p>Security failures are handled as dependency-resolution failures: a clean install, audit, typecheck, build, or affected test failure blocks completion and is recorded with the exact command. Compatibility failures preserve the old manifest in Git until the minimum source adjustment is proven by the affected check. No remote write, release, installed-App refresh, or Python source edit is in this workstream.</p>
+<h2>Gate</h2>
+<pre translate="no"><code>npm ci --ignore-scripts
+npm audit --json                       # zero vulnerabilities, plus range reconciliation
+npm run build --workspace apps/web
+npm run typecheck --workspace apps/cli
+npm test --workspace apps/cli
+npm test --workspace apps/web
+npm run check:web
+npm run check:desktop
+npm run check:cli
+git diff --check</code></pre>
+<p class="note">From a clean install. Also manifest and lockfile consistency, a clean worktree, and a report separating existing source failures from dependency-induced ones. The diff holds only manifests, lockfile, necessary compatibility source, this design and the ignored evidence rule.</p>
 
-    <h2>Acceptance criteria</h2>
-    <ol>
-      <li>At the final commit, every direct npm manifest version and every lockfile instance is outside each applicable fixed advisory range in the canonical inventory; no alert is dismissed or hidden.</li>
-      <li><code>npm ci --ignore-scripts</code> succeeds on the supported Node/npm engines, <code>npm audit --json</code> reports zero vulnerabilities, and the canonical range reconciliation reports no affected npm version. If an upstream no-patch advisory remains, the report names its parent chain, reason, and tested replacement.</li>
-      <li><code>npm run build --workspace apps/web</code>, <code>npm run typecheck --workspace apps/cli</code>, <code>npm test --workspace apps/web</code>, <code>npm run check:web</code>, <code>npm run check:desktop</code>, and <code>npm run check:cli</code> are run from a clean install. The final report distinguishes existing source failures from dependency-induced failures.</li>
-      <li>The final diff contains only dependency manifests/lockfile, necessary Next/Electron compatibility source, the canonical design, and the ignored evidence rule. The worktree is clean after the scoped commit.</li>
-    </ol>
+<details>
+<summary>References</summary>
+<ul>
+<li><a href="https://nextjs.org/docs/app/guides/upgrading/version-16">Next.js 16 upgrade guide</a></li>
+<li><a href="https://github.com/vercel/next.js/releases/tag/v16.3.5">Next.js 16.3.5 release</a></li>
+<li><a href="https://www.electronjs.org/blog/electron-44-0">Electron 44 release</a></li>
+<li><a href="https://github.com/fabricjs/fabric.js/security/advisories/GHSA-hfvx-25r5-qc3w">Fabric advisory GHSA-hfvx-25r5-qc3w</a></li>
+<li><a href="https://github.com/fabricjs/fabric.js/security/advisories/GHSA-w22m-hvvm-xmwx">Fabric advisory GHSA-w22m-hvvm-xmwx</a></li>
+</ul>
+</details>
 
-    <h2>Full gate manifest</h2>
-    <ul>
-      <li><code>npm ci --ignore-scripts</code></li>
-      <li><code>npm audit --json</code> and the canonical reconciliation script over the final lockfile</li>
-      <li><code>npm run build --workspace apps/web</code></li>
-      <li><code>npm run typecheck --workspace apps/cli</code> and <code>npm test --workspace apps/cli</code></li>
-      <li><code>npm test --workspace apps/web</code> and <code>npm run check:web</code></li>
-      <li><code>npm run check:desktop</code></li>
-      <li><code>git diff --check</code>, manifest/lockfile consistency, and clean-worktree verification</li>
-    </ul>
-
-    <h2>Implementation status</h2>
-    <p>The npm candidate uses Next 16.4.4, Electron 45.2.1, Fabric 7.4.0, and the fixed transitive graph recorded in the lockfile. Source checks cover static export, direct lint invocation, the native desktop surface, and the raster editor's crop, rotate, draw, annotation, save, undo, redo, and destroy paths. The Python section remains a coordination boundary for the separate <code>uv.lock</code> changes. Final audit counts, reconciliation output, and residual source-test failures belong in the ignored final ledger.</p>
-  </main>
-</body>
-</html>
+<h2>Implementation status</h2>
+<p>Versions above are in the manifests and lockfile. Source checks cover static export, direct lint, the desktop surface, and the raster editor's crop, rotate, draw, annotate, save, undo, redo and destroy. Python stays a coordination boundary around <code translate="no">uv.lock</code>.</p>

@@ -43,10 +43,10 @@ def prepare_command(
         # grant the requested directory just because the model named it.
         violation = sandbox.validate_read_path(target)
         if violation:
-            raise PermissionError(f"sandbox policy: {violation}")
+            raise sandbox.SandboxPathDenied(violation)
         violation = sandbox.validate_write_path(target, cwd=base)
         if violation:
-            raise PermissionError(f"sandbox policy: {violation}")
+            raise sandbox.SandboxPathDenied(violation)
         if not stat.S_ISDIR(os.stat(target).st_mode):
             raise NotADirectoryError(f"workdir is not a directory: {target}")
         if sandbox.resolve_policy() is not None:
@@ -55,7 +55,7 @@ def prepare_command(
             # validation cannot turn the requested workdir into a new grant.
             reason = sandbox.unavailable_reason()
             if reason is not None:
-                raise PermissionError(f"explicit workdir requires the configured sandbox: {reason}")
+                raise sandbox.SandboxPathDenied(f"an explicit workdir needs the sandbox, which is unavailable here: {reason}")
             shell_target = target
             if os.name == "nt":
                 from openprogram.host._platform.environment import windows_path_to_wsl
@@ -68,7 +68,7 @@ def prepare_command(
     # A host policy cannot authorize paths in another filesystem. Do not use
     # host realpath/stat, or silently disable sandboxing for a remote override.
     if sandbox.resolve_policy() is not None:
-        raise PermissionError("explicit remote workdir requires backend-native sandbox validation")
+        raise sandbox.SandboxPathDenied("an explicit workdir on an SSH or Docker backend cannot be checked against the sandbox")
     if drive or "\\" in workdir:
         raise ValueError("SSH/Docker workdir must use a POSIX path")
     if posixpath.isabs(workdir):

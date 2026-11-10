@@ -20,14 +20,21 @@ dispatch 里处理, 而 dispatch 只对已放行的发信人运行, 顺序上也
       "policy": "pairing",
       "allowlist": {"<user_id>": {"display": ..., "approved_at": ts}},
       "pending":   {"<user_id>": {"code": ..., "display": ...,
-                                   "requested_at": ts, "notified_at": ts}}
+                                   "requested_at": ts, "notified_at": ts}},
+      "group_full_access": {"<user_id>": {"display": ..., "added_at": ts}},
+      "group_chat_only":   {"<user_id>": {"display": ..., "added_at": ts}}
     }
+
+群聊不走配对. :func:`group_sender_access` 只读, 三种结果: 绑定的联系人
+(allowlist) 和 ``group_full_access`` 名单上的人是 ``full``, 和本人私聊同权;
+``group_chat_only`` 上的人是 ``chat``, 只能回复和用记忆; 其余 ``None``,
+消息直接丢弃, 不发东西、不生成配对码、不建会话. 某个群可以在 ``rooms.json``
+里带自己的两张名单, 这时账号级名单对这个群不起作用, 绑定的联系人不受影响.
 
 未知发信人首次来信生成配对码并回执说明; 机主 approve 后放行. 配对码
 1 小时过期, 过期后下一条消息刷新. 不存在关闭认证或开放入站的策略.
 
-多人共用: allowlist 放多少人都行, 一个群里的每个人都可以由机主分别
-批准. 他们共用同一个 agent 和同一份记忆工作区 (``<state>/memory/``), 记忆按发言人
+多人共用: allowlist 放多少人都行, 上面的人都代表机主. 他们共用同一个 agent 和同一份记忆工作区 (``<state>/memory/``), 记忆按发言人
 记录谁说了什么 —— 每条渠道 user 消息带 ``speaker_display`` 和 ``speaker_id``,
 一路带到 ``memory/`` 读取的 ``ChatTurn``. 门禁判定的是"这
 个人能不能进", 不是"能进几个人".
@@ -47,8 +54,25 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any, Optional
 
+from openprogram.interfaces.channels._room import (
+    GROUP_USER_KEYS,
+    clear_room_users,
+    drop_room_chat_user,
+    remove_room_user,
+    room_user_lists,
+    set_room_user,
+)
 
 DEFAULT_POLICY = "pairing"
+
+#: 有群聊的渠道 (WeChat iLink 只有私聊).
+GROUP_CHANNELS = ("telegram", "discord", "slack")
+#: 名单只认平台的稳定 user id; 用户名和显示名能改, 也会撞名.
+_GROUP_USER_ID = {
+    "telegram": re.compile(r"^[0-9]+$"),
+    "discord": re.compile(r"^[0-9]+$"),
+    "slack": re.compile(r"^[UW][A-Z0-9]+$"),
+}
 
 #: 配对码字符集 — 去掉易混淆的 0/O/1/I.
 _CODE_ALPHABET = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"
@@ -156,6 +180,7 @@ def _load(channel: str, account_id: str) -> dict[str, Any]:
         "policy": DEFAULT_POLICY,
         "allowlist": _rows(raw.get("allowlist")),
         "pending": _rows(raw.get("pending")),
+        **{key: _rows(raw.get(key)) for key in GROUP_USER_KEYS.values()},
     }
 
 
@@ -259,6 +284,38 @@ def decide_inbound_sender(
     return _decision(False, "unpaired", "PAIRING_REQUIRED", reply)
 
 
+def group_sender_access(
+    channel: str,
+    account_id: str,
+    chat_id: str,
+    user_id: str,
+    *,
+    parent_chat_id: str = "",
+) -> Optional[str]:
+    """What this sender may do in this group: ``full``, ``chat`` or None.
+
+    Reads only: no pending row, no reply, nothing a sender can provoke.
+    ``parent_chat_id`` lets a thread use its parent channel's lists when it
+    has none of its own.
+    """
+    user_id = str(user_id or "").strip()
+    if not user_id:
+        return None
+    with _lock, _state_file_lock(channel, account_id):
+        data = _load(channel, account_id)
+    if user_id in data["allowlist"]:
+        return "full"
+    lists = room_user_lists(channel, account_id, chat_id)
+    if lists is None and parent_chat_id:
+        lists = room_user_lists(channel, account_id, parent_chat_id)
+    if lists is None:
+        lists = data
+    for level, key in GROUP_USER_KEYS.items():
+        if user_id in lists[key]:
+            return level
+    return None
+
+
 def _new_code() -> str:
     return "".join(secrets.choice(_CODE_ALPHABET) for _ in range(_CODE_LENGTH))
 
@@ -291,6 +348,7 @@ def approve(channel: str, account_id: str, code: str) -> Optional[str]:
                     "display": _safe_display(row.get("display") or uid),
                     "approved_at": time.time(),
                 }
+                _drop_chat_listing(channel, account_id, data, uid)
                 _save(channel, account_id, data)
                 return uid
         return None
@@ -316,7 +374,16 @@ def approve_user(
             ),
             "approved_at": time.time(),
         }
+        _drop_chat_listing(channel, account_id, data, user_id)
         _save(channel, account_id, data)
+
+
+def _drop_chat_listing(
+    channel: str, account_id: str, data: dict[str, Any], user_id: str
+) -> None:
+    """A bound contact has full access in groups, so a chat listing would lie."""
+    data[GROUP_USER_KEYS["chat"]].pop(user_id, None)
+    drop_room_chat_user(channel, account_id, user_id)
 
 
 def revoke(channel: str, account_id: str, user_id: str) -> bool:
@@ -329,6 +396,102 @@ def revoke(channel: str, account_id: str, user_id: str) -> bool:
         if removed:
             _save(channel, account_id, data)
         return removed
+
+
+def _group_user_id(channel: str, user_id: str) -> str:
+    user_id = str(user_id or "").strip()
+    pattern = _GROUP_USER_ID.get(channel)
+    if not user_id or (pattern is not None and not pattern.fullmatch(user_id)):
+        raise ValueError(
+            f"{user_id!r} is not a {channel} user id. Use the numeric or "
+            "platform id, not a username or display name."
+        )
+    return user_id
+
+
+def add_group_user(
+    channel: str,
+    account_id: str,
+    user_id: str,
+    access: str,
+    *,
+    chat_id: str = "",
+    display: str = "",
+) -> str:
+    """Put a user on a group list; adding them moves them off the other one.
+
+    Without ``chat_id`` this is the account's list. With it, it is that
+    group's own list, which replaces the account's lists for that group.
+    A bound contact always has full access in groups, so listing one as
+    ``chat`` is refused rather than recorded with no effect. Local callers only.
+    """
+    if access not in GROUP_USER_KEYS:
+        raise ValueError(f"access must be one of {tuple(GROUP_USER_KEYS)}")
+    user_id = _group_user_id(channel, user_id)
+    with _lock, _state_file_lock(channel, account_id):
+        data = _load(channel, account_id)
+        if access == "chat" and user_id in data["allowlist"]:
+            raise ValueError(
+                f"{user_id} is a bound contact on {channel}:{account_id}, and a "
+                "bound contact always has full access in groups. To limit them "
+                f"to chat, first run `openprogram channels access revoke {channel} "
+                f"{user_id}{_id_flag(account_id)}`, which also ends their direct "
+                "messages."
+            )
+        if chat_id:
+            set_room_user(channel, account_id, chat_id, user_id, access)
+            return user_id
+        for key in GROUP_USER_KEYS.values():
+            data[key].pop(user_id, None)
+        data[GROUP_USER_KEYS[access]][user_id] = {
+            "display": _safe_display(display or user_id),
+            "added_at": time.time(),
+        }
+        _save(channel, account_id, data)
+    return user_id
+
+
+def remove_group_user(
+    channel: str, account_id: str, user_id: str, *, chat_id: str = "",
+) -> bool:
+    """Take a user off a group's lists, or the account's. True if they were on one."""
+    user_id = str(user_id or "").strip()
+    if chat_id:
+        return remove_room_user(channel, account_id, chat_id, user_id)
+    with _lock, _state_file_lock(channel, account_id):
+        data = _load(channel, account_id)
+        removed = False
+        for key in GROUP_USER_KEYS.values():
+            removed = data[key].pop(user_id, None) is not None or removed
+        if removed:
+            _save(channel, account_id, data)
+        return removed
+
+
+def reset_group_users(channel: str, account_id: str, chat_id: str) -> bool:
+    """Drop a group's own lists, so the account's lists apply to it again."""
+    return clear_room_users(channel, account_id, chat_id)
+
+
+def group_users(channel: str, account_id: str, *, chat_id: str = "") -> dict[str, Any]:
+    """The lists in force for the account, or for one group.
+
+    ``own_lists`` says whether the group has lists of its own; rows are
+    keyed by user id, as in the account's ``access.json``.
+    """
+    room = room_user_lists(channel, account_id, chat_id) if chat_id else None
+    if room is not None:
+        return {
+            "own_lists": True,
+            **{key: {uid: {"display": ""} for uid in room[key]}
+               for key in GROUP_USER_KEYS.values()},
+        }
+    with _lock, _state_file_lock(channel, account_id):
+        data = _load(channel, account_id)
+    return {
+        "own_lists": False,
+        **{key: data[key] for key in GROUP_USER_KEYS.values()},
+    }
 
 
 def describe(channel: str, account_id: str) -> dict[str, Any]:

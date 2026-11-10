@@ -28,6 +28,8 @@ class Attachment:
                     直接跳过不发起请求.
     * ``aes_key`` — 下载到的字节要先用这个 AES-128-ECB 密钥 (hex) 解密.
                     只有 WeChat iLink 的 CDN 媒体用 (见 :mod:`._wechat_media`).
+    * ``voice``   — 语音消息: 下载后转成文字一起进这一轮
+                    (:func:`._attachments.voice_notes`).
     """
     name: str = ""
     mime: str = ""
@@ -36,6 +38,7 @@ class Attachment:
     file_id: str = ""
     size: int = 0
     aes_key: str = ""
+    voice: bool = False
 
 
 @dataclass(frozen=True)
@@ -70,6 +73,9 @@ class ChannelMessage:
                           quoted 块.
     * ``thread_id``     — thread / 楼层 id (Slack thread_ts, Discord
                           thread channel, 等).
+    * ``parent_chat_id``— 这条消息所在 thread 的父频道 (Discord thread 的
+                          ``chat_id`` 是它自己的 id). 群名单先看 thread
+                          自己的覆盖, 再看父频道.
     * ``attachments``   — tuple of :class:`Attachment`. base 在
                           dispatch 前统一下载落盘.
     * ``mentioned``     — 这条消息是冲机器人说的: @了它、命中提及模式,
@@ -89,6 +95,7 @@ class ChannelMessage:
     reply_to_id: str = ""
     quoted_text: str = ""
     thread_id: str = ""
+    parent_chat_id: str = ""
     attachments: tuple = field(default_factory=tuple)
     mentioned: bool = False
     from_bot: bool = False

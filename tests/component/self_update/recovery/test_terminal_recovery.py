@@ -125,7 +125,7 @@ def test_aborted_prepared_transaction_recovers_without_activation(live, installa
     store.transition(record.request.update_id, UpdatePhase.NEEDS_MANUAL_RECOVERY)
     request = replace(record.request, update_id="su_aborted")
     store.create(request)
-    store.transition(request.update_id, UpdatePhase.STAGING)
+    store.transition(request.update_id, UpdatePhase.BUILDING)
     store.transition(request.update_id, UpdatePhase.READY, detail={"transaction_dir": str(transaction)})
     from openprogram.operations.self_update.control.maintenance import enter_maintenance
     enter_maintenance(request.update_id)

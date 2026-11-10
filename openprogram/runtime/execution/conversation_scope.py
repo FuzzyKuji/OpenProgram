@@ -1,6 +1,7 @@
 """Exact execution membership derived from immutable conversation provenance."""
 from __future__ import annotations
 
+import json
 from contextlib import closing
 from typing import Any
 
@@ -8,29 +9,42 @@ from .authorization import ExecutionAuthorizationError, authorize_session_action
 from .model import ExecutionRecord
 
 
-def conversation_execution_scope(store: Any, session_id: str):
-    """Include direct runs, exact called Jobs and descendants, never whole target sessions."""
+def _caller_session_hint(payload_json: str) -> Any:
+    """The session id a stored Agent payload names as its Job's caller, if readable."""
+    try:
+        value = json.loads(payload_json)
+    except (ValueError, RecursionError):
+        return None
+    for key in ("job_context", "caller", "session_id"):
+        value = value.get(key) if isinstance(value, dict) else None
+    return value
+
+
+def conversation_execution_scope(store: Any, session_id: str, *, consulted: set[str] | None = None):
+    """Include direct runs, exact called Jobs and descendants, never whole target sessions.
+
+    Admission rows never change, so the answer for the executions that exist
+    stays the same until one is admitted or removed, unless a session graph
+    was read to place a called Job: a graph still grows. ``consulted``
+    collects the sessions whose graph was read, for callers that reuse the
+    answer.
+    """
     from .job_input import JobAgentInputV1
     from .store import ExecutionConflict
 
-    with closing(store._connect()) as connection:
-        connection.execute("BEGIN")
-        executions = {row["execution_id"]: store._record(row) for row in connection.execute(
-            "SELECT * FROM executions ORDER BY created_at DESC, execution_id",
+    store.tables.ensure_session(session_id)
+    with closing(store._connect()) as connection, store.tables.lock:
+        executions = {row["execution_id"]: store._record(row) for row in connection.rows(
+            "executions", order=("-created_at", "execution_id"),
         )}
-        inputs = {row["execution_id"]: row for row in connection.execute(
-            "SELECT execution_id, session_id, user_message_id, assistant_message_id FROM execution_inputs",
-        )}
+        inputs = {row["execution_id"]: row for row in connection.rows("execution_inputs")}
         # These untrusted hints only select candidates. Full immutable input
         # integrity/schema checks happen below, for relevant sessions only.
-        caller_sessions = {
-            row["execution_id"]: row["caller_session_id"]
-            for row in connection.execute(
-                "SELECT execution_id, CASE WHEN json_valid(payload_json) THEN "
-                "json_extract(payload_json, '$.job_context.caller.session_id') "
-                "END AS caller_session_id FROM execution_agent_turn_inputs"
-            ) if isinstance(row["caller_session_id"], str)
+        caller_hints = {
+            row["execution_id"]: _caller_session_hint(row["payload_json"])
+            for row in connection.rows("execution_agent_turn_inputs")
         }
+        caller_sessions = {key: hint for key, hint in caller_hints.items() if isinstance(hint, str)}
 
     anchor_owners = {}
     for key, record in inputs.items():
@@ -62,6 +76,8 @@ def conversation_execution_scope(store: Any, session_id: str):
                 found.update(owners)
                 continue
             if sid not in graphs:
+                if consulted is not None:
+                    consulted.add(sid)
                 from openprogram.runtime.context.session_db import default_db
                 from openprogram.state.store import SessionNodeWriter
 

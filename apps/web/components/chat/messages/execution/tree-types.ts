@@ -8,6 +8,8 @@ import type { StreamAttempt } from "@/lib/execution-stream/types";
 export interface TNode {
   path?: string;
   name?: string;
+  /** The model's tool call this tree ran for, when its record names one. */
+  tool_call_id?: string;
   status?: string;
   node_type?: string;
   /** Visibility policy for descendants in nested content. */

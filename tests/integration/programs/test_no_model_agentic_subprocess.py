@@ -12,7 +12,7 @@ import pytest
 
 
 def _workflow(state: Path, name: str, source: str) -> Path:
-    """A committed user package in ``<state>/programs/<name>``."""
+    """A committed user package; returns the checked copy it runs from."""
     project = state / "programs" / name
     project.mkdir(parents=True)
     (project / "__init__.py").write_text(
@@ -26,7 +26,9 @@ def _workflow(state: Path, name: str, source: str) -> Path:
          "commit", "-m", "Fixture"],
     ):
         subprocess.run(command, cwd=project, check=True, capture_output=True)
-    return project
+    commit = subprocess.run(["git", "rev-parse", "HEAD"], cwd=project, check=True,
+                            capture_output=True, text=True).stdout.strip()
+    return state / "programs-cache" / name / commit
 
 
 @pytest.mark.parametrize("use_model", [False, True])

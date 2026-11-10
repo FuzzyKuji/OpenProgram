@@ -38,7 +38,6 @@ export type ActivityModel = {
   looseCalls: ActiveToolCall[];
   loosePrograms: ManagedProcess[];
   childrenOf: (executionId: string) => ExecutionSnapshot[];
-  runOf: (executionId: string) => ActivityRun | null;
 };
 
 export function executionPending(item: ExecutionSnapshot): boolean {
@@ -73,7 +72,6 @@ export function activityModel(
   const liveCalls = calls.filter(call => !programs.some(program => processIsActive(program)
     && program.execution_id === call.execution_id && program.tool_call_id && program.tool_call_id === call.tool_call_id));
 
-  const runOfId = new Map<string, ActivityRun>();
   const runs = roots.map(root => {
     const tree: ExecutionSnapshot[] = [];
     const seen = new Set<string>();
@@ -106,7 +104,6 @@ export function activityModel(
       runningCall: runCalls.filter(call => call.status === "running").at(-1) ?? null,
       at: startedAt(root),
     };
-    for (const id of ids) runOfId.set(id, run);
     return run;
   }).sort((a, b) => b.at - a.at);
 
@@ -117,7 +114,7 @@ export function activityModel(
     ...looseCalls.filter(call => call.status !== "running").map(call => ({ kind: "call" as const, key: `call:${call.id}`, call, owner: null, at: call.started_at })),
     ...loosePrograms.filter(program => ["unknown", "lost"].includes(program.status)).map(program => ({ kind: "program" as const, key: `program:${program.id}`, program, at: program.started_at })),
   ].sort((a, b) => b.at - a.at);
-  return { runs, issues, looseCalls, loosePrograms, childrenOf, runOf: id => runOfId.get(id) ?? null };
+  return { runs, issues, looseCalls, loosePrograms, childrenOf };
 }
 
 /** The sub-agent an `agent` call started: the job child that began right
@@ -139,13 +136,9 @@ export type BranchRow<T> = { depth: number; last: boolean; guides: number[] } & 
 export type AgentBranches = {
   /** The listed execution this one runs under, if any. */
   parentOf: (item: ExecutionSnapshot) => string | null;
-  /** The nearest sub-agent above an execution; null: the main agent. */
-  agentParentOf: (item: ExecutionSnapshot) => string | null;
   /** The branch that runs an execution: the sub-agent itself, the nearest
    *  sub-agent above it, or null for the main agent. */
   ownerOf: (item: ExecutionSnapshot) => string | null;
-  /** The sub-agents a branch started (null: the main agent), newest first. */
-  agentsUnder: (owner: string | null) => ExecutionSnapshot[];
   /** Every sub-agent under the main agent, depth first, newest
    *  first, with each branch's `leaves` (things it started that are not
    *  sub-agents) placed among its sub-agents by time. */
@@ -178,9 +171,7 @@ export function agentBranches(executions: ExecutionSnapshot[]): AgentBranches {
   const agentsUnder = (owner: string | null) => agents.filter(item => agentParentOf(item) === owner);
   return {
     parentOf: listedParent,
-    agentParentOf,
     ownerOf: item => isAgent(item) ? item.execution_id : agentParentOf(item),
-    agentsUnder,
     tree: <T>(leaves?: (owner: string | null) => { at: number; leaf: T }[]) => {
       const rows: BranchRow<T>[] = [];
       const placed = new Set<string>();

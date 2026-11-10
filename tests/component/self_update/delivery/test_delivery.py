@@ -50,14 +50,14 @@ def test_runner_retries_interrupted_delivery_once(store_fixture, tmp_path, monke
     from openprogram.runtime.jobs.runner import JobRunner
     from openprogram.operations.self_update import SelfUpdateStore, UpdatePhase
     from openprogram.state.store import SessionStore
-    from openprogram.state.store.session.git_session import GitSession
+    from openprogram.state.store.session.session_log import SessionLog
 
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "profile")
     monkeypatch.setattr('openprogram.runtime.jobs.runner.shared._broadcast', lambda *a, **k: None)
     updates = SelfUpdateStore()
     updates.create(replace(_request(), session_id="p1", origin_assistant_id="a1"))
     updates.transition("su_test", UpdatePhase.ABORTED)
-    original_write = GitSession.write_history if failure == "history" else SelfUpdateStore._write_json
+    original_write = SessionLog.write_history if failure == "history" else SelfUpdateStore._write_json
     failures = []
 
     def interrupted_write(self, *args, **kwargs):
@@ -68,7 +68,7 @@ def test_runner_retries_interrupted_delivery_once(store_fixture, tmp_path, monke
             raise OSError("interrupted result persistence")
         return original_write(self, *args, **kwargs)
 
-    monkeypatch.setattr(GitSession if failure == "history" else SelfUpdateStore,
+    monkeypatch.setattr(SessionLog if failure == "history" else SelfUpdateStore,
                         "write_history" if failure == "history" else "_write_json", interrupted_write)
     runner = JobRunner(max_workers=1)
     try:

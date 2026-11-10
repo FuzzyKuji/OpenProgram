@@ -19,18 +19,18 @@ Crash recovery: :func:`store.reconcile_orphans` runs at process start
 non-terminal state are flipped to ``errored``.
 
 Broadcast events: each state transition fires a client broadcast so the UI
-updates without an explicit poll. We also fire a ``session_reload``
-on terminal so the existing attach card pickup path triggers.
+updates without an explicit poll. The attach card a job writes reaches open
+transcripts through the transcript publisher.
 """
 
 
 from __future__ import annotations
 
 
+import asyncio  # read by the runner modules as shared.asyncio
 import atexit
 
 
-import asyncio
 
 
 import contextvars
@@ -100,10 +100,11 @@ _MAX_CANONICAL_JOB_INPUT_BYTES = 1_000_000
 _CANCEL_ESCALATION_SECS = 30.0
 
 
-_LEASE_RENEW_SECS = 10.0
-
-
 _RECONCILE_SECS = 5.0
+
+
+#: How long a session with nothing unfinished stays in memory after its last change.
+_FINISHED_SESSION_MEMORY_SECS = 3600.0
 
 
 _RUNNERS_BY_EXECUTION_PATH: dict[str, "JobRunner"] = {}
@@ -114,24 +115,6 @@ _RUNNERS_BY_EXECUTION_LOCK = threading.Lock()
 
 class NonPreemptibleOperation(RuntimeError):
     reason_code = "error.nonpreemptible_operation"
-
-
-class JobOperationTimeout(asyncio.TimeoutError):
-    def __init__(self, reason_code: str) -> None:
-        self.reason_code = reason_code
-        super().__init__(reason_code)
-
-
-def _execution_failure_reason(error: str | None) -> str:
-    text = error or ""
-    for reason_code in (
-        NonPreemptibleOperation.reason_code,
-        "budget.runtime_exhausted",
-        "budget.idle_exhausted",
-    ):
-        if reason_code in text:
-            return reason_code
-    return "error.execution"
 
 
 def _terminal_fields(
@@ -178,6 +161,11 @@ def _store_write_terminal(
     return _store_update_status(session_id, job_id, status, **terminal_fields)
 
 
+# Set on the calls a scheduled run makes to the Worker: whose run it is, as the
+# Worker verified it. Its turn lives in the run's own process.
+scheduled_caller: contextvars.ContextVar[Optional[dict[str, Any]]] = contextvars.ContextVar(
+    "openprogram_scheduled_caller", default=None,
+)
 _current_job_id: contextvars.ContextVar[Optional[str]] = contextvars.ContextVar(
     "openprogram_current_job_id", default=None,
 )
@@ -257,13 +245,6 @@ def _broadcast(payload: dict) -> None:
     emit_ws_frame(payload)
 
 
-def _broadcast_session_reload(session_id: str, *, reason: str = "job") -> None:
-    _broadcast({
-        "type": "session_reload",
-        "data": {"session_id": session_id, "reason": reason},
-    })
-
-
 def _refresh_context_stats(session_id: str) -> None:
     """Re-estimate the context ring after the runner moved the graph.
 
@@ -279,31 +260,6 @@ def _refresh_context_stats(session_id: str) -> None:
         _log.debug("context stats not refreshed for session %s", session_id, exc_info=True)
 
 
-def _stamp_job_change_owner(job: Job) -> None:
-    """Persist actor/ownership facts on the child assistant change set."""
-    if not job.head_id:
-        return
-    try:
-        from openprogram.state.store.session.session_store import default_store
-
-        store = default_store()
-        store.merge_node_metadata(
-            job.parent_session_id,
-            job.head_id,
-            {"change_owner": {
-                "relation": job.relation,
-                "origin_turn_id": job.origin_turn_id,
-                "actor_id": job.agent_id,
-                "job_id": job.id,
-                "worktree_id": job.worktree_id,
-                "session_id": job.parent_session_id,
-                "status": job.status.value,
-            }},
-        )
-    except Exception:
-        _log.warning("job change ownership stamp failed for %s", job.id, exc_info=True)
-
-
 def _mirror_linked_job_to_caller(job: Job) -> None:
     """Keep cross-session linked impact visible from its origin turn."""
     try:
@@ -314,12 +270,25 @@ def _mirror_linked_job_to_caller(job: Job) -> None:
         _log.warning("linked job mirror failed for %s", job.id, exc_info=True)
 
 
+_JOB_REPLY_SUFFIX = "_user_reply"
+
+
+def _continued_job(job: Job) -> str | None:
+    """The Job whose reply this Job's agent continues from: admission names that reply ``<job>_user_reply``."""
+    parent = job.parent_msg_id or ""
+    if not parent.endswith(_JOB_REPLY_SUFFIX):
+        return None
+    continued = parent[: -len(_JOB_REPLY_SUFFIX)]
+    return continued if continued and continued != job.id else None
+
+
 def _broadcast_job_status(job: Job, resource: dict | None = None) -> None:
     data = {
         "job_id": job.id,
         "session_id": job.parent_session_id,
         "status": job.status.value,
         "parent_msg_id": job.parent_msg_id,
+        "continues_job_id": _continued_job(job),
         "target_branch_head_id": job.target_branch_head_id,
         "head_id": job.head_id,
         "label": job.label,
@@ -358,7 +327,15 @@ _runner: Optional[JobRunner] = None
 
 
 def get_runner() -> JobRunner:
-    """Process-wide JobRunner. Idempotent."""
+    """Process-wide JobRunner. Idempotent.
+
+    A function subprocess gets a stand-in that hands each call to the Worker.
+    """
+    from openprogram.runtime.execution.worker_calls import worker_calls
+    calls = worker_calls()
+    if calls is not None:
+        from openprogram.runtime.jobs.runner.worker_runner import WorkerRunner
+        return WorkerRunner(calls)
     from openprogram.runtime.jobs.runner.service import JobRunner
     global _runner
     with _runner_lock:
@@ -410,4 +387,3 @@ __all__ = [
     "runner_for_execution_store",
     "shutdown_runner",
 ]
-

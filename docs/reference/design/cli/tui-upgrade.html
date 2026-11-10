@@ -1,0 +1,63 @@
+<title>TUI transcript rendering</title>
+<meta name="description" content="How the Ink TUI renders tool calls, folds output, declares commands and keybindings, and presents mid-run prompts.">
+<h1>TUI transcript rendering</h1>
+
+<p>Tool calls collapse without losing information, Ctrl+O shows everything, diffs are structural, messages queue while the agent is busy, and keybindings can be found and overridden. Mid-run questions: <a href="../runtime/operations/user-input-requests.html">user input requests</a>.</p>
+
+<h2 id="transcript">Transcript</h2>
+<pre translate="no" tabindex="0">⏺ Read(src/app.py)
+  ⎿ Read 52 lines
+⏺ Edit(src/app.py)
+  ⎿ Added 5 lines, removed 2 lines
+    12 + new line
+  … +14 lines (ctrl+o to expand)
+✻ verb… (esc to interrupt · 42s · ↓ 3.2k tokens)</pre>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Element</th><th scope="col">Design</th></tr></thead>
+<tbody>
+<tr><th scope="row">Tool shell</th><td>One per-tool render hook set (use-line, progress, result, error) in one shell. Dot: dim queued, blinking running, green done, red error. Bold name, parenthesized argument summary, result under a <code translate="no">⎿</code> gutter. Two glyphs, no boxes</td></tr>
+<tr><th scope="row">Truncation</th><td>3 lines, then <code translate="no">… +N lines (ctrl+o to expand)</code>. One hidden line is shown instead. Huge output is pre-truncated by characters and the rest estimated</td></tr>
+<tr><th scope="row">Summaries</th><td>Quantified: <code translate="no">Read 52 lines</code>, <code translate="no">Added 5 lines, removed 2 lines</code> plus a diff, <code translate="no">Found 8 files</code>, <code translate="no">Done (12 calls · 48k tokens · 2m 10s)</code></td></tr>
+<tr><th scope="row">Ctrl+O</th><td>A separate Screen: freezes the message list, re-renders expanded, exit hints in the footer. Ctrl+E inside shows everything untruncated. Safe as a global key: flow control uses Ctrl+S and Ctrl+Q</td></tr>
+<tr><th scope="row">Spinner</th><td>One composite line, progressive width gating</td></tr>
+<tr><th scope="row">Busy input</th><td>Typing queues the message (dim, above the input), ↑ recalls it, the queue flushes between turns</td></tr>
+<tr><th scope="row">Diff</th><td>In-house: line numbers, add and remove colours, three context lines; for edit results and <code translate="no">/diff</code></td></tr>
+<tr><th scope="row">Markdown</th><td>marked-terminal, memoized by streaming state, text and width per text segment; the cell-grid renderer redraws every frame</td></tr>
+</tbody>
+</table>
+<p class="note">Density follows Claude Code; interaction below follows opencode. The vendored hermes-ink renderer stays: it has mouse tracking and ScrollBox, so OpenTUI buys nothing.</p>
+
+<h2 id="interaction">Commands and interaction</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Element</th><th scope="col">Design</th></tr></thead>
+<tbody>
+<tr><th scope="row">Command registry</th><td>Each command declared once (name, title, category, keybind, slash-name, enabled); drives keybindings, Ctrl+K, slash commands and footer hints, so registry and handlers cannot drift</td></tr>
+<tr><th scope="row">Keybind table</th><td>Defaults and descriptions declared once, generate the config schema. User overrides under <code translate="no">~/.openprogram</code>. Unknown keys are errors; <code translate="no">"none"</code> disables. <code translate="no">?</code> help comes from the same table</td></tr>
+<tr><th scope="row">Prompts</th><td>Questions and approvals occupy the input slot instead of a modal; the transcript stays scrollable and esc keeps one meaning</td></tr>
+<tr><th scope="row">Danger</th><td>Destructive picker actions confirm in the row: press again, the row turns red. No nested confirm layer</td></tr>
+<tr><th scope="row">Pickers</th><td>Move from the <code translate="no">pickerKind</code> enum to the ModalProvider and Form kit, one at a time</td></tr>
+</tbody>
+</table>
+
+<h2 id="server-support">Server support</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Change</th><th scope="col">Why</th></tr></thead>
+<tbody>
+<tr><th scope="row">Tool stream events carry <code translate="no">call_id</code></th><td>Results match by id; concurrent same-name calls are attributed correctly</td></tr>
+<tr><th scope="row">The <code translate="no">load_session</code> reply carries tool blocks</th><td><code translate="no">/resume</code> restores tool history</td></tr>
+</tbody>
+</table>
+<p class="note">Both touch <code translate="no">_event_parsing.py</code> and dispatcher event emission, shared with the event-bus work.</p>
+
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack">
+<thead><tr><th scope="col">Priority</th><th scope="col">Item</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">Base</th><td>hermes-ink, four themes, BottomBar, Ctrl+K, autosuggest, <code translate="no">@file</code>, per-session drafts, account and channel flows, Markdown memoization</td><td>Built</td></tr>
+<tr><th scope="row">Base</th><td>Mid-run decisions: FIFO <code translate="no">pendingDecisions</code>, the head occupies the input slot as the <code translate="no">question</code> picker. Shift+Tab reaches all four permission modes. <code translate="no">/keybindings</code> lists shortcuts</td><td>Built</td></tr>
+<tr><th scope="row">P0</th><td>Tool shell and per-tool rendering, 3-line truncation (<code translate="no">Turn.tsx</code> folds at 6 with no expand), Ctrl+O screen, diff component (<code translate="no">/diff</code> prints raw text)</td><td>Not built</td></tr>
+<tr><th scope="row">P1</th><td>Queued messages, composite spinner line, registry unification, keybind table and overrides, <code translate="no">?</code> help, in-row danger</td><td>Not built</td></tr>
+<tr><th scope="row">P2</th><td><code translate="no">call_id</code> in stream events (results still match by name), tool blocks on resume, picker migration (<code translate="no">pickerKind</code> remains beside ModalProvider)</td><td>Not built</td></tr>
+</tbody>
+</table>
+<p class="note">P0 is accepted when a mixed-tool run reads as two-line entries, Ctrl+O shows everything, an edit shows a coloured diff, and long bash output folds with an accurate +N.</p>

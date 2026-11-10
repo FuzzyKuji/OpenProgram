@@ -1,57 +1,79 @@
-<!doctype html>
-<html lang="zh">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>左右侧栏宽度与收起状态</title>
-  <style>
-    :root{color-scheme:light dark;font:15px/1.55 system-ui,sans-serif;--bg:#181817;--panel:#232321;--text:#eee;--muted:#aaa;--line:#444;--accent:#6ea8fe}
-    body{margin:0;background:var(--bg);color:var(--text)}
-    main{max-width:900px;margin:auto;padding:40px 24px 64px}h1{margin:0 0 8px;font-size:28px}h2{margin:32px 0 8px;font-size:18px}p{color:var(--muted);max-width:76ch}code{color:var(--accent)}
-    table{width:100%;border-collapse:collapse;background:var(--panel)}th,td{padding:10px 12px;border:1px solid var(--line);text-align:left}th{color:var(--text)}td{color:var(--muted)}
-  </style>
-</head>
-<body><main>
-  <h1>左右侧栏宽度与收起状态</h1>
-  <p>左右侧栏共用同一套宽度、拖拽和收起行为。各侧栏只负责自己的导航、状态来源和主体内容。</p>
+<title>侧栏宽度与折叠状态</title>
+<meta name="description" content="两侧侧栏共用的宽度、拖动、折叠和开合规则。">
+<h1>侧栏宽度与折叠状态</h1>
 
-  <h2>状态约束</h2>
-  <table>
-    <tr><th>状态</th><th>宽度规则</th><th>行为</th></tr>
-    <tr><td>左侧展开</td><td>180–480px</td><td>从右边缘拖拽；超出范围时停止变化</td></tr>
-    <tr><td>右侧展开</td><td>240–720px</td><td>从左边缘拖拽；超出范围时停止变化</td></tr>
-    <tr><td>收起</td><td>固定 63px（8px 外边距内是 47px 的卡片）</td><td>左右使用同一 200ms 宽度动画</td></tr>
-    <tr><td>重新展开</td><td>恢复收起前的合法宽度</td><td>使用同一宽度动画，不丢弃刚调整的宽度</td></tr>
-  </table>
+<table class="stack">
+<thead><tr><th scope="col">状态</th><th scope="col">宽度</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">左侧展开</th><td>180–480px，窗口宽于 900px 时不超过窗口的 30%</td><td>从右边缘拖动；到极限停止。窗口变窄只限制显示，不改存下的宽度，窗口放大后宽度恢复</td></tr>
+<tr><th scope="row">右侧展开</th><td>240–720px，窗口宽于 900px 时不超过窗口的 45%</td><td>从左边缘拖动；到极限停止。窗口变窄只限制显示，不改存下的宽度，窗口放大后宽度恢复</td></tr>
+<tr><th scope="row">折叠</th><td>62px：8px 边距内的 46px 卡片</td><td>两侧相同的 200ms 宽度动画</td></tr>
+<tr><th scope="row">再次展开</th><td>折叠前的有效宽度</td><td>相同动画；保留最近调整的宽度</td></tr>
+</tbody>
+</table>
 
-  <h2>实现边界</h2>
-  <p><code>components/layout/use-resizable-rail.ts</code> 是唯一的宽度行为实现：保存展开宽度、限制范围、处理指针捕获、生成展开/收起样式并控制 transition。左、右侧栏分别提供范围和增长方向，不再各自维护事件监听器。手柄共用 base.css 中的 rail-resize-handle 样式，命中范围以分隔线为中心，向两侧各延伸约 8px，不改变布局宽度；外壳允许手柄溢出，内部内容容器继续裁切；仅主按钮启动拖动，并禁用手柄上的触摸平移与文字选择。</p>
+<h2 id="implementation-boundaries">宽度行为</h2>
+<p><code translate="no">components/layout/use-resizable-rail.ts</code> 是唯一实现：保存展开宽度、限制范围、处理指针捕获、生成展开和折叠样式、控制过渡。每个侧栏传入自己的范围和增长方向。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">手柄</th><td><code translate="no">.rail-resize-handle</code>，分隔线两侧约 8px 可点击，不影响布局宽度。外壳允许它溢出，内部内容仍裁切。</td></tr>
+<tr><th scope="row">拖动</th><td>只有主键触发；手柄上禁用触摸平移和文字选择。悬停时出现和分屏分隔线相同的短条，位于两张卡片之间 8px 缝隙的正中；拖动时变实，宽度停在默认值上时变成主题色。</td></tr>
+<tr><th scope="row">回到默认</th><td>两侧相同：双击拖动条，或焦点在拖动条上时按 Enter，用 280ms 缓出回到 288px；宽度像拖动一样逐帧变化，侧栏里面的内容跟着边缘一起动。拖到 288px 附近 8px 内会贴上去。处于默认宽度时不保存。</td></tr>
+<tr><th scope="row">结束拖动</th><td>松开、指针取消或窗口失焦。窗口级结束事件作为被捕获手柄事件的补充；移动事件发现按键已松开也会结束。每次都恢复折叠动画。</td></tr>
+</tbody>
+</table>
 
-  <h2>展开与收起</h2>
-  <p>侧栏里的每个部件在两种状态下都存在：展开和收起都不挂载、卸载或切换 display，无论方向，也无论移动中途是否再次切换。外壳宽度在点击那一帧开始移动，<code>.collapsed</code> 也在同一次渲染里加上或去掉。每个部件属于以下三类之一（规则见 <code>app/styles/base/layout.css</code> 的 "Opening and closing"）：</p>
-  <table>
-    <tr><th>类别</th><th>部件</th><th>运动方式</th></tr>
-    <tr><td>两态同一位置</td><td>左栏 New chat 圆标和导航图标</td><td>贴着不动的左边缘布局，从不移动；每行的底框贴着卡片移动的边缘、内缩 8px。</td></tr>
-    <tr><td>两态不同位置</td><td>两个开关、右栏视图行、左栏底部头像</td><td>开关展开时距移动边缘 8px，收起时在卡片中居中（8.5px），头部内边距按宽度的时长和曲线在两者间移动。右栏的行两态都是一列，随左侧移动边缘一起走。头像的内边距从 16px 滑到 6px。</td></tr>
-    <tr><td>仅展开态</td><td>字标、标签、Ability 刷新按钮、收藏、会话列表、滚动分隔线、底部名字和箭头、右栏视图（Files、Activity、Resources、Detail、Context）</td><td>两态都按展开宽度、贴着不动的边缘布局，由卡片裁切，从不重排；按宽度的时长和曲线淡入淡出（底部名字用自己的 160ms 曲线），只靠 opacity；从收起落定到展开落定之间 inert（不接指针、不可聚焦、退出无障碍树）。标签和底部名字在各自的行里，收起的侧栏保留这些行，所以仍可触达。</td></tr>
-  </table>
-  <p>移动不改变任何部件的继承属性（<code>pointer-events</code>、<code>visibility</code>、<code>color</code>、自定义属性）：元素的继承属性一变，浏览器就要重算它下面整棵子树的样式，在点击那一帧就是整个会话列表（<code>pointer-events</code> 1,764 个元素，<code>visibility</code> 1,946 个，<code>opacity</code> 只有 1 个；实测 trace）。<code>use-resizable-rail.ts</code> 在落定时（宽度的 <code>transitionend</code> 或计时器）自己把 <code>inert</code> 写到最外层的仅展开态部件上，这次重算落在移动结束之后；侧栏静止收起时新挂载的部件也随之 inert。</p>
-  <p>开关的两个图形（隐藏、显示）都保持挂载并交叉淡变。<code>data-rail-closed</code> 标记收起已落定（宽度的 <code>transitionend</code> 或计时器），只有看不见的东西依赖它：窄屏下分屏时回到文档流、左栏列表的滚动复位、隐藏列表里运行标记的暂停。左栏列表滚动着收起时，导航链接随宽度滑回顶部（transform 上的一个 Web Animation），落定那一帧复位滚动。右栏视图里的工作只在展开时运行：收起时 Activity、Resources 的进程轮询、页面截图和终端读取都暂停。存储为收起的左栏在 <code>html[data-sidebar-closed]</code> 下首帧即为收起态，不播过渡；在挂载后的侧栏把仅展开态部件设为 inert 之前，由 <code>interactivity: inert</code> 让它们不可触达。</p>
+<h2 id="opening-and-closing">开合</h2>
+<p>每个部件在两种状态下都存在：开合时不在侧栏内挂载、卸载或改变 <code translate="no">display</code>，方向相反或中途再次切换也一样。外壳宽度在点击那一帧开始变化，<code translate="no">.collapsed</code> 在同一次渲染里切换。规则见 <code translate="no">app/styles/base/layout.css</code> 的 “Opening and closing”。</p>
+<table class="stack">
+<thead><tr><th scope="col">类别</th><th scope="col">部件</th><th scope="col">如何移动</th></tr></thead>
+<tbody>
+<tr><th scope="row">一个位置</th><td>左侧栏的新建对话按钮和链接图标</td><td>贴着不动的左边缘布局。每行的盒子跟着卡片移动的边缘，内缩 8px。</td></tr>
+<tr><th scope="row">两个位置</th><td>两个开关、右侧面板的视图行、左下角头像</td><td>开关在展开时距移动边缘 8px，折叠时在卡片内居中。右侧面板的行始终一列，跟着移动的左边缘。头像左内边距从 16px 滑到 5px，右内边距从 16px 到 27px，名称宽度不变。</td></tr>
+<tr><th scope="row">仅展开时</th><td>字标、文字标签、能力刷新按钮、收藏、对话列表、滚动分隔线、页脚名称和箭头、右侧面板的视图（文件、活动、资源、详情、上下文）</td><td>两种状态都按展开宽度布局并被卡片裁切，不会重新换行。只靠透明度淡入淡出，时长和曲线与宽度相同（页脚名称用自己的 160ms 曲线）。从关闭结束到打开结束期间为 inert。文字标签和页脚名称在折叠侧栏保留的行里仍可访问。</td></tr>
+</tbody>
+</table>
 
-  <h2>组件边界</h2>
-  <table>
-    <tr><th>文件</th><th>职责</th></tr>
-    <tr><td><code>sidebar/sidebar.tsx</code></td><td>左栏外壳、开关持久化、New chat、收藏和会话组合</td></tr>
-    <tr><td><code>sidebar/sidebar-primary-nav.tsx</code></td><td>固定导航、路由高亮、导航图标动画和 Programs 刷新</td></tr>
-    <tr><td><code>right-sidebar/right-sidebar.tsx</code></td><td>右栏外壳、文件入口和视图容器</td></tr>
-    <tr><td><code>right-sidebar/detail-panel.tsx</code></td><td>DAG 选中节点的 Details/Context 切换和详情渲染</td></tr>
-  </table>
-  <p>不在本次结构调整中拆分会话列表或 AppShell；它们有独立状态和交互边界，不能与侧栏外壳移动混在同一次变更中。</p>
+<details>
+<summary>为什么不改继承属性</summary>
+<p>移动时不改任何继承属性（<code translate="no">pointer-events</code>、<code translate="no">visibility</code>、<code translate="no">color</code>、自定义属性）。这类变化会让浏览器重算整个子树的样式，在点击那一帧就是整个对话列表：<code translate="no">pointer-events</code> 1,764 个元素，<code translate="no">visibility</code> 1,946 个，<code translate="no">opacity</code> 1 个（实测）。</p>
+<p><code translate="no">use-resizable-rail.ts</code> 在结束时（宽度的 <code translate="no">transitionend</code> 或定时器）自己给最外层的仅展开部件写 <code translate="no">inert</code>，让重算发生在移动之后。侧栏静止折叠时才挂载的部件随之变为 inert。</p>
+</details>
 
-  <h2>验收</h2>
-  <p>分别将左右侧栏拖到边界后收起，应在 200ms 内平滑变为 63px，期间没有任何部件在一帧内消失或出现；再次展开应恢复各自之前的宽度。分隔线两侧约 8px 均可触发拖动，悬停和拖动时只改变鼠标光标，不增加高亮；拖动过程中离开手柄仍应继续响应，释放、取消指针或窗口失去焦点后必须恢复收起动画；窗口级结束事件补充手柄的捕获事件，移动时发现按钮已释放也结束拖动。</p>
+<details>
+<summary>关闭结束状态和首帧</summary>
+<ul>
+<li>开关的两个图形（隐藏、显示）始终挂载并交叉淡入淡出。</li>
+<li><code translate="no">data-rail-closed</code> 表示关闭已结束。只有看不见的东西依赖它：窄布局回到分栏画布旁的文档流、左侧列表重置滚动、暂停隐藏列表里的运行标记。</li>
+<li>左侧栏滚动时关闭，链接随宽度滑到顶部（一个 transform 的 Web Animation），结束时在同一帧重置滚动。</li>
+<li>右侧面板的视图只在打开时工作：折叠期间暂停活动、资源的进程、页面截图和终端读取。</li>
+<li>已保存为关闭的左侧栏在首帧按 <code translate="no">html[data-sidebar-closed]</code> 画成折叠，没有过渡，仅展开部件靠 <code translate="no">interactivity: inert</code> 不可达，直到侧栏挂载后把它们设为 inert。</li>
+</ul>
+</details>
 
-  <h2>实现状态</h2>
-  <p>已实现：左右侧栏使用同一宽度行为模块；固定导航和详情渲染分别离开外壳文件，外壳组件只负责组合。</p>
-</main></body>
-</html>
+<h2 id="component-boundaries">组件</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">文件</th><th scope="col">职责</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">sidebar/sidebar.tsx</code></th><td>左侧外壳、持久化开关、新建对话、收藏和会话组合</td></tr>
+<tr><th scope="row"><code translate="no">sidebar/sidebar-primary-nav.tsx</code></th><td>固定导航、路由高亮、导航图标动画、Programs 刷新</td></tr>
+<tr><th scope="row"><code translate="no">right-sidebar/right-sidebar.tsx</code></th><td>右侧外壳、文件入口、视图容器</td></tr>
+<tr><th scope="row"><code translate="no">right-sidebar/detail-panel.tsx</code></th><td>详情和上下文切换，选中 DAG 节点的详情渲染</td></tr>
+</tbody>
+</table>
+<p class="note">会话列表和 AppShell 保留各自的状态与交互边界，与侧栏外壳分开。</p>
+
+<details>
+<summary>验收</summary>
+<ul>
+<li>把每个侧栏拖到极限再折叠：200ms 内变成 62px，没有东西在一帧内消失或出现。</li>
+<li>展开恢复之前的宽度。</li>
+<li>双击侧栏的拖动条回到 288px，刷新后仍是 288px。</li>
+<li>打开长对话时拖动任一侧栏，聊天区不出现滚动条。</li>
+<li>分隔线两侧约 8px 内可开始拖动，显示短条，指针离开手柄后继续拖动。</li>
+</ul>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<p>已实现。两侧使用同一宽度模块；外壳组件只组合导航和详情渲染。</p>

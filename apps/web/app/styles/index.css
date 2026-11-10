@@ -22,6 +22,7 @@
 @import "./chat/pane/peer-session-pane.css";
 @import "./chat/messages/bubbles.css";
 @import "./chat/messages/a2ui.css";
+@import "./chat/messages/visual.css";
 @import "./chat/messages/message-actions.css";
 @import "./chat/execution/typing-indicator.css";
 @import "./chat/welcome/code-rain-style.css";

@@ -5,9 +5,18 @@ room layer's call (test_channels_rooms.py).
 """
 from __future__ import annotations
 
+import os
+import sys
+import threading
+import types
+
+import httpx
 import pytest
 
 from openprogram.interfaces.channels import accounts as _accounts
+from openprogram.interfaces.channels.implementations import telegram as telegram_module
+from openprogram.interfaces.channels.implementations import wechat as wechat_module
+from openprogram.interfaces.channels.implementations.slack import SlackChannel
 from openprogram.interfaces.channels.implementations.telegram import TelegramChannel
 
 
@@ -193,3 +202,281 @@ def test_quoted_text_from_reply() -> None:
 def test_text_free_update_ignored() -> None:
     ch = _adapter()
     assert _capture(ch, _update(text=None)) == []
+
+
+# --- Adapter loops: revoked tokens, old edits, WeChat, Slack -----------------
+
+class _Client:
+    """Stands in for the safe HTTP client; answers polls from a script."""
+
+    def __init__(self, responses: list, stop: threading.Event):
+        self.responses = responses
+        self.stop = stop
+        self.polls = 0
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc):
+        return False
+
+    def _next(self, url):
+        self.polls += 1
+        status, body = self.responses.pop(0)
+        if not self.responses:
+            self.stop.set()
+        return httpx.Response(status, json=body, request=httpx.Request("POST", url))
+
+    def get(self, url, **_kw):
+        if url.endswith("/getMe"):
+            return httpx.Response(200, json={"ok": True, "result": {"id": 1}},
+                                  request=httpx.Request("GET", url))
+        return self._next(url)
+
+    def post(self, url, **_kw):
+        return self._next(url)
+
+
+def _run_telegram(monkeypatch, responses, stop=None):
+    ch = _adapter()
+    stop = stop or threading.Event()
+    client = _Client(responses, stop)
+    monkeypatch.setattr("openprogram.host.security.safe_http.safe_client",
+                        lambda *_a, **_k: client)
+    sleeps: list[float] = []
+    monkeypatch.setattr(telegram_module.time, "sleep", sleeps.append)
+    ch.run(stop)
+    return client, sleeps
+
+
+@pytest.mark.parametrize("status", [401, 404])
+def test_telegram_stops_when_the_token_is_rejected(monkeypatch, status):
+    # A second answer stays queued: the adapter must not ask again.
+    client, sleeps = _run_telegram(
+        monkeypatch, [(status, {"ok": False}), (200, {"ok": True, "result": []})],
+    )
+    assert client.polls == 1
+    assert sleeps == []
+
+
+def test_telegram_keeps_polling_through_a_conflict(monkeypatch):
+    client, sleeps = _run_telegram(
+        monkeypatch, [(409, {"ok": False}), (200, {"ok": True, "result": []})],
+    )
+    assert client.polls == 2
+    assert sleeps == [5]
+
+
+def _edit_update(ch: TelegramChannel, sent_at: float) -> dict:
+    upd = _update("changed", chat_type="private")
+    upd["edited_message"] = {**upd.pop("message"), "date": sent_at,
+                             "edit_date": ch.started_at + 10, "message_id": 9}
+    return upd
+
+
+def test_telegram_ignores_an_edit_of_a_message_from_before_start():
+    ch = _adapter()
+    assert _capture(ch, _edit_update(ch, ch.started_at - 60)) == []
+
+
+def test_telegram_still_takes_an_edit_of_a_message_from_this_run():
+    ch = _adapter()
+    got = _capture(ch, _edit_update(ch, ch.started_at + 1))
+    assert [m.text for m in got] == ["changed"]
+
+
+def test_telegram_new_message_is_not_judged_by_its_date():
+    ch = _adapter()
+    upd = _update("queued while down", chat_type="private")
+    upd["message"]["date"] = ch.started_at - 60
+    assert len(_capture(ch, upd)) == 1
+
+
+def _run_wechat(monkeypatch, responses):
+    _accounts.save_credentials(
+        "wechat", "a1", {"bot_token": "TOK", "ilink_bot_id": "BOT"},
+    )
+    stop = threading.Event()
+    client = _Client(responses, stop)
+    monkeypatch.setattr(wechat_module, "_wechat_client", lambda _base: client)
+    sleeps: list[float] = []
+    monkeypatch.setattr(wechat_module.time, "sleep", sleeps.append)
+    wechat_module.WechatChannel(account_id="a1").run(stop)
+    return sleeps
+
+
+def test_wechat_backs_off_on_non_2xx(monkeypatch):
+    sleeps = _run_wechat(monkeypatch, [(503, {}), (503, {}), (500, {})])
+    assert sleeps == [3, 6, 12]
+
+
+def test_wechat_ok_poll_does_not_sleep_and_resets_backoff(monkeypatch):
+    sleeps = _run_wechat(
+        monkeypatch,
+        [(503, {}), (200, {"msgs": []}), (200, {"msgs": []}), (503, {})],
+    )
+    assert sleeps == [3, 3]
+
+
+def test_wechat_cursor_write_is_atomic_and_round_trips(monkeypatch):
+    wechat_module._save_cursor_for_account("a1", "first")
+    wechat_module._save_cursor_for_account("a1", "second")
+    assert wechat_module._load_cursor_for_account("a1") == "second"
+
+    def fail(*_a, **_k):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(os, "fsync", fail)
+    wechat_module._save_cursor_for_account("a1", "third")
+    assert wechat_module._load_cursor_for_account("a1") == "second"
+
+
+def _slack_handler(monkeypatch):
+    """Run the Slack adapter against stand-in SDK modules; return its listener."""
+    listeners: list = []
+
+    class Web:
+        def __init__(self, token):
+            self.token = token
+
+        def auth_test(self):
+            return {"user_id": "UBOT", "user": "bot"}
+
+        def conversations_replies(self, **_kw):
+            return {"messages": [{"text": "the parent"}]}
+
+    class Socket:
+        socket_mode_request_listeners = listeners
+
+        def __init__(self, app_token, web_client):
+            self.app_token = app_token
+
+        def send_socket_mode_response(self, _response):
+            return None
+
+        def connect(self):
+            return None
+
+        def disconnect(self):
+            return None
+
+    def module(name, **attrs):
+        mod = types.ModuleType(name)
+        mod.__dict__.update(attrs)
+        monkeypatch.setitem(sys.modules, name, mod)
+
+    module("slack_sdk")
+    module("slack_sdk.web", WebClient=Web)
+    module("slack_sdk.socket_mode", SocketModeClient=Socket)
+    module("slack_sdk.socket_mode.request", SocketModeRequest=object)
+    module("slack_sdk.socket_mode.response",
+           SocketModeResponse=lambda envelope_id: envelope_id)
+    monkeypatch.setattr(
+        "openprogram.host.security.safe_http.require_active_sdk_transport",
+        lambda *_a, **_k: None,
+    )
+    _accounts.save_credentials(
+        "slack", "a1", {"bot_token": "xoxb", "app_token": "xapp"},
+    )
+    ch = SlackChannel(account_id="a1")
+    got: list = []
+    ch.handle_inbound = got.append  # type: ignore[method-assign]
+    stop = threading.Event()
+    stop.set()
+    ch.run(stop)
+    return listeners[0], got
+
+
+def _slack_event(**event):
+    base = {"type": "message", "channel": "C1", "user": "U1", "text": "hi",
+            "ts": "200.0"}
+    return types.SimpleNamespace(
+        type="events_api", envelope_id="e", payload={"event": {**base, **event}},
+    )
+
+
+def test_slack_takes_a_thread_broadcast(monkeypatch):
+    handle, got = _slack_handler(monkeypatch)
+    handle(None, _slack_event(subtype="thread_broadcast", thread_ts="100.0"))
+    assert [(m.text, m.thread_id, m.quoted_text) for m in got] == [
+        ("hi", "100.0", "the parent"),
+    ]
+
+
+def test_slack_still_ignores_other_subtypes(monkeypatch):
+    handle, got = _slack_handler(monkeypatch)
+    handle(None, _slack_event(subtype="message_changed"))
+    assert got == []
+
+
+@pytest.mark.parametrize("field,expected_name,expected_mime", [
+    ("voice", "voice.ogg", "audio/ogg"),
+    ("audio", "audio.mp3", "audio/mpeg"),
+    ("video", "video.mp4", "video/mp4"),
+    ("video_note", "video_note.mp4", "video/mp4"),
+    ("animation", "animation.mp4", "video/mp4"),
+])
+def test_audio_and_video_become_attachments(field, expected_name, expected_mime) -> None:
+    [attachment] = TelegramChannel._parse_attachments(
+        {field: {"file_id": "f1", "file_size": 9}})
+    assert (attachment.name, attachment.mime, attachment.file_id, attachment.size) == (
+        expected_name, expected_mime, "f1", 9)
+    assert attachment.voice is (field == "voice")
+
+
+def test_gif_counts_once_though_telegram_sends_animation_and_document() -> None:
+    attachments = TelegramChannel._parse_attachments({
+        "animation": {"file_id": "same", "file_name": "cat.mp4", "mime_type": "video/mp4"},
+        "document": {"file_id": "same", "file_name": "cat.mp4", "mime_type": "video/mp4"},
+    })
+    assert [a.name for a in attachments] == ["cat.mp4"]
+
+
+class _FakeResponse:
+    def __init__(self, status_code: int) -> None:
+        self.status_code = status_code
+        self.is_success = 200 <= status_code < 300
+
+    def json(self) -> dict:
+        return {"ok": self.is_success, "result": []}
+
+
+def _poll_with(monkeypatch: pytest.MonkeyPatch, status_code: int, stop: threading.Event) -> list[str]:
+    calls: list[str] = []
+
+    class _Client:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_):
+            return False
+
+        def get(self, url: str, **_):
+            calls.append(url)
+            if len([u for u in calls if u.endswith("/getUpdates")]) > 1:
+                stop.set()
+            return _FakeResponse(status_code)
+
+    monkeypatch.setattr(
+        "openprogram.host.security.safe_http.safe_client", lambda *_a, **_k: _Client(),
+    )
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels.implementations.telegram.time.sleep", lambda _: None,
+    )
+    return calls
+
+
+@pytest.mark.parametrize("status_code", [401, 404])
+def test_a_rejected_token_ends_the_run_for_good(monkeypatch, status_code) -> None:
+    stop = threading.Event()
+    calls = _poll_with(monkeypatch, status_code, stop)
+    _adapter().run(stop)
+    assert len([u for u in calls if u.endswith("/getUpdates")]) == 1
+    assert not stop.is_set()
+
+
+def test_a_server_error_keeps_polling(monkeypatch) -> None:
+    stop = threading.Event()
+    calls = _poll_with(monkeypatch, 502, stop)
+    _adapter().run(stop)
+    assert len([u for u in calls if u.endswith("/getUpdates")]) == 2

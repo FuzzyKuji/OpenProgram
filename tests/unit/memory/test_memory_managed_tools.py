@@ -49,11 +49,28 @@ def test_managed_file_tools_reject_escape(managed, tmp_path):
     assert not outside.exists()
 
 
-def test_managed_shell_requires_the_os_sandbox(managed, monkeypatch):
+def test_the_owners_batch_runs_without_a_sandbox_where_there_is_none(managed, monkeypatch):
     from openprogram.host import sandbox
 
     _, _, handlers = managed
     monkeypatch.setattr(sandbox, "unavailable_reason", lambda: "missing sandbox")
     result = _call(handlers["shell"], command="true")
-    assert result["is_error"]
-    assert "missing sandbox" in result["content"][0]["text"]
+    assert not result["is_error"]
+
+
+def test_someone_elses_words_get_no_shell_without_a_sandbox(tmp_path, monkeypatch):
+    from openprogram.host import sandbox
+    from openprogram.state.memory.management.tools import management_tools
+    from openprogram.state.memory.management.workspace import MemoryWorkspace, foreign_source
+
+    monkeypatch.setattr(sandbox, "unavailable_reason", lambda: "missing sandbox")
+    with foreign_source(True):
+        workspace = MemoryWorkspace(tmp_path / "memory")
+    try:
+        handlers = {tool.name: tool.handler for tool in management_tools(workspace, [])}
+        marker = tmp_path / "ran"
+        result = _call(handlers["shell"], command=f"touch {marker}")
+    finally:
+        workspace.close()
+    assert result["is_error"] and "missing sandbox" in result["content"][0]["text"]
+    assert not marker.exists()

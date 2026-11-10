@@ -2,18 +2,31 @@
 
 const fs = require("node:fs");
 const crypto = require("node:crypto");
+const os = require("node:os");
+const path = require("node:path");
 const { runScroll } = require("./self-update-ui-scroll");
 
-const APP = "/Applications/OpenProgram.app";
+// Someone without administrator rights installs into their own Applications.
+const APP_LOCATIONS = ["/Applications/OpenProgram.app", path.join(os.homedir(), "Applications", "OpenProgram.app")];
 const NONCE = /^[0-9a-f]{64}$/;
 const REASONS = new Set(["installation_unavailable", "invalid_capture_contract", "main_window_changed",
   "original_session_not_visible", "installation_changed", "renderer_unavailable", "debugger_in_use",
   "capture_interrupted", "target_unavailable", "accessibility_unavailable", "screenshot_unavailable",
   "capture_cleanup_failed", "capture_output_limit", "capture_not_accepted"]);
 
-function installedIdentity(app) {
+function sealedIdentity(context) {
+  const manifest = JSON.parse(fs.readFileSync(
+    path.join(context.runtimeRoot, "versions", context.versionId, "version.json"), "utf8"));
+  if (!/^[0-9a-f]{40}$/.test(manifest.commit || "")) throw new Error("installation_unavailable");
+  return { app_path: process.execPath, app_pid: process.pid, candidate_sha: manifest.commit };
+}
+
+function installedIdentity(app, sealedVersion) {
+  const context = sealedVersion?.();
+  if (context?.versionId) return sealedIdentity(context);
+  const APP = APP_LOCATIONS.find((location) => app.getAppPath() === `${location}/Contents/Resources/app.asar`);
   const marker = `${APP}/Contents/Resources/openprogram-source-revision`;
-  if (!app.isPackaged || app.getAppPath() !== `${APP}/Contents/Resources/app.asar` ||
+  if (!app.isPackaged || !APP ||
       process.execPath !== `${APP}/Contents/MacOS/OpenProgram` ||
       fs.realpathSync(process.execPath) !== process.execPath || fs.realpathSync(marker) !== marker ||
       !fs.statSync(marker).isFile() || fs.statSync(marker).size > 80) throw new Error("installation_unavailable");
@@ -50,7 +63,7 @@ function validateContract(value, nonce) {
 }
 
 function registerUiVerificationIpc({ ipcMain, windows, origin, app, request,
-  guard, installation = () => installedIdentity(app) }) {
+  guard, sealedVersion, installation = () => installedIdentity(app, sealedVersion) }) {
   let busy = false;
   ipcMain.handle("self-update:ui-capture", async (event, nonce) => {
     const ctx = windows.get("main");
@@ -96,7 +109,7 @@ function registerUiVerificationIpc({ ipcMain, windows, origin, app, request,
           throw new Error("original_session_not_visible");
         }
         const native = installation();
-        if (native.app_path !== APP || native.candidate_sha !== contract.candidate_sha ||
+        if (!APP_LOCATIONS.includes(native.app_path) || native.candidate_sha !== contract.candidate_sha ||
             !Number.isInteger(native.app_pid) || native.app_pid <= 0) throw new Error("installation_changed");
         const renderer = wc.getOSProcessId();
         if (!Number.isInteger(renderer) || renderer <= 0) throw new Error("renderer_unavailable");

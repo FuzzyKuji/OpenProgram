@@ -3,7 +3,7 @@ Event bus: the framework-wide event layer.
 
 Three APIs live here:
 
-* **Typed events** (``docs/reference/design/proactive/event-layer.md``):
+* **Typed events** (``docs/reference/design/proactive/event-layer.html``):
   a frozen :class:`Event` (core trio ``type``/``payload``/``ts`` plus ``id``,
   ``origin`` and an open ``metadata`` pocket), emitted to the process-wide
   singleton from :func:`get_event_bus`. Sources call ``emit(make_event(...))``;

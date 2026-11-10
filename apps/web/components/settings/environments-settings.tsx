@@ -23,6 +23,8 @@ import {
   type EnvironmentInfo,
 } from "@/lib/environments/store";
 import { SimpleSelect } from "@/components/ui/select";
+import { confirmAction } from "@/components/ui/confirm-dialog";
+import { SettingsPage } from "./settings-ui";
 import styles from "./settings-page.module.css";
 
 interface Result {
@@ -59,20 +61,32 @@ export function EnvironmentsSettings() {
     setStatus((s) => ({ ...s, [id]: { ok, msg } }));
   }
 
-  async function mutate(action: string, payload: Record<string, unknown>): Promise<Result | null> {
-    const res = await wsRequest<Result>(action, payload, "environment_result", undefined, 8000);
-    if (!res) return { ok: false, error: text("The worker did not answer.", "后台没有响应。") };
-    return res;
+  async function mutate(action: string, payload: Record<string, unknown>): Promise<Result> {
+    const noAnswer = { ok: false, error: text("The worker did not answer.", "后台没有响应。") };
+    try {
+      return (await wsRequest<Result>(action, payload, "environment_result", undefined, 8000)) ?? noAnswer;
+    } catch {
+      return noAnswer;
+    }
   }
 
   async function makeDefault(env: EnvironmentInfo) {
     const res = await mutate("set_default_environment", { id: env.id });
-    if (res && !res.ok) note(env.id, false, res.error || "");
+    if (!res.ok) note(env.id, false, res.error || "");
   }
 
   async function remove(env: EnvironmentInfo) {
+    if (!(await confirmAction({
+      title: text(`Remove "${env.name}"?`, `删除“${env.name}”？`),
+      description: text(
+        "New conversations can no longer pick it. Nothing on that machine is deleted.",
+        "新会话将不能再选择它。那台机器上的内容不会被删除。",
+      ),
+      confirmLabel: text("Remove", "删除"),
+      destructive: true,
+    }))) return;
     const res = await mutate("delete_environment", { id: env.id });
-    if (res && !res.ok) note(env.id, false, res.error || "");
+    if (!res.ok) note(env.id, false, res.error || "");
   }
 
   async function test(env: EnvironmentInfo) {
@@ -90,6 +104,13 @@ export function EnvironmentsSettings() {
 
   async function onAdd(e: FormEvent) {
     e.preventDefault();
+    if (items.some((env) => env.id === form.id.trim())) {
+      setFormError(text(
+        `An environment with the ID "${form.id.trim()}" already exists. Pick another ID.`,
+        `ID 为“${form.id.trim()}”的环境已存在，请换一个 ID。`,
+      ));
+      return;
+    }
     setFormError("");
     setBusy(true);
     const environment: Record<string, string> = {
@@ -105,7 +126,7 @@ export function EnvironmentsSettings() {
     }
     const res = await mutate("save_environment", { environment });
     setBusy(false);
-    if (res && !res.ok) {
+    if (!res.ok) {
       setFormError(res.error || "");
       return;
     }
@@ -113,17 +134,13 @@ export function EnvironmentsSettings() {
   }
 
   return (
-    <div className={styles.page}>
-      <div className={styles.pageHeader}>
-        <h2 className={styles.pageTitle}>{text("Environments", "运行环境")}</h2>
-        <p className={styles.pageMeta}>
-          {text(
-            "Where a conversation runs its commands and reads and writes files. A new conversation starts in the default; its environment is fixed once the first message is sent.",
-            "会话在哪里执行命令、读写文件。新会话使用默认环境；发出第一条消息后，会话的环境就固定下来。",
-          )}
-        </p>
-      </div>
-      <div className={styles.pageBody}>
+    <SettingsPage
+      title={text("Environments", "运行环境")}
+      description={text(
+        "Where a conversation runs its commands and reads and writes files. A new conversation starts in the default; its environment is fixed once you send the first message.",
+        "会话在哪里执行命令、读写文件。新会话使用默认环境；发出第一条消息后，会话的环境就固定下来。",
+      )}
+    >
         <section>
           <h3 className={styles.sectionTitle}>{text("Environments", "环境列表")}</h3>
           <div className={styles.card}>
@@ -185,7 +202,7 @@ export function EnvironmentsSettings() {
             <label className={styles.authField}>
               {text("Type", "类型")}
               <SimpleSelect label={text("Type", "类型")}
-                className="w-full"
+                className="max-w-none"
                 value={form.kind}
                 onValueChange={(value) => setForm((f) => ({ ...f, kind: value }))}
                 options={[
@@ -269,8 +286,7 @@ export function EnvironmentsSettings() {
             </div>
           </form>
         </section>
-      </div>
-    </div>
+    </SettingsPage>
   );
 }
 

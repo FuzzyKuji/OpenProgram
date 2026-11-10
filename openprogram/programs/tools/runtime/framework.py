@@ -2,7 +2,7 @@
 from openprogram.programs._host.runtime import function
 
 
-@function(name='framework', toolset=['core'], unsafe_in=['wechat', 'telegram', 'plan'],
+@function(name='framework', toolset=['core'], unsafe_in=["plan"],
           requires_approval=True, path_params={}, url_params=[], max_result_chars=48_000)
 def framework(action: str = 'describe', operation: str = '', arguments: dict | None = None):
     """Discover and invoke authenticated OpenProgram backend operations.

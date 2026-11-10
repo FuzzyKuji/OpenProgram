@@ -211,14 +211,6 @@ def _inject_mention(text: str, name: str, dest, count, oversize: bool,
     return (text + "\n" + marker).strip()
 
 
-def _preview_block(abs_path: str, preview: str, count_str, kind: str) -> str:
-    """A passive head-preview content part. The chip parser strips it from
-    the bubble; the model reads it as a first look at constant cost."""
-    shows = count_str or ""
-    return (f'<attachment-preview path="{abs_path}" kind="{kind}" shows="{shows}">\n'
-            f'{preview}\n</attachment-preview>')
-
-
 def _attachment_name(d: dict, index: int) -> str:
     """Display/on-disk name for one incoming attachment.
 

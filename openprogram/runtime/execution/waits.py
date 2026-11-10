@@ -1,6 +1,6 @@
 """Execution-owned durable question and approval waits.
 
-Wait records are canonical state in the execution SQLite store.  Local
+Wait records are canonical state in the execution store.  Local
 events may wake a currently running Python thread, but never decide whether a
 question is open, answered, declined, expired, or cancelled.
 """
@@ -134,16 +134,12 @@ class DurableWaitStore:
 
     def _live_owner_valid(self, connection, execution_id, attempt_id, generation):
         execution = self.executions._require_execution(connection, execution_id)
-        attempt = connection.execute(
-            "SELECT status, lease_expires_at FROM attempts WHERE attempt_id = ?",
-            (attempt_id,),
-        ).fetchone()
+        attempt = connection.get("attempts", attempt_id)
         return (
             execution.status is ExecutionStatus.RUNNING
             and execution.current_attempt_id == attempt_id
             and execution.owner_lease.get("generation") == generation
             and attempt is not None and attempt["status"] == "active"
-            and float(attempt["lease_expires_at"]) > time.time()
         )
 
     def cancel_live_waits(self, *, execution_id=None, attempt_id=None,
@@ -152,9 +148,7 @@ class DurableWaitStore:
         closed = []
         now = time.time()
         with self.executions._transaction() as connection:
-            rows = connection.execute(
-                "SELECT * FROM execution_waits WHERE status IN ('open', 'claimed')"
-            ).fetchall()
+            rows = connection.rows("execution_waits", status=["open", "claimed"])
             for row in rows:
                 if wait_id is not None and row["wait_id"] != wait_id:
                     continue
@@ -168,10 +162,17 @@ class DurableWaitStore:
                         continue
                 elif self._live_owner_valid(connection, row["execution_id"], row["attempt_id"], int(row["generation"])):
                     continue
-                connection.execute(
-                    "UPDATE execution_waits SET status = 'cancelled', outcome = 'cancelled', "
-                    "claim_owner = NULL, claim_expires_at = NULL, resolved_at = ?, updated_at = ? WHERE wait_id = ?",
-                    (now, now, row["wait_id"]),
+                connection.update(
+                    "execution_waits",
+                    {
+                        "status": "cancelled",
+                        "outcome": "cancelled",
+                        "claim_owner": None,
+                        "claim_expires_at": None,
+                        "resolved_at": now,
+                        "updated_at": now,
+                    },
+                    wait_id=row["wait_id"],
                 )
                 execution = self.executions._require_execution(connection, row["execution_id"])
                 self.executions._append_event(
@@ -230,7 +231,7 @@ class DurableWaitStore:
 
         The public ``open_wait`` method and a safe-point handoff use the
         same validation and write path.  The latter publishes its checkpoint,
-        wait, execution state, and ended attempt in one SQLite transaction.
+        wait, execution state, and ended attempt in one transaction.
         """
         if kind not in _WAIT_KINDS:
             raise ExecutionConflict("invalid_wait_kind", "unsupported wait kind")
@@ -255,10 +256,7 @@ class DurableWaitStore:
             or execution.owner_lease.get("generation") != generation
         ):
             raise ExecutionConflict("stale_attempt", "wait owner is not the current attempt")
-        attempt = connection.execute(
-            "SELECT execution_id, generation, status FROM attempts WHERE attempt_id = ?",
-            (attempt_id,),
-        ).fetchone()
+        attempt = connection.get("attempts", attempt_id)
         if attempt is None or attempt["execution_id"] != execution_id or int(attempt["generation"]) != generation or attempt["status"] != "active":
             raise ExecutionConflict("stale_attempt", "wait attempt is no longer active")
         if policy_snapshot.get("mode") == "live":
@@ -266,9 +264,7 @@ class DurableWaitStore:
                     or not self._live_owner_valid(connection, execution_id, attempt_id, generation)):
                 raise ExecutionConflict("stale_live_owner", "live Workflow question requires its current leased owner")
         if checkpoint_id is not None:
-            checkpoint = connection.execute(
-                "SELECT execution_id FROM checkpoints WHERE checkpoint_id = ?", (checkpoint_id,)
-            ).fetchone()
+            checkpoint = connection.get("checkpoints", checkpoint_id)
             if checkpoint is None or checkpoint["execution_id"] != execution_id:
                 raise ExecutionConflict("invalid_checkpoint", "wait checkpoint belongs to another execution")
         request_blob = self.executions._put_state_blob_in_transaction(
@@ -280,18 +276,44 @@ class DurableWaitStore:
             media_type="application/json", schema_version=1,
         )
         try:
-            connection.execute(
-                "INSERT INTO execution_waits (wait_id, execution_id, attempt_id, generation, checkpoint_id, kind, request_ref, request_hash, policy_snapshot_ref, status, claim_generation, claim_owner, claim_expires_at, answer_ref, outcome, created_at, expires_at, resolved_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'open', 0, NULL, NULL, NULL, NULL, ?, ?, NULL, ?)",
-                (wait_id, execution_id, attempt_id, generation, checkpoint_id, kind,
-                 request_blob["ref"], hashlib.sha256(request_bytes).hexdigest(),
-                 policy_blob["ref"], now, float(expires_at), now),
+            connection.insert(
+                "execution_waits",
+                {
+                    "wait_id": wait_id,
+                    "execution_id": execution_id,
+                    "attempt_id": attempt_id,
+                    "generation": generation,
+                    "checkpoint_id": checkpoint_id,
+                    "kind": kind,
+                    "request_ref": request_blob["ref"],
+                    "request_hash": hashlib.sha256(request_bytes).hexdigest(),
+                    "policy_snapshot_ref": policy_blob["ref"],
+                    "status": "open",
+                    "claim_generation": 0,
+                    "claim_owner": None,
+                    "claim_expires_at": None,
+                    "answer_ref": None,
+                    "outcome": None,
+                    "created_at": now,
+                    "expires_at": float(expires_at),
+                    "resolved_at": None,
+                    "updated_at": now,
+                },
             )
         except Exception as exc:
             raise ExecutionConflict("wait_exists", f"wait already exists: {wait_id}") from exc
         for ref, name in ((request_blob["ref"], "request"), (policy_blob["ref"], "policy")):
-            connection.execute(
-                "INSERT OR IGNORE INTO execution_state_blob_refs (execution_id, ref, name, reference_kind, reference_id, created_at) VALUES (?, ?, ?, 'wait', ?, ?)",
-                (execution_id, ref, name, wait_id, now),
+            connection.insert(
+                "execution_state_blob_refs",
+                {
+                    "execution_id": execution_id,
+                    "ref": ref,
+                    "name": name,
+                    "reference_kind": "wait",
+                    "reference_id": wait_id,
+                    "created_at": now,
+                },
+                on_conflict="ignore",
             )
         self.executions._append_event(
             connection, execution_id=execution_id, execution_version=execution.status_version,
@@ -435,32 +457,28 @@ class DurableWaitStore:
 
     def get_wait(self, wait_id: str) -> WaitRecord | None:
         with self.executions._connect() as connection:
-            row = connection.execute("SELECT * FROM execution_waits WHERE wait_id = ?", (wait_id,)).fetchone()
+            row = connection.get("execution_waits", wait_id)
         return self._record(row) if row is not None else None
 
     def list_open(self, *, session_id: str | None = None, execution_id: str | None = None) -> list[WaitRecord]:
-        clauses = ["w.status IN ('open', 'claimed')"]
-        values: list[Any] = []
-        if session_id is not None:
-            clauses.append("e.session_id = ?")
-            values.append(session_id)
-        if execution_id is not None:
-            clauses.append("w.execution_id = ?")
-            values.append(execution_id)
+        scope = {} if execution_id is None else {"execution_id": execution_id}
         with self.executions._connect() as connection:
-            rows = connection.execute(
-                "SELECT w.* FROM execution_waits AS w JOIN executions AS e ON e.execution_id = w.execution_id WHERE "
-                + " AND ".join(clauses) + " ORDER BY w.created_at, w.wait_id", values,
-            ).fetchall()
+            def in_session(wait: Mapping[str, Any]) -> bool:
+                execution = connection.get("executions", wait["execution_id"])
+                return execution is not None and (session_id is None or execution["session_id"] == session_id)
+
+            rows = connection.rows(
+                "execution_waits", where=in_session, order=("created_at", "wait_id"),
+                status=["open", "claimed"], **scope,
+            )
         return [self._record(row) for row in rows]
 
     def list_outcomes(self) -> list[WaitRecord]:
         """Return durable non-cancel outcomes for recovery scheduling."""
         with self.executions._connect() as connection:
-            rows = connection.execute(
-                "SELECT * FROM execution_waits WHERE status IN ('resolved', 'declined', 'expired') "
-                "ORDER BY resolved_at, wait_id"
-            ).fetchall()
+            rows = connection.rows(
+                "execution_waits", order=("resolved_at", "wait_id"), status=["resolved", "declined", "expired"],
+            )
         return [self._record(row) for row in rows]
 
     def claim(self, wait_id: str, *, generation: int, owner_id: str, lease_ttl_seconds: float, now: float | None = None) -> bool:
@@ -468,25 +486,38 @@ class DurableWaitStore:
         if not owner_id or lease_ttl_seconds <= 0:
             raise ExecutionConflict("invalid_wait_claim", "owner and positive lease are required")
         with self.executions._transaction() as connection:
-            row = connection.execute("SELECT * FROM execution_waits WHERE wait_id = ?", (wait_id,)).fetchone()
+            row = connection.get("execution_waits", wait_id)
             if row is None:
                 return False
             if row["status"] != WaitStatus.OPEN.value or int(row["claim_generation"]) != generation or (0 < float(row["expires_at"]) <= current):
                 return False
-            changed = connection.execute(
-                "UPDATE execution_waits SET status = 'claimed', claim_owner = ?, claim_expires_at = ?, updated_at = ? WHERE wait_id = ? AND status = 'open' AND claim_generation = ?",
-                (owner_id, current + lease_ttl_seconds, current, wait_id, generation),
-            ).rowcount
+            changed = connection.update(
+                "execution_waits",
+                {
+                    "status": "claimed",
+                    "claim_owner": owner_id,
+                    "claim_expires_at": current + lease_ttl_seconds,
+                    "updated_at": current,
+                },
+                wait_id=wait_id,
+                status="open",
+                claim_generation=generation,
+            )
             return changed == 1
 
     def reclaim_expired_claims(self, *, now: float | None = None) -> int:
         current = time.time() if now is None else float(now)
         with self.executions._transaction() as connection:
-            result = connection.execute(
-                "UPDATE execution_waits SET status = 'open', claim_generation = claim_generation + 1, claim_owner = NULL, claim_expires_at = NULL, updated_at = ? WHERE status = 'claimed' AND claim_expires_at IS NOT NULL AND claim_expires_at <= ? AND (expires_at = 0 OR expires_at > ?)",
-                (current, current, current),
+            return connection.update(
+                "execution_waits",
+                self._reopened_claim(current),
+                where=lambda wait: (
+                    wait["claim_expires_at"] is not None
+                    and wait["claim_expires_at"] <= current
+                    and (wait["expires_at"] == 0 or wait["expires_at"] > current)
+                ),
+                status="claimed",
             )
-            return int(result.rowcount)
 
     def reclaim_orphaned_claims(self, *, now: float | None = None) -> int:
         """Return claims whose original execution owner is no longer live.
@@ -497,34 +528,58 @@ class DurableWaitStore:
         """
         current = time.time() if now is None else float(now)
         with self.executions._transaction() as connection:
-            result = connection.execute(
-                "UPDATE execution_waits SET status = 'open', "
-                "claim_generation = claim_generation + 1, claim_owner = NULL, "
-                "claim_expires_at = NULL, updated_at = ? "
-                "WHERE status = 'claimed' AND (expires_at = 0 OR expires_at > ?) AND NOT EXISTS ("
-                "SELECT 1 FROM attempts AS a JOIN executions AS e "
-                "ON e.execution_id = a.execution_id "
-                "WHERE a.attempt_id = execution_waits.attempt_id "
-                "AND a.execution_id = execution_waits.execution_id "
-                "AND a.generation = execution_waits.generation "
-                "AND a.status = 'active' "
-                "AND e.current_attempt_id = a.attempt_id "
-                "AND json_extract(e.owner_lease_json, '$.generation') = a.generation "
-                "AND a.lease_expires_at > ?)",
-                (current, current, current),
+            return connection.update(
+                "execution_waits",
+                self._reopened_claim(current),
+                where=lambda wait: (
+                    (wait["expires_at"] == 0 or wait["expires_at"] > current)
+                    and not self._claim_owner_is_live(connection, wait)
+                ),
+                status="claimed",
             )
-            return int(result.rowcount)
+
+    @staticmethod
+    def _reopened_claim(now: float) -> dict[str, Any]:
+        return {
+            "status": "open",
+            "claim_generation": lambda wait: wait["claim_generation"] + 1,
+            "claim_owner": None,
+            "claim_expires_at": None,
+            "updated_at": now,
+        }
+
+    @staticmethod
+    def _claim_owner_is_live(connection, wait: Mapping[str, Any]) -> bool:
+        attempt = connection.get("attempts", wait["attempt_id"])
+        if (attempt is None or attempt["execution_id"] != wait["execution_id"]
+                or attempt["generation"] != wait["generation"] or attempt["status"] != "active"):
+            return False
+        execution = connection.get("executions", attempt["execution_id"])
+        return (
+            execution is not None
+            and execution["current_attempt_id"] == attempt["attempt_id"]
+            and json.loads(execution["owner_lease_json"]).get("generation") == attempt["generation"]
+        )
 
     def expire_due(self, *, now: float | None = None) -> int:
         current = time.time() if now is None else float(now)
         with self.executions._transaction() as connection:
-            rows = connection.execute(
-                "SELECT wait_id, execution_id FROM execution_waits WHERE status IN ('open', 'claimed') AND expires_at > 0 AND expires_at <= ?", (current,)
-            ).fetchall()
+            rows = connection.rows(
+                "execution_waits", where=lambda wait: 0 < wait["expires_at"] <= current, status=["open", "claimed"],
+            )
             for row in rows:
-                connection.execute(
-                    "UPDATE execution_waits SET status = 'expired', claim_owner = NULL, claim_expires_at = NULL, outcome = 'timeout', resolved_at = ?, updated_at = ? WHERE wait_id = ? AND status IN ('open', 'claimed')",
-                    (current, current, row["wait_id"]),
+                connection.update(
+                    "execution_waits",
+                    {
+                        "status": "expired",
+                        "claim_owner": None,
+                        "claim_expires_at": None,
+                        "outcome": "timeout",
+                        "resolved_at": current,
+                        "updated_at": current,
+                    },
+                    wait_id=row["wait_id"],
+                    status=["open", "claimed"],
                 )
                 execution = self.executions._require_execution(connection, row["execution_id"])
                 self.executions._append_event(connection, execution_id=row["execution_id"], execution_version=execution.status_version, kind="execution.wait.expired", payload={"wait_id": row["wait_id"]}, created_at=current)
@@ -537,14 +592,21 @@ class DurableWaitStore:
     def cancel_execution_in_transaction(self, connection, execution_id: str) -> int:
         """Cancel unresolved waits in the caller's canonical transaction."""
         now = time.time()
-        rows = connection.execute(
-            "SELECT wait_id FROM execution_waits WHERE execution_id = ? AND status IN ('open', 'claimed')", (execution_id,)
-        ).fetchall()
+        rows = connection.rows("execution_waits", execution_id=execution_id, status=["open", "claimed"])
         if not rows:
             return 0
-        connection.execute(
-            "UPDATE execution_waits SET status = 'cancelled', claim_owner = NULL, claim_expires_at = NULL, outcome = 'cancelled', resolved_at = ?, updated_at = ? WHERE execution_id = ? AND status IN ('open', 'claimed')",
-            (now, now, execution_id),
+        connection.update(
+            "execution_waits",
+            {
+                "status": "cancelled",
+                "claim_owner": None,
+                "claim_expires_at": None,
+                "outcome": "cancelled",
+                "resolved_at": now,
+                "updated_at": now,
+            },
+            execution_id=execution_id,
+            status=["open", "claimed"],
         )
         execution = self.executions._require_execution(connection, execution_id)
         for row in rows:
@@ -568,9 +630,7 @@ class DurableWaitStore:
         }
         now = time.time()
         with self.executions._transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM execution_waits WHERE wait_id = ?", (wait_id,)
-            ).fetchone()
+            row = connection.get("execution_waits", wait_id)
             if row is None or row["kind"] != "system_access" or row["status"] != WaitStatus.OPEN.value:
                 return None
             request = self._decode_ref(str(row["execution_id"]), str(row["request_ref"]))
@@ -591,10 +651,19 @@ class DurableWaitStore:
                 }
             ):
                 return None
-            changed = connection.execute(
-                "UPDATE execution_waits SET status = 'resolved', claim_owner = ?, claim_expires_at = NULL, outcome = 'granted', resolved_at = ?, updated_at = ? WHERE wait_id = ? AND status = 'open'",
-                (owner_id, now, now, wait_id),
-            ).rowcount
+            changed = connection.update(
+                "execution_waits",
+                {
+                    "status": "resolved",
+                    "claim_owner": owner_id,
+                    "claim_expires_at": None,
+                    "outcome": "granted",
+                    "resolved_at": now,
+                    "updated_at": now,
+                },
+                wait_id=wait_id,
+                status="open",
+            )
             if changed != 1:
                 return None
             self.executions._append_event(
@@ -634,7 +703,7 @@ class DurableWaitStore:
                 connection, command_id=command_id, execution_id=execution_id,
                 expected_version=expected_version, kind=kind, payload=payload, actor=actor,
             )
-            row = connection.execute("SELECT * FROM execution_waits WHERE wait_id = ?", (wait_id,)).fetchone()
+            row = connection.get("execution_waits", wait_id)
             if row is None or row["execution_id"] != execution_id:
                 raise ExecutionConflict("wait_not_found", "wait does not belong to execution")
             if row["kind"] == "system_access":
@@ -647,9 +716,18 @@ class DurableWaitStore:
                 result_command = command
             else:
                 if 0 < float(row["expires_at"]) <= now:
-                    connection.execute(
-                        "UPDATE execution_waits SET status = 'expired', outcome = 'timeout', claim_owner = NULL, claim_expires_at = NULL, resolved_at = ?, updated_at = ? WHERE wait_id = ? AND status IN ('open', 'claimed')",
-                        (now, now, wait_id),
+                    connection.update(
+                        "execution_waits",
+                        {
+                            "status": "expired",
+                            "outcome": "timeout",
+                            "claim_owner": None,
+                            "claim_expires_at": None,
+                            "resolved_at": now,
+                            "updated_at": now,
+                        },
+                        wait_id=wait_id,
+                        status=["open", "claimed"],
                     )
                     result_command = self.executions._transition_command(connection, command_id, expected_status=CommandStatus.ACCEPTED, target=CommandStatus.REJECTED, result_version=expected_version, rejection_code="wait_expired")
                 elif row["status"] != WaitStatus.OPEN.value or int(row["claim_generation"]) != generation:
@@ -675,15 +753,34 @@ class DurableWaitStore:
                     if answer_bytes is not None:
                         blob = self.executions._put_state_blob_in_transaction(connection, execution_id=execution_id, payload=answer_bytes, media_type="application/json", schema_version=1)
                         answer_ref = blob["ref"]
-                        connection.execute(
-                            "INSERT OR IGNORE INTO execution_state_blob_refs (execution_id, ref, name, reference_kind, reference_id, created_at) VALUES (?, ?, 'answer', 'wait', ?, ?)",
-                            (execution_id, answer_ref, wait_id, now),
+                        connection.insert(
+                            "execution_state_blob_refs",
+                            {
+                                "execution_id": execution_id,
+                                "ref": answer_ref,
+                                "name": "answer",
+                                "reference_kind": "wait",
+                                "reference_id": wait_id,
+                                "created_at": now,
+                            },
+                            on_conflict="ignore",
                         )
                     status = WaitStatus.RESOLVED if kind is CommandKind.WAIT_ANSWER else WaitStatus.DECLINED
                     outcome = "answered" if kind is CommandKind.WAIT_ANSWER else "declined"
-                    connection.execute(
-                        "UPDATE execution_waits SET status = ?, claim_owner = ?, claim_expires_at = NULL, answer_ref = ?, outcome = ?, resolved_at = ?, updated_at = ? WHERE wait_id = ? AND status = 'open' AND claim_generation = ?",
-                        (status.value, f"command:{command_id}", answer_ref, outcome, now, now, wait_id, generation),
+                    connection.update(
+                        "execution_waits",
+                        {
+                            "status": status.value,
+                            "claim_owner": f"command:{command_id}",
+                            "claim_expires_at": None,
+                            "answer_ref": answer_ref,
+                            "outcome": outcome,
+                            "resolved_at": now,
+                            "updated_at": now,
+                        },
+                        wait_id=wait_id,
+                        status="open",
+                        claim_generation=generation,
                     )
                     execution = self.executions._require_execution(connection, execution_id)
                     self.executions._append_event(connection, execution_id=execution_id, execution_version=execution.status_version, command_id=command_id, kind=f"execution.wait.{outcome}", payload={"wait_id": wait_id, "generation": generation, "outcome": outcome}, created_at=now)

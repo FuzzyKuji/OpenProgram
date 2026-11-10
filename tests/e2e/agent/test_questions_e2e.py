@@ -52,7 +52,6 @@ def fresh(monkeypatch, tmp_path):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="questions-e2e",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,

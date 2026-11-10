@@ -4,29 +4,15 @@
  *  chat draws the two replies as one: the cut-off reply hides, and the
  *  reply that continues it opens with its steps and a "restarted" step
  *  where the restart fell. Collapsed, the reply reads as if never cut. */
-import type { AssistantBlock, ChatMsg } from "../../session-store/types.ts";
+import type { AssistantBlock, ChatMsg, TurnFileSummary } from "../../session-store/types.ts";
 
-/** The user message a reply answers: its recorded predecessor, else the
- *  ``<user>_reply`` naming a live placeholder carries. */
-function promptOf(byId: Record<string, ChatMsg>, reply: ChatMsg): ChatMsg | undefined {
-  const id = reply.calledBy ?? (reply.id.endsWith("_reply") ? reply.id.slice(0, -"_reply".length) : undefined);
-  return id ? byId[id] : undefined;
-}
-
-/** The replies ``reply`` continues, oldest first; empty for a reply no
- *  restart cut short. */
-export function restartPredecessors(byId: Record<string, ChatMsg>, reply: ChatMsg): ChatMsg[] {
-  const chain: ChatMsg[] = [];
-  const seen = new Set<string>([reply.id]);
-  let prompt = promptOf(byId, reply);
-  while (prompt?.trigger === "restart" && prompt.calledBy && !seen.has(prompt.calledBy)) {
-    const cut = byId[prompt.calledBy];
-    if (!cut || cut.role !== "assistant") break;
-    seen.add(cut.id);
-    chain.unshift(cut);
-    prompt = promptOf(byId, cut);
-  }
-  return chain;
+/** The rows ``reply`` continues, oldest first: exactly those its
+ *  ``continues`` names (stamped by the server, all of its own turn). */
+export function continuedRows(rows: Readonly<Record<string, ChatMsg | undefined>>, reply: ChatMsg): ChatMsg[] {
+  return (reply.continues ?? []).flatMap((id) => {
+    const row = rows[id];
+    return row ? [row] : [];
+  });
 }
 
 /** A reply's ordered blocks, adapting records that kept only the flat
@@ -54,6 +40,37 @@ function partBlocks(msg: ChatMsg, prose: (content: string) => string): Assistant
   return text && !blocks.some((b) => b.type === "text") ? [...blocks, { type: "text", text }] : blocks;
 }
 
+const addCounts = (a: number | null, b: number | null) => (a === null || b === null ? null : a + b);
+
+/** The files every part of a joined reply changed. A file changed in two
+ *  parts is one row, with both parts' line counts. */
+function joinedTurnFiles(parts: ChatMsg[]): TurnFileSummary | undefined {
+  const summaries = parts.flatMap((part) => (part.turnFiles ? [part.turnFiles] : []));
+  if (summaries.length < 2) {
+    const only = summaries[0];
+    return only && only !== parts[parts.length - 1].turnFiles ? { ...only, spansTurns: true } : only;
+  }
+  const files = new Map<string, TurnFileSummary["files"][number]>();
+  for (const file of summaries.flatMap((summary) => summary.files)) {
+    const seen = files.get(file.path);
+    files.set(file.path, seen
+      ? { ...file, added: addCounts(seen.added, file.added), removed: addCounts(seen.removed, file.removed) }
+      : file);
+  }
+  // A bounded part counts more files than it lists; they are not in the map.
+  const unlisted = summaries.reduce((total, summary) => total + Math.max(0, summary.file_count - summary.files.length), 0);
+  const last = summaries[summaries.length - 1];
+  return {
+    ...last,
+    spansTurns: true,
+    files: [...files.values()],
+    file_count: files.size + unlisted,
+    added: summaries.map((summary) => summary.added).reduce(addCounts),
+    removed: summaries.map((summary) => summary.removed).reduce(addCounts),
+    ...(summaries.some((summary) => summary.recoverability === "unavailable") ? { recoverability: "unavailable" as const } : {}),
+  };
+}
+
 /** ``reply`` drawn with the replies it continues in front of it. */
 export function joinedReply(
   cut: ChatMsg[], reply: ChatMsg, prose: (content: string) => string,
@@ -65,25 +82,20 @@ export function joinedReply(
     if (i > 0) blocks.push({ type: "restart" });
     blocks.push(...partBlocks(part, prose));
   });
+  const withFiles = parts.filter((part) => part.turnFiles);
   const all = <T,>(pick: (m: ChatMsg) => T[] | undefined) => parts.flatMap((m) => pick(m) ?? []);
   return {
     ...reply,
+    content: parts.map((part) => part.content).filter(Boolean).join("\n\n"),
+    // An error's raw text stays this part's, not the whole reply's.
+    errorDetail: reply.errorDetail || (reply.status === "error" ? reply.content : undefined),
+    turnFiles: joinedTurnFiles(parts),
+    // The list reads as reverted only when every part behind it was.
+    reverted: withFiles.length ? withFiles.every((part) => part.reverted) : reply.reverted,
     blocks,
     tools: all((m) => m.tools),
     attachCards: all((m) => m.attachCards),
     callRoots: all((m) => m.callRoots),
     runtimeChildren: all((m) => m.runtimeChildren),
   };
-}
-
-/** Mark each cut-off reply with the reply that continues it, so its own
- *  row draws nothing (history load). */
-export function markRestartContinuations(msgs: ChatMsg[]): void {
-  const byId = new Map(msgs.map((m) => [m.id, m]));
-  for (const reply of msgs) {
-    if (reply.role !== "assistant" || !reply.calledBy) continue;
-    const prompt = byId.get(reply.calledBy);
-    const cut = prompt?.trigger === "restart" && prompt.calledBy ? byId.get(prompt.calledBy) : undefined;
-    if (cut?.role === "assistant") cut.continuedBy = reply.id;
-  }
 }

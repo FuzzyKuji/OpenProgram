@@ -16,12 +16,12 @@ def test_normal_user_docs_use_the_short_release_installer() -> None:
     short_command = "curl -fsSL https://openprogram.io/install | sh"
     for relative in (
         "README.md",
-        "docs/install/install.md",
-        "docs/install/install.zh.md",
-        "docs/install/upgrade.md",
-        "docs/install/upgrade.zh.md",
-        "docs/start/GETTING_STARTED.md",
-        "docs/start/GETTING_STARTED.zh.md",
+        "docs/install/install.html",
+        "docs/install/install.zh.html",
+        "docs/install/upgrade.html",
+        "docs/install/upgrade.zh.html",
+        "docs/start/GETTING_STARTED.html",
+        "docs/start/GETTING_STARTED.zh.html",
         "website/index.html",
     ):
         contents = (ROOT / relative).read_text(encoding="utf-8")
@@ -32,8 +32,8 @@ def test_normal_user_docs_use_the_short_release_installer() -> None:
     # The task-oriented overview links to the installation guide instead of
     # duplicating commands. Both language entries must reach their own guide.
     for suffix in ("", ".zh"):
-        overview = (ROOT / f"docs/README{suffix}.md").read_text(encoding="utf-8")
-        assert f"(install/install{suffix}.md)" in overview
+        overview = (ROOT / f"docs/README{suffix}.html").read_text(encoding="utf-8")
+        assert f'href="install/install{suffix}.html"' in overview
 
 
 
@@ -162,12 +162,12 @@ fi
 def test_public_docs_follow_the_release_platform_policy() -> None:
     public_docs = [
         ROOT / "README.md",
-        ROOT / "docs" / "README.md",
-        ROOT / "docs" / "README.zh.md",
-        ROOT / "docs" / "capabilities" / "installing-programs.md",
-        ROOT / "docs" / "capabilities" / "installing-programs.zh.md",
-        ROOT / "docs" / "reference" / "cli.md",
-        ROOT / "docs" / "reference" / "cli.zh.md",
+        ROOT / "docs" / "README.html",
+        ROOT / "docs" / "README.zh.html",
+        ROOT / "docs" / "capabilities" / "installing-programs.html",
+        ROOT / "docs" / "capabilities" / "installing-programs.zh.html",
+        ROOT / "docs" / "reference" / "cli.html",
+        ROOT / "docs" / "reference" / "cli.zh.html",
     ]
     forbidden = [
         "Any platform",
@@ -184,22 +184,84 @@ def test_public_docs_follow_the_release_platform_policy() -> None:
 
 
 
-def test_linux_install_docs_do_not_claim_a_desktop_artifact() -> None:
+def test_install_docs_say_what_each_release_offers() -> None:
     expectations = {
-        "docs/install/install.md": "no reduced Linux desktop artifact is published",
-        "docs/install/install.zh.md": "不发布精简的 Linux 桌面产物",
+        "docs/install/install.html": (
+            ">Terminal install only, x86_64 and arm64.</td>",
+            ">Adds the App: deb and AppImage, x86_64 and arm64.</td>",
+            ">No prebuilt files. The PowerShell command stops and says so; only a source checkout works.</td>",
+            ">Adds the App and the terminal install, x64. Windows on Arm comes later.</td>",
+        ),
+        "docs/install/install.zh.html": (
+            ">只有终端安装，x86_64 和 arm64。</td>",
+            ">增加 App：deb 和 AppImage，x86_64 和 arm64。</td>",
+            ">没有预构建文件。PowerShell 命令会停下并说明原因，只能用源码 checkout。</td>",
+            ">增加 App 和终端安装，x64。Windows on Arm 以后再做。</td>",
+        ),
     }
     for relative, expected in expectations.items():
         contents = (ROOT / relative).read_text(encoding="utf-8")
-        assert "linux-x86_64.AppImage" not in contents
-        assert expected in contents
+        for sentence in expected:
+            assert sentence in contents, relative
+
+
+def test_install_docs_cover_what_stops_a_new_user() -> None:
+    fallbacks = (
+        "https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh",
+        "https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.ps1 | iex",
+    )
+    required = (
+        "macOS 13",
+        "~/Applications",
+        "-unsigned",
+        "fuse3",
+        "APPIMAGE_EXTRACT_AND_RUN=1",
+        "HTTPS_PROXY",
+        "NO_PROXY",
+        "SHA256SUMS",
+    )
+    for relative in ("docs/install/install.html", "docs/install/install.zh.html"):
+        contents = (ROOT / relative).read_text(encoding="utf-8")
+        for needle in (*fallbacks, *required):
+            assert needle in contents, f"{relative}: {needle}"
+    assert "Smart App Control" in (ROOT / "docs/install/install.html").read_text(encoding="utf-8")
+    assert "智能应用控制" in (ROOT / "docs/install/install.zh.html").read_text(encoding="utf-8")
+
+
+def test_every_readme_gives_the_working_install_fallback() -> None:
+    fallback = "https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh"
+    readmes = sorted(ROOT.glob("README*.md"))
+    assert len(readmes) == 10
+    for path in readmes:
+        contents = path.read_text(encoding="utf-8")
+        assert "curl -fsSL https://openprogram.io/install | sh" in contents, path.name
+        assert fallback in contents, path.name
+
+
+def test_download_page_is_registered_and_lists_every_app_file() -> None:
+    from scripts.docs_site.nav import PAGE_ORDER, TAB_SECTIONS
+
+    assert "install/download.html" in PAGE_ORDER
+    assert any("install/download.html" in paths for _en, _zh, paths in TAB_SECTIONS["install"])
+    for relative in ("docs/install/download.html", "docs/install/download.zh.html"):
+        contents = (ROOT / relative).read_text(encoding="utf-8")
+        for name in (
+            "OpenProgram-mac-arm64.dmg",
+            "OpenProgram-mac-x64.dmg",
+            "OpenProgram-linux-amd64.deb",
+            "OpenProgram-linux-x86_64.AppImage",
+            "OpenProgram-linux-arm64.deb",
+            "OpenProgram-linux-arm64.AppImage",
+            "OpenProgram-win-x64.exe",
+        ):
+            assert name in contents, f"{relative}: {name}"
 
 
 
 def test_public_install_docs_pin_current_product_version() -> None:
     version = _desktop_package()["version"]
-    english = (ROOT / "docs" / "install" / "install.md").read_text(encoding="utf-8")
-    chinese = (ROOT / "docs" / "install" / "install.zh.md").read_text(
+    english = (ROOT / "docs" / "install" / "install.html").read_text(encoding="utf-8")
+    chinese = (ROOT / "docs" / "install" / "install.zh.html").read_text(
         encoding="utf-8"
     )
     design = (
@@ -216,54 +278,55 @@ def test_public_install_docs_pin_current_product_version() -> None:
         / "reference"
         / "design"
         / "distribution"
-        / "implementation-plan.md"
+        / "implementation-plan.html"
     ).read_text(encoding="utf-8")
 
-    assert f"OPENPROGRAM_VERSION={version} sh" in english
-    assert f"OPENPROGRAM_VERSION={version} sh" in chinese
+    # The docs must not go stale at each release, so the pin example is generic.
+    assert "OPENPROGRAM_VERSION=X.Y.Z sh" in english
+    assert "OPENPROGRAM_VERSION=X.Y.Z sh" in chinese
     assert f"Official releases</strong>: v{version}" in design
     chinese_design = (
         ROOT / "docs/reference/design/distribution/installation-packaging.zh.html"
     ).read_text(encoding="utf-8")
     assert f"正式版本</strong>：v{version}" in chinese_design
-    assert f"### Current v{version} release acceptance" in plan
+    assert 'id="release-acceptance"' in plan
 
 
 
 def test_public_docs_describe_one_release_product_runtime() -> None:
     public_docs = [
         ROOT / "README.md",
-        ROOT / "docs" / "README.md",
-        ROOT / "docs" / "README.zh.md",
-        ROOT / "docs" / "install" / "install.md",
-        ROOT / "docs" / "install" / "install.zh.md",
-        ROOT / "docs" / "install" / "upgrade.md",
-        ROOT / "docs" / "install" / "upgrade.zh.md",
-        ROOT / "docs" / "capabilities" / "installing-programs.md",
-        ROOT / "docs" / "capabilities" / "installing-programs.zh.md",
-        ROOT / "docs" / "capabilities" / "workflows" / "README.md",
-        ROOT / "docs" / "capabilities" / "workflows" / "README.zh.md",
-        ROOT / "docs" / "capabilities" / "computer-use.md",
-        ROOT / "docs" / "capabilities" / "computer-use.zh.md",
-        ROOT / "docs" / "capabilities" / "tools.md",
-        ROOT / "docs" / "capabilities" / "tools.zh.md",
-        ROOT / "docs" / "capabilities" / "README.md",
+        ROOT / "docs" / "README.html",
+        ROOT / "docs" / "README.zh.html",
+        ROOT / "docs" / "install" / "install.html",
+        ROOT / "docs" / "install" / "install.zh.html",
+        ROOT / "docs" / "install" / "upgrade.html",
+        ROOT / "docs" / "install" / "upgrade.zh.html",
+        ROOT / "docs" / "capabilities" / "installing-programs.html",
+        ROOT / "docs" / "capabilities" / "installing-programs.zh.html",
+        ROOT / "docs" / "capabilities" / "workflows" / "README.html",
+        ROOT / "docs" / "capabilities" / "workflows" / "README.zh.html",
+        ROOT / "docs" / "capabilities" / "computer-use.html",
+        ROOT / "docs" / "capabilities" / "computer-use.zh.html",
+        ROOT / "docs" / "capabilities" / "tools.html",
+        ROOT / "docs" / "capabilities" / "tools.zh.html",
+        ROOT / "docs" / "capabilities" / "README.html",
         ROOT
         / "docs"
         / "capabilities"
         / "agentic-programming"
-        / "embedding-in-your-own-stack.md",
+        / "embedding-in-your-own-stack.html",
         ROOT
         / "docs"
         / "capabilities"
         / "agentic-programming"
-        / "embedding-in-your-own-stack.zh.md",
-        ROOT / "docs" / "integrations" / "channels.md",
-        ROOT / "docs" / "integrations" / "channels.zh.md",
-        ROOT / "docs" / "start" / "GETTING_STARTED.md",
-        ROOT / "docs" / "start" / "GETTING_STARTED.zh.md",
-        ROOT / "docs" / "start" / "faq.md",
-        ROOT / "docs" / "start" / "faq.zh.md",
+        / "embedding-in-your-own-stack.zh.html",
+        ROOT / "docs" / "integrations" / "channels.html",
+        ROOT / "docs" / "integrations" / "channels.zh.html",
+        ROOT / "docs" / "start" / "GETTING_STARTED.html",
+        ROOT / "docs" / "start" / "GETTING_STARTED.zh.html",
+        ROOT / "docs" / "start" / "faq.html",
+        ROOT / "docs" / "start" / "faq.zh.html",
         ROOT / "docs" / "reference" / "design" / "feature-matrix.html",
     ]
     forbidden = (
@@ -305,10 +368,10 @@ def test_public_product_surfaces_do_not_offer_python_package_install() -> None:
     public_files = [
         ROOT / ".github" / "CONTRIBUTING.md",
         ROOT / "docs" / "_static_root" / "llms.txt",
-        ROOT / "docs" / "server" / "troubleshooting.md",
-        ROOT / "docs" / "server" / "troubleshooting.zh.md",
-        ROOT / "docs" / "integrations" / "openclaw.md",
-        ROOT / "docs" / "integrations" / "openclaw.zh.md",
+        ROOT / "docs" / "server" / "troubleshooting.html",
+        ROOT / "docs" / "server" / "troubleshooting.zh.html",
+        ROOT / "docs" / "integrations" / "openclaw.html",
+        ROOT / "docs" / "integrations" / "openclaw.zh.html",
     ]
     internal_python_installers = {
         ROOT / "openprogram" / "interfaces" / "cli" / "commands" / "browser.py",

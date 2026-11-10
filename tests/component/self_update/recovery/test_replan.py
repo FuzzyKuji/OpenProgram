@@ -45,7 +45,7 @@ def test_exact_update_replans(real_agent_chat, tmp_path, monkeypatch, elapsed, e
     _wait(h.provider.entered.is_set)
     updates = SelfUpdateStore()
     updates.create(_request())
-    updates.transition("su_test", UpdatePhase.STAGING)
+    updates.transition("su_test", UpdatePhase.BUILDING)
     updates.transition("su_test", UpdatePhase.READY)
     runner = JobRunner(max_workers=1)
     monkeypatch.setattr('openprogram.runtime.jobs.runner.shared._runner', runner)

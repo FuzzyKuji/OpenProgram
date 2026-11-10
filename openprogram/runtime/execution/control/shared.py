@@ -59,8 +59,8 @@ def default_control_service() -> RuntimeControlService:
     # Test and embedded workers may switch the state directory while keeping
     # the profile name. Key the service by the actual execution database so
     # admission and activation cannot read different stores.
-    from openprogram.state.paths import get_execution_db_path
-    service_key = f"{profile}:{get_execution_db_path()}"
+    from openprogram.state.paths import get_run_state_path
+    service_key = f"{profile}:{get_run_state_path()}"
     with _default_control_services_lock:
         service = _default_control_services.get(service_key)
         if service is None:

@@ -4,7 +4,6 @@ import assert from "node:assert/strict";
 import { describe, test } from "node:test";
 
 import { runtimeSummaryLabel } from "../../../components/chat/messages/runtime/runtime-summary.ts";
-import { convToChatMsgs } from "../../../lib/chat/transcript/conv-mapper.ts";
 
 const startedAt = 1_700_000_000;
 const zh = (_en, cn) => cn;
@@ -135,34 +134,6 @@ describe("runtime summary label", () => {
   });
 });
 
-describe("runtime runs in a loaded transcript", () => {
-  const run = (overrides) => ({
-    role: "assistant", type: "status", display: "runtime", status: "completed", content: "", ...overrides,
-  });
-
-  test("a direct run stays top-level when only its predecessor is an assistant", () => {
-    const msgs = convToChatMsgs([
-      { id: "assistant-1", role: "assistant", content: "parent reply" },
-      run({ id: "direct-run", function: "report_workflow", caller: "", predecessor: "assistant-1" }),
-    ]);
-    assert.equal(msgs.length, 2);
-    assert.equal(msgs[0].runtimeChildren, undefined);
-    assert.equal(msgs[1].id, "direct-run");
-    assert.equal(msgs[1].display, "runtime");
-  });
-
-  test("a run the assistant called nests under that assistant", () => {
-    const msgs = convToChatMsgs([
-      { id: "assistant-1", role: "assistant", content: "parent reply" },
-      run({ id: "owned-run", function: "paper_agent", caller: "assistant-1", predecessor: "assistant-1" }),
-    ]);
-    assert.equal(msgs.length, 1);
-    assert.equal(msgs[0].runtimeChildren?.length, 1);
-    assert.equal(msgs[0].runtimeChildren[0].id, "owned-run");
-    assert.equal(msgs[0].runtimeChildren[0].calledBy, "assistant-1");
-  });
-});
-
 // ── The Function card itself, rendered. Loaded lazily so the pure tests
 // above run without a DOM.
 const card = (async () => {
@@ -219,7 +190,7 @@ describe("RuntimeBlock", () => {
     const { createElement, render, RuntimeBlock, useSessionStore, setSocket, settleFunctionRetry } = await card;
     const sent = [];
     setSocket({ readyState: 1, send: (frame) => sent.push(JSON.parse(frame)) });
-    useSessionStore.setState({ currentSessionId: "rb", messagesById: { "run-1": run() }, messageOrder: { rb: ["run-1"] } });
+    useSessionStore.setState({ currentSessionId: "rb", rowsByView: { rb: { "run-1": run() } }, messageOrder: { rb: ["run-1"] } });
     const view = await render(createElement(RuntimeBlock, { msg: run() }));
     try {
       const retry = view.container.querySelector('button[aria-label="Retry"]');

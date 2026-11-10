@@ -110,6 +110,8 @@ def receive(task_id: str, headers: Mapping[str, str], body: bytes) -> tuple[int,
     if _rate_limited(task_id, time.monotonic()):
         return 429, {"error": "too_many_calls"}
     proc = worker.fire_event(entry, {"source": "webhook", "text": event_text(headers, body)})
+    if proc is worker.PREVIOUS_RUN_ACTIVE:
+        return 409, {"error": "previous_run_active"}
     if proc is None:
         return 500, {"error": "task_refused"}
     return 202, {"ok": True, "task_id": task_id}

@@ -41,7 +41,7 @@ globalThis.localStorage = {
 globalThis.WebSocket = { OPEN: 1 };
 
 const { runtimeState, setSocket } = await import("../../../lib/runtime-bridge/state.ts");
-const { useSessionStore } = await import("../../../lib/session-store/index.ts");
+const { selectRow, useSessionStore } = await import("../../../lib/session-store/index.ts");
 const pending = await import("../../../lib/chat/send/pending-user-text.ts");
 const { sendChatMessage } = await import("../../../components/chat/composer/submit/send-chat-message.ts");
 const follow = await import("../../../lib/chat/history/chat-scroll.ts");
@@ -49,7 +49,7 @@ const follow = await import("../../../lib/chat/history/chat-scroll.ts");
 function reset(sid) {
   pending.clearPendingUserText(sid);
   pending.clearPendingFirstAck(sid);
-  useSessionStore.setState({ messagesById: {}, messageOrder: {}, runningTasks: {}, currentSessionId: sid });
+  useSessionStore.setState({ rowsByView: {}, overlaysByView: {}, messageOrder: {}, runningTasks: {}, currentSessionId: sid });
   runtimeState.currentSessionId = sid;
 }
 
@@ -65,7 +65,7 @@ test("socket write immediately paints pending user row before delayed ACK", () =
   const state = useSessionStore.getState();
   assert.equal(frames.length, 1);
   assert.deepEqual(state.messageOrder[sid].length, 1);
-  const row = state.messagesById[state.messageOrder[sid][0]];
+  const row = selectRow(sid, state.messageOrder[sid][0])(state);
   assert.equal(row.role, "user");
   assert.equal(row.content, "delayed");
   assert.equal(row.status, "pending");

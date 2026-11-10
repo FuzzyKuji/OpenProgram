@@ -4,18 +4,16 @@
  *  "[name (id)] " label at the head of the text, which is stripped here
  *  for display. */
 
+import { CHANNEL_BRANDS } from "../../channels/channel-brands.ts";
+
 type Text = (en: string, zh: string) => string;
 
-const CHANNEL_NAMES: Record<string, string> = {
-  telegram: "Telegram", slack: "Slack", discord: "Discord", wechat: "WeChat",
-};
-
 export function isChannelSource(source: string | undefined): source is string {
-  return Boolean(source && source in CHANNEL_NAMES);
+  return Boolean(source && source in CHANNEL_BRANDS);
 }
 
 export function channelName(channel: string, text: Text): string {
-  return channel === "wechat" ? text("WeChat", "微信") : CHANNEL_NAMES[channel] ?? channel;
+  return channel === "wechat" ? text("WeChat", "微信") : CHANNEL_BRANDS[channel]?.name ?? channel;
 }
 
 export interface ChannelSpeaker {

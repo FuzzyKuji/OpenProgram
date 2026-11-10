@@ -62,9 +62,9 @@ def test_transition_is_compare_and_swap_and_rejects_illegal_edges(
     store.create(_request())
 
     staged = store.transition(
-        "su_test", UpdatePhase.STAGING, expected_phase=UpdatePhase.PREPARING
+        "su_test", UpdatePhase.BUILDING, expected_phase=UpdatePhase.PREPARING
     )
-    assert staged.phase is UpdatePhase.STAGING
+    assert staged.phase is UpdatePhase.BUILDING
     assert staged.revision == 2
 
     with pytest.raises(ConcurrentUpdateError):
@@ -81,8 +81,8 @@ def test_verifier_claim_is_stable_and_lease_can_be_taken_over(tmp_path: Path) ->
     store = SelfUpdateStore(tmp_path)
     store.create(_request())
     for current, target in (
-        (UpdatePhase.PREPARING, UpdatePhase.STAGING),
-        (UpdatePhase.STAGING, UpdatePhase.READY),
+        (UpdatePhase.PREPARING, UpdatePhase.BUILDING),
+        (UpdatePhase.BUILDING, UpdatePhase.READY),
         (UpdatePhase.READY, UpdatePhase.ACTIVATING),
         (UpdatePhase.ACTIVATING, UpdatePhase.VERIFYING),
     ):
@@ -240,7 +240,7 @@ def test_load_repairs_state_committed_before_event_append(
     )
 
     with pytest.raises(OSError, match="event failure"):
-        store.transition("su_test", UpdatePhase.STAGING)
+        store.transition("su_test", UpdatePhase.BUILDING)
     monkeypatch.setattr(store, "_write_events", write_events)
 
     record = store.load("su_test")
@@ -248,7 +248,7 @@ def test_load_repairs_state_committed_before_event_append(
         json.loads(line)
         for line in (tmp_path / "su_test" / "events.jsonl").read_text().splitlines()
     ]
-    assert record.state.phase is UpdatePhase.STAGING
+    assert record.state.phase is UpdatePhase.BUILDING
     assert [event["revision"] for event in events] == [1, 2]
     assert events[-1] == record.state.last_event
 
@@ -256,7 +256,7 @@ def test_load_repairs_state_committed_before_event_append(
 def test_event_log_rejects_illegal_transition_evidence(tmp_path: Path) -> None:
     store = SelfUpdateStore(tmp_path)
     store.create(_request())
-    store.transition("su_test", UpdatePhase.STAGING)
+    store.transition("su_test", UpdatePhase.BUILDING)
     store.transition("su_test", UpdatePhase.READY)
     events_path = tmp_path / "su_test" / "events.jsonl"
     events = [json.loads(line) for line in events_path.read_text().splitlines()]
@@ -283,7 +283,7 @@ def _finish(store: SelfUpdateStore, update_id: str, phase: UpdatePhase, at: floa
     if phase is UpdatePhase.ABORTED:
         store.transition(update_id, UpdatePhase.ABORTED)
     else:
-        for step in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+        for step in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
             store.transition(update_id, step)
         if phase is UpdatePhase.SUCCEEDED:
             store.transition(update_id, UpdatePhase.VERIFYING)

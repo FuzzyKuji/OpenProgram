@@ -20,6 +20,7 @@ _locked_session: ContextVar[str | None] = ContextVar("chat_goal_lock", default=N
 # when a conversation has one waiting; a continuation yields to it for at most
 # USER_TURN_GRACE_S, so a closed window cannot hold a Goal forever.
 USER_TURN_GRACE_S = 15.0
+ADMITTED_TURN_LOCK_WAIT_S = 5.0
 _waiting_users: dict[str, float | None] = {}  # session -> first deferral time
 _waiting_lock = threading.Lock()
 
@@ -42,6 +43,33 @@ def locked(session_id):
             yield
         finally:
             _locked_session.reset(token)
+
+
+@contextmanager
+def _locked_when_free(session_id):
+    """Take the Goal lock for a turn that was already admitted.
+
+    The admission or checkpoint that let this turn start can still be letting
+    go of the lock when its runner gets here, so a short wait replaces failing
+    a turn nothing is competing with.
+    """
+    if _locked_session.get() == session_id:
+        yield
+        return
+    from .ownership import goal_owner
+    deadline = time.monotonic() + ADMITTED_TURN_LOCK_WAIT_S
+    while True:
+        with goal_owner(goals._db(), session_id) as acquired:
+            if acquired:
+                token = _locked_session.set(session_id)
+                try:
+                    yield
+                finally:
+                    _locked_session.reset(token)
+                return
+        if time.monotonic() >= deadline:
+            raise goals.GoalConflictError("Goal admission or mutation is already in progress")
+        time.sleep(0.01)
 
 
 def serialized(function):
@@ -77,9 +105,18 @@ def user_waiting(session_id: str) -> bool:
 
 
 def used_tools(store, execution_id: str) -> bool:
-    """Every tool call plans a durable ``tool.before`` effect, read-only ones too."""
-    from openprogram.runtime.execution.effects import EffectStore
-    return EffectStore(store).has_kind(execution_id, "tool.before")
+    """Whether the turn's journal shows a tool call, read-only ones included."""
+    from openprogram.runtime.context.session_db import default_db
+    from openprogram.runtime.execution.agent_journal import DECISION
+
+    execution = store.get_execution(execution_id)
+    if execution is None or not execution.session_id:
+        return False
+    return any(
+        record["type"] == DECISION
+        and any(item.get("type") == "toolCall" for item in record["data"]["message"].get("content") or ())
+        for record in default_db().read_turn_records(execution.session_id, execution_id)
+    )
 
 
 IDLE_WARNING = (
@@ -118,7 +155,7 @@ def continuation_prompt(goal: dict) -> str:
 @serialized
 def create(session_id: str, objective: str, token_budget: int | None = None, *,
            max_elapsed_s: float | None = None, max_cost_usd: float | None = None,
-           origin: str = "") -> dict:
+           origin: str = "", handoff_chain: dict | None = None) -> dict:
     objective = objective.strip()
     if not objective:
         raise ValueError("Goal objective is required")
@@ -148,6 +185,9 @@ def create(session_id: str, objective: str, token_budget: int | None = None, *,
     }
     if origin:
         goal["origin"] = origin
+    if handoff_chain:
+        # Its later turns have new message ids but stay in the chain that started it.
+        goal["handoff_chain"] = handoff_chain
     if goal["execution_id"]:
         # A mid-turn creation cannot mutate its already admitted request.
         # Preserve that exact association, not permission for a later revision.
@@ -249,6 +289,7 @@ def resume(session_id: str, expected: dict | None = None) -> dict:
                 control_version=int(goal.get("control_version") or 0) + 1,
                 run_id=uuid.uuid4().hex, run_turns=0, idle_turns=0, stop_requested=False,
                 pause_reason="", active_started_at=None, last_reason="")
+    goal.pop("automatic_resumes", None)
     goal["goal_id"] = goal.get("goal_id") or uuid.uuid4().hex
     goal.pop("continuation_restart", None)
     goal.pop("verification", None)
@@ -322,7 +363,7 @@ def turn_context(session_id: str, execution_id: str, expected: dict | None = Non
     token = _turn_goal.set(dict(expected or {}))
     try:
         if expected:
-            with locked(session_id):
+            with _locked_when_free(session_id):
                 goal = goals.load_goal(session_id)
                 goals.check_goal_preconditions(goal or {}, expected)
                 if goal.get("status") != "active" or goal.get("execution_id") != execution_id:
@@ -424,6 +465,29 @@ def admit(entry, **kwargs):
         return admission
 
 
+def settled_at_turn_end(request: dict) -> bool:
+    """Whether a turn's own end settles its Goal. A background turn (a check-in)
+    runs beside the conversation: a Goal it created starts from the next wake,
+    as a turn of the conversation itself."""
+    return request.get("source") in {"web", "tui", "acp"} and not request.get("background")
+
+
+def charge_daily_budget(session_id: str, goal: dict, execution_id: str) -> None:
+    """An automatic Goal's own turn spends from its Agent's daily budget, once.
+    Call it when the turn's usage has settled; a person's turn in the conversation is not charged."""
+    from openprogram.runtime.permissions.identity import AUTOMATIC_GOAL_ORIGINS
+    if goal.get("origin") not in AUTOMATIC_GOAL_ORIGINS or goal.get("charged_execution_id") == execution_id:
+        return
+    from openprogram.runtime.conversation.always_on.runtime import add_goal_turn_spend
+    try:
+        add_goal_turn_spend(session_id, execution_id)
+    except Exception:
+        # The day's total comes up short; the Goal must still continue.
+        logging.getLogger(__name__).exception("Daily spend of Goal turn %s not recorded", execution_id)
+    goal["charged_execution_id"] = execution_id
+    publish(session_id, goal)
+
+
 def after_terminal(store, execution):
     """Account a committed terminal turn and request at most one next chat."""
     from openprogram.runtime.execution.model import ExecutionStatus
@@ -431,7 +495,7 @@ def after_terminal(store, execution):
     if not payload or payload.get("kind") != "chat":
         return
     request = payload.get("request") or {}
-    if request.get("source") not in {"web", "tui", "acp"}:
+    if not settled_at_turn_end(request):
         return
     sid = execution.session_id
     completed_verification = bool(request.get("goal_verification")) and execution.status == ExecutionStatus.COMPLETED
@@ -455,6 +519,8 @@ def after_terminal(store, execution):
             goal["run_turns"] = int(goal.get("run_turns") or 0) + 1
             goal["accounted_execution_id"] = execution.execution_id
             goal["checklist"] = project_todos(sid, goal)
+            if execution.status == ExecutionStatus.COMPLETED:
+                goal.pop("automatic_resumes", None)
             if not request.get("goal_verification"):
                 # Only an automatic turn can spin; a user turn starts the count over.
                 idle = (request.get("goal_trigger") and execution.status == ExecutionStatus.COMPLETED
@@ -475,6 +541,8 @@ def after_terminal(store, execution):
             publish(sid, goal)
         if goal.get("usage_pending_until") is not None:
             raise goals.GoalStateUnavailable("Goal usage settlement is pending")
+        if request.get("goal_trigger"):
+            charge_daily_budget(sid, goal, execution.execution_id)
         if goal.get("status") != "active" or stale_revision:
             return
         from . import verification
@@ -496,6 +564,85 @@ def after_terminal(store, execution):
         if goal.get("status") != "active":
             return
     start_next(store, execution.execution_id, expected=identity(goal))
+
+
+@serialized
+def close_exhausted(session_id: str) -> None:
+    """A Goal out of budget before a turn could notice ends the way a turn's end would end it."""
+    goal = goals.load_goal(session_id)
+    exhausted = goals.budget_exhausted(goal) if goal and goal.get("status") == "active" else ""
+    if exhausted:
+        goal.update(status="budget_exhausted", phase="terminal", last_reason=exhausted)
+        publish(session_id, goal)
+
+
+#: Why a stop paused an automatic Goal, in words the Goal's own panel shows.
+STOP_REASONS = {
+    "conversation_archived": "The conversation was archived. Unarchiving it continues the Goal.",
+    "always_on_off": "Always-on was turned off. Turning it on again continues the Goal.",
+}
+
+
+@serialized
+def pause_always_on(session_id: str, reason: str) -> bool:
+    """Stop an unattended Goal's next turn; a person's Goal is never touched.
+
+    A turn already running finishes, and its end finds the Goal paused."""
+    from openprogram.runtime.conversation.always_on.runtime import UNATTENDED_GOAL_ORIGINS
+    goal = goals.load_goal(session_id)
+    if (not goal or goal.get("execution_mode") != "chat" or goal.get("status") != "active"
+            or goal.get("origin") not in UNATTENDED_GOAL_ORIGINS):
+        return False
+    goals.checkpoint_active_elapsed(goal)
+    goal.update(status="paused_recoverable", phase="paused", pause_reason=reason,
+                last_reason=STOP_REASONS[reason],
+                control_version=int(goal.get("control_version") or 0) + 1)
+    publish(session_id, goal)
+    return True
+
+
+@serialized
+def restore_always_on(session_id: str) -> bool:
+    """Undo a stop. The Goal keeps its identity, so a turn still running carries on with it."""
+    goal = goals.load_goal(session_id)
+    if not goal or goal.get("status") != "paused_recoverable" or goal.get("pause_reason") not in STOP_REASONS:
+        return False
+    goal.update(status="active", phase="idle", pause_reason="", last_reason="",
+                control_version=int(goal.get("control_version") or 0) + 1)
+    if goal.get("accounted_execution_id") == goal.get("execution_id") and goal.get("usage_pending_until") is None:
+        # That turn's end found the Goal paused and asked for no next one, so a wake must start it.
+        # A restart it was waiting for has passed, and its repair found the Goal paused too.
+        goal["execution_id"] = None
+        goal.pop("continuation_restart", None)
+    publish(session_id, goal)
+    return True
+
+
+@serialized
+def relabel_stop(session_id: str, reason: str) -> None:
+    """One stop was undone while another still holds the Goal; its panel names the one left."""
+    goal = goals.load_goal(session_id)
+    if (goal and goal.get("status") == "paused_recoverable"
+            and goal.get("pause_reason") in STOP_REASONS and goal.get("pause_reason") != reason):
+        goal.update(pause_reason=reason, last_reason=STOP_REASONS[reason])
+        publish(session_id, goal)
+
+
+#: Pauses a wake may undo by itself; every other stuck Goal waits for a person.
+AUTOMATIC_RESUME_REASONS = ("execution_failed", "restart_policy")
+
+
+@serialized
+def resume_unattended(session_id: str) -> dict:
+    """A wake restarts an automatic Goal, counting the restarts since its last completed turn.
+    Raises ``ValueError`` when the Goal cannot be resumed after all."""
+    count = int((goals.load_goal(session_id) or {}).get("automatic_resumes") or 0)
+    goal = resume(session_id)
+    goal["automatic_resumes"] = count + 1
+    if goal.get("accounted_execution_id") == goal.get("execution_id"):
+        # That turn is over and asked for no next one, so if this start is refused the next wake must retry.
+        goal["execution_id"] = None
+    return publish(session_id, goal)
 
 
 def _continuation_ready(store, session_id: str, previous_execution_id: str, expected: dict) -> bool:
@@ -520,8 +667,7 @@ def _continuation_ready(store, session_id: str, previous_execution_id: str, expe
             publish(session_id, goal)
             return False
         current = current_process_owner()
-        restarted = bool(origin and any(origin.get(key) != current.get(key)
-                                        for key in ("host", "pid", "start")))
+        restarted = bool(origin and origin.get("instance") != current.get("instance"))
         stopping = is_worker_stopping()
         if stopping or restarted:
             if pending is None:
@@ -645,8 +791,7 @@ def start_from_controls(session_id: str, *, source: str = "web") -> dict:
     from openprogram.runtime.permissions.authority import local_owner_authority
     from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
-    from openprogram.runtime.conversation.session_config import load_session_run_config, permission_from_config, tools_override_from_config
-    from openprogram.runtime.permissions.rule import load_merged_rules
+    from openprogram.runtime.conversation.session_config import conversation_permission, load_session_run_config, tools_override_from_config
     from openprogram.runtime.events import emit_ws_frame
     goal = goals.load_goal(session_id)
     if not goal or goal.get("status") != "active":
@@ -658,12 +803,12 @@ def start_from_controls(session_id: str, *, source: str = "web") -> dict:
     request = TurnRequest(
         session_id=session_id, user_text=goal["text"],
         agent_id=session.get("agent_id") or "main", source=source,
-        user_msg_id=msg_id, permission_mode=permission_from_config(config),
+        user_msg_id=msg_id, **conversation_permission(session_id),
         tools_override=tools_override_from_config(config), thinking_effort=config.thinking_effort,
-        permission_rules=load_merged_rules(session_id),
         additional_working_dirs=config.additional_working_dirs,
         goal_context=identity(goal), goal_trigger=True,
-        goal_previous_execution=goal.get("execution_id"), **authority,
+        goal_previous_execution=goal.get("execution_id"),
+        automation="handoff" if goal.get("handoff_chain") else None, **authority,
     )
     adapter = CanonicalAgentAdapter(event_sink=emit_ws_frame)
     admission = adapter.admit(request, trusted_actor=authority, user_message_id=msg_id,

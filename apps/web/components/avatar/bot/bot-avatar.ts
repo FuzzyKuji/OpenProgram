@@ -24,9 +24,9 @@ import { createElement, useEffect, useLayoutEffect, useRef, useState, useSyncExt
 import { motion, useAnimation } from "framer-motion";
 import type { MountedAvatar } from "open-bot-avatar/dom";
 
-import { HOVER_POP, HOVER_SPRING, followHostHover } from "../../ui/hover-pop";
+import { HOVER_POP, HOVER_POP_FILL, HOVER_SPRING, followHostHover } from "../../ui/hover-pop";
 
-import { BOT_COLORS, BOT_EYE_COLOR, DEFAULT_BOT_COLOR, botFit, isBotColor } from "./catalog";
+import { BOT_COLORS, BOT_EYE_COLOR, DEFAULT_BOT_COLOR, botFit, botMarkFit, isBotColor } from "./catalog";
 import { botGlyph } from "./glyph";
 import { loadBotRuntime, loadedBotRuntime } from "./runtime";
 import { shapeReady, startWarming, wantShape, watchShapes } from "./warm";
@@ -44,7 +44,14 @@ export interface BotAvatarProps {
   /** Accessible name; leave empty where the name is written beside it. */
   label?: string;
   className?: string;
+  /** How the body fills its slot: "avatar" (botFit, the default, used
+   *  everywhere else) or "mark" (botMarkFit), only for the composer's
+   *  Agent chip and the Agent menu: the body's longer side fills the slot
+   *  and the slot grows to exactly 18 px on hover (HOVER_POP_FILL). */
+  fit?: BotFitRule;
 }
+
+export type BotFitRule = "avatar" | "mark";
 
 const useBrowserLayoutEffect = typeof window === "undefined" ? useEffect : useLayoutEffect;
 
@@ -62,7 +69,7 @@ function useReducedMotion(): boolean {
   return useSyncExternalStore(watchReducedMotion, () => reducedMotionQuery()?.matches ?? false, () => false);
 }
 
-export function BotAvatar({ shape, color, size, live = false, mood = "idle", label = "", className }: BotAvatarProps) {
+export function BotAvatar({ shape, color, size, live = false, mood = "idle", label = "", className, fit: fitRule = "avatar" }: BotAvatarProps) {
   const slot = useRef<HTMLSpanElement | null>(null);
   const host = useRef<HTMLSpanElement | null>(null);
   const pop = useAnimation();
@@ -125,7 +132,7 @@ export function BotAvatar({ shape, color, size, live = false, mood = "idle", lab
     mounted.current = null;
   }, []);
 
-  const fit = botFit(shape);
+  const fit = fitRule === "mark" ? botMarkFit(shape) : botFit(shape);
   const style: CSSProperties = {
     position: "relative",
     width: size,
@@ -150,7 +157,7 @@ export function BotAvatar({ shape, color, size, live = false, mood = "idle", lab
     style,
     initial: "normal",
     animate: pop,
-    variants: HOVER_POP,
+    variants: fitRule === "mark" ? HOVER_POP_FILL : HOVER_POP,
     transition: HOVER_SPRING,
     "data-bot-shape": shape,
     "data-bot-live": live ? "" : undefined,

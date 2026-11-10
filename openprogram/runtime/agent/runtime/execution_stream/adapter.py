@@ -174,33 +174,6 @@ def project_provider_event(state: CallStreamState, event: dict[str, Any]) -> Non
         _log.debug("project_provider_event failed", exc_info=True)
 
 
-def project_raw_agent_event(state: CallStreamState, ev: Any) -> None:
-    """Optional path when adapter sees the raw agent event before legacy dict."""
-    t = getattr(ev, "type", None)
-    if t != "message_update":
-        return
-    inner = getattr(ev, "assistant_message_event", None)
-    if inner is None:
-        return
-    inner_type = getattr(inner, "type", None)
-    if inner_type == "text_delta":
-        project_provider_event(
-            state, {"type": "text", "text": getattr(inner, "delta", "") or ""}
-        )
-    elif inner_type == "thinking_delta":
-        project_provider_event(
-            state, {"type": "thinking", "text": getattr(inner, "delta", "") or ""}
-        )
-    elif inner_type in ("structured_output_retry", "structured_output_end"):
-        try:
-            dump = inner.model_dump(exclude_none=True)
-        except Exception:
-            dump = {"type": inner_type}
-        project_provider_event(state, dump)
-    elif inner_type == "done":
-        project_provider_event(state, {"type": "done"})
-
-
 def attach_call_stream_to_exec(
     exec_state,
     *,

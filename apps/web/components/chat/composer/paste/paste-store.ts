@@ -23,9 +23,6 @@
  * across windows (time-based), so a draft moved to another window still
  * finds its paste: a miss looks in the other windows' entries once and
  * adopts what it finds.
- *
- * Modeled on claude-code's pasteStore + inputPaste truncation logic
- * (``references/claude-code-leaked/src/components/PromptInput/inputPaste.ts``).
  */
 
 import { pastedSpanLabel } from "../../../../lib/chat/send/paste-elements.ts";

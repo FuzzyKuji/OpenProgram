@@ -6,7 +6,7 @@ to" = "which branches exist". By default only the current session's
 branches are shown (that is where spawned agents live); scope="all"
 widens to every session, most recently active first.
 
-Design: docs/reference/design/runtime/collaboration/agent-collaboration.md (C2).
+Design: docs/reference/design/runtime/collaboration/agent-collaboration.html (C2).
 """
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ _DESCRIPTION = (
     "List the agents you can talk to. An agent's conversation is stored "
     "as a branch in the session DAG; each line gives a ready-to-use "
     "`to=\"SID:HEAD\"` address for send_message, the branch name (if "
-    "any — a «name» works directly as `to` too), busy/idle status, and "
+    "any — a «name» works directly as `to` too), the scheduled task the "
+    "branch works on (if any), busy/idle status, and "
     "turn count / approximate size so you can pick a sensible "
     "`max_chars` before read_conversation. Default scope=\"session\" "
     "shows only the current session's branches — the agents spawned "
@@ -56,6 +57,31 @@ def _turn_running(session_id: str) -> bool | None:
         return bool(is_turn_running(session_id))
     except Exception:
         return None
+
+
+def _branch_task(db, sid: str, head: str) -> str:
+    """The scheduled task this branch is bound to, in words; empty if none."""
+    try:
+        task_id = (db.get_branch_meta(sid, head) or {}).get("scheduled_task_id")
+        if not task_id:
+            return ""
+        from openprogram.programs.tools.jobs.cron.remind import next_cron
+        from openprogram.runtime.scheduler import service
+        import datetime as dt
+
+        task = service.get_task(str(task_id))
+        if task is None:
+            return "deleted"
+        parts = [str(task.get("title") or task_id), str(task.get("cron") or task.get("run_at") or task.get("type") or "")]
+        if not task.get("enabled", True):
+            parts.append("paused")
+        elif task.get("cron"):
+            upcoming = next_cron(str(task["cron"]), dt.datetime.now())
+            if upcoming:
+                parts.append(f"next {upcoming:%Y-%m-%d %H:%M}")
+        return ", ".join(part for part in parts if part)
+    except Exception:
+        return ""
 
 
 def _session_lines(
@@ -101,6 +127,9 @@ def _session_lines(
         label = f" «{name}»" if name else ""
         if head in agents and agents[head] != name:
             label += f" (agent «{agents[head]}»)"
+        task = _branch_task(db, sid, head)
+        if task:
+            label += f" [scheduled task: {task}]"
         stats = _branch_stats(db, sid, head)
         line = f"  - to={sid}:{head}{label}{stats}"
         if preview:

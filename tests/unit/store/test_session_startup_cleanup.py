@@ -1,6 +1,6 @@
 """Startup cleanup never loses session data.
 
-Design: docs/reference/design/runtime/session/operations.md "Process
+Design: docs/reference/design/runtime/session/operations.html "Process
 startup". A directory without ``history/`` is kept when it holds session
 data and otherwise moved to ``.quarantine``; anything uncertain is kept.
 """
@@ -30,9 +30,7 @@ def _reopen(tmp_path: Path) -> SessionStore:
 
 
 def _strip_to_shell(sdir: Path) -> None:
-    for name in ("history", ".git"):
-        remove_tree(sdir / name)
-    (sdir / "meta.json").unlink()
+    (sdir / "main.jsonl").unlink()
 
 
 @pytest.fixture
@@ -47,7 +45,7 @@ def no_unbind(monkeypatch: pytest.MonkeyPatch) -> list[str]:
 def test_new_session_has_history_before_any_message(tmp_path: Path):
     store = _store(tmp_path)
     sdir = _old_session(store, "s1")
-    assert (sdir / "history").is_dir()
+    assert (sdir / "main.jsonl").is_file()
     assert "s1" in _reopen(tmp_path)._index
 
 
@@ -55,12 +53,13 @@ def test_session_missing_history_keeps_its_files(tmp_path: Path):
     store = _store(tmp_path)
     sdir = _old_session(store, "s1")
     (sdir / "workdir" / "notes.txt").write_text("user file")
-    remove_tree(sdir / "history")
+    (sdir / "main.jsonl").unlink()
+    (sdir / "events.jsonl").write_text("")
 
     reopened = _reopen(tmp_path)
 
     assert "s1" in reopened._index
-    assert (sdir / "meta.json").is_file()
+    assert (sdir / "events.jsonl").is_file()
     assert (sdir / "workdir" / "notes.txt").read_text() == "user file"
 
 

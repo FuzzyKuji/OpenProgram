@@ -1,0 +1,163 @@
+<title>Browser application</title>
+<meta name="description" content="The built-in browser as an application: its service, modules and the web_use runtime.">
+<h1>Browser application</h1>
+
+
+<p>The built-in browser is the application <code translate="no">openprogram/programs/applications/browser/</code>. The core never imports it: the application's <code translate="no">setup(ctx)</code> provides the service <code translate="no">browser</code>, and every core caller looks it up with <code translate="no">_services.lookup("browser")</code> and runs without a browser when the lookup returns <code translate="no">None</code>.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Module</th><th scope="col">Role</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">__init__.py</code></th><td><code translate="no">PROGRAM_ENTRIES</code> (<code translate="no">web_use</code>) and <code translate="no">setup</code>: provides the service, registers the L2 context section <code translate="no">pages</code> and the resource provider <code translate="no">web</code></td></tr>
+<tr><th scope="row"><code translate="no">service.py</code></th><td><code translate="no">BrowserService</code>, the service's members (below)</td></tr>
+<tr><th scope="row"><code translate="no">pages.py</code></th><td><code translate="no">BrowserResourceStore</code>, per-conversation Page projections, resource control, human page input</td></tr>
+<tr><th scope="row"><code translate="no">tabs.py</code></th><td>the tab driver for <code translate="no">computer_use_agent(target="browser")</code></td></tr>
+<tr><th scope="row"><code translate="no">extension.py</code></th><td>the user's Chrome or Edge through the Playwright Extension</td></tr>
+<tr><th scope="row"><code translate="no">chrome.py</code>, <code translate="no">privacy.py</code></th><td>the Chrome bootstrap that <code translate="no">openprogram browser</code> maintains; privacy filters</td></tr>
+<tr><th scope="row"><code translate="no">contract.py</code></th><td>the <code translate="no">web_use</code> argument contract shared by agents and MCP</td></tr>
+<tr><th scope="row"><code translate="no">prompt.py</code></th><td>the open-Pages section of a call's prompt</td></tr>
+<tr><th scope="row"><code translate="no">resource.py</code></th><td>the <code translate="no">web</code> resource provider and the Page lease for native presentation commands</td></tr>
+<tr><th scope="row"><code translate="no">web_use/</code></th><td>the <code translate="no">web_use</code> runtime: page controller, sessions and their registry, recovery, the exact-page MCP backend</td></tr>
+<tr><th scope="row"><code translate="no">engine/</code></th><td>the Playwright verb engine the page controller drives</td></tr>
+</tbody>
+</table>
+<p>The service's members are <code translate="no">pages</code>, <code translate="no">tabs</code>, <code translate="no">chrome</code>, <code translate="no">extension</code>, <code translate="no">user_browser_names</code>, <code translate="no">web_use_parameters()</code>, <code translate="no">normalize_web_use_arguments()</code>, <code translate="no">execute_direct_web_use(arguments, owner_id=)</code>, <code translate="no">registry()</code>, <code translate="no">release_owner()</code>, <code translate="no">park_owner()</code>, <code translate="no">authorized_page()</code> and <code translate="no">browser_of()</code>.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Caller</th><th scope="col">Without the service</th></tr></thead>
+<tbody>
+<tr><th scope="row">A call's prompt</th><td>No Pages section; the turn gets no <code translate="no">web_use</code></td></tr>
+<tr><th scope="row"><code translate="no">web_use</code> arguments</th><td>Fail validation with "the browser is not enabled"</td></tr>
+<tr><th scope="row">MCP</th><td>Lists no <code translate="no">web_use</code> and refuses its calls</td></tr>
+<tr><th scope="row"><code translate="no">/api/web-use</code></th><td>Answers <code translate="no">browser_not_enabled</code></td></tr>
+<tr><th scope="row">Process routes</th><td>List no browser resources; 404 for browser control</td></tr>
+<tr><th scope="row">Web tab bridge</th><td>Skips Page bookkeeping</td></tr>
+<tr><th scope="row"><code translate="no">computer_use_agent(target="browser")</code></th><td>Reports the target unavailable; desktop targets keep working</td></tr>
+<tr><th scope="row">Permission policy</th><td>Sees no user browser</td></tr>
+</tbody>
+</table>
+
+<h2 id="the-web_use-runtime">The <code translate="no">web_use</code> runtime</h2>
+<p><code translate="no">web_use</code> is the application's one registered entry. Programs and MCP clients call it directly; the <code translate="no">browser</code> target of <code translate="no">computer_use_agent</code> uses the <a href="browser-tab-driver.html">tab driver</a> instead.</p>
+<p><strong>Names.</strong> Agents and MCP see one tool, <code translate="no">web_use</code>; sessions are <code translate="no">web_session_id</code> in a <code translate="no">WebUseSessionRegistry</code>. The HTTP route is <code translate="no">/api/web-use</code>; <code translate="no">/api/computer-use</code> remains a hidden compatibility route on the same handler, kept out of OpenAPI, and old <code translate="no">computer_session_id</code> request fields are converted to the new ones.</p>
+
+<h3 id="five-commands">Five commands</h3>
+<table class="stack fixed">
+<thead><tr><th scope="col">Command</th><th scope="col">What it does</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">list_pages</code></th><td>lists the Pages of every registered OpenProgram window, each with a single-use <code translate="no">page_context_token</code></td></tr>
+<tr><th scope="row"><code translate="no">observe</code></th><td>selects a Page by token, opens a WebSession and returns bounded text, ARIA and element refs</td></tr>
+<tr><th scope="row"><code translate="no">act</code></th><td>performs one <code translate="no">navigate</code>, <code translate="no">click</code>, <code translate="no">type</code>, <code translate="no">press</code>, <code translate="no">scroll</code>, <code translate="no">hover</code> or <code translate="no">select</code> against the latest <code translate="no">expected_frame_id</code></td></tr>
+<tr><th scope="row"><code translate="no">verify</code></th><td>runs a Runtime assertion (<code translate="no">text_contains</code>, <code translate="no">title_contains</code>, <code translate="no">url_contains</code> and so on); a model's claim of completion never makes a result <code translate="no">succeeded</code></td></tr>
+<tr><th scope="row"><code translate="no">close</code></th><td>closes the observed Page's tab and releases its WebSession, Page binding and held capabilities</td></tr>
+</tbody>
+</table>
+<pre translate="no" tabindex="0"><code>web_use({ command: "list_pages" })
+web_use({ command: "observe", page_context_token: "pct_…", arguments: { detail: "interactive" } })
+web_use({ command: "act", web_session_id: "cs_…", arguments: { action: "click", expected_frame_id: "f_…", ref: "e1" } })
+web_use({ command: "verify", web_session_id: "cs_…", arguments: { action: "verify", expected_frame_id: "f_…", assertion: "text_contains", value: "Saved" } })
+web_use({ command: "close", web_session_id: "cs_…" })</code></pre>
+
+<h3 id="page-inventory">Page inventory</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Reply</th><td><code translate="no">list_pages</code> returns <code translate="no">windows[]</code>, one snapshot per registered window with its <code translate="no">window_id</code>, <code translate="no">inventory_revision</code>, <code translate="no">active_tab_entry_id</code>, <code translate="no">focused_page</code> and <code translate="no">tab_entries</code>, and a flattened <code translate="no">pages</code> list.</td></tr>
+<tr><th scope="row">Tab entry</th><td>A tab entry is one item in the top tab bar: <code translate="no">single</code> holds one Page, <code translate="no">split</code> two ordered panes (<code translate="no">tab:&lt;tab_id&gt;</code> and <code translate="no">group:&lt;CenterTabGroup.id&gt;</code>).</td></tr>
+<tr><th scope="row">Page</th><td>Each Page carries its <code translate="no">window_id</code>, <code translate="no">tab_id</code>, <code translate="no">tab_entry_id</code>, <code translate="no">placement</code>, title, origin, <code translate="no">visible</code>, <code translate="no">focused</code>, an optional <code translate="no">opener_tab_id</code> and its token.</td></tr>
+<tr><th scope="row">Pane order</th><td>Pane order follows the rendered order; left and right derive from actual geometry and are never Page identity.</td></tr>
+<tr><th scope="row">Inventory revision</th><td>Grouping, reordering or resizing increments <code translate="no">inventory_revision</code> without changing a Page.</td></tr>
+<tr><th scope="row">Popup</th><td>A popup becomes its own tab and Page with <code translate="no">opener_tab_id</code>; it never rebinds the opener's session, and the caller picks it up on the next <code translate="no">list_pages</code>.</td></tr>
+<tr><th scope="row">No Desktop window</th><td>When no Desktop window is registered, as after a worker or App restart, discovery waits up to <code translate="no">DESKTOP_RECONNECT_WAIT_SECONDS</code> (20 s) and then returns <code translate="no">desktop_unavailable</code> with <code translate="no">retry_command=list_pages</code>.</td></tr>
+</tbody>
+</table>
+
+<h3 id="binding-and-revisions">Binding and revisions</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Token</th><td>A token binds the caller's owner, the window, the exact CDP target and the server's page and access revisions; missing, replayed, cross-owner or replaced-target tokens are refused before any backend call.</td></tr>
+<tr><th scope="row">Geometry revision</th><td>Each visible web tab also carries a renderer-owned <code translate="no">geometry_revision</code> that changes with its in-App bounds or visibility (not with focus, and not with macOS stacking, occlusion or minimization).</td></tr>
+<tr><th scope="row">Comparison</th><td>The WebSession stores all three revisions, the worker compares page and access, and the exact renderer compares geometry before native activation; any mismatch returns <code translate="no">page_context_stale</code> without touching the backend.</td></tr>
+<tr><th scope="row">Lease</th><td>Writes to one Page hold an exclusive lease; different Pages run concurrently.</td></tr>
+<tr><th scope="row">Background Pages</th><td>Background Pages resolve their target directly, with no tab switch, window focus, <code translate="no">bringToFront()</code> or OS input.</td></tr>
+<tr><th scope="row">Location</th><td>The inventory, WebSession registry and renderer WebSocket registry run in the worker's main process; a workflow subprocess reaches the same WebSession through the parent bridge, which forwards revisions unchanged.</td></tr>
+</tbody>
+</table>
+
+<h3 id="owners-and-cleanup">Owners and cleanup</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Owner</th><td>A chat turn's owner is its session and assistant turn.</td></tr>
+<tr><th scope="row">Release</th><td>Normal return, retry, cancellation and exceptions release every WebSession, Page lease and binding the owner holds, whether or not the model called <code translate="no">close</code>.</td></tr>
+<tr><th scope="row">Disconnect</th><td>A disconnected owner WebSocket revokes all its bindings at once.</td></tr>
+<tr><th scope="row">close</th><td>Explicit <code translate="no">close</code> checks the owner and live binding, asks the App to close the tab and then releases the session; a foreign owner closes nothing.</td></tr>
+</tbody>
+</table>
+
+<h3 id="tokens-and-recovery">Tokens and recovery</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Reuse</th><td><code translate="no">act</code> or <code translate="no">verify</code> with a token and no live <code translate="no">web_session_id</code> reuses the WebSession that token opened; with an unused token the runtime first observes read-only, and <code translate="no">navigate</code>, <code translate="no">screenshot</code>, <code translate="no">wait</code> and ref-free <code translate="no">verify</code> continue on that frame, while ref or coordinate actions return the observation with <code translate="no">action_performed=false</code>.</td></tr>
+<tr><th scope="row">Memory</th><td>The registry remembers, bounded and in memory, the tabs of WebSessions that ended and of tokens that expired.</td></tr>
+<tr><th scope="row">Hints</th><td>A later <code translate="no">page_context_not_found</code>, <code translate="no">page_context_consumed</code> or <code translate="no">web_session_not_found</code> from the same owner scope carries <code translate="no">recovery_tab_id</code>, <code translate="no">recovery_window_id</code> and <code translate="no">recovery_command=observe</code>; the agent tool then observes that tab with a fresh token and returns <code translate="no">recovered_page=true</code>, <code translate="no">previous_action_replayed=false</code>.</td></tr>
+<tr><th scope="row">Replay</th><td>Nothing is replayed.</td></tr>
+<tr><th scope="row">Next call</th><td>Every recoverable failure names exactly one next call.</td></tr>
+</tbody>
+</table>
+
+<h3 id="backends">Backends</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Choice</th><td><code translate="no">observe</code> picks one of three backends and freezes it for the WebSession: <code translate="no">playwright_mcp</code> (default, pinned <code translate="no">@playwright/mcp</code>), <code translate="no">chrome_devtools_mcp</code> (pinned <code translate="no">chrome-devtools-mcp</code>) or <code translate="no">open_claude_chrome</code> (OpenProgram's own Electron/CDP controller that follows the Open Claude in Chrome tool contract, with no extension or native host).</td></tr>
+<tr><th scope="row">Mismatch</th><td>A later request for another backend returns <code translate="no">backend_mismatch</code>; failures, timeouts and stale frames never fall back to another backend, so one action writes at most once.</td></tr>
+<tr><th scope="row">Process</th><td>Each official-MCP WebSession owns a private MCP process started with <code translate="no">npx --prefer-offline</code>, bound to the exact target with tab selection disabled.</td></tr>
+<tr><th scope="row">Restart</th><td>If that process stops, the next <code translate="no">observe</code> restarts it read-only; <code translate="no">act</code> never writes through a restarted process and returns <code translate="no">computer_use_backend_unavailable</code> with <code translate="no">observe_required=true</code>.</td></tr>
+<tr><th scope="row">Parity</th><td>All three run one parity matrix through <code translate="no">WebUseSessionRegistry.execute()</code>: the same results, frame invalidation, reason codes and verification semantics.</td></tr>
+</tbody>
+</table>
+
+<h3 id="frames-and-failures">Frames and failures</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">After a write</th><td>Every successful write invalidates the frame and sets <code translate="no">observe_required=true</code>.</td></tr>
+<tr><th scope="row">Failures</th><td>Missing arguments return <code translate="no">invalid_arguments</code> with the complete <code translate="no">missing_arguments</code> list and leave a valid observation in place; an old frame returns <code translate="no">stale_observation</code>; an unknown action returns <code translate="no">unsupported_action</code>; a backend error returns <code translate="no">backend_action_failed</code>.</td></tr>
+<tr><th scope="row">Reason codes</th><td>Reason codes (<code translate="no">page_context_stale</code>, <code translate="no">page_access_disabled</code>, <code translate="no">target_lost</code>, <code translate="no">page_in_use</code>, <code translate="no">ref_not_found</code>, <code translate="no">timeout</code>, <code translate="no">cancelled</code> among them) come from the runtime; backend text never overrides them.</td></tr>
+</tbody>
+</table>
+
+<h3 id="cost">Cost</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Observation</th><td>Observation is DOM and ARIA first: URL, title, text, snapshot and refs, without screenshots.</td></tr>
+<tr><th scope="row">Screenshot</th><td><code translate="no">screenshot</code> returns one current-viewport PNG, taken from the exact Page's CDP session, for canvas pages or failed semantic location.</td></tr>
+<tr><th scope="row">Image lifetime</th><td>The image goes only to the next provider request; tool text, the DAG and final results keep only <code translate="no">frame_id</code>, the viewport and <code translate="no">image_attached</code>, and normal return, provider errors, timeouts and cancellation all clear the image and revoke coordinate permission.</td></tr>
+<tr><th scope="row">Not run</th><td>No OCR, object detection, crop and zoom, visual memory or workflow replay runs.</td></tr>
+<tr><th scope="row">Page content</th><td>Page content is untrusted data that cannot change targets or permissions.</td></tr>
+</tbody>
+</table>
+
+<h3 id="agent-cursor-1">Agent cursor</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col"></th></tr></thead>
+<tbody>
+<tr><th scope="row">Cursor</th><td>During an agent click, all three backends arm a capture listener in the exact Page only; a real pointer event shows a text-free, <code translate="no">aria-hidden</code>, <code translate="no">pointer-events: none</code> cursor and ripple at the viewport point, which then fades.</td></tr>
+<tr><th scope="row">Isolation</th><td>User clicks, other Pages and the OS mouse are untouched, and a feedback failure never changes the click's result.</td></tr>
+</tbody>
+</table>
+
+<h2 id="implementation-status">Implementation status</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">State</th><th scope="col">Scope</th></tr></thead>
+<tbody>
+<tr><th scope="row">Implemented</th><td>the built-in browser as the application <code translate="no">programs/applications/browser/</code>, reached only through the <code translate="no">browser</code> service, with tests for each caller running without it.</td></tr>
+<tr><th scope="row">Implemented</th><td>the <code translate="no">web_use</code> runtime with the cross-window Page inventory, page/access/geometry revisions, owner cleanup, recovery hints, the three backends and their parity matrix, the single-viewport screenshot release and the agent cursor.</td></tr>
+<tr><th scope="row">Implemented</th><td>visible tabs and <code translate="no">changes_only</code> observations on the native backends.</td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="computer-and-browser-use.html">Computer and browser use</a></p>

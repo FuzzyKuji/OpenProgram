@@ -22,7 +22,8 @@
 import type { ExecutionCommand } from "@/lib/execution/execution-debugger";
 import { useCallback } from "react";
 
-import { useSessionStore } from "@/lib/session-store";
+import { selectViewRows, useSessionStore } from "@/lib/session-store";
+import { stopOverlay } from "@/lib/chat/transcript/apply-transcript-update";
 import { getSocket, runtimeState } from "@/lib/runtime-bridge/state";
 import { parseFunctionInvocation } from "@/lib/execution/function-invocation";
 import { showToast } from "@/lib/format-utils/toast";
@@ -43,6 +44,7 @@ import { resolveFnFormSessionId } from "../modes/fn-form/session-target";
 import type { SubmittedAttachments, useComposerAttachments } from "../attach/use-composer-attachments";
 import type { useSlashMenu } from "../slash/use-slash-menu";
 import type { FunctionDispatcher } from "../modes/fn-form/use-function-dispatch";
+import { isSettled } from "@/lib/chat/transcript/row-status";
 
 type Attachments = ReturnType<typeof useComposerAttachments>;
 
@@ -521,23 +523,21 @@ export function stopSession(
   const executionId = task?.execution_id || "";
   const expectedVersion = task?.status_version;
   const commandId = crypto.randomUUID();
-  const direct = executionId ? store.messagesById[executionId] : undefined;
+  const rows = selectViewRows(targetSessionId)(store);
+  const direct = executionId ? rows[executionId] : undefined;
   let optimisticMessage = direct;
   if (!optimisticMessage) {
     const ids = store.messageOrder[targetSessionId] || [];
     for (let i = ids.length - 1; i >= 0; i--) {
-      const m = store.messagesById[ids[i]];
+      const m = rows[ids[i]];
       if (!m || m.role !== "assistant") continue;
-      if (
-        m.status === "done" || m.status === "completed"
-        || m.status === "cancelled" || m.status === "error"
-        || m.status === "cancelling"
-      ) break;
+      if (isSettled(m.status) || m.status === "cancelling") break;
       optimisticMessage = m;
       break;
     }
   }
   // 1. Tell the server first so the model HTTP stream can abort.
+  const cancelSent = Boolean(executionId && typeof expectedVersion === "number");
   if (executionId && typeof expectedVersion === "number") {
     runtimeState._optimisticCancels[commandId] = {
       sessionId: targetSessionId,
@@ -596,18 +596,17 @@ export function stopSession(
   // 2. Patch the live assistant to cancelled. Keep streamed text.
   //    Only the server-issued execution identity can identify the exact
   //    assistant message. A message id is not an execution owner.
+  const stopClears = cancelSent ? [{ until_command_rejected: commandId }] : [];
   if (direct) {
     const s = direct.status;
     if (s !== "done" && s !== "completed" && s !== "cancelled" && s !== "error") {
-      store.updateMessage(targetSessionId, executionId, { status: "cancelled" });
+      store.applyLocalChange(targetSessionId, stopOverlay(executionId, stopClears));
     }
     store.setRunningTaskFor(targetSessionId, null, "always");
     return;
   }
   if (optimisticMessage) {
-    store.updateMessage(targetSessionId, optimisticMessage.id, {
-      status: "cancelled",
-    });
+    store.applyLocalChange(targetSessionId, stopOverlay(optimisticMessage.id, stopClears));
   }
   // 3. Drop the running task so the send queue drains immediately.
   //    Leaving a cancelling flag on the task was the composer lock.

@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import json
 
+from openprogram.interfaces.server.transcript.legacy import parsed_extra
+
 
 def _annotate_spawn_origin(graph: list[dict], messages: list[dict] | None = None) -> None:
     """Attach ``spawned_from`` to each ``source=agent_spawn`` user msg
@@ -98,10 +100,8 @@ def _spawning_call_description(root: dict, caller: str, messages: list[dict]) ->
     for m in messages:
         if m.get("caller") != caller or m.get("function") != "agent":
             continue
-        extra = m.get("extra")
         try:
-            extra = json.loads(extra) if isinstance(extra, str) else extra
-            arguments = (extra or {}).get("tool_use", {}).get("arguments")
+            arguments = (parsed_extra(m) or {}).get("tool_use", {}).get("arguments")
             arguments = json.loads(arguments) if isinstance(arguments, str) else arguments
         except (json.JSONDecodeError, TypeError, AttributeError):
             continue
@@ -417,8 +417,30 @@ def _is_top_function_run(m: dict, by_id: dict[str, dict]) -> bool:
     return crole not in ("tool", "code")
 
 
+def _runtime_card(m: dict, tree) -> dict:
+    """A top-level Agent method's code node as the Function-call card the live runtime shows."""
+    # Errored fn-form code nodes persist metadata.status="error", which
+    # _node_to_msg surfaces as m["status"] (no is_error key exists on the
+    # dict). Read the real landed status first; keep is_error only as a
+    # legacy fallback.
+    status = m.get("status") or ("error" if m.get("is_error") else "done")
+    return {
+        **m,
+        "role": "assistant",
+        "type": "status",
+        "display": "runtime",
+        "function": m.get("function") or "",
+        "content": m.get("content") or "",
+        "status": status,
+        "context_tree": tree,
+        # Top-level card: no assistant parent, so the row stays on the main
+        # list instead of folding into an LLM bubble's runtimeChildren.
+        "predecessor": "",
+    }
+
+
 def _rebuild_runtime_cards(
-    chain: list[dict], all_msgs: list[dict], session_id: str,
+    chain: list[dict], all_msgs: list[dict], session_id: str, *, with_trees: bool = True,
 ) -> list[dict]:
     """Turn a manually-invoked Agent method's code node into the
     same Function-call card the live runtime shows.
@@ -427,10 +449,10 @@ def _rebuild_runtime_cards(
     that is not an LLM reply) is the root of one Agent method call.
     On refresh it arrives as a bare ``role="tool"`` row whose parent is
     not an assistant, so ``aggregate_tool_messages`` can't fold it — the
-    mapper then renders it as a ``role="system"`` text blob instead of a
+    projection would draw it as a ``role="system"`` text blob instead of a
     card. Rebuild it into a ``{role:"assistant", display:"runtime",
-    function, content, context_tree}`` row (the shape conv-mapper.ts
-    already maps to a RuntimeBlock), and drop its nested sub-nodes
+    function, content, context_tree}`` row (the shape the projection
+    draws as a function run), and drop its nested sub-nodes
     (gui_step / plan_next_action / internal LLM …) so they collapse into
     the card's context_tree instead of spilling into the chat stream.
     """
@@ -487,32 +509,12 @@ def _rebuild_runtime_cards(
         if mid in drop:
             continue
         if _is_top_code(m):
-            name = m.get("function") or ""
             # Anchor the context_tree on this code node's own id, not on
             # (name, caller=ROOT). The latter is "last match wins", so
             # calling one function twice in a session would resolve both
             # cards to the most recent invocation's subtree. By-id gives
             # each card its own subtree.
-            tree = build_exec_dag_by_id(session_id, mid)
-            # Errored fn-form code nodes persist metadata.status="error",
-            # which _node_to_msg surfaces as m["status"] (no is_error key
-            # exists on the dict). Read the real landed status first; keep
-            # is_error only as a legacy fallback.
-            status = m.get("status") or ("error" if m.get("is_error") else "done")
-            card = {
-                **m,
-                "role": "assistant",
-                "type": "status",
-                "display": "runtime",
-                "function": name,
-                "content": m.get("content") or "",
-                "status": status,
-                "context_tree": tree,
-                # Top-level card: no assistant parent, so conv-mapper
-                # keeps it on the main list instead of folding it into
-                # an LLM bubble's runtimeChildren.
-                "predecessor": "",
-            }
+            card = _runtime_card(m, build_exec_dag_by_id(session_id, mid) if with_trees else None)
             out.append(card)
             drop |= _descendants(mid)
             continue

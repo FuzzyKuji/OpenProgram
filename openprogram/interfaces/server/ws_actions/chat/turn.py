@@ -260,6 +260,7 @@ def _save_run_config(_s, req: _ChatRequest, conv: dict, msg_id: str):
         if not session_db.is_created(session_id):
             session_db.create_session(session_id, req.agent_id or _s._default_agent_id(),
                                       project_id=req.project_id)
+            _bind_draft_channel(_s, req)
         from openprogram.host.environments import assign_new_session_environment
         conv["environment_id"] = assign_new_session_environment(
             session_db, session_id, req.requested_environment)
@@ -294,6 +295,28 @@ def _save_run_config(_s, req: _ChatRequest, conv: dict, msg_id: str):
         else req.sandbox_flag
     )
     return run_cfg, effective_permission
+
+
+def _bind_draft_channel(_s, req: _ChatRequest) -> None:
+    """A draft's channel pick arrives with its first message; bind the
+    conversation the moment its row exists, the same as picking it on a
+    saved chat."""
+    channel = (req.cmd.get("channel") or "").strip()
+    if not channel:
+        return
+    from .conversation_channel import bind_conversation_channel
+    try:
+        result = bind_conversation_channel(
+            _s, req.session_id, channel,
+            req.cmd.get("account_id"), req.cmd.get("peer"),
+        )
+    except Exception:
+        # The turn runs; the chat stays unbound and the chip shows it.
+        _log.warning("draft channel not bound for %s", req.session_id, exc_info=True)
+        return
+    if not result.ok:
+        _log.warning("draft channel not bound for %s: %s",
+                     req.session_id, result.error)
 
 
 async def _persist_turn_attachments(_s, req: _ChatRequest, msg_id: str) -> None:
@@ -393,12 +416,12 @@ def _build_user_msg(req: _ChatRequest, msg_id: str, parsed: dict,
         "content": text,
         "timestamp": time.time(),
         "source": "web",
-        "interaction": (
-            "spawn" if parsed.get("action") == "spawn"
-            else "merge" if parsed.get("action") == "merge" else None
-        ),
+        "origin": "person",
         **_local_authority,
     }
+    request_id = client_request_id_of(req.cmd)
+    if request_id is not None:
+        user_msg["client_request_id"] = request_id
     model_text = _skill_model_text(req)
     if model_text is not None:
         # Later turns read the skill body from here; the transcript shows
@@ -475,6 +498,10 @@ def _turn_request_payload(req: _ChatRequest, msg_id: str, run_cfg,
         "permission_mode": effective_permission,
         "permission_rules": _load_merged_rules(session_id),
         **_local_authority,
+        # A typed /task or /merge is marked after the authority fields, which
+        # also carry `interaction`. The admitted actor keeps the authority.
+        **({"interaction": parsed["action"]}
+           if parsed.get("action") in {"spawn", "merge"} else {}),
         "thinking_effort": run_cfg.thinking_effort,
         "service_tier": req.service_tier,
         "response_format": _response_format_payload,
@@ -588,12 +615,15 @@ async def _send_chat_ack(ws, req: _ChatRequest, turn: _AdmittedTurn,
     # own draft has no path to open. Handing it the final text is what
     # makes an attachment clickable in the turn you sent it, instead of
     # only after a reload.
+    first_read, end_parking = await _join_and_read(ws, turn.session_id)
     try:
         await ws.send_text(json.dumps({
             "type": "chat_ack",
             "data": _with_client_request_id({
+                **first_read,
                 "session_id": turn.session_id,
                 "msg_id": turn.msg_id,
+                "reply_id": f"{turn.msg_id}_reply",
                 "text": req.text,
                 "execution_id": turn.execution_id,
                 "status_version": turn.admission.status_version,
@@ -606,3 +636,28 @@ async def _send_chat_ack(ws, req: _ChatRequest, turn: _AdmittedTurn,
         # not leave that user message without a corresponding execution.
         _log.debug(
             "chat_ack not delivered for session %s", turn.session_id, exc_info=True)
+    finally:
+        end_parking()
+
+
+async def _join_and_read(ws, session_id: str):
+    """A send from a socket holding no view of the chat joins it, and the ack
+    carries the first read: ``(fields for the ack, end of parking)``."""
+    from openprogram.interfaces.server.transcript import publisher, reader, turn_index
+    from openprogram.interfaces.server.ws_actions.session.load import _park_read
+    from openprogram.runtime.context.session_db import default_db
+
+    held = getattr(ws, "_transcript_views", None) or ()
+    if getattr(ws, "_history_protocol", 0) != 3 or session_id in held:
+        return {}, lambda: None
+    end_parking = _park_read(ws, session_id)
+    publisher.hold(ws, session_id)
+    try:
+        db = default_db()
+        head = (db.get_session(session_id) or {}).get("head_id")
+        view = await asyncio.to_thread(turn_index.get_view, db, session_id, head)
+        turns, window = await asyncio.to_thread(reader.first_read, db, view)
+    except Exception:
+        _log.warning("first read for session %s failed", session_id, exc_info=True)
+        return {}, end_parking
+    return {"first_read": {"turns": turns, "window": window}}, end_parking

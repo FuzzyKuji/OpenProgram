@@ -1,10 +1,8 @@
 """SessionStore sessions operations."""
 from __future__ import annotations
+from openprogram.state import execution_facts
+
 from . import shared
-
-
-def _has_history(session_dir: shared.Path) -> bool:
-    return next((session_dir / "history").glob("*.json"), None) is not None
 
 
 class SessionsOperations:
@@ -73,7 +71,7 @@ class SessionsOperations:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return
-        git, idx = pair
+        session_log, idx = pair
         if idx.meta.get("id") == session_id:
             return  # Already created
         extra: dict[str, shared.Any] = {}
@@ -106,7 +104,7 @@ class SessionsOperations:
             updated_at=updated_at,
             **extra,
         )
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
 
         # Write registry entry.
         _explicit = {"agent_id", "title", "source", "created_at",
@@ -152,8 +150,8 @@ class SessionsOperations:
             current = self._session_dir(session_id)
             if current == target or target.exists() or not current.is_dir():
                 return
-            git = shared.GitSession(current)
-            if git.read_meta().get("id") or _has_history(current):
+            session_log = shared.SessionLog(current)
+            if session_log.read_meta().get("id") or session_log.list_history():
                 return
             with self._lock:
                 self._sessions.pop(session_id, None)
@@ -188,7 +186,7 @@ class SessionsOperations:
             ):
                 current = self._session_dir(session_id)
                 if (current == target or target.exists() or not current.is_dir()
-                        or _has_history(current)):
+                        or shared.SessionLog(current).list_history()):
                     if project.is_default:
                         self._project_ids.pop(session_id, None)
                     else:
@@ -272,15 +270,15 @@ class SessionsOperations:
             return False
         if meta.get("id"):
             return True
-        return _has_history(self._session_dir(session_id))
+        return bool(shared.SessionLog(self._session_dir(session_id)).list_history())
 
 
     def update_session(self, session_id: str, **fields: shared.Any) -> None:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return
-        git, idx = pair
-        with self._head_file_lock(git):
+        session_log, idx = pair
+        with self._head_file_lock(session_log):
             # head_id needs special routing because it's also the index's
             # ``head_id`` field.
             if "head_id" in fields and fields["head_id"] is not None:
@@ -293,7 +291,7 @@ class SessionsOperations:
                 with idx._lock:
                     meta = dict(idx.meta)
                     meta["head_id"] = idx.head_id
-                git.write_meta(meta)
+                session_log.write_meta(meta)
         # Sync registry.
         index_fields = {k: v for k, v in clean.items()
                         if k in self._INDEX_FIELDS}
@@ -331,10 +329,10 @@ class SessionsOperations:
         pair = self._open(session_id, create_if_missing=True)
         if pair is None:
             return None
-        git, idx = pair
-        with self._head_file_lock(git):
+        session_log, idx = pair
+        with self._head_file_lock(session_log):
             with idx._persist_lock:
-                meta = git.read_meta()
+                meta = session_log.read_meta()
                 current = meta.get(field)
                 value = update(current if isinstance(current, dict) else {})
                 if value is None:
@@ -344,12 +342,42 @@ class SessionsOperations:
                     idx.meta.clear()
                     idx.meta.update(meta)
                     idx.head_id = meta.get("head_id")
-                git.write_meta(meta)
+                session_log.write_meta(meta)
         return value
 
 
+    def clear_session_field(
+        self,
+        session_id: str,
+        field: str,
+        *,
+        when: shared.Callable[[dict[str, shared.Any]], bool],
+    ) -> bool:
+        """Remove one session field if ``when(meta)`` holds under the session's write lock.
+
+        ``update_session`` cannot do this: it drops ``None`` values rather than
+        writing them. The callback must not perform I/O or re-enter the store.
+        """
+        pair = self._open(session_id)
+        if pair is None:
+            return False
+        git, idx = pair
+        with self._head_file_lock(git):
+            with idx._persist_lock:
+                meta = git.read_meta()
+                if field not in meta or not when(meta):
+                    return False
+                del meta[field]
+                with idx._lock:
+                    idx.meta.clear()
+                    idx.meta.update(meta)
+                    idx.head_id = meta.get("head_id")
+                git.write_meta(meta)
+        return True
+
+
     def read_disk_meta(self, session_id: str) -> shared.Optional[dict[str, shared.Any]]:
-        """``meta.json`` exactly as it is on disk now, or ``None`` when the
+        """The session fields exactly as they are on disk now, or ``None`` when the
         session has none.
 
         For reads that must see another process's latest session-level
@@ -365,17 +393,18 @@ class SessionsOperations:
             or "\\" in session_id
         ):
             return None
-        git = shared.GitSession(self._session_dir(session_id))
-        if not (git.path / "meta.json").is_file():
+        session_dir = self._session_dir(session_id)
+        session_log = shared.SessionLog(session_dir)
+        if not session_log.exists():
             return None
-        return git.read_meta()
+        return session_log.read_meta()
 
 
     def get_session(self, session_id: str) -> shared.Optional[dict[str, shared.Any]]:
         pair = self._open(session_id)
         if pair is None:
             return None
-        git, idx = pair
+        session_log, idx = pair
         # Synthesize a row-shaped dict so _row_to_session can format it
         # like the old SQLite path.
         meta = dict(idx.meta)
@@ -415,11 +444,12 @@ class SessionsOperations:
                 loc = self._locations.get(session_id)
             if pair:
                 pair[0].destroy()
-            shared.GitSession(sdir).destroy()
+            shared.SessionLog(sdir).destroy()
+            execution_facts.forget_session_runs(session_id)
             if loc:
                 extra = shared.Path(loc)
                 if extra != sdir:
-                    shared.GitSession(extra).destroy()
+                    shared.SessionLog(extra).destroy()
             recovery = sdir.parent / ".file-recovery" / session_id
             if recovery.is_dir():
                 shared.remove_tree(recovery, ignore_errors=True)

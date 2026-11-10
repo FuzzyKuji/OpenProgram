@@ -959,7 +959,17 @@ def _child_entry(
     original_owner_input=None,
     permission_mode_snapshot: Optional[str] = None,
     link_registration_modules: Optional[list[str]] = None,
+    function_log_path: Optional[str] = None,
+    function_policy: Optional[str] = None,
+    detached: bool = False,
 ) -> None:
+    # This process keeps a read-only view of the run tables. Its progress goes
+    # in its own log; run state changes through its parent.
+    from openprogram.runtime.execution.store.run_tables import this_process_only_reads_run_tables
+    this_process_only_reads_run_tables()
+    from openprogram.runtime.execution.worker_calls import SubprocessWorkerCalls, use_worker_calls
+    to_worker = SubprocessWorkerCalls(event_queue.put)
+    use_worker_calls(to_worker)
     # Detach into our own process group so ``killpg`` from the parent
     # takes down every grandchild (browser, subprocess providers, ...).
     try:
@@ -1034,12 +1044,12 @@ def _child_entry(
                         return
                     if msg is None:  # shutdown sentinel
                         return
-                    if handle_webtab_answer(msg):
+                    if handle_webtab_answer(msg) or to_worker.handle_message(msg):
                         continue
                     try:
                         qid = msg.get("id")
                         if qid:
-                            reg.wake(qid)
+                            reg.deliver(qid, msg.get("outcome"), msg.get("value"))
                     except Exception:
                         # Pump thread must survive a malformed answer.
                         _log.debug("question answer not delivered: %r", msg, exc_info=True)
@@ -1086,9 +1096,8 @@ def _child_entry(
             set_current_execution_id as _set_eid,
         )
 
-        # Drop any inherited DB handle and re-acquire so we don't share
-        # a sqlite connection with the parent (sqlite handles after fork
-        # are unsafe).
+        # Start from a session store of this process's own, not one
+        # inherited from the parent.
         try:
             import openprogram.runtime.context.session_db as _sdb_mod
             for attr in ("_default_db", "_DB_SINGLETON", "_db"):
@@ -1164,6 +1173,7 @@ def _child_entry(
                 pickle.dump({"error": f"tool not found: {tool_name}"}, f)
             return
 
+        from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
         req = TurnRequest(
             session_id=session_id,
             user_text="",
@@ -1172,7 +1182,8 @@ def _child_entry(
             model_override=f"{provider}/{model}" if provider and model else None,
             render_range=render_range,
             surface_context=surface_context_snapshot,
-            permission_mode="ask" if permission_mode_snapshot is None else permission_mode_snapshot,
+            detached=detached,
+            permission_mode=DEFAULT_PERMISSION if permission_mode_snapshot is None else permission_mode_snapshot,
             permission_rules=_permission_rules_from_snapshot(
                 permission_rules_snapshot
             ),
@@ -1253,18 +1264,24 @@ def _child_entry(
                 import uuid as _uuid
                 call_id = f"forced_{_uuid.uuid4().hex[:8]}"
             from contextlib import nullcontext
-            from openprogram.runtime.agent.durable_steps import function_execution, default_policy
-            from openprogram.runtime.execution import default_store
+            from openprogram.runtime.agent.durable_steps import subprocess_function_execution
             binding = (
-                function_execution(
-                    default_store(), attempt_id=attempt_id, generation=generation,
-                    call_key=parent_call_id or anchor_msg_id, policy=default_policy(default_store(), execution_id),
-                    publish_pause=False, checkpoint_root=parent_call_id is None,
+                subprocess_function_execution(
+                    function_log_path, execution_id=execution_id, attempt_id=attempt_id,
+                    generation=generation, call_key=parent_call_id or anchor_msg_id,
+                    policy=function_policy,
+                    on_admitted=None if parent_call_id else _report_function_admitted(event_queue),
                 )
                 if attempt_id is not None and getattr(tool, "_resumable", False)
                 else nullcontext()
             )
-            from openprogram.runtime.agent.questions import live_workflow_questions
+            from openprogram.runtime.agent.questions import (
+                live_workflow_questions, send_live_questions_to_parent,
+            )
+            if attempt_id is not None:
+                send_live_questions_to_parent(
+                    lambda data: event_queue.put({"__op_live_question__": True, "data": data}, block=False)
+                )
             question_binding = (
                 live_workflow_questions(
                     execution_id=execution_id, attempt_id=attempt_id,
@@ -1322,33 +1339,28 @@ def _child_entry(
         with open(result_path, "wb") as f:
             pickle.dump(payload, f)
     except BaseException as e:  # noqa: BLE001
-        from openprogram.runtime.agent.durable_steps import FunctionSuspended
+        from openprogram.runtime.agent.durable_steps import FunctionCompatibilityError, FunctionSuspended
         # A recoverable invocation can fail before its wrapper is entered (for
         # example, an unavailable retained dependency or runtime credential).
         # Preserve its completed steps and pending result destination.
         if isinstance(e, Exception) and attempt_id is not None:
-            from contextlib import closing
             from openprogram.runtime.agent.durable_steps import (
-                FunctionCompatibilityError, default_policy, function_execution,
+                FunctionCompatibilityError, subprocess_function_execution,
             )
-            from openprogram.runtime.execution.function_suspension import suspension_evidence
-            from openprogram.runtime.execution import default_store
-            recovery_store = default_store()
+            from openprogram.runtime.execution.function_log import function_log_at
             recovery_key = parent_call_id or anchor_msg_id
-            with closing(recovery_store._connect()) as connection:
-                recoverable = suspension_evidence(recovery_store, connection, execution_id, recovery_key)
-            if recoverable:
+            if function_log_path and function_log_at(function_log_path).settled_at_boundary(recovery_key):
                 try:
-                    with function_execution(
-                        recovery_store, attempt_id=attempt_id, generation=generation,
-                        call_key=recovery_key, policy=default_policy(recovery_store, execution_id),
-                        publish_pause=False, checkpoint_root=parent_call_id is None,
+                    with subprocess_function_execution(
+                        function_log_path, execution_id=execution_id, attempt_id=attempt_id,
+                        generation=generation, call_key=recovery_key, policy=function_policy,
                     ):
                         raise FunctionCompatibilityError(f"{type(e).__name__}: {e}")
                 except FunctionSuspended as suspended:
                     e = suspended
         outcome = (
-            {"function_suspended": True, "call_key": parent_call_id or anchor_msg_id}
+            {"function_suspended": True, "call_key": parent_call_id or anchor_msg_id,
+             "incompatible": isinstance(e, FunctionCompatibilityError)}
             if isinstance(e, FunctionSuspended)
             else {"error": f"{type(e).__name__}: {e}"}
         )
@@ -1360,19 +1372,28 @@ def _child_entry(
             _log.warning("error result not written to %s", result_path, exc_info=True)
 
 
+def _report_function_admitted(event_queue):
+    def report(call_key: str, policy: str) -> None:
+        event_queue.put({"__op_function_admitted__": True,
+                         "data": {"call_key": call_key, "policy": policy}}, block=False)
+    return report
+
+
 # ---------------------------------------------------------------------------
 # user-input subprocess bridge (parent side) — Phase 2
 # ---------------------------------------------------------------------------
 #
-# The child commits a durable wait before it sends this envelope.  On the
-# parent side we verify the child cannot choose another owner, emit the durable
-# request for presentation, then forward only its terminal projection back to
-# the child.  SQLite is the sole lifecycle authority across the two processes.
+# The child sends its question here and this process opens the durable wait,
+# fenced to the attempt it spawned the child for. It emits the durable request
+# for presentation, then forwards only its terminal outcome back to the child.
 
 def _bridge_question_to_parent(
     data, answer_queue, pending_qids, lock, *,
     parent_session_id: str | None = None,
     execution_id: str | None = None,
+    attempt_id: str | None = None,
+    generation: int | None = None,
+    producer_id: str | None = None,
 ) -> None:
     try:
         from openprogram.runtime.execution import default_store
@@ -1386,8 +1407,24 @@ def _bridge_question_to_parent(
         return
 
     waits = DurableWaitStore(default_store())
-    wait = waits.get_wait(str(qid))
-    if wait is None or wait.execution_id != execution_id:
+    if data.get("session_id") != parent_session_id or attempt_id is None:
+        wait = None
+    else:
+        try:
+            wait = waits.open_wait(
+                execution_id=execution_id, attempt_id=attempt_id, generation=generation,
+                kind=str(data["kind"]), request=dict(data["request"]),
+                policy_snapshot={"version": 1, "mode": "live", "producer_id": producer_id},
+                expires_at=float(data["expires_at"]), wait_id=str(qid),
+            )
+        except Exception:
+            _log.warning("question %s from a subprocess was refused", qid, exc_info=True)
+            wait = None
+    if wait is None:
+        try:
+            answer_queue.put({"id": qid, "outcome": "cancelled", "value": None}, block=False)
+        except (queue.Full, ValueError):
+            _log.debug("refusal of question %s not sent to child", qid, exc_info=True)
         return
     execution = default_store().get_execution(execution_id)
     if execution is None or execution.session_id != parent_session_id:
@@ -1399,8 +1436,7 @@ def _bridge_question_to_parent(
                 or execution.status.value != "running"
                 or execution.current_attempt_id != wait.attempt_id
                 or execution.owner_lease.get("generation") != wait.generation
-                or owner is None or owner.status.value != "active"
-                or owner.lease_expires_at <= time.time()):
+                or owner is None or owner.status.value != "active"):
             return
     with lock:
         pending_qids.add(qid)
@@ -1455,6 +1491,46 @@ def _bridge_question_to_parent(
 # Parent API
 # ---------------------------------------------------------------------------
 
+def _function_process_settings(
+    session_id: str, execution_id: str, attempt_id: str | None,
+) -> tuple[str | None, str | None]:
+    """Where a function subprocess records its steps, and which code it may use."""
+    if attempt_id is None:
+        return None, None
+    from openprogram.runtime.agent.durable_steps import default_policy
+    from openprogram.runtime.execution import default_store
+
+    store = default_store()
+    return str(store.function_log_path(session_id, execution_id)), default_policy(store, execution_id)
+
+
+def _deliver_pending_pause(execution_id: str, attempt_id: str | None, generation: int | None) -> None:
+    """A pause accepted while the subprocess was starting reaches it here."""
+    if attempt_id is None:
+        return
+    from openprogram.runtime.execution import default_store
+    from openprogram.runtime.execution.model import CommandKind, CommandStatus
+
+    store = default_store()
+    if store.list_commands(execution_id, kinds=(CommandKind.PAUSE,),
+                           statuses=(CommandStatus.ACCEPTED, CommandStatus.APPLYING)):
+        store.function_log(execution_id).request("pause", generation)
+
+
+def _pause_incompatible_function(execution_id: str, attempt_id: str) -> None:
+    """The child found its saved progress cannot continue; pause the execution here."""
+    from concurrent.futures import ThreadPoolExecutor
+    from openprogram.runtime.agent.durable_steps import request_incompatible_pause
+    from openprogram.runtime.execution import default_control_service, default_store
+
+    # This thread may be running under an event loop that cannot be re-entered.
+    with ThreadPoolExecutor(max_workers=1) as pool:
+        pool.submit(
+            request_incompatible_pause, default_store(), execution_id, attempt_id,
+            service=default_control_service(),
+        ).result()
+
+
 def _capture_sandbox_snapshot() -> dict:
     from openprogram.host.sandbox import policy_snapshot
     return policy_snapshot()
@@ -1484,6 +1560,7 @@ def run_agent_method_in_subprocess(
     model_setup_error: Optional[dict] = None,
     original_owner_input=None,
     permission_mode_snapshot: Optional[str] = None,
+    detached: bool = False,
 ) -> dict:
     """Run a single Agent method tool in a fork()'d subprocess.
 
@@ -1534,6 +1611,7 @@ def run_agent_method_in_subprocess(
     if attempt_id is not None and not execution_id:
         raise ValueError("exact execution_id is required with attempt binding")
     eid = execution_id or parent_call_id or session_id
+    function_log_path, function_policy = _function_process_settings(session_id, eid, attempt_id)
     p = ctx.Process(
         target=_child_entry,
         args=(tool_name, dict(kwargs or {}), session_id, anchor_msg_id,
@@ -1543,7 +1621,7 @@ def run_agent_method_in_subprocess(
               authority, permission_rules_snapshot, surface_context_snapshot,
               provider, model, eid, attempt_id, generation, model_setup_error,
               original_owner_input, permission_mode_snapshot,
-              _link_registration_modules()),
+              _link_registration_modules(), function_log_path, function_policy, detached),
         daemon=False,
     )
     p.start()
@@ -1551,6 +1629,7 @@ def run_agent_method_in_subprocess(
     with _active_lock:
         _active[eid] = p
         _active_stop_q[eid] = stop_queue
+    _deliver_pending_pause(eid, attempt_id, generation)
     try:
         from openprogram.runtime.execution.run_control import register_execution_owner
         register_execution_owner(
@@ -1590,6 +1669,8 @@ def run_agent_method_in_subprocess(
     }
 
     progress = _ChildProgress()
+    from openprogram.runtime.execution.worker_calls import WorkerCallServer
+    worker_call_server = WorkerCallServer(answer_queue, p.is_alive)
 
     def _handle(env) -> None:
         try:
@@ -1597,6 +1678,8 @@ def run_agent_method_in_subprocess(
         except Exception:
             # Progress is diagnostic; the event is still handled below.
             _log.debug("child progress not recorded for execution %s", eid, exc_info=True)
+        if worker_call_server.handle_message(env):
+            return
         if isinstance(env, dict) and env.get("__op_webtab__"):
             data = env.get("data") or {}
             with webtab_cleanup_lock:
@@ -1631,12 +1714,23 @@ def run_agent_method_in_subprocess(
         # raised via runtime.ask. Register it on the PARENT registry +
         # broadcast to the frontend, and arrange to route the answer back
         # through ``answer_queue``.
-        if isinstance(env, dict) and env.get("__op_question__"):
+        if isinstance(env, dict) and env.get("__op_live_question__"):
             _bridge_question_to_parent(
                 env.get("data") or {}, answer_queue,
                 pending_qids, pending_qids_lock,
                 parent_session_id=session_id,
                 execution_id=eid,
+                attempt_id=attempt_id,
+                generation=generation,
+                producer_id=f"process:{p.pid}",
+            )
+            return
+        if isinstance(env, dict) and env.get("__op_function_admitted__"):
+            from openprogram.runtime.agent.durable_steps import publish_function_checkpoint
+            from openprogram.runtime.execution import default_store
+            data = env.get("data") or {}
+            publish_function_checkpoint(
+                default_store(), eid, attempt_id, str(data["call_key"]), str(data["policy"]),
             )
             return
         if isinstance(env, dict) and env.get("__op_native_window__"):
@@ -1858,6 +1952,8 @@ def run_agent_method_in_subprocess(
         out.update(cleanup_result)
         out["page_cleanup_failed"] = True
         out["page_cleanup_result"] = cleanup_result
+    if out.get("incompatible") and attempt_id is not None:
+        _pause_incompatible_function(eid, attempt_id)
     return out
 
 

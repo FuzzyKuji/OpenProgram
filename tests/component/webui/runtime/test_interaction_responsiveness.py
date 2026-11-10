@@ -136,12 +136,10 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
         from importlib import import_module
         module_name, name = {
             "aggregate": ("openprogram.interfaces.server.persistence", "aggregate_tool_messages"),
-            "runtime": ("openprogram.interfaces.server.ws_actions.session.load", "_rebuild_runtime_cards"),
-            "page": ("openprogram.interfaces.server.session_history", "page"),
+            "runtime": ("openprogram.interfaces.server.ws_actions.session.transcript", "_rebuild_runtime_cards"),
+            "page": ("openprogram.interfaces.server.transcript.reader", "first_read"),
         }[phase]
         module = import_module(module_name)
-        if phase == "page":
-            module = module.HistorySnapshot
         original_phase = getattr(module, name)
 
         def slow_phase(*args, **kwargs):
@@ -187,7 +185,7 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
     )
 
     class WS:
-        _history_protocol = 1
+        _history_protocol = 3
 
         def __init__(self):
             self.frames = []
@@ -196,6 +194,10 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
             self.frames.append(payload)
 
     async def scenario():
+        from openprogram.interfaces.server.transcript import publisher
+        from openprogram.interfaces.server.transcript.turn_index import forget_views
+
+        forget_views()
         ws = WS()
         task = asyncio.create_task(handle_load_session(ws, {"session_id": "s"}))
         while not started.is_set():
@@ -213,11 +215,13 @@ def test_handle_load_session_offloads_slow_history_and_keeps_new_head(
         store.set_head("s", "new")
         release.set()
         await task
-        assert ws.frames
-        assert '"type": "session_loaded"' in ws.frames[0]
+        # A publisher left running by another test may also send this socket
+        # an update for the new head; the read itself answers for "a".
+        [loaded] = [frame for frame in ws.frames if '"type": "session_loaded"' in frame]
         assert server._sessions["s"]["head_id"] == "newer"
-        assert '"head_id": "a"' in ws.frames[0]
-        assert '"head_id": "new"' not in ws.frames[0]
+        assert '"head_id": "a"' in loaded
+        assert '"head_id": "new"' not in loaded
+        publisher.release(ws)
 
     asyncio.run(scenario())
 
@@ -228,7 +232,7 @@ def test_negotiated_history_delivery_does_not_disconnect_on_large_snapshot(kind)
     from openprogram.interfaces.server.ws_delivery import QueuedWebSocket
 
     class Raw:
-        _history_protocol = 1
+        _history_protocol = 3
         def __init__(self):
             self.frames = []
             self.closed = False

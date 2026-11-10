@@ -58,8 +58,28 @@ def goal_message(goal: dict) -> dict | None:
     return {"message_id": message_id, "presentation": candidate_presentation(candidate)}
 
 
-def annotate_messages(session_id: str, messages: list[dict]) -> list[dict]:
-    """Recognize old and new messages by immutable execution input, not text."""
+def verification_executions(session_id: str, row_ids: set) -> dict[str, str]:
+    """``{reply id: execution id}`` for the session's goal-verifier turns."""
+    from openprogram.runtime.execution import default_store
+
+    store = default_store()
+    found: dict[str, str] = {}
+    for source in store.list_inputs_for_session(session_id):
+        if source.assistant_message_id not in row_ids:
+            continue
+        payload = store.get_agent_turn_input(source.execution_id) or {}
+        identity = (payload.get("request") or {}).get("goal_verification")
+        if payload.get("kind") == "chat" and isinstance(identity, str) and identity:
+            found[source.assistant_message_id] = source.execution_id
+    return found
+
+
+def annotate_messages(session_id: str, messages: list[dict], *, executions: dict[str, str] | None = None) -> list[dict]:
+    """Recognize old and new messages by immutable execution input, not text.
+
+    ``executions`` names the verifier turns among ``messages`` when the caller
+    already knows them, so a page need not scan the session's executions.
+    """
     from openprogram.runtime.execution import default_store
     from openprogram.runtime.context.session_db import default_db
     from .verification import digest, message_snapshot
@@ -73,7 +93,9 @@ def annotate_messages(session_id: str, messages: list[dict]) -> list[dict]:
                   if isinstance(item, dict) and item.get("id")}
     rows = {row.get("id"): row for row in messages}
     marks = {}
-    for execution in store.list_for_session(session_id):
+    scanned = store.list_for_session(session_id) if executions is None else filter(
+        None, (store.get_execution(execution_id) for execution_id in executions.values()))
+    for execution in scanned:
         source = store.get_execution_input(execution.execution_id)
         if source is None or source.assistant_message_id not in rows:
             continue

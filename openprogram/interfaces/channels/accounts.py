@@ -309,6 +309,19 @@ def is_configured(channel: str, account_id: str) -> bool:
     return False
 
 
+def owner_peer_id(channel: str, account_id: str) -> str:
+    """The direct-chat peer id of the person who owns this account, or "".
+
+    A WeChat bot is talked to by the WeChat user who scanned its QR code:
+    ``ilink_user_id`` in its credentials, the ``from_user_id`` of their
+    messages. Other platforms have no single owner chat.
+    """
+    if channel != "wechat":
+        return ""
+    creds = load_credentials(channel, account_id or "default")
+    return str(creds.get("ilink_user_id") or "").strip()
+
+
 # ---------------------------------------------------------------------------
 # 账号行为设置 — 存在 account.json 的 "settings" 键下
 # ---------------------------------------------------------------------------
@@ -324,8 +337,9 @@ _GROUP_SETTINGS: dict[str, tuple[str, ...]] = {
     "ack_reaction": ("off", "on"),
 }
 
-#: 通过准入的发信人拿什么权限: ``owner`` 和本机主人一样 (工具、批准都
-#: 照常, 群聊会话默认开沙盒); ``paired`` 只能回复和用记忆.
+#: 这个账号的发信人拿什么权限. 绑定账号的人就是机主自己, 默认 ``owner``
+#: (所有工具、批准, Bypass 模式下不询问); ``paired`` 把整个账号收窄成只能
+#: 回复和用记忆, 私聊和群聊都算. 群里谁能说话另看名单, 见 :mod:`._access`.
 SENDER_ACCESS = ("owner", "paired")
 
 ACCOUNT_SETTINGS: dict[str, dict[str, tuple[str, ...]]] = {
@@ -346,6 +360,25 @@ def sender_access(channel: str, account_id: str) -> str:
     return value if value in SENDER_ACCESS else SENDER_ACCESS[0]
 
 
+#: 群权限现在按人列名单 (:mod:`._access`), 旧的账号级开关只从磁盘上清掉.
+_RETIRED_SETTING = "group_access"
+
+
+def _forget_retired_setting(raw_path: Path) -> None:
+    """把 account.json 里的旧 key 删掉, 读到一次就没了."""
+    with _lock:
+        try:
+            raw = json.loads(raw_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return
+        settings = raw.get("settings")
+        if isinstance(settings, dict) and settings.pop(_RETIRED_SETTING, None) is not None:
+            raw_path.write_text(
+                json.dumps(raw, indent=2, sort_keys=True),
+                encoding="utf-8",
+            )
+
+
 def get_settings(channel: str, account_id: str) -> dict[str, str]:
     """账号 settings dict (只含显式设置过的 key, 缺省语义由读方给)."""
     raw_path = account_meta_path(channel, account_id)
@@ -356,7 +389,9 @@ def get_settings(channel: str, account_id: str) -> dict[str, str]:
     settings = raw.get("settings")
     if not isinstance(settings, dict):
         return {}
-    return {str(k): str(v) for k, v in settings.items()}
+    if _RETIRED_SETTING in settings:
+        _forget_retired_setting(raw_path)
+    return {str(k): str(v) for k, v in settings.items() if k != _RETIRED_SETTING}
 
 
 def set_setting(channel: str, account_id: str, key: str, value: str) -> None:

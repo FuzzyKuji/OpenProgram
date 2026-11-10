@@ -17,9 +17,12 @@ import {
   BlocksIcon,
   CalendarDaysIcon,
   HistoryIcon,
+  InboxIcon,
 } from "../animated-icons";
 import { useTranslation } from "@/lib/i18n";
 import { refreshFunctionsList } from "@/lib/abilities/functions-actions";
+import { usePendingInbox } from "@/lib/agents/pending-inbox";
+import { Badge } from "@/components/ui/badge";
 import {
   sidebarNavActionClass,
   sidebarNavIconClass,
@@ -92,6 +95,8 @@ export function SidebarPrimaryNav() {
       else if (kind === "plugins" || kind === "skills" || kind === "programs") setAbilityHref(`/${kind}`);
     } catch { /* ignore */ }
   }, [pathname]);
+  // Reports from always-on Agents still waiting for the user (/pending).
+  const { items: pending } = usePendingInbox();
   const [refreshing, setRefreshing] = useState(false);
   const [refreshDone, setRefreshDone] = useState(false);
   const refreshSvgRef = useRef<SVGSVGElement>(null);
@@ -143,6 +148,13 @@ export function SidebarPrimaryNav() {
     icon: NavIcon;
     className?: string;
   }> = [
+    {
+      href: "/pending",
+      id: "navPending",
+      active: pathname.startsWith("/pending"),
+      label: text("Pending", "待处理"),
+      icon: InboxIcon,
+    },
     {
       href: "/agents",
       id: "navAgents",
@@ -220,13 +232,19 @@ export function SidebarPrimaryNav() {
     </span>
   );
 
+  const pendingCount = pending.length > 0 ? (
+    <Badge className="ml-auto h-[18px] min-w-[18px] px-[6px] text-fs-2xs tabular-nums" aria-label={text(`${pending.length} waiting`, `${pending.length} 项待处理`)}>
+      {pending.length > 99 ? "99+" : pending.length}
+    </Badge>
+  ) : undefined;
+
   return (
     <div className="flex flex-col gap-px shrink-0 px-[8px] pt-px">
       {items.map((item) => (
         <SidebarNavLink
           key={item.id}
           {...item}
-          action={item.id === "navAbility" ? refreshAction : undefined}
+          action={item.id === "navAbility" ? refreshAction : item.id === "navPending" ? pendingCount : undefined}
         />
       ))}
     </div>

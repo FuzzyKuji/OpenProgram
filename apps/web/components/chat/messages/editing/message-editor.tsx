@@ -10,7 +10,7 @@ import { useSessionStore, type ChatMsg } from "@/lib/session-store";
 import { useTranslation } from "@/lib/i18n";
 import { absRawFileUrl } from "@/lib/files/files-shared";
 import { buildAttachmentEnvelope } from "@/lib/chat/send/attachment-marker";
-import { getSocket, runtimeState } from "@/lib/runtime-bridge/state";
+import { getSocket } from "@/lib/runtime-bridge/state";
 import { setRunActive } from "@/lib/runtime-bridge/session/chat-handlers";
 import { ChatInputRow } from "../../composer/input/chat-input-row";
 import { useFileMention } from "../../composer/attach/mention/use-file-mention";
@@ -71,7 +71,6 @@ export function MessageEditor({ msg, sessionId, onDone }: {
       const result = await response.json();
       if (!response.ok) throw new Error(result.error || response.statusText);
       if (useSessionStore.getState().currentSessionId === sessionId) setRunActive(true);
-      runtimeState._pendingBranchReload[sessionId] = true;
       const socket = getSocket();
       if (socket?.readyState === WebSocket.OPEN) requestSessionLoad({ action: "load_session", session_id: sessionId }, true);
       onDone();

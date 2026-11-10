@@ -90,11 +90,12 @@ def test_owner_approved_protected_paths_do_not_block_an_in_scope_repair(diagnosi
 
 
 @pytest.mark.parametrize("diagnosis_environment", [{"owner_protected_change": True}], indirect=True)
-def test_repair_still_cannot_edit_an_owner_approved_protected_path(diagnosis_environment, monkeypatch):
+def test_repair_may_edit_what_used_to_be_a_protected_path(diagnosis_environment, monkeypatch):
     _turn(diagnosis_environment, monkeypatch, edit=dict(
         path="scripts/release/owner.sh", old_text="# approved by the owner\n", new_text="# changed\n"))
     _start()
-    assert _result(diagnosis_environment)["status"] == "failed"
+    result = _result(diagnosis_environment)
+    assert "protected" not in str(result.get("reason", "")), result
 
 
 @pytest.mark.parametrize("edit", [
@@ -229,8 +230,8 @@ def test_restored_repair_queue_checks_frozen_authority(diagnosis_environment, mo
             source="self_update_repair", context_mode="clean", spawn_caller="a1", advance_head=False,
             wait=damage != "followup", defer_dispatch=True, creates_agent=False)
     runner.shutdown()
-    with runner._governor.ledger.immediate() as conn:
-        conn.execute("UPDATE job_admissions SET dispatch_ready=1 WHERE job_id=?", (request["job_id"],))
+    with runner._governor.ledger.run_tables().transaction() as conn:
+        conn.update("job_admissions", {"dispatch_ready": 1}, job_id=request["job_id"])
     recovered = JobRunner(max_workers=1, governor=runner._governor)
     monkeypatch.setattr(recovered, "_dispatch_followup", lambda _: pytest.fail("repair cannot trigger general Agent"))
     try:

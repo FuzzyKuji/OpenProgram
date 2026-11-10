@@ -6,6 +6,7 @@ import os
 import platform
 import re
 import runpy
+import subprocess
 import zipfile
 from ._support import (
     POSIX_SHELL_INTEGRATION,
@@ -30,13 +31,14 @@ def test_desktop_targets_and_embedded_runtime_are_declared() -> None:
         for target in build["mac"]["target"]
     }
     assert {"dmg", "zip"} <= mac_targets
-    assert "linux" not in build
+    assert build["linux"]["executableName"] == "openprogram-desktop"
+    assert {"AppImage", "deb"} == set(build["linux"]["target"])
     assert "dist:linux" not in package["scripts"]
     assert {item["to"] for item in build["extraResources"]} >= {"runtime"}
     resources = {item["to"]: item["from"] for item in build["extraResources"]}
     assert resources["update/install-app.sh"] == "scripts/install-app.sh"
-    # main.js plus every module under main/ ships in app.asar.
-    assert build["files"] == ["main.js", "main/**"]
+    # main.js, every module under main/ and the thin shell ship in app.asar.
+    assert build["files"] == ["main.js", "main/**", "shell/**"]
     for module in ("worker/worker-recovery-state.js", "web-views/tab-transfer-validation.js", "self-update/packaged-runtime.js"):
         assert (ROOT / "apps" / "desktop" / "main" / module).is_file()
     assert package["desktopName"] == "ai.openprogram.OpenProgram.desktop"
@@ -51,7 +53,7 @@ def test_packaging_leaves_the_runtime_browser_bytes_alone() -> None:
     for signed in (f"{app}/Contents/Resources/runtime/OpenProgram.app",
                    f"{app}/Contents/Frameworks/Electron Framework.framework"):
         assert not any(pattern.search(signed) for pattern in ignored)
-    staging = (ROOT / "scripts" / "release" / "build-product-runtime.sh").read_text(encoding="utf-8")
+    staging = (ROOT / "scripts" / "release" / "build-base.sh").read_text(encoding="utf-8")
     install = staging.index("playwright install chromium")
     assert staging.index("codesign --force --deep --sign -", install) > install
 
@@ -121,19 +123,19 @@ def test_packaged_worker_uses_isolated_embedded_python() -> None:
     assert 'env.OPENPROGRAM_IMMUTABLE_RUNTIME = "1"' in main
 
 
-def test_packaged_runtime_rejects_program_mutation(monkeypatch, capsys) -> None:
-    from openprogram.interfaces.cli.commands.programs import _cmd_install, _cmd_uninstall
+def test_packaged_runtime_may_change_programs(monkeypatch, capsys) -> None:
+    """The packaged runtime goes on to the real install and reports what happens there."""
+    from openprogram.interfaces.cli.commands import programs
 
     monkeypatch.setenv("OPENPROGRAM_IMMUTABLE_RUNTIME", "1")
-    with pytest.raises(SystemExit) as install_exit:
-        _cmd_install("owner/repo")
-    assert install_exit.value.code == 1
-    assert "disabled in the packaged desktop runtime" in capsys.readouterr().out
+    monkeypatch.setattr(subprocess, "call", lambda *a, **k: 1)
+    with pytest.raises(SystemExit):
+        programs._cmd_install("owner/repo")
+    assert "disabled in the packaged desktop runtime" not in capsys.readouterr().out
 
-    with pytest.raises(SystemExit) as uninstall_exit:
-        _cmd_uninstall("demo_harness")
-    assert uninstall_exit.value.code == 1
-    assert "disabled in the packaged desktop runtime" in capsys.readouterr().out
+    with pytest.raises(SystemExit):
+        programs._cmd_uninstall("demo_harness")
+    assert "disabled in the packaged desktop runtime" not in capsys.readouterr().out
 
 
 @POSIX_SHELL_INTEGRATION
@@ -250,7 +252,7 @@ def test_release_version_verifier_rejects_a_mismatched_built_wheel(
 def test_product_runtime_installs_complete_default_capabilities() -> None:
     staging = (ROOT / "scripts" / "release" / "build-product-runtime.sh").read_text(
         encoding="utf-8"
-    )
+    ) + (ROOT / "scripts" / "release" / "build-base.sh").read_text(encoding="utf-8")
     verifier = (ROOT / "scripts" / "release" / "verify-product-runtime.py").read_text(
         encoding="utf-8"
     )
@@ -566,8 +568,8 @@ def test_linux_complete_runtime_smoke_is_runnable_without_release_credentials() 
     assert "scripts/install-release.sh" in workflow
     assert "smoke-linux-runtime-baseline.sh" in workflow
     assert "Ubuntu 22.04 glibc baseline" in workflow
-    assert "AppImage" not in workflow
-    assert "electron-builder" not in workflow
+    assert "scripts/release/smoke-linux-desktop.sh" in workflow
+    assert "runner: ubuntu-22.04-arm" in workflow
 
     release = (ROOT / ".github" / "workflows" / "release.yml").read_text(
         encoding="utf-8"
@@ -581,7 +583,7 @@ def test_linux_complete_runtime_smoke_is_runnable_without_release_credentials() 
     assert '"$runtime/assets/tui/index.cjs" --probe' not in baseline
 
 
-def test_packaged_smoke_rejects_unreleased_linux_desktop() -> None:
+def test_packaged_smoke_leaves_linux_to_its_own_script() -> None:
     smoke = (ROOT / "scripts" / "release" / "smoke-packaged-runtime.sh").read_text(
         encoding="utf-8"
     )
@@ -591,6 +593,28 @@ def test_packaged_smoke_rejects_unreleased_linux_desktop() -> None:
     assert "run_with_timeout" in smoke
     assert "timed out after" in smoke
     assert "OPENPROGRAM_SELF_UPDATE_DEFER_BROWSER:=1" in smoke
+    desktop = (ROOT / "scripts/release/smoke-linux-desktop.sh").read_text(encoding="utf-8")
+    for image in ("ubuntu:22.04", "ubuntu:24.04"):
+        assert image in desktop
+    for check in ("/healthz", "/chat", "node-pty", "openprogram-launcher", "--force-depends git", ".desktop"):
+        assert check in desktop
+
+
+@POSIX_SHELL_INTEGRATION
+def test_packaged_smoke_recognises_a_thin_shell_and_checks_its_seed(tmp_path: Path) -> None:
+    seed = tmp_path / "dist" / "OpenProgram.app" / "Contents" / "Resources" / "seed"
+    seed.mkdir(parents=True)
+    (seed / "seed.json").write_text("{}\n", encoding="utf-8")
+    (seed / "base.tar.zst").write_bytes(b"base")
+
+    result = subprocess.run(
+        [str(ROOT / "scripts" / "release" / "smoke-packaged-runtime.sh"), "mac", str(tmp_path / "dist")],
+        capture_output=True, text=True, check=False, env={**os.environ, "TMPDIR": str(tmp_path)},
+    )
+
+    assert result.returncode != 0
+    assert "the seed is missing version.tar.zst" in result.stderr
+    assert "packaged runtime manifest not found" not in result.stderr
 
 
 @POSIX_SHELL_INTEGRATION
@@ -628,8 +652,8 @@ def test_packaged_smoke_reads_formatted_runtime_manifest(tmp_path: Path) -> None
 
 def test_openclaw_source_checkout_uses_its_locked_environment() -> None:
     for relative_path in (
-        "docs/integrations/openclaw.md",
-        "docs/integrations/openclaw.zh.md",
+        "docs/integrations/openclaw.html",
+        "docs/integrations/openclaw.zh.html",
     ):
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         assert "uv sync --locked" in source
@@ -642,8 +666,8 @@ def test_openclaw_source_checkout_uses_its_locked_environment() -> None:
 
 def test_python_import_troubleshooting_distinguishes_managed_and_source() -> None:
     for relative_path in (
-        "docs/server/troubleshooting.md",
-        "docs/server/troubleshooting.zh.md",
+        "docs/server/troubleshooting.html",
+        "docs/server/troubleshooting.zh.html",
     ):
         source = (ROOT / relative_path).read_text(encoding="utf-8")
         assert "uv sync --locked" in source

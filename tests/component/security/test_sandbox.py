@@ -95,8 +95,6 @@ def test_mode_on_resolves_a_policy(cfg):
 def test_required_policy_stays_on_when_config_mode_is_off(cfg):
     pol = resolve_policy(required=True)
     assert pol is not None
-    assert any(p.endswith(os.path.join("applications", "**"))
-               for p in pol.deny_write)
 
 
 def test_policy_json_roundtrip_keeps_hash_and_hard_floor(cfg):
@@ -112,8 +110,6 @@ def test_policy_json_roundtrip_keeps_hash_and_hard_floor(cfg):
     assert policy_hash(restored) == policy_hash(policy_from_dict(encoded))
     assert restored.writable_roots == original.writable_roots
     assert restored.network is True
-    assert any(p.endswith(os.path.join("applications", "**"))
-               for p in restored.deny_write)
 
 
 def test_unknown_mode_reads_as_off(cfg):
@@ -121,12 +117,11 @@ def test_unknown_mode_reads_as_off(cfg):
     assert resolve_policy() is None
 
 
-def test_applications_directory_is_always_denied_write(cfg):
-    """A user emptying deny_write must not be able to unblock the one
-    directory whose contents get imported into the agent process."""
+def test_an_emptied_deny_write_leaves_nothing_on_it(cfg):
+    """No directory is written to the list behind the owner's back."""
     on(cfg, deny_write=[])
     pol = resolve_policy()
-    assert any(
+    assert not any(
         p.endswith(os.path.join("applications", "**")) for p in pol.deny_write
     )
 
@@ -207,7 +202,8 @@ def test_write_tool_enforces_process_policy(tmp_path, cfg, monkeypatch):
     ))
     result = "".join(block.text for block in tool_result.content)
 
-    assert result.startswith("Error: sandbox policy:")
+    assert result.startswith("[blocked by sandbox]")
+    assert tool_result.details["denied"] is True
     assert not (outside / "blocked.txt").exists()
 
 
@@ -261,7 +257,7 @@ def test_read_tool_refuses_denied_path(cfg, monkeypatch, secrets):
     _install_deny_read(monkeypatch, str(vault) + "/**")
 
     denied = _tool_text(read, {"file_path": str(vault / "id_rsa")})
-    assert denied.startswith("Error: sandbox policy:")
+    assert denied.startswith("[blocked by sandbox]")
     assert "PRIVATE KEY" not in denied
 
     allowed = _tool_text(read, {"file_path": str(work / "ok.txt")})
@@ -285,7 +281,7 @@ def test_list_tool_refuses_denied_directory(cfg, monkeypatch, secrets):
     _install_deny_read(monkeypatch, str(vault) + "/**")
 
     out = _tool_text(list_dir, {"path": str(vault)})
-    assert out.startswith("Error: sandbox policy:")
+    assert out.startswith("[blocked by sandbox]")
 
 
 def test_glob_tool_drops_denied_matches(cfg, monkeypatch, tmp_path):
@@ -742,8 +738,8 @@ def test_escalated_policy_preserves_only_the_hard_floor(cfg):
     assert policy.network is True
     assert policy.deny_read == ()
     assert "/" in policy.writable_roots
-    assert any(p.endswith(os.path.join("applications", "**"))
-               for p in policy.deny_write)
+    assert not any(p.endswith(os.path.join("applications", "**"))
+                   for p in policy.deny_write)
 
 
 # --- config surface --------------------------------------------------------

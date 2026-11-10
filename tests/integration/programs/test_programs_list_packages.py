@@ -47,8 +47,11 @@ def test_programs_list_loads_committed_user_packages_only(tmp_path: Path):
         env=env, capture_output=True, text=True, timeout=60,
     )
     assert result.returncode == 0, result.stderr
-    assert (committed / "imported.flag").is_file()
+    # The package runs from its checked copy, not from the working directory.
+    assert list((tmp_path / ".openprogram" / "programs-cache" / "cli_report").glob("*/imported.flag"))
+    assert not (committed / "imported.flag").exists()
     assert not (pending / "imported.flag").exists()
+    assert not (tmp_path / ".openprogram" / "programs-cache" / "cli_pending_report").exists()
     listing = json.loads(result.stdout)
     assert listing["root"] == str(root)
     packages = {row["name"]: row for row in listing["programs"] if row["kind"] == "package"}

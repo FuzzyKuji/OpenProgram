@@ -22,6 +22,8 @@ from dataclasses import asdict, dataclass
 from typing import Any, Optional
 import logging
 
+from .probe_log import KIND_CREDENTIAL, probe
+
 _log = logging.getLogger(__name__)
 
 
@@ -714,6 +716,7 @@ def _maybe_layer2_usable(
 
 
 # public API
+@probe(KIND_CREDENTIAL)
 def validate_credential(
     provider_id: str, *, api_key: str | None = None, model: str | None = None,
     timeout: float = 15.0, use_cache: bool = True, prove_usable: bool = False,

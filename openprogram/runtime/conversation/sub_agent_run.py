@@ -10,12 +10,12 @@ All agents are peers. There is no "sub-agent type". A turn is just
     Claude-Code Job feel.
   * ``predecessor = None`` — the new turn starts a fresh root. The
     agent sees only the prompt; its turn series becomes an
-    independent DAG tree inside the same session repo.
+    independent DAG tree inside the same session.
 
-Either way the new turn lands in the parent session's git repo as
-a branch (or a new root commit). No separate ``sub_xxx`` session id
+Either way the new turn lands in the parent session as
+a branch (or a new root). No separate ``sub_xxx`` session id
 is minted — the previous design of "detached spawn = independent
-session" has been removed; multi-root DAGs in a single repo cover
+session" has been removed; multi-root DAGs in a single session cover
 the same use case without a separate ``session_id`` namespace.
 
 Merge is the symmetric op (see ``_merge.process_merge_turn``): pick
@@ -217,15 +217,17 @@ def _execute_agent_turn(
     # context assembly doesn't pull in any conversation history.
     # Inherit: history is whatever leads to ``predecessor``, which the
     # dispatcher already resolves from ``predecessor``.
-    # Spawned sub-agents run with ``permission_mode="bypass"``: there's
-    # no UI subscribed to approval_request events on the spawned lane
-    # (the chat view only listens to its own turn), so the default
-    # ``"ask"`` would hang on every bash/list/read until the 300s
-    # timeout and return ``[denied]`` for every tool call. Spawning a
-    # sub-agent is itself an explicit user act, so the user has
-    # already consented to tool use within that turn.
+    # A sub-agent works under its parent's mode and rules, so Ask means Ask
+    # all the way down; nobody attends the spawned lane, so what would ask
+    # there is refused instead of waiting.
+    from openprogram.runtime.agent.turn_request import get_turn_request
     from openprogram.runtime.permissions.authority import runtime_authority
+    from openprogram.runtime.permissions.lifecycle import current_permission_request
+    from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
     _authority = runtime_authority(authority or {}, source)
+    _parent = get_turn_request()
+    if _parent is not None:
+        _parent = current_permission_request(_parent)
     req = TurnRequest(
         session_id=session_id,
         user_text=prompt,
@@ -233,7 +235,8 @@ def _execute_agent_turn(
         source=source,
         branch_from=branch_from,
         history_override=[] if branch_from is None else None,
-        permission_mode="bypass",
+        permission_mode=_parent.permission_mode if _parent is not None else DEFAULT_PERMISSION,
+        permission_rules=_parent.permission_rules if _parent is not None else None,
         # New-branch (branch_from=None) root points its caller at the
         # spawning node, so the branch is an explicit spawn (see
         # dag/overview.md §2.3). No-op for inherit forks.
@@ -313,6 +316,7 @@ def run_agent_turn(
     caller_chain_generations: int = 0,
     archive_when_done: bool = False,
     on_accepted=None,
+    attach_pointer_id: Optional[str] = None,
     model_override: Optional[str] = None,
     thinking_effort: Optional[str] = None,
     source: str = "agent_spawn",
@@ -374,6 +378,7 @@ def run_agent_turn(
             authority=authority,
             creates_agent=creates_agent,
             on_accepted=on_accepted,
+            attach_pointer_id=attach_pointer_id,
             borrow_current_claim=borrow_current_claim,
         )
         if borrow_current_claim or owns_worker:
@@ -427,59 +432,12 @@ def run_agent_turn(
     )
 
 
-def emit_spawn_event(
-    *,
-    session_id: str,
-    status: str,
-    label: Optional[str],
-    prompt: str,
-    chosen_agent: str,
-    card_id: str,
-    target_session_id: Optional[str] = None,
-    tool_call_id: Optional[str] = None,
-    head_id: Optional[str] = None,
-    content: str = "",
-    job_id: Optional[str] = None,
-) -> None:
-    """Push one ``sub_agent`` stream event so the caller's live turn can
-    draw the spawn card without waiting for a page reload.
-
-    The ``attach`` payload is deliberately the same dict shape
-    ``write_attach_pointer_for_spawn`` persists into ``extra.attach``,
-    so the live path in ``chat-stream.ts`` and the reload path in
-    ``conv-mapper.ts`` build structurally identical ``attachCards``
-    entries. ``card_id`` is stable across the running → terminal pair,
-    letting the client patch the card in place instead of appending a
-    second one.
-    """
-    from openprogram.runtime.events import emit_ws_frame
-
-    emit_ws_frame({
-        "type": "chat_response",
-        "data": {
-            "type": "stream_event",
-            "session_id": session_id,
-            "event": {
-                "type": "sub_agent",
-                # Anchors the card to the execution-timeline row drawn
-                # for the spawning tool call. Absent (slash-command
-                # spawns) the client falls back to FIFO order, the same
-                # way the reload path matches cards to spawn blocks.
-                "tool_call_id": tool_call_id,
-                "card_id": card_id,
-                "content": content,
-                "attach": {
-                    "session_id": target_session_id or session_id,
-                    "head_id": head_id,
-                    "label": label or "",
-                    "prompt": (prompt or "")[:500],
-                    "status": status,
-                    "job_id": job_id,
-                },
-                "agent_id": chosen_agent,
-            },
-        },
-    })
+def _attach_node(store, session_id: str, node_id: Optional[str]):
+    """The attach row a spawn already wrote, or None."""
+    if not node_id:
+        return None
+    pair = store._open(session_id)  # noqa: SLF001
+    return pair[1].nodes_by_id.get(node_id) if pair is not None else None
 
 
 def write_attach_pointer_for_spawn(
@@ -492,111 +450,98 @@ def write_attach_pointer_for_spawn(
     chosen_agent: str,
     node_id: Optional[str] = None,
     target_session_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    delivery: Optional[str] = "tool_result",
 ) -> Optional[str]:
-    """Write an `attach`-function pointer node for a synchronous
-    agent() spawn (LLM tool call, foreground). Mirrors the body of
-    ``run_spawn`` in turn_runtime/slash_actions.py — kept in sync so the
-    DAG sees the same node shape whether the user typed ``/spawn`` or
-    the LLM called the ``task`` tool.
+    """Settle the attach row of a synchronous spawn.
+
+    The row normally exists already, written when the job was accepted, so
+    this patches it. A placeholder that could not be written is replaced
+    here by the full row. A result with no head can only close an existing
+    placeholder, because a new row would have nothing to open.
     """
     import json as _json
     import time as _time
     import uuid as _uuid
 
-    if not result or not result.head_id:
+    if not result:
         return None
     try:
         from openprogram.runtime.context.session_db import default_db
+        from openprogram.state.store import SessionNodeWriter
         store = default_db()
+        placeholder = _attach_node(store, session_id, node_id)
+        if placeholder is None and not result.head_id:
+            return None
         target_session = target_session_id or session_id
-        sess_row = store.get_session(session_id) or {}
-        head_before = sess_row.get("head_id")
-        # Anchor the attach pointer DIRECTLY to the caller turn (the
-        # LLM reply that ran the agent() tool call, or the user_msg of
-        # a slash-command path). This is the call-edge semantics from
-        # docs/design/runtime/dag-node-model.md: attach is a function_call
-        # whose ``predecessor`` is the turn that triggered it. Previously
-        # this code re-anchored to the caller's parent (the spawn
-        # user_msg) which made depth.py collapse attach onto the same
-        # row as the LLM reply.
-        fork_anchor = caller_msg_id
-
         source_commit_id = None
-        terminal_status = (
-            "errored" if result.failed or result.error else "completed"
-        )
-        try:
-            from openprogram.state.store.session.context_commit.store import load_commit_for_head
-            _src = load_commit_for_head(store, target_session, result.head_id)
-            if _src is not None:
-                source_commit_id = _src.id
-        except Exception:
-            # No commit id: the attach card falls back to the final text.
-            _log.debug("source commit lookup failed for session %s", target_session, exc_info=True)
-
-        # Reuse the id the live spawn event already announced, so the
-        # card the client drew mid-stream and the row a reload reads
-        # from the DB are the same node — otherwise a refresh would
-        # show the spawn twice.
-        attach_node_id = node_id or _uuid.uuid4().hex[:12]
-        # Attach is a branch-referencing function_call that lives ON
-        # the main sequence (per docs/design/runtime/dag-node-model.md), so it
-        # must hang off the caller via ``predecessor`` (sequence edge),
-        # not ``caller`` (which would put it on a side branch and
-        # leave the caller's reply orphaned as its own tip).
-        attach_msg = {
-            "id": attach_node_id,
-            "role": "assistant",
-            "display": "runtime",
-            "function": "attach",
-            "content": (result.final_text or result.error or "(no output)").strip(),
-            "predecessor": fork_anchor,
-            "timestamp": _time.time(),
-            "is_error": bool(result.failed or result.error),
-            "agent_id": chosen_agent,
-            "extra": _json.dumps({
-                "attach": {
-                    "session_id": target_session,
-                    "head_id": result.head_id,
-                    "label": label or "",
-                    "prompt": prompt[:500],
-                    "source_commit_id": source_commit_id,
-                    "status": terminal_status,
-                    # The agent tool returned the reply as its result, so
-                    # the caller's context carries only the address
-                    # (context/commit/generator.py ``_report_item``).
-                    "delivery": "tool_result",
-                },
-            }, default=str),
-        }
-        store.append_message(session_id, attach_msg)
-        if head_before:
+        failed = bool(result.failed or result.error or not result.head_id)
+        terminal_status = "errored" if failed else "completed"
+        if result.head_id:
             try:
-                store.set_head(session_id, head_before)
+                from openprogram.state.store.session.context_commit.store import load_commit_for_head
+                _src = load_commit_for_head(store, target_session, result.head_id)
+                if _src is not None:
+                    source_commit_id = _src.id
             except Exception:
-                _log.warning("attach card moved head of session %s; restore failed", session_id, exc_info=True)
+                # No commit id: the attach card falls back to the final text.
+                _log.debug("source commit lookup failed for session %s", target_session, exc_info=True)
+
+        content = (result.final_text or result.error or "(no output)").strip()
+        attach: dict[str, Any] = {
+            "session_id": target_session,
+            "head_id": result.head_id,
+            "label": label or "",
+            "prompt": prompt[:500],
+            "source_commit_id": source_commit_id,
+            "status": terminal_status,
+        }
+        if delivery:
+            # The agent tool already returned the reply as its result.
+            attach["delivery"] = delivery
+        if tool_call_id:
+            attach["tool_call_id"] = tool_call_id
+        attach_node_id = node_id or _uuid.uuid4().hex[:12]
+        if placeholder is not None:
+            merged = dict((placeholder.metadata or {}).get("attach") or {})
+            if not delivery:
+                merged.pop("delivery", None)
+            SessionNodeWriter(store, session_id).update(
+                attach_node_id,
+                output=content,
+                metadata={"attach": {**merged, **attach}, "is_error": failed},
+            )
+        else:
+            # Attach is a branch-referencing function_call that lives ON
+            # the main sequence (per docs/design/runtime/dag-node-model.md),
+            # so it hangs off the caller via ``predecessor``.
+            store.append_message(session_id, {
+                "id": attach_node_id,
+                "role": "assistant",
+                "display": "runtime",
+                "function": "attach",
+                "content": content,
+                "predecessor": caller_msg_id,
+                "timestamp": _time.time(),
+                "is_error": failed,
+                "agent_id": chosen_agent,
+                "extra": _json.dumps({"attach": attach}, default=str),
+            }, advance_head=False)
         store.commit_turn(session_id, f"agent tool spawn: {label or chosen_agent}")
         # Hide the spawned sub-branch from the Branches panel — its
         # content is now reachable from main via the attach pointer.
         # Same retirement the async runner does on completion (see
         # job/runner.py::_update_attach_card).
-        if terminal_status == "completed":
+        if terminal_status == "completed" and delivery:
             try:
                 store.mark_merged(target_session, [result.head_id])
             except Exception:
                 # Cosmetic: the sub-branch still shows in the Branches panel.
                 _log.warning("sub-agent head not marked merged in session %s", target_session, exc_info=True)
-        # Broadcast session_reload so the UI re-renders the DAG with
-        # the new attach pointer + reference edge.
-        # 步 4：走总线（ws.frame 事件），不再 import webui；帧内容不变。
-        from openprogram.runtime.events import emit_ws_frame
-        emit_ws_frame({
-            "type": "session_reload",
-            "data": {"session_id": session_id, "reason": "task_tool_spawn"},
-        })
         # The attach pointer changed what the next request carries, so the
-        # context ring re-estimates alongside the DAG reload — same pairing
-        # the async runner does on its own attach write.
+        # context ring re-estimates — the same refresh the async runner does
+        # on its own attach write. Open transcripts get the card from the
+        # transcript publisher.
         try:
             from openprogram.runtime import interface_link
             interface_link.refresh_context_stats(session_id)
@@ -605,6 +550,7 @@ def write_attach_pointer_for_spawn(
             _log.debug("context stats refresh failed for session %s", session_id, exc_info=True)
         return attach_node_id
     except Exception:
+        _log.warning("spawn attach row not written in session %s", session_id, exc_info=True)
         return None
 
 
@@ -618,12 +564,13 @@ def write_attach_placeholder_for_spawn(
     node_id: Optional[str] = None,
     job_id: Optional[str] = None,
     target_session_id: Optional[str] = None,
+    tool_call_id: Optional[str] = None,
+    delivery: Optional[str] = None,
 ) -> Optional[str]:
-    """Write a ``status=running`` placeholder attach card for an async
-    spawn, anchored at the CALLING node（在哪调用就锚在哪）. The runner
-    patches it on terminal via ``_update_attach_card``. Without this the
-    agent(run_in_background=true) path had no card at all — the result later arrived
-    as a job_followup with nothing anchoring it in the transcript.
+    """Write a ``status=running`` attach row when a spawn is accepted,
+    anchored at the calling node. The job carries the row's id, so every
+    path that ends the job patches it. ``delivery="tool_result"`` keeps the
+    row out of the next request: the reply arrives as the tool's result.
     """
     import json as _json
     import time as _time
@@ -633,9 +580,20 @@ def write_attach_placeholder_for_spawn(
         from openprogram.runtime.context.session_db import default_db
         store = default_db()
         target_session = target_session_id or session_id
-        sess_row = store.get_session(session_id) or {}
-        head_before = sess_row.get("head_id")
         attach_node_id = node_id or _uuid.uuid4().hex[:12]
+        attach: dict[str, Any] = {
+            "session_id": target_session,
+            "head_id": None,
+            "label": label or "",
+            "prompt": prompt[:500],
+            "source_commit_id": None,
+            "status": "running",
+            "job_id": job_id,
+        }
+        if tool_call_id:
+            attach["tool_call_id"] = tool_call_id
+        if delivery:
+            attach["delivery"] = delivery
         store.append_message(session_id, {
             "id": attach_node_id,
             "role": "assistant",
@@ -646,28 +604,14 @@ def write_attach_placeholder_for_spawn(
             "timestamp": _time.time(),
             "is_error": False,
             "agent_id": chosen_agent,
-            "extra": _json.dumps({
-                "attach": {
-                    "session_id": target_session,
-                    "head_id": None,
-                    "label": label or "",
-                    "prompt": prompt[:500],
-                    "source_commit_id": None,
-                    "status": "running",
-                    "job_id": job_id,
-                },
-            }, default=str),
-        })
-        if head_before:
-            try:
-                store.set_head(session_id, head_before)
-            except Exception:
-                _log.warning("attach card moved head of session %s; restore failed", session_id, exc_info=True)
+            "extra": _json.dumps({"attach": attach}, default=str),
+        }, advance_head=False)
         store.commit_turn(
             session_id, f"agent tool spawn (async): {label or chosen_agent}",
         )
         return attach_node_id
     except Exception:
+        _log.warning("spawn placeholder not written in session %s", session_id, exc_info=True)
         return None
 
 
@@ -700,6 +644,7 @@ def run_agent_turn_async(
     on_accepted=None,
     defer_dispatch: bool = False,
     resume_deferred: bool = False,
+    message_origin: Optional[str] = None,
 ) -> str:
     """Submit an agent turn to the job runner, return ``job_id``.
 
@@ -745,4 +690,5 @@ def run_agent_turn_async(
         on_accepted=on_accepted,
         defer_dispatch=defer_dispatch,
         resume_deferred=resume_deferred,
+        message_origin=message_origin,
     )

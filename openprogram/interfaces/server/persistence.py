@@ -18,6 +18,7 @@ metadata tag stored in the session's meta, never a locator.
 
 from __future__ import annotations
 
+from collections import Counter
 from typing import Optional
 
 
@@ -102,11 +103,11 @@ def load_session(agent_id: str, session_id: str) -> Optional[dict]:
     messages = aggregate_tool_messages(raw_messages)
     head = sess.get("head_id") or head_or_tip(sess, messages)
     try:
-        branch_ids = {
+        branch_ids = [
             m.get("id") for m in (db.get_branch(session_id, head) or [])
-        }
+        ]
     except Exception:
-        branch_ids = set()
+        branch_ids = []
     messages = active_branch_chain(messages, branch_ids, head)
     result = dict(sess)
     result["id"] = session_id
@@ -140,6 +141,8 @@ def aggregate_tool_messages(messages: list[dict]) -> list[dict]:
 
     out: list[dict] = []
     late: dict[str, list[tuple[str | None, dict]]] = {}
+    folded: dict[str, list] = {}
+    unreplaced: dict[str, dict] = {}
     for m in messages:
         if m.get("role") == "tool":
             caller_id = m.get("caller")
@@ -163,40 +166,75 @@ def aggregate_tool_messages(messages: list[dict]) -> list[dict]:
                     "result": m.get("content", ""),
                     "is_error": bool(m.get("is_error")),
                 }
-                parent.setdefault("tool_calls", []).append(tool_call)
-                late.setdefault(parent["id"], []).append((_provider_call_id(m), tool_call))
+                provider_id = _provider_call_id(m)
+                calls = folded.get(parent["id"])
+                if calls is None:
+                    # A reply's stored list can be the node cache's own
+                    # object, so folding works on a copy.
+                    calls = folded[parent["id"]] = list(parent.get("tool_calls") or [])
+                    parent["tool_calls"] = calls
+                    unreplaced[parent["id"]] = _call_positions(calls)
+                positions = unreplaced[parent["id"]].get(provider_id) if provider_id else None
+                if positions:
+                    calls[positions.pop()] = tool_call
+                else:
+                    calls.append(tool_call)
+                late.setdefault(parent["id"], []).append((provider_id, tool_call))
                 continue  # don't emit a top-level entry
         out.append(m)
 
     # Extract blocks (thinking / text / tool) from the extra JSON field
     # so the frontend mapper sees them directly on the message object.
+    # A reply written through the append fallback has no ``extra``: its
+    # blocks are already top-level.
     import json as _json2
     for m in out:
         if m.get("role") != "assistant":
             continue
         extra = m.get("extra")
-        if not extra:
-            continue
         if isinstance(extra, str):
             try:
                 extra = _json2.loads(extra)
             except Exception:
-                continue
-        if isinstance(extra, dict) and extra.get("stream_seq"):
+                extra = None
+        if not isinstance(extra, dict):
+            extra = {}
+        if extra.get("stream_seq"):
             # The last stream frame a still-running reply's content
             # reflects; the client applies only later frames on top.
             m["stream_seq"] = extra["stream_seq"]
-        if isinstance(extra, dict) and extra.get("blocks"):
-            m["blocks"] = extra["blocks"]
+        blocks = extra.get("blocks") or m.get("blocks")
+        if blocks:
             # Blocks are frozen when the turn ends. A call attached later,
             # such as a delivered self-update result, exists only as a row.
-            recorded = {b.get("tool_call_id") for b in m["blocks"] if b.get("type") == "tool"}
-            m["blocks"] = [*m["blocks"], *(
-                {"type": "tool", **call} for call_id, call in late.get(m["id"], ())
-                if call_id is None or call_id not in recorded
-            )]
+            tool_blocks = [b for b in blocks if b.get("type") == "tool"]
+            recorded = {b.get("tool_call_id") for b in tool_blocks}
+            # An old block and its row can both lack an id; the name pairs them.
+            unnamed = Counter(b.get("tool") for b in tool_blocks if not b.get("tool_call_id"))
+            attached = []
+            for call_id, call in late.get(m["id"], ()):
+                if call_id is None and unnamed[call["tool"]] > 0:
+                    unnamed[call["tool"]] -= 1
+                elif call_id is None or call_id not in recorded:
+                    attached.append({"type": "tool", **call})
+            m["blocks"] = [*blocks, *attached]
 
     return out
+
+
+def _call_positions(calls: list) -> dict[str, list[int]]:
+    """Where each stored call id sits, earliest position last.
+
+    A row replaces its stored call once and then carries the row's own id, so
+    a match pops its position and a repeated id reaches the next stored call.
+    """
+    positions: dict[str, list[int]] = {}
+    for index in range(len(calls) - 1, -1, -1):
+        call = calls[index]
+        call_id = call.get("tool_call_id") if isinstance(call, dict) else None
+        if isinstance(call_id, str):
+            positions.setdefault(call_id, []).append(index)
+    return positions
 
 
 def _provider_call_id(tool_msg: dict) -> str | None:

@@ -7,7 +7,7 @@ import pytest
 
 
 
-# Starting a job includes a durable jobs.json write and a session Git commit.
+# Starting a job includes a durable jobs.json write.
 # Same-session commits are intentionally serialized; Windows filesystem and
 # Defender latency can make a healthy pickup exceed the old one-second waits.
 WORKER_START_TIMEOUT = 5.0

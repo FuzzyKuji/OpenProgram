@@ -42,6 +42,51 @@ def test_an_action_goes_to_the_named_tab_then_the_last_used_then_the_focused(dri
     assert [row["tab"] for row in missing.value.extra["tabs"]] == [B, A]
 
 
+def _turn(**fields):
+    from openprogram.runtime.agent.turn_request import TurnRequest, set_turn_request
+
+    return set_turn_request(TurnRequest(session_id="s1", user_text="", agent_id="main", **fields))
+
+
+@pytest.mark.parametrize("fields", [
+    {"source": "scheduler", "interaction": "non-interactive"},
+    {"source": "web", "background": True, "interaction": "non-interactive"},
+    {"source": "web", "goal_trigger": True, "interaction": "interactive"},
+    {"source": "web", "automation": "handoff", "interaction": "interactive"},
+    {"source": "telegram", "peer_kind": "direct", "interaction": "interactive"},
+    {"source": "agent_spawn", "detached": True, "interaction": "non-interactive"},
+])
+def test_a_turn_with_no_window_keeps_off_the_tab_in_front_and_keeps_its_own(driver, fields):
+    from openprogram.runtime.agent.turn_request import reset_turn_request
+
+    token = _turn(**fields)
+    try:
+        with pytest.raises(tabs.BrowserError) as missing:
+            driver._tab("", "s1")
+        assert missing.value.reason_code == "tab_not_found"
+        assert "open(url)" in str(missing.value)
+        # Naming a tab still works, and that tab is this conversation's from then on.
+        named = driver._tab(A, "s1")
+        assert named.title == "A" and driver._tab(None, "s1") is named
+    finally:
+        reset_turn_request(token)
+
+
+@pytest.mark.parametrize("fields", [
+    {"source": "web", "interaction": "interactive"},
+    {"source": "agent_spawn", "interaction": "non-interactive"},
+    {"source": "hook_continue", "interaction": "non-interactive"},
+])
+def test_a_person_s_turn_still_starts_on_the_tab_in_front(driver, fields):
+    from openprogram.runtime.agent.turn_request import reset_turn_request
+
+    token = _turn(**fields)
+    try:
+        assert driver._tab("", "s1").title == "B"
+    finally:
+        reset_turn_request(token)
+
+
 def test_every_process_names_a_tab_alike_and_a_moved_tab_keeps_its_name(driver):
     assert A == tabs._tab_name("main", "a", set()) != B and A.startswith("t") and len(A) == 5
     # A name another tab already has grows by a letter.
@@ -219,19 +264,80 @@ class _Scrolled(_Page):
         return [800, 0, self.scroll]
 
 
-def test_coordinates_stop_working_once_the_page_was_acted_on_or_scrolled(driver):
+class _Clickable(_Scrolled):
+    def __init__(self, scroll=0):
+        super().__init__(scroll)
+        self.clicks = []
+        self.mouse = type("_Mouse", (), {"click": lambda _mouse, x, y, **options: self.clicks.append((x, y))})()
+        self.keyboard = type("_Keyboard", (), {"down": lambda _keyboard, key: None, "up": lambda _keyboard, key: None})()
+
+
+def _png(width, height, colour=(200, 10, 10), spot=None):
+    """A PNG of one colour; ``spot`` ((x, y), colour) paints a 20x20 square of another."""
+    import struct
+    import zlib
+    rows = []
+    for y in range(height):
+        row = bytearray()
+        for x in range(width):
+            rgb = spot[1] if spot and abs(x - spot[0][0]) < 10 and abs(y - spot[0][1]) < 10 else colour
+            row += bytes(rgb)
+        rows.append(b"\x00" + bytes(row))
+
+    def chunk(kind, data):
+        return struct.pack("!I", len(data)) + kind + data + struct.pack("!I", zlib.crc32(kind + data) & 0xffffffff)
+    return (b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack("!IIBBBBB", width, height, 8, 2, 0, 0, 0))
+            + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b""))
+
+
+def test_coordinates_stop_working_once_the_page_moved_or_changed_at_the_point(driver, monkeypatch):
+    pytest.importorskip("Quartz")
     tab = tabs.Tab(id="t1", window_id="main", tab_id="a")
+    seen = _png(200, 120)
     with pytest.raises(tabs.BrowserError) as missing:
-        driver._click_point(_Scrolled(0), tab, {"x": 1, "y": 1})
+        driver._click_point(_Clickable(0), tab, {"x": 1, "y": 1})
     assert missing.value.reason_code == "screenshot_required"
-    tab.shots[""] = (1.0, 0, _Page.url, 0, 0)
+    tab.shots[""] = (1.0, 0, _Page.url, 0, 0, seen)
+    fresh = [seen]
+    monkeypatch.setattr(driver, "_capture", lambda tab: (fresh[0], _Page.url, [800, 0, 0]))
+    # Scrolled since: refused, and the new screenshot comes with the refusal.
     with pytest.raises(tabs.BrowserError) as scrolled:
-        driver._click_point(_Scrolled(40), tab, {"x": 1, "y": 1})
-    assert scrolled.value.reason_code == "screenshot_stale"
+        driver._click_point(_Clickable(40), tab, {"x": 50, "y": 60})
+    assert scrolled.value.reason_code == "screenshot_stale" and scrolled.value.extra["_images"] == [seen]
+    assert "A new screenshot is attached" in str(scrolled.value)
+    # Acted on since, but the point still looks the same: the click goes ahead.
+    tab.shots[""] = (1.0, 0, _Page.url, 0, 0, seen)
     tab.writes.append((next(tabs._writes), "other"))
-    with pytest.raises(tabs.BrowserError) as acted:
-        driver._click_point(_Scrolled(0), tab, {"x": 1, "y": 1})
-    assert acted.value.reason_code == "screenshot_stale"
+    fresh[0] = _png(200, 120, spot=((150, 100), (10, 10, 200)))
+    page = _Clickable(0)
+    assert driver._click_point(page, tab, {"x": 50, "y": 60}) == "clicked (50, 60) of the screenshot"
+    assert page.clicks == [(50.0, 60.0)]
+    # Acted on since, and the point shows something else: refused, with the new screenshot recorded.
+    fresh[0] = _png(200, 120, spot=((50, 60), (10, 10, 200)))
+    with pytest.raises(tabs.BrowserError) as changed:
+        driver._click_point(_Clickable(0), tab, {"x": 50, "y": 60})
+    assert changed.value.reason_code == "screenshot_stale" and changed.value.extra["_images"] == [fresh[0]]
+    assert tab.shots[""][5] == fresh[0] and tab.shots[""][1] == tab.last_write()
+    # Where the pixels cannot be compared, acted on means stale, as before.
+    tab.shots[""] = (1.0, 0, _Page.url, 0, 0, seen)
+    monkeypatch.setattr(tabs, "_pixels_around", lambda png, point, radius: b"")
+    with pytest.raises(tabs.BrowserError) as unknown:
+        driver._click_point(_Clickable(0), tab, {"x": 50, "y": 60})
+    assert unknown.value.reason_code == "screenshot_stale"
+
+
+def test_a_failing_script_says_what_the_page_threw(driver, monkeypatch):
+    class _Failing(_Page):
+        def evaluate(self, script, *args):
+            raise RuntimeError("Page.evaluate: SyntaxError: Unexpected token ';'\n    at eval (eval at <anonymous>)")
+    tab = tabs.Tab(id="t1", window_id="main", tab_id="a", target_id="tg")
+    monkeypatch.setattr(driver, "_page", lambda tab: _Failing())
+    driver._watches["tg"] = tabs._Watch()
+    with pytest.raises(tabs.BrowserError) as failed:
+        driver._operate(tab, "evaluate", {"script": "a; b"})
+    assert failed.value.reason_code == "script_error"
+    assert str(failed.value) == "the script failed: SyntaxError: Unexpected token ';'"
+    assert tab.last_write(), "the script may have changed the page before it failed"
 
 
 def test_a_list_of_actions_holds_its_tab_until_it_ends(driver, monkeypatch):
@@ -253,7 +359,9 @@ def test_a_list_of_actions_holds_its_tab_until_it_ends(driver, monkeypatch):
 def test_the_browser_is_refused_while_the_user_turned_off_agent_access(driver, monkeypatch):
     from openprogram.runtime.conversation import surface_context
     monkeypatch.setattr(surface_context, "current", lambda: {"surfaces": [{"preview_status": "disabled"}]})
-    assert driver.run("read", {}, "s1")["reason_code"] == "page_access_disabled"
+    result = driver.run("read", {}, "s1")
+    assert result["reason_code"] == "page_access_disabled"
+    assert result["error"].startswith("[blocked by setting] ") and "To change this: " in result["error"]
 
 
 def test_a_forked_subprocess_starts_its_own_driver(monkeypatch):
@@ -521,3 +629,42 @@ def test_a_subprocess_hands_its_operations_to_the_worker(monkeypatch):
     assert calls == [("page:a", operation, True, "exec-parent")]
     pages.report_forwarded_operation({"page_key": "page:a", "operation": {"id": "op_2", "phase": "made-up"}})
     assert len(calls) == 1
+
+
+@pytest.fixture
+def opened_store(monkeypatch, tmp_path):
+    from openprogram.programs.applications.browser import pages
+    monkeypatch.setattr(pages, "resource_db_path", lambda: tmp_path / "resources.db")
+    return pages.BrowserResourceStore(tmp_path / "resources.db")
+
+
+def test_tabs_lists_only_what_this_conversation_opened_unless_all_is_asked(driver, opened_store, monkeypatch):
+    monkeypatch.setattr(driver, "_urls", lambda listed: {})
+    monkeypatch.setattr(driver, "_on_owner", lambda function, *args: function(*args))
+    opened_store.note_tab_opened("main", "a", "s1")
+    mine = driver._list("s1")
+    assert [row["tab"] for row in mine["tabs"]] == [A] and mine["other_tabs"] == 1
+    assert driver._list("s2")["tabs"] == []
+    assert sorted(row["tab"] for row in driver._list("s1", True)["tabs"]) == sorted([A, B])
+
+
+def test_closing_a_conversation_closes_only_the_tabs_it_opened(driver, opened_store, monkeypatch):
+    from openprogram.host.resources import desktop_link
+    closed = []
+    monkeypatch.setattr(tabs, "driver", lambda: driver)
+    monkeypatch.setattr(desktop_link, "request_close_tab", lambda binding: closed.append(binding) or {"ok": True})
+    opened_store.note_tab_opened("main", "a", "s1")
+    opened_store.note_tab_opened("main", "gone", "s1")
+    assert tabs.close_conversation_tabs("s1") == 1
+    assert closed == ["ba"]
+    # The tab the user closed earlier is forgotten with it; the user's own tab b was never touched.
+    assert opened_store.tabs_opened_by("s1") == set()
+    assert tabs.close_conversation_tabs("s2") == 0
+
+
+def test_a_tab_dragged_to_another_window_stays_the_conversations(driver, opened_store):
+    driver._refresh()
+    opened_store.note_tab_opened("main", "a", "s1")
+    driver.listed["surfaces"] = [_surface("a", window_id="second", binding_id="b2"), _surface("b")]
+    driver._refresh()
+    assert opened_store.tabs_opened_by("s1") == {("second", "a")}

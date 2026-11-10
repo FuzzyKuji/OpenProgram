@@ -14,7 +14,7 @@ There is no unarchive: to reuse an archived agent's memory, fork it.
 Any session may archive any branch. Archiving interrupts nothing that
 is running and deletes nothing, so it does not cancel an active execution.
 
-Design: docs/reference/design/runtime/collaboration/agent-collaboration.md.
+Design: docs/reference/design/runtime/collaboration/agent-collaboration.html.
 """
 from __future__ import annotations
 

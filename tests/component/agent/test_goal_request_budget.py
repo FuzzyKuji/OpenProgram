@@ -224,7 +224,7 @@ def test_joint_receipt_releases_only_known_budget_kinds_after_reopen(runtime, tr
     restored.flush()
     assert governor.recover_provider_reservations(now=10**12) == 0
     with meter.read() as conn:
-        states = {row["kind"]: row["state"] for row in conn.execute("SELECT kind, state FROM usage_reservations")}
+        states = {row["kind"]: row["state"] for row in meter.run_tables().handle.rows("usage_reservations")}
         assert states["token"] == ("settled" if kind in {"complete", "tokens_only"} else "started")
         assert states["cost"] == ("settled" if kind in {"complete", "cost_only"} else "started")
         assert conn.execute("SELECT COUNT(*) FROM usage_events").fetchone()[0] == 1
@@ -237,11 +237,11 @@ def test_joint_receipt_releases_only_known_budget_kinds_after_reopen(runtime, tr
 def test_expired_joint_job_reservation_cannot_start_goal_request(runtime, transport):
     _, _, meter, _ = runtime
     receipt, _ = joint_receipt(runtime, transport)
-    with meter.immediate() as conn:
-        conn.execute("UPDATE usage_reservations SET expires_at = 1")
+    with meter.run_tables().transaction() as conn:
+        conn.update("usage_reservations", {"expires_at": 1})
     meter.close()
     with pytest.raises((QuotaExceeded, RuntimeError), match="expired"):
         receipt.start()
     with meter.read() as conn:
         assert conn.execute("SELECT state FROM usage_requests").fetchone()[0] == "prepared"
-        assert {row[0] for row in conn.execute("SELECT state FROM usage_reservations")} == {"reserved"}
+        assert {row["state"] for row in meter.run_tables().handle.rows("usage_reservations")} == {"reserved"}

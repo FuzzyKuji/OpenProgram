@@ -29,6 +29,7 @@ import { TILE_R } from "../../render/tiles";
 import { seatOf } from "../../render/seat";
 import { closeNodeLayers } from "../node/inspector";
 import { hideTooltip } from "../node/tooltip";
+import { desktopBridge } from "@/lib/desktop/bridge/bridge-api";
 import { WHEEL_ZOOM_RATE, wireGestures } from "./gestures";
 import { hideMinimap, paintMinimap } from "./minimap";
 import { paintFarLabels } from "./far-labels";
@@ -400,6 +401,8 @@ export function attachCanvas(
     zoomAt,
     dismiss: dismissOverlays,
     moved: () => { _glide?.stop(); _glideScale = null; applyView(); },
+    followHeldButton: (held, onCursor, onReleased) =>
+      desktopBridge()?.pointerFollow?.start(held, onCursor, onReleased) ?? null,
   });
   wireFitRetryOnResize(host);
   const fresh = _viewSession !== sessionId;

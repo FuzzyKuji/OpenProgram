@@ -23,6 +23,8 @@ export interface RecordingInfo {
   steps: number;
   duration_ms: number;
   images: number;
+  /** The block as sent, kept when the message goes back to the composer. */
+  raw?: string;
 }
 
 interface StepRow {

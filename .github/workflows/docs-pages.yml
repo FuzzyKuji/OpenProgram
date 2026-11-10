@@ -54,6 +54,7 @@ jobs:
           done
           mv _publish/docs/install.sh _publish/install
           mv _publish/docs/install.ps1 _publish/install.ps1
+          mv _publish/docs/install.cmd _publish/install.cmd
           grep -Fx 'google-site-verification: google01b0015fda12129e.html' \
             _publish/google01b0015fda12129e.html
           ls -la _publish
@@ -62,7 +63,7 @@ jobs:
         uses: peaceiris/actions-gh-pages@v4
         with:
           deploy_key: ${{ secrets.SITE_DEPLOY_KEY }}
-          external_repository: fzkuji-neo/openprogram-site
+          external_repository: FuzzyKuji/openprogram-site
           publish_branch: main
           publish_dir: ./_publish
           commit_message: "Publish openprogram.io (${{ github.sha }})"

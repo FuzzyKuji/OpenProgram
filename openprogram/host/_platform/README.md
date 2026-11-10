@@ -9,7 +9,8 @@ owner-only permissions, directory handles), ``locking`` (``flock``),
 ``processes`` (liveness, kill trees, port owners), ``process_ownership``
 (process groups and Windows jobs), ``terminal`` (shells, PTYs, bundled
 tools), ``environment`` (browser, WSL, release and service backends),
-``screen_capture_audio`` (audio-only ScreenCaptureKit streams on macOS) and
+``screen_capture_audio`` (audio-only ScreenCaptureKit streams on macOS),
+``front`` (giving the front back to the application the user is in) and
 ``asyncio``.
 
 ## Files in this directory
@@ -17,6 +18,7 @@ tools), ``environment`` (browser, WSL, release and service backends),
 - **`asyncio.py`** — Platform asyncio
 - **`environment.py`** — Platform environment
 - **`filesystem.py`** — Platform filesystem
+- **`front.py`** — What the user has in front stays in front while an agent operates something else
 - **`locking.py`** — Advisory file locking with the POSIX ``fcntl.flock`` surface on every platform
 - **`power.py`** — Optional macOS idle-system-sleep assertion for active agent execution
 - **`process_ownership.py`** — Platform process ownership

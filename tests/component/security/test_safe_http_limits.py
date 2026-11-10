@@ -666,6 +666,34 @@ def test_overall_timeout_is_enforced_during_body_read(monkeypatch):
     assert exc.value.reason == "OVERALL_TIMEOUT"
 
 
+def test_a_body_still_moving_outlives_the_deadline_when_it_does_not_cover_the_body(
+    monkeypatch,
+):
+    """A large asset on a slow link is read whole however long it takes;
+    only a read that goes silent (the read timeout) ends it."""
+    monkeypatch.setattr(safe_http, "monotonic", lambda: 0.0)
+    client = _small_client(
+        monkeypatch,
+        httpcore.Response(
+            200, headers=[(b"content-type", b"text/plain")], content=[b"ok", b"ok"]
+        ),
+    )
+    spec = safe_http.CONSUMER_REGISTRY["tool.web_fetch"]
+    registry = dict(safe_http.CONSUMER_REGISTRY)
+    registry["tool.web_fetch"] = replace(spec, deadline_covers_body=False)
+    monkeypatch.setattr(safe_http, "CONSUMER_REGISTRY", MappingProxyType(registry))
+    later = iter((0.0, 0.0))
+    monkeypatch.setattr(safe_http, "monotonic", lambda: next(later, 10_000.0))
+
+    with client:
+        assert client.get("https://public.test/resource").content == b"okok"
+
+
+def test_the_office_pack_is_read_while_it_moves():
+    assert safe_http.CONSUMER_REGISTRY["office.assets"].deadline_covers_body is False
+    assert safe_http.CONSUMER_REGISTRY["tool.web_fetch"].deadline_covers_body is True
+
+
 def test_audit_events_retain_a_fixed_sanitized_recent_window():
     client = safe_client(
         "tool.web_fetch",

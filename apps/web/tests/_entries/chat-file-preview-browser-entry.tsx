@@ -30,7 +30,7 @@ const complete=(name='report.md')=>{
 };
 Object.assign(window,{complete,layout:()=>useCenterTabs.getState()});
 function Fixture(){
- const msg=useSessionStore(s=>Object.values(s.messagesById).filter(msg=>msg.role==='assistant').at(-1));
+ const msg=useSessionStore(s=>Object.values(s.rowsByView.s??{}).filter(msg=>msg.role==='assistant').at(-1));
  const tabs=useCenterTabs(s=>s.tabs),groups=useCenterTabs(s=>s.groups);
  const ids=groups[0]?.visibleIds.filter(id=>id!==chat.id)??[];
  const layouts=new Map(ids.map(id=>[id,{className:'file-pane',style:{width:'50%',height:'100%'}}]));

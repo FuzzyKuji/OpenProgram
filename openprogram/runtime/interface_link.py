@@ -46,7 +46,7 @@ class InterfaceLink(Protocol):
         """Move the session HEAD and the interface's in-memory copy together."""
 
     def session_on_screen(self, session_id: str) -> bool:
-        """Whether a connected client is looking at the session right now."""
+        """Whether a connected client shows the session in a window that is not hidden."""
 
     def document_file(self, page: str) -> str:
         """The installed file of one product documentation page, or ``""``."""

@@ -38,7 +38,7 @@ def _staging(root: Path, *, timeout_seconds: int = 1800) -> SelfUpdateStore:
             timeout_seconds=timeout_seconds,
         )
     )
-    store.transition("su_supervisor", UpdatePhase.STAGING)
+    store.transition("su_supervisor", UpdatePhase.BUILDING)
     return store
 
 

@@ -84,6 +84,7 @@ export function RightSidebar() {
     document.addEventListener("visibilitychange", update);
     return () => document.removeEventListener("visibilitychange", update);
   }, []);
+  const [activityResetSignal, setActivityResetSignal] = useState(0);
   const {
     style: railStyle,
     shellProps: railShellProps,
@@ -94,6 +95,8 @@ export function RightSidebar() {
     maxWidth: 720,
     defaultWidth: 288,
     direction: -1,
+    storageKey: "openprogram.right-sidebar-width",
+    maxWindowShare: 0.45,
   });
   // Animated nav icons (pqoqubbw/icons), driven from each row's / the
   // toggle button's hover.
@@ -192,6 +195,7 @@ export function RightSidebar() {
   function onNavClick(v: string) {
     // History / Execution Detail nav buttons only switch view +
     // ensure the panel is open. Collapsing is the top toggle's job.
+    if (v === VIEW_RUNNING && view === VIEW_RUNNING) setActivityResetSignal(value => value + 1);
     setRightDockView(v);
     if (!open) setRightDockOpen(true);
   }
@@ -348,7 +352,7 @@ export function RightSidebar() {
         </div>
         {/* One conversation-owned view for Agents and their managed programs. */}
         <div className="right-view" data-view={VIEW_RUNNING}>
-          <RunningPanel key={activitySessionId || "no-session"} sessionId={activitySessionId} active={open && visible && view === VIEW_RUNNING} />
+          <RunningPanel key={activitySessionId || "no-session"} sessionId={activitySessionId} active={open && visible && view === VIEW_RUNNING} resetSignal={activityResetSignal} />
         </div>
         <div id="sessionResourcesPanel" className="right-view" data-view={VIEW_RESOURCES} data-resource-drop-session={open && view === VIEW_RESOURCES ? activitySessionId || undefined : undefined}>
           {view === VIEW_RESOURCES && <SessionResourcesPanel sessionId={activitySessionId} active={open && visible} />}

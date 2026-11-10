@@ -15,7 +15,7 @@ def _result_base(session_id: str, assistant_msg_id: str) -> dict[str, Any]:
     }
 
 
-def _persist_status(git, node, *, reverted: bool, result: dict) -> bool:
+def _persist_status(session_log, node, *, reverted: bool, result: dict) -> bool:
     try:
         node.metadata = {
             **(node.metadata or {}),
@@ -25,15 +25,7 @@ def _persist_status(git, node, *, reverted: bool, result: dict) -> bool:
             "reverted_paths": list(result.get("restored_paths") or []),
             "history_transaction_id": result.get("transaction_id"),
         }
-        role = (node.role or "x")[0]
-        path = git.path / "history" / f"{node.seq:04d}-{role}-{node.id}.json"
-        if path.exists():
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                json.dumps(node.to_dict(), ensure_ascii=False, default=str),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
+        session_log.write_history(node.seq, node.role, node.id, node.to_dict())
         return True
     except Exception:
         return False
@@ -62,7 +54,7 @@ def _apply(
     pair = store._open(session_id)
     if pair is None:
         return {**base, "status": "error", "error": f"unknown session {session_id!r}"}
-    git, index = pair
+    session_log, index = pair
     node = index.nodes_by_id.get(assistant_msg_id)
     if node is None:
         return {**base, "status": "error", "error": (
@@ -104,7 +96,7 @@ def _apply(
                 get_head=lambda: (
                     (store.get_session(session_id) or {}).get("head_id")
                 ),
-                compare_and_set_head=lambda expected, target: (
+                compare_and_set_head=lambda expected, target, rollback=False: (
                     expected == target == head_id
                     and store.compare_and_set_head(session_id, expected, target)
                 ),
@@ -129,7 +121,7 @@ def _apply(
     if result.get("status") != "committed":
         return payload
     payload["metadata_stamped"] = _persist_status(
-        git, node, reverted=direction == "revert", result=result,
+        session_log, node, reverted=direction == "revert", result=result,
     )
     return payload
 

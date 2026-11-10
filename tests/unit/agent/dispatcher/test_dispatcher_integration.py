@@ -448,18 +448,12 @@ def test_caller_forks_sibling_branch(
     assert r1.assistant_msg_id in by_id
 
 
-@pytest.mark.skip(
-    reason="context-engine commit path now pulls fresh history from "
-           "default_store() and ignores the caller's history_override — "
-           "pre-existing production behavior from the commit-chain "
-           "refactor, not a test-migration issue"
-)
-def test_history_override_skips_session_db_walk(
-    tmp_db: SessionDB, captured, collector,
+@pytest.mark.parametrize("override, sees_conversation", [([], False), (None, True)])
+def test_a_clean_run_does_not_read_the_conversation(
+    tmp_db: SessionDB, captured, collector, override, sees_conversation,
 ) -> None:
-    """When ``history_override`` is given, dispatcher should NOT pull
-    history from SessionDB. Webui's branch-walk lives in memory, this
-    is the seam it uses to inject it."""
+    """``history_override=[]`` (scheduled task, clean Job or sub-agent) starts
+    from nothing; without it the turn reads the conversation as before."""
     seen_messages: list = []
 
     async def _capturing(model, ctx, opts):
@@ -473,42 +467,28 @@ def test_history_override_skips_session_db_walk(
         return orig(req=req, history=history, on_event=on_event,
                     cancel_event=cancel_event, stream_fn=_capturing)
 
-    # Pre-seed SessionDB with a "wrong" history that the override
-    # should bypass.
     tmp_db.create_session("c1", "main", title="t")
     tmp_db.append_message("c1", {
-        "id": "x1", "role": "user", "content": "should NOT appear",
+        "id": "x1", "role": "user", "content": "earlier conversation",
         "timestamp": 1.0, "predecessor": None,
     })
-    tmp_db.set_head("c1", "x1")
+    tmp_db.append_message("c1", {
+        "id": "x2", "role": "assistant", "content": "earlier reply",
+        "timestamp": 2.0, "predecessor": "x1",
+    })
+    tmp_db.set_head("c1", "x2")
 
-    fake_history = [
-        {"id": "ov1", "role": "user", "content": "from override",
-         "timestamp": 100.0},
-        {"id": "ov2", "role": "assistant", "content": "ack",
-         "timestamp": 101.0},
-    ]
     with patch.object(D, "_run_loop_blocking", _w):
         D.process_user_turn(
             agent_turn_request.TurnRequest(session_id="c1", user_text="next",
                           agent_id="main", source="tui",
-                          history_override=fake_history),
+                          history_override=override),
         )
 
-    # context.messages = override + the new prompt
     assert seen_messages
-    contents = []
-    for m in seen_messages[0]:
-        c = getattr(m, "content", None)
-        if isinstance(c, list):
-            for blk in c:
-                t = getattr(blk, "text", None)
-                if t:
-                    contents.append(t)
-    # "should NOT appear" is the SessionDB row — must be absent
-    assert not any("should NOT appear" in c for c in contents)
-    # "from override" is the injected history — must be present
-    assert any("from override" in c for c in contents)
+    rendered = repr(seen_messages[0])
+    assert ("earlier conversation" in rendered) is sees_conversation
+    assert "next" in rendered
 
 
 def test_user_already_persisted_skips_duplicate_user_msg(

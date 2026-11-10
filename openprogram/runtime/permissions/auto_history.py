@@ -25,12 +25,15 @@ class AutoHistory:
         self.action_id = action_id
 
     def _existing(self, connection, action_id):
-        row = connection.execute(
-            "SELECT payload_json FROM execution_events WHERE execution_id = ? AND kind = ? "
-            "AND json_extract(payload_json, '$.action_id') = ? ORDER BY sequence DESC LIMIT 1",
-            (self.execution_id, _EVENT, action_id),
-        ).fetchone()
-        return json.loads(row[0]) if row else None
+        row = connection.first(
+            "execution_events", execution_id=self.execution_id, kind=_EVENT, order="-sequence",
+            where=lambda event: json.loads(event["payload_json"]).get("action_id") == action_id,
+        )
+        return json.loads(row["payload_json"]) if row else None
+
+    def _in_this_epoch(self, event):
+        payload = json.loads(event["payload_json"])
+        return payload.get("session_id") == self.session_id and payload.get("epoch") == self.epoch
 
     def get(self):
         from contextlib import closing
@@ -38,6 +41,14 @@ class AutoHistory:
             return self._existing(connection, self.action_id)
 
     def record(self, *, blocked, reason, code, approved=False):
+        from openprogram.runtime.execution.worker_calls import run_table_calls
+        calls = run_table_calls()
+        if calls is not None:
+            return calls.call(
+                "openprogram.runtime.permissions.auto_history:record_in_worker",
+                self.execution_id, self.session_id, self.epoch, self.action_id,
+                blocked=blocked, reason=reason, code=code, approved=approved,
+            )
         action_id = self.action_id + (":approved" if approved else "")
         with self.store._transaction() as connection:
             existing = self._existing(connection, action_id)
@@ -46,13 +57,8 @@ class AutoHistory:
             execution = self.store._require_execution(connection, self.execution_id)
             if execution.session_id != self.session_id:
                 raise ValueError("auto review session mismatch")
-            row = connection.execute(
-                "SELECT payload_json FROM execution_events WHERE kind = ? "
-                "AND json_extract(payload_json, '$.session_id') = ? "
-                "AND json_extract(payload_json, '$.epoch') = ? ORDER BY sequence DESC LIMIT 1",
-                (_EVENT, self.session_id, self.epoch),
-            ).fetchone()
-            previous = json.loads(row[0]) if row else {}
+            row = connection.first("execution_events", kind=_EVENT, order="-sequence", where=self._in_this_epoch)
+            previous = json.loads(row["payload_json"]) if row else {}
             total = int(previous.get("total", 0)) + int(blocked)
             if approved and int(previous.get("total", 0)) >= 20:
                 total = 0
@@ -63,6 +69,12 @@ class AutoHistory:
             self.store._append_event(connection, execution_id=self.execution_id,
                 execution_version=execution.status_version, kind=_EVENT, payload=value, created_at=time.time())
             return value
+
+
+def record_in_worker(execution_id, session_id, epoch, action_id, **verdict):
+    """Runs in the parent: an Auto verdict reached inside a function subprocess."""
+    from openprogram.runtime.execution import default_store
+    return AutoHistory(default_store(), execution_id, session_id, epoch, action_id).record(**verdict)
 
 
 def for_operation(request, name, call_id, args, operation_id=None, *, files=None):

@@ -1,1 +1,44 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Effort picker</title><style>body{font:16px/1.7 system-ui;max-width:850px;margin:40px auto;padding:0 24px;background:#f8f7f3;color:#292824}h1,h2{line-height:1.3}h2{margin-top:32px;font-size:20px}</style><main><h1>Effort picker</h1><h2>Design and reference</h2><p>The composer Effort popup adopts the observed Claude desktop 2.31226.0 layout and timing: neutral stepped track, white handle, directional label transitions, and a sustained lavender square field at the highest option. Local published JavaScript and GLSL were inspected as reference; implementation is independently written. Claude has an Ultracode workflow mode; OpenProgram keeps provider effort IDs and adds no workflow mode.</p><h2>Behavior</h2><p>Options and Recommended come from the selected model. The highest of multiple supported options activates the field, including xhigh, max, or high. One or zero options never animate. Radix owns pointer and keyboard selection; state still flows through the existing composer settings. Fast and help remain independent. No changes to function calls, chat generation, providers, queues, or permissions.</p><h2>Motion</h2><p>Ordinary options use a neutral filled track with discrete ticks. Dragging enlarges the handle by 12%. Labels move vertically and resolve from blur in 200ms. The highest option uses rounded 3px squares on a 4px grid, randomly repeated propagation from the right, stepped brightness and independent slow variation. The field enters over 700ms and fades over 850ms when leaving the highest option; the canvas remains at full track width during exit. WebGL2 renders an eight-pulse field with summed propagation, five intensity steps, per-cell brightness drift, shared surface propagation and theme-specific premultiplied color composition. The slider uses a clipped fill with an inverse-translated full-width field, elastic sub-step pointer feedback, 120ms snapping and four-layer label transitions. Selection previews while dragging and commits on release.</p><h2>Lifecycle and compatibility</h2><p>The component owns one animation callback. It cancels on close, unmount, hidden document, or reduced motion. Reduced motion disables the decorative field. Theme colors come from CSS tokens; canvas failure leaves a usable slider. Canvas resolution follows device pixel ratio, capped at 4,147,200 pixels. Named slider values, keyboard focus and the recommended tick remain accessible. Pointer cancellation clears drag feedback.</p><h2>Acceptance</h2><p>Exercise the actual ThinkingEffortPill: pointer and keyboard select unchanged effort IDs; xhigh activates sustained animation; leaving it fades to empty; reopen and model option changes work; Fast remains independent; reduced motion produces a stable frame; dark/light and narrow layouts remain legible. Verify the refreshed default installed App separately.</p><h2>Implementation evidence</h2><p id="status">The full WebGL2 field, layered text and discrete slider are implemented. Production build passes. The user explicitly requests installation without further test runs. Native pixel-identical acceptance is not claimed.</p></main></html>
+<title>Effort picker</title>
+<meta name="description" content="The composer's thinking effort popup: options, slider motion, the highest-option field and its lifecycle.">
+<meta name="covers" content="apps/web/components/chat/composer/controls/effort/ apps/web/lib/effort/">
+<h1>Effort picker</h1>
+
+<p>Layout and timing follow the observed Claude desktop 2.31226.0, written independently. Claude's Ultracode workflow mode has no counterpart: OpenProgram keeps provider effort ids. Options and Recommended come from the selected model; Radix owns pointer and keyboard selection; state flows through composer settings. <a href="composer-fast-control.html">Fast</a> and help are independent.</p>
+
+<h2>Motion</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Element</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Track</th><td>Neutral fill, discrete ticks, clipped fill with an inverse-translated full-width field</td></tr>
+<tr><th scope="row">Handle</th><td>White; 12% larger while dragging; elastic sub-step feedback; snaps in 120ms</td></tr>
+<tr><th scope="row">Selection</th><td>Previews while dragging, commits on release. Pointer cancel clears drag feedback.</td></tr>
+<tr><th scope="row">Labels</th><td>Four-layer transition: vertical move, resolving from blur in 200ms</td></tr>
+</tbody>
+</table>
+
+<h2>Highest-option field</h2>
+<p>Runs on the highest of several options (<code translate="no">xhigh</code>, <code translate="no">max</code> or <code translate="no">high</code>). One or zero options never animate.</p>
+<dl class="pairs">
+<dt>Cells</dt><dd>Rounded 3px squares on a 4px grid; lavender</dd>
+<dt>Pattern</dt><dd>WebGL2 eight-pulse field propagating from the right, five intensity steps, per-cell brightness drift, premultiplied per-theme colour</dd>
+<dt>Timing</dt><dd>Enters over 700ms; fades over 850ms on leaving, canvas staying full track width</dd>
+<dt>Resolution</dt><dd>Device pixel ratio, capped at 4,147,200 pixels</dd>
+</dl>
+
+<h2>Lifecycle</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Animation</th><td>One animation callback, cancelled on close, unmount, hidden document or reduced motion.</td></tr>
+<tr><th scope="row">Failure</th><td>Reduced motion disables the field. Canvas failure leaves a usable slider.</td></tr>
+<tr><th scope="row">Accessibility</th><td>Theme colours come from CSS tokens. Named values, keyboard focus and the recommended tick stay accessible.</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Acceptance</summary>
+<p>On the real <code translate="no">ThinkingEffortPill</code>: pointer and keyboard select unchanged effort ids; <code translate="no">xhigh</code> animates; leaving fades to empty; reopen and model changes work; Fast stays independent; reduced motion gives a stable frame; dark, light and narrow layouts stay legible.</p>
+</details>
+
+<h2>Implementation status</h2>
+<p>Implemented. Pixel-identical match with the reference is not claimed.</p>

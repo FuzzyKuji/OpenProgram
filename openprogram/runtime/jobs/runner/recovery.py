@@ -4,63 +4,6 @@ from openprogram.runtime.jobs.runner import shared
 
 
 class RecoveryOperations:
-    def _renew_job_lease(
-        self,
-        job_id: str,
-        lease_generation: int,
-        stop: shared.threading.Event,
-        attempt_id: str | None = None,
-        attempt_generation: int | None = None,
-    ) -> None:
-        while not stop.wait(shared._LEASE_RENEW_SECS):
-            try:
-                if not self._governor.renew_lease(
-                    job_id, owner_instance_id=self._instance_id,
-                    lease_generation=lease_generation,
-                ):
-                    return
-                if attempt_id is not None and attempt_generation is not None:
-                    self._execution_attempts.heartbeat(
-                        attempt_id,
-                        generation=attempt_generation,
-                        ttl_seconds=30.0,
-                    )
-            except Exception:
-                shared._log.exception("failed to renew resource lease for %s", job_id)
-                return
-
-
-    def _renew_borrowed_lease(
-        self,
-        job_id: str,
-        parent_job_id: str,
-        lease_generation: int,
-        stop: shared.threading.Event,
-        attempt_id: str | None = None,
-        attempt_generation: int | None = None,
-    ) -> None:
-        while not stop.wait(shared._LEASE_RENEW_SECS):
-            try:
-                if not self._governor.renew_borrowed_lease(
-                    job_id,
-                    parent_job_id=parent_job_id,
-                    owner_instance_id=self._instance_id,
-                    lease_generation=lease_generation,
-                ):
-                    return
-                if attempt_id is not None and attempt_generation is not None:
-                    self._execution_attempts.heartbeat(
-                        attempt_id,
-                        generation=attempt_generation,
-                        ttl_seconds=30.0,
-                    )
-            except Exception:
-                shared._log.exception(
-                    "failed to renew borrowed resource lease for %s", job_id,
-                )
-                return
-
-
     def _owner_holds_worker_lock(self, owner_instance_id: str) -> bool:
         try:
             owner_pid = int(owner_instance_id.split("_", 2)[1])
@@ -198,9 +141,6 @@ class RecoveryOperations:
             if job is not None and shared.is_terminal(job.status):
                 self._broadcast_job_status(job)
                 self._update_attach_card(job, error_text=job.error)
-                shared._broadcast_session_reload(
-                    session_id, reason=f"job_{job.status.value}",
-                )
         try:
             result = self._governor.reconcile(
                 job_lookup=lambda session_id, job_id: shared._store_load(
@@ -218,9 +158,6 @@ class RecoveryOperations:
             if job is not None and shared.is_terminal(job.status):
                 self._broadcast_job_status(job)
                 self._update_attach_card(job, error_text=job.error)
-                shared._broadcast_session_reload(
-                    session_id, reason=f"job_{job.status.value}",
-                )
         for job_id, session_id in result.worker_lost:
             if self._recover_unactivated_canonical_resume(job_id):
                 self._dispatch_wake.set()
@@ -259,9 +196,6 @@ class RecoveryOperations:
             if job is not None and shared.is_terminal(job.status):
                 self._broadcast_job_status(job)
                 self._update_attach_card(job, error_text=job.error)
-                shared._broadcast_session_reload(
-                    session_id, reason=f"job_{job.status.value}",
-                )
         try:
             self._governor.recover_provider_reservations()
         except Exception:
@@ -425,6 +359,10 @@ class RecoveryOperations:
     def _reconcile_loop(self) -> None:
         while not self._shutdown_event.wait(shared._RECONCILE_SECS):
             self._reconcile_resources()
+            try:
+                self._execution_store.tables.forget_finished_sessions(shared._FINISHED_SESSION_MEMORY_SECS)
+            except Exception:
+                shared._log.exception("finished sessions were not released from memory")
             try:
                 from openprogram.operations.self_update.delivery.restart import reconcile
                 reconcile(self)

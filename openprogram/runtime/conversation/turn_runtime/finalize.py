@@ -9,6 +9,7 @@ never breaks the turn:
   6.1  context-commit backfill (assistant output + tool sub-calls)
   6.4  feed real provider usage back into the context engine
   6.5  auto-title on the first text turn
+  6.5a sort the turn's message into a topic, in the background
   6.8  git-commit the turn (git-as-truth)
   6.9  project auto-commit (entity layer)
   6.95 evict old per-turn file-backup snapshots
@@ -26,6 +27,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Optional
 
+from openprogram.runtime.conversation.turn_runtime.prep import is_runtime_prompt
 from openprogram.runtime.conversation.turn_runtime.titles import (
     _maybe_auto_title,
     maybe_auto_name_branch,
@@ -94,21 +96,13 @@ def persist_turn_file_summary(
         pair = store._open(session_id)
         if pair is None:
             return summary
-        git, index = pair
+        session_log, index = pair
         node = index.nodes_by_id.get(assistant_msg_id)
         if node is None:
             return summary
         node.metadata = {**(node.metadata or {}), "turn_files": summary}
         import json as _json
-        role = (node.role or "x")[0]
-        path = git.path / "history" / f"{node.seq:04d}-{role}-{node.id}.json"
-        if path.exists():
-            tmp = path.with_suffix(".json.tmp")
-            tmp.write_text(
-                _json.dumps(node.to_dict(), ensure_ascii=False, default=str),
-                encoding="utf-8",
-            )
-            tmp.replace(path)
+        session_log.write_history(node.seq, node.role, node.id, node.to_dict())
         return summary
     except Exception:
         _log.warning(
@@ -260,7 +254,7 @@ def commit_turn_to_shadow_git(
         pair = store._open(session_id)
         if pair is None:
             return after
-        git, idx = pair
+        session_log, idx = pair
         node = idx.nodes_by_id.get(assistant_msg_id)
         if node is None:
             return after
@@ -275,19 +269,9 @@ def commit_turn_to_shadow_git(
                 "before": before, "after": after,
             },
         }
-        # Per-node metadata lives in the node's history file (not
-        # meta.json) — rewrite it so the stamp survives a worker
-        # restart, mirroring the project_commit stamp above.
+        # Record the stamp so it survives a worker restart.
         import json as _json
-        role = (node.role or "x")[0]
-        fp = git.path / "history" / f"{node.seq:04d}-{role}-{node.id}.json"
-        if fp.exists():
-            tmp = fp.with_suffix(".json.tmp")
-            tmp.write_text(
-                _json.dumps(node.to_dict(), ensure_ascii=False, default=str),
-                encoding="utf-8",
-            )
-            tmp.replace(fp)
+        session_log.write_history(node.seq, node.role, node.id, node.to_dict())
         return after
     except Exception:
         # The turn's diff falls back to the approximate difflib path. Say
@@ -296,6 +280,15 @@ def commit_turn_to_shadow_git(
         _log.debug("shadow-git turn commit skipped for session %s turn %s",
                    session_id, assistant_msg_id, exc_info=True)
         return None
+
+
+def _person_talked(req: Any) -> bool:
+    """The conversation's own turn, and somebody typed it."""
+    return bool(req.advance_head and getattr(req, "speaker_kind", None) in ("owner", "human")
+                and not getattr(req, "quiet_finish", False)
+                and not getattr(req, "automation", None)
+                # A process-exit notice keeps the speaker of the chat before it.
+                and not is_runtime_prompt(req))
 
 
 def finalize_turn(
@@ -313,7 +306,7 @@ def finalize_turn(
     head_id: Optional[str] = None,
 ) -> bool:
     """Run the phase-6 turn-finalization bookkeeping. All side effects;
-    returns whether the session Git commit succeeded. Every other sub-step is
+    returns whether the session's final fields were saved. Every other sub-step is
     best-effort — the conversation
     persists regardless, and the next turn re-derives anything skipped.
 
@@ -327,12 +320,16 @@ def finalize_turn(
     # on a spawned turn, which update_session treats as "don't touch".
     # This step used to move the head unconditionally and was the last
     # unguarded mover (context/compaction.md §5).
-    db.update_session(
-        req.session_id,
-        head_id=head_id,
-        last_prompt_tokens=int(usage.get("context_tokens") or 0),
-        model=req.model_override or session.get("model"),
-    )
+    # A background turn (an always-on check-in on a side branch) may run
+    # on another model and context; the conversation keeps its own.
+    background = bool(getattr(req, "background", False))
+    if not background:
+        db.update_session(
+            req.session_id,
+            head_id=head_id,
+            last_prompt_tokens=int(usage.get("context_tokens") or 0),
+            model=req.model_override or session.get("model"),
+        )
 
     # 6.1. Backfill the latest context commit's placeholder item with the
     # final assistant output. The turn-start context commit saw the assistant
@@ -367,9 +364,8 @@ def finalize_turn(
                     _patched = True
                     break
             # Also splice in tool sub-calls written during the LLM loop
-            # (caller=assistant_msg_id). ensure_latest_commit ran at
-            # turn-start before any tool node existed, so the context commit
-            # has no tool items — the Context panel was showing a fake
+            # (caller=assistant_msg_id). The turn's context was built
+            # before any tool node existed, so it has no tool items — the Context panel was showing a fake
             # "user → assistant" pair instead of the real "user →
             # assistant_with_tool_calls → tool_result(s)" sequence.
             if _assistant_idx >= 0:
@@ -428,7 +424,7 @@ def finalize_turn(
     # directly); when either is None — resolution failed at the call site —
     # we skip, matching the old inline try/except fall-through.
     try:
-        if agent_profile is not None and ctx_win is not None:
+        if agent_profile is not None and ctx_win is not None and not background:
             from openprogram.runtime.context import resolve_engine_for as _resolve_eng
             from openprogram.runtime.context.types import (
                 BudgetAllocation as _BA, TurnPrep as _TurnPrep,
@@ -453,7 +449,14 @@ def finalize_turn(
 
     # 6.5. Auto-title: background LLM generation at turn thresholds.
     _assistant_text = assistant_msg.get("content") or ""
-    _maybe_auto_title(db, req.session_id, session, req.user_text, _assistant_text)
+    if not background:
+        _maybe_auto_title(db, req.session_id, session, req.user_text, _assistant_text)
+        try:
+            from openprogram.runtime.conversation.topics import sort_after_turn
+
+            sort_after_turn(req.session_id)
+        except Exception:
+            _log.warning("topic sorting not started for %s", req.session_id, exc_info=True)
 
     # 6.5b. Auto-name the current branch (DAG badge). Bumps the branch's
     # own turn counter and, at thresholds, spawns a background LLM rename
@@ -461,28 +464,35 @@ def finalize_turn(
     # assistant_msg_id above. The branch's entry first moves off the tip
     # this turn extended, so its name, lock and counter follow the
     # branch. Best-effort. See branch-naming.md.
+    # A background turn's branch is hidden when it ends; it gets no name.
     try:
-        db.carry_branch_entry(req.session_id, assistant_msg_id)
+        if not background:
+            db.carry_branch_entry(req.session_id, assistant_msg_id)
     except Exception:
         _log.debug("branch entry not carried for session %s",
                    req.session_id, exc_info=True)
     try:
-        maybe_auto_name_branch(db, req.session_id, assistant_msg_id)
+        if not background:
+            maybe_auto_name_branch(db, req.session_id, assistant_msg_id)
     except Exception:
         # The branch keeps its current badge; the next turn tries again.
         _log.debug("branch auto-name skipped for session %s",
                    req.session_id, exc_info=True)
 
+    # 6.5c. The user talked: an always-on conversation looks back soon.
+    if not background and _person_talked(req):
+        try:
+            from openprogram.runtime.conversation.always_on import runtime as always_on_runtime
+            always_on_runtime.note_user_turn(req.session_id)
+        except Exception:
+            _log.debug("always-on wake not reset for session %s", req.session_id, exc_info=True)
+
     # 6.6. Compaction itself is not run here. Auto-compact happens
     # before the next model call; clients invoke ``trigger_compaction``
     # for a manual compact. after_turn only feeds usage back.
 
-    # 6.8. Git commit the turn — the session's git repo is the source
-    # of truth (git-as-truth). Every successful turn becomes one
-    # commit on the session's branch, picking up new history files +
-    # rewritten context/messages.json + context/commit.json + meta.json
-    # in a single diff. Best-effort: if git fails the data is still
-    # on disk, next turn's commit will sweep it up.
+    # 6.8. Save the session's fields at the turn boundary. Messages reached
+    # the log as they were written; this records the head and meta.
     turn_committed = False
     try:
         from openprogram.state.store import default_store
@@ -492,9 +502,9 @@ def finalize_turn(
             db.commit_turn(req.session_id, f"turn: {_msg}")
             turn_committed = True
     except Exception:
-        # The turn's data is on disk either way; next turn's commit sweeps
-        # it up. A repeat means the session repo is no longer committing.
-        _log.warning("session git commit failed for %s", req.session_id,
+        # The messages are in the log either way; the next turn saves the
+        # fields. A repeat means this session's log can no longer be written.
+        _log.warning("session fields not saved for %s", req.session_id,
                      exc_info=True)
 
     # 6.9. Project auto-commit (entity layer, half 2): if this session is
@@ -530,19 +540,7 @@ def finalize_turn(
                                 "repo": _proj.path, "sha": _commit_sha,
                             },
                         }
-                        # Per-node metadata lives in the node's history
-                        # file (not meta.json) — rewrite it so the stamp
-                        # survives a worker restart, mirroring _revert.py.
-                        import json as _json
-                        _rl = (_n.role or "x")[0]
-                        _fp = _g.path / "history" / f"{_n.seq:04d}-{_rl}-{_n.id}.json"
-                        if _fp.exists():
-                            _tmp = _fp.with_suffix(".json.tmp")
-                            _tmp.write_text(
-                                _json.dumps(_n.to_dict(), ensure_ascii=False, default=str),
-                                encoding="utf-8",
-                            )
-                            _tmp.replace(_fp)
+                        _g.write_history(_n.seq, _n.role, _n.id, _n.to_dict())
             except Exception:
                 # Without the stamp a later revert_turn falls back to the
                 # file-snapshot restore instead of a git-aware undo.

@@ -18,12 +18,10 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, replace
 from typing import Iterator, Optional
 
-from .event import CALL_KIND_UNKNOWN
-
 
 @dataclass(frozen=True)
 class UsageContext:
-    call_kind: str = CALL_KIND_UNKNOWN
+    call_kind: Optional[str] = None  # None: no caller has said what this is
     call_label: Optional[str] = None
     session_id: Optional[str] = None
     parent_session_id: Optional[str] = None
@@ -122,7 +120,7 @@ def apply_snapshot(data: Optional[dict]) -> None:
     if not data:
         return
     _current.set(UsageContext(
-        call_kind=data.get("call_kind") or CALL_KIND_UNKNOWN,
+        call_kind=data.get("call_kind"),
         call_label=data.get("call_label"),
         session_id=data.get("session_id"),
         parent_session_id=data.get("parent_session_id"),

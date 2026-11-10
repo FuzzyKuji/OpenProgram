@@ -298,6 +298,12 @@ class Usage(BaseModel):
     # Local estimate of the exact request that produced this usage. It is
     # paired with provider input usage to calibrate later graph estimates.
     request_input_estimate: int = 0
+    # Time to first token, measured where every provider stream passes
+    # (streaming/first_token.py): from sending the request to the reply's
+    # first content of any kind, and to its first visible text. ``None``
+    # when the reply had none of that kind or was not streamed here.
+    first_token_ms: int | None = None
+    first_text_ms: int | None = None
     cost: UsageCost = Field(default_factory=UsageCost)
 
 
@@ -340,6 +346,13 @@ class AssistantMessage(BaseModel):
     # that answered. Empty when the first model answered.
     failover: list[dict[str, str]] = Field(default_factory=list)
     timestamp: int  # Unix ms
+
+    @classmethod
+    def empty(cls, model: Any, *, api: str | None = None) -> "AssistantMessage":
+        """A reply with no content yet, stamped now, for a stream to fill."""
+        import time
+        return cls(content=[], api=api or model.api, provider=model.provider, model=model.id,
+                   usage=Usage(), stop_reason="stop", timestamp=int(time.time() * 1000))
 
 
 class ToolResultMessage(BaseModel):
@@ -522,6 +535,8 @@ class EventRetry(BaseModel):
     max_attempts: int | None = None
     reason: str
     delay_ms: int = 0
+    # What failed, in one short line, for the retry row's detail.
+    error: str | None = None
 
 
 class EventStructuredOutputEnd(BaseModel):

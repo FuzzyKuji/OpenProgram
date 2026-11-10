@@ -46,6 +46,8 @@ def test_ui_design_navigation_is_grouped_without_losing_pages() -> None:
     assert set(ui_sections) == {
         "UI · Foundations",
         "UI · Chat and composer",
+        "UI · Transcript model",
+        "UI · Composer",
         "UI · Browser and tabs",
         "UI · Settings and catalog",
         "UI · Workspace and sidebar",
@@ -167,8 +169,8 @@ def test_bilingual_companions_keep_distinct_language_outputs(tmp_path, monkeypat
 
 
 def test_root_overview_has_bilingual_navigation_titles(tmp_path: Path) -> None:
-    (tmp_path / "README.md").write_text('<p>OpenProgram</p>', encoding="utf-8")
-    (tmp_path / "README.zh.md").write_text('<p>OpenProgram</p>', encoding="utf-8")
+    (tmp_path / "README.html").write_text('<p>OpenProgram</p>', encoding="utf-8")
+    (tmp_path / "README.zh.html").write_text('<p>OpenProgram</p>', encoding="utf-8")
     page = discover(tmp_path)[0]
     assert (page.title, page.title_zh) == ("Overview", "概览")
 
@@ -249,6 +251,7 @@ def test_retired_document_urls_publish_redirects_without_duplicate_catalog_entri
     monkeypatch.setattr(build, 'DOCS_ROOT', tmp_path)
     monkeypatch.setattr(build, 'OUT_ROOT', tmp_path / '_site')
     monkeypatch.setattr(generate_reference, 'generate_all', lambda: None)
+    monkeypatch.setattr(build, 'format_gate', dict)  # these sites test other things
     assert build.build() == 0
     output = tmp_path / '_site'
     redirect = (output / 'start/old.html').read_text()
@@ -274,6 +277,7 @@ def test_invalid_document_redirect_preserves_published_site(tmp_path: Path, monk
     monkeypatch.setattr(build, 'DOCS_ROOT', tmp_path)
     monkeypatch.setattr(build, 'OUT_ROOT', tmp_path / '_site')
     monkeypatch.setattr(generate_reference, 'generate_all', lambda: None)
+    monkeypatch.setattr(build, 'format_gate', dict)  # these sites test other things
     assert build.build() == 0
     published = (tmp_path / '_site/start/topic.html').read_bytes()
     for aliases in (
@@ -290,37 +294,27 @@ def test_invalid_document_redirect_preserves_published_site(tmp_path: Path, monk
 
 def test_consolidated_entity_proposal_retains_replay_and_project_sections() -> None:
     import re
-    from scripts.docs_site import build
 
-    for language, headings in (
-        ('', ('42-projects-panel', '43-project-indicator-at-the-top-of-chat',
-              '5-key-invariants', '6-risks',
-              '8-relationship-with-the-existing-commit-chain', 'appendix-proposed-build-order')),
-        ('.zh', ('42-projects-panel', '43-chat-顶部-project-指示',
-                 '5-关键不变式', '6-风险点', '8-跟现有-commit-chain-的关系', '附录-提议的构建顺序')),
-    ):
-        source = (ROOT / f'docs/reference/design/memory/entity-memory-proposal{language}.md').read_text()
-        build._SLUG_DEDUP = {}
-        rendered = build.make_md().render(source)
-        ids = re.findall(r'\bid="([^"]+)"', rendered)
+    headings = ('storage-layout', 'session-git-lifecycle', 'replay-ui', 'project-git-lifecycle',
+                'project-metadata-and-presentation', 'key-invariants', 'risks', 'relationships')
+    for language in ('', '.zh'):
+        source = (ROOT / f'docs/reference/design/memory/entity-memory-proposal{language}.html').read_text()
+        ids = re.findall(r'<h[1-6][^>]*\bid="([^"]+)"', source)
         assert set(headings) <= set(ids)
         assert len(ids) == len(set(ids))
-        assert '&lt;span' not in rendered
+        assert '&lt;span' not in re.sub(r'<(pre|code)\b.*?</\1>', '', source, flags=re.DOTALL)
 
 
 def test_local_topic_titles_render_as_headings_after_compatibility_anchors() -> None:
     import re
-    from scripts.docs_site import build
 
     for name in ('context/composition', 'memory/overview',
                  'runtime/session/storage', 'runtime/dag/rendering'):
         for language in ('', '.zh'):
-            source = (ROOT / f'docs/reference/design/{name}{language}.md').read_text()
-            build._SLUG_DEDUP = {}
-            rendered = build.make_md().render(source)
-            assert re.search(r'<h1\b[^>]*>[^<]+', rendered), name + language
+            source = (ROOT / f'docs/reference/design/{name}{language}.html').read_text()
+            assert re.search(r'<h1\b[^>]*>\s*[^<\s]', source), name + language
             # Code blocks quote prompts whose own headings start with "# ".
-            prose = re.sub(r'<pre>.*?</pre>', '', rendered, flags=re.DOTALL)
+            prose = re.sub(r'<pre\b.*?</pre>', '', source, flags=re.DOTALL)
             assert not re.search(r'^# ', prose, re.MULTILINE), name + language
 
 
@@ -385,18 +379,15 @@ def test_short_navigation_names_preserve_document_identity(tmp_path) -> None:
     folder.mkdir(parents=True)
     for suffix, title in (("", "Self-Recursion Guard for Agentic Functions"),
                           (".zh", "Agentic 函数防自递归机制")):
-        (folder / f"agentic-self-recursion{suffix}.md").write_text(f"# {title}\n")
         (folder / f"agentic-self-recursion{suffix}.html").write_text(
             f"<title>{title}</title><h1 id='existing-anchor'>{title}</h1>"
         )
-    pages = {page.kind: page for page in discover(tmp_path)}
-    assert (pages["md"].title, pages["md"].title_zh) == ("Recursion guard", "递归保护")
-    assert (pages["html"].title, pages["html"].title_zh) == ("Recursion diagram", "递归图解")
-    assert pages["md"].out.name == "agentic-self-recursion.html"
-    assert pages["html"].out.name == "agentic-self-recursion.viz.html"
-    assert pages["html"].zh_out.name == "agentic-self-recursion.zh.viz.html"
-    assert "existing-anchor" in pages["html"].src.read_text()
-    assert "Self-Recursion Guard for Agentic Functions" in pages["md"].src.read_text()
+    page = discover(tmp_path)[0]
+    assert (page.title, page.title_zh) == ("Recursion guard", "递归保护")
+    assert page.out.name == "agentic-self-recursion.html"
+    assert page.zh_out.name == "agentic-self-recursion.zh.html"
+    assert "existing-anchor" in page.src.read_text()
+    assert "Self-Recursion Guard for Agentic Functions" in page.src.read_text()
 
 
 def test_page_without_toc_does_not_reserve_the_right_column() -> None:

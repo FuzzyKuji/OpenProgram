@@ -334,8 +334,8 @@ def test_restored_queue_checks_image_capability_before_model_execution(verifier,
         creates_agent=False, defer_dispatch=True, **{key: config[key] for key in (
             "profile_snapshot", "model_override", "tools_override", "response_format", "authority")})
     verifier.runner.shutdown()
-    with verifier.runner._governor.ledger.immediate() as conn:
-        conn.execute("UPDATE job_admissions SET dispatch_ready = 1 WHERE job_id = ?", (claim.job_id,))
+    with verifier.runner._governor.ledger.run_tables().transaction() as conn:
+        conn.update("job_admissions", {"dispatch_ready": 1}, job_id=claim.job_id)
     monkeypatch.setattr("openprogram.runtime.conversation.model_tools.resolve_model",
                         lambda *a: SimpleNamespace(provider="fake", id="fixed", input=["text"]))
     recovered = JobRunner(max_workers=1, governor=verifier.runner._governor)

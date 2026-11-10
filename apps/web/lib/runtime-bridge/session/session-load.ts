@@ -1,12 +1,8 @@
-import { flushPendingChatDeltas } from "@/lib/net/ws/chat-stream";
-import { createSessionLoads, retainChangedRows, type SessionRead, type SessionReadStatus } from '@/lib/net/ws/session-load';
-import { useSessionStore, type ChatMsg } from '@/lib/session-store';
-import { runtimeState, getSocket } from '../state';
+import { flushTextFrames } from "@/lib/net/ws/text-frames";
+import { createSessionLoads, type SessionRead, type SessionReadStatus } from '@/lib/net/ws/session-load';
+import { useSessionStore } from '@/lib/session-store';
+import { getSocket } from '../state';
 
-function rows(id: string): ChatMsg[] {
-  const state = useSessionStore.getState();
-  return (state.messageOrder[id] ?? []).map(mid => state.messagesById[mid]).filter(Boolean);
-}
 function status(id: string, value: SessionReadStatus) {
   useSessionStore.getState().setTranscriptReadStatus(id, value);
 }
@@ -16,20 +12,8 @@ function createOwner(socket: WebSocket) {
       if (socket.readyState !== WebSocket.OPEN) throw new Error('Disconnected');
       socket.send(JSON.stringify(request));
     },
-    capture: id => {
-      // Progress received before this read belongs to its baseline; only later
-      // deltas may override the returned snapshot.
-      flushPendingChatDeltas(id);
-      return { rows: rows(id), wire: [...(runtimeState.conversations[id]?.messages as { id: string }[] ?? [])] };
-    },
     status: (id, value) => { if (getSocket() === socket) status(id, value); }, requestId: () => crypto.randomUUID(),
   });
-}
-const applying = new Map<string, { before: ChatMsg[]; current: ChatMsg[] }>();
-/** Called at the existing transcript store write, so no intermediate state loses live rows. */
-export function preserveSessionReadRows(id: string, loaded: ChatMsg[]): ChatMsg[] {
-  const read = applying.get(id);
-  return read ? retainChangedRows(read.before, read.current, loaded) : loaded;
 }
 const owners = new WeakMap<WebSocket, ReturnType<typeof createOwner>>();
 function owner(socket: WebSocket) {
@@ -57,17 +41,20 @@ export function acceptSessionLoad(socket: WebSocket, data: Record<string, unknow
   const accepted = owner(socket).accept(data);
   if (!accepted) return false;
   const id = data.id as string;
-  flushPendingChatDeltas(id);
-  const current = rows(id);
-  const context = accepted.context;
-  if (context) {
-    const wire = runtimeState.conversations[id]?.messages as { id: string }[] ?? [];
-    data = { ...data, messages: retainChangedRows(context.wire, wire, data.messages as { id: string }[] ?? []) };
-  }
-  if (context) applying.set(id, { before: context.rows, current });
+  flushTextFrames();
   try { apply(data as never); } catch (error) { status(id, 'error'); throw error; }
-  finally { applying.delete(id); }
+  if (accepted.next) owner(socket).request(accepted.next);
   return true;
+}
+/** A repair or page read of a view, owned by this socket's reads: see createSessionLoads.exclusive. */
+export function exclusiveSessionRead<R>(view: string, read: () => Promise<R>, skipped: R): Promise<R> {
+  const socket = getSocket();
+  return socket ? owner(socket).exclusive(view, read, skipped) : read();
+}
+/** Whether a repair or page read of the view is in flight on this socket. */
+export function sessionReadBusy(view: string): boolean {
+  const socket = getSocket();
+  return socket ? owner(socket).busy(view) : false;
 }
 export function failSessionLoad(socket: WebSocket, data: { request_id?: unknown }) { return owner(socket).error(data); }
 export function disposeSessionLoads(socket: WebSocket) { owners.get(socket)?.dispose(); }

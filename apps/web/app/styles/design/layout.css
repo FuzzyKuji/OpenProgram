@@ -3,10 +3,10 @@
   --transition: var(--motion-slow) var(--ease-standard);
   --sidebar-width: 288px;
   --detail-width: 300px;
-  /* Collapsed rail: the 49px icon rail inside the floating card plus
-     the card's two 7px gutters — components/layout/use-resizable-rail.ts
+  /* Collapsed rail: a 46px card (8px, a 30px square row, 8px) inside the
+     shell's two 8px gutters — components/layout/use-resizable-rail.ts
      carries the same number. */
-  --rail-collapsed-w: 63px;
+  --rail-collapsed-w: 62px;
   /* 聊天列（消息列 + 输入框三条带共用）：空间够就扩，封顶 900。
      消息正文左右不再内缩，文字边缘与输入框边缘对齐。 */
   --chat-column-max: 900px;

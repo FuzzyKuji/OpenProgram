@@ -1,13 +1,13 @@
 {
   "name": "openprogram-desktop",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "private": true,
   "description": "Electron desktop shell for OpenProgram",
   "author": "Fzkuji",
   "license": "AGPL-3.0-or-later",
   "homepage": "https://openprogram.io/",
   "repository": "https://github.com/FuzzyKuji/OpenProgram",
-  "main": "main.js",
+  "main": "shell/loader.js",
   "desktopName": "ai.openprogram.OpenProgram.desktop",
   "scripts": {
     "postinstall": "node scripts/check-native-dependencies.js",
@@ -16,8 +16,9 @@
     "check:shell-pty": "node --test tests/check-shell-pty.cjs",
     "check:packaged-files": "node tests/check-packaged-files.js",
     "check:native-menu": "node tests/check-native-context-menu.js && node --test tests/check-bookmark-menu-cache.cjs",
-    "check": "npm run check:packaged-files && npm run check:preload-fanout && npm run check:agent-control && npm run check:native-menu && npm run check:webtabs && npm run check:webtab-user-agent && npm run check:no-browser-extensions && npm run check:webtab-zoom-bounds && npm run check:web-corners && npm run check:tab-transfer-store && npm run check:window-state && npm run check:tab-detach-placement && npm run check:window-lifecycle && npm run check:theme-chrome && npm run check:window-chrome && npm run check:browser-import && npm run check:installed-transfer-client && npm run check:worker-auth && npm run check:worker-recovery && npm run check:packaged-runtime && npm run check:updates && npm run check:attention && npm run check:windows && npm run check:terminal-resources && npm run check:shell-metadata",
+    "check": "npm run check:packaged-files && npm run check:preload-fanout && npm run check:pointer-follow && npm run check:agent-control && npm run check:native-menu && npm run check:webtabs && npm run check:webtab-user-agent && npm run check:no-browser-extensions && npm run check:webtab-zoom-bounds && npm run check:web-corners && npm run check:tab-transfer-store && npm run check:window-state && npm run check:tab-detach-placement && npm run check:window-lifecycle && npm run check:theme-chrome && npm run check:window-chrome && npm run check:browser-import && npm run check:installed-transfer-client && npm run check:worker-auth && npm run check:worker-recovery && npm run check:packaged-runtime && npm run check:updates && npm run check:attention && npm run check:windows && npm run check:terminal-resources && npm run check:shell-metadata",
     "check:preload-fanout": "node tests/check-preload-fanout.js",
+    "check:pointer-follow": "node tests/check-pointer-follow.js",
     "check:agent-control": "node tests/check-agent-control.js",
     "check:webtabs": "node tests/check-webtab-navigation.js",
     "check:no-browser-extensions": "node tests/check-no-browser-extensions.js",
@@ -34,7 +35,7 @@
     "check:installed-transfer-client": "node tests/check-installed-tab-transfer-client.js",
     "check:worker-auth": "node tests/check-worker-start-url.js && node tests/check-self-update-reopen.js && node tests/check-self-update-ui-guard.js && node tests/check-self-update-ui.js",
     "check:worker-recovery": "node tests/check-worker-recovery.js && node tests/check-install-lock.js",
-    "check:packaged-runtime": "node tests/check-packaged-runtime.js && node tests/check-instance.js",
+    "check:packaged-runtime": "node tests/check-packaged-runtime.js && node tests/check-instance.js && node tests/check-thin-shell.js",
     "check:updates": "node tests/check-update-service.js",
     "check:attention": "node tests/check-attention-service.js && node tests/check-session-windows.js",
     "check:windows": "node tests/check-windows-desktop.js",
@@ -46,7 +47,12 @@
     "app:install": "bash scripts/package-and-install-app.sh",
     "dist:mac": "npm run prepare:runtime && npm run icon:check && electron-builder --mac dmg zip",
     "dist:win": "npm run prepare:runtime:win && electron-builder --win nsis --x64",
-    "dist:win:arm64": "npm run prepare:runtime:win && electron-builder --win nsis --arm64"
+    "dist:win:arm64": "npm run prepare:runtime:win && electron-builder --win nsis --arm64",
+    "dist:thin:config": "python3 ../../scripts/release/thin-shell-config.py build/thin-shell.json build/seed || python ../../scripts/release/thin-shell-config.py build/thin-shell.json build/seed",
+    "dist:thin:mac": "npm run dist:thin:config && npm run icon:check && electron-builder --mac dmg zip --config build/thin-shell.json",
+    "dist:thin:win": "npm run dist:thin:config && electron-builder --win nsis --x64 --config build/thin-shell.json",
+    "dist:thin:win:arm64": "npm run dist:thin:config && electron-builder --win nsis --arm64 --config build/thin-shell.json",
+    "dist:thin:linux": "npm run dist:thin:config && electron-builder --linux AppImage deb --config build/thin-shell.json"
   },
   "devDependencies": {
     "electron": "45.2.1",
@@ -59,7 +65,8 @@
     "afterPack": "scripts/write-reopen-protocol.cjs",
     "files": [
       "main.js",
-      "main/**"
+      "main/**",
+      "shell/**"
     ],
     "directories": {
       "output": "dist",
@@ -121,6 +128,63 @@
           "sha256"
         ]
       }
+    },
+    "linux": {
+      "target": [
+        "AppImage",
+        "deb"
+      ],
+      "icon": "build/icon.icns",
+      "executableName": "openprogram-desktop",
+      "syncDesktopName": true,
+      "category": "Development",
+      "synopsis": "Agent workspace",
+      "description": "Agent workspace",
+      "maintainer": "OpenProgram <noreply@openprogram.io>",
+      "desktop": {
+        "entry": {
+          "Name": "OpenProgram",
+          "Comment": "Agent workspace"
+        }
+      }
+    },
+    "deb": {
+      "depends": [
+        "libgtk-3-0",
+        "libnotify4",
+        "libnss3",
+        "libxss1",
+        "libxtst6",
+        "xdg-utils",
+        "libatspi2.0-0",
+        "libuuid1",
+        "libsecret-1-0",
+        "libgbm1",
+        "libasound2t64 | libasound2",
+        "libcurl4 | libcurl4t64",
+        "zlib1g",
+        "git"
+      ],
+      "recommends": [
+        "libappindicator3-1",
+        "bubblewrap"
+      ],
+      "desktop": {
+        "entry": {
+          "Name": "OpenProgram",
+          "Comment": "Agent workspace",
+          "Actions": "Recovery;"
+        },
+        "desktopActions": {
+          "Recovery": {
+            "Name": "Go back to a previous version",
+            "Exec": "/opt/OpenProgram/openprogram-desktop --recovery"
+          }
+        }
+      }
+    },
+    "toolsets": {
+      "appimage": "1.0.3"
     },
     "nsis": {
       "oneClick": false,

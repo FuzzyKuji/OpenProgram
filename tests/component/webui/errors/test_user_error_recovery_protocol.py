@@ -78,7 +78,7 @@ def isolated_websocket_state(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def user_error_store(tmp_path, monkeypatch: pytest.MonkeyPatch) -> UserErrorStore:
-    store = UserErrorStore(tmp_path / "user_errors.db")
+    store = UserErrorStore(tmp_path / "user_errors.jsonl")
     monkeypatch.setattr(ws_errors, "default_user_error_store", lambda: store)
     monkeypatch.setattr(
         user_error_actions,

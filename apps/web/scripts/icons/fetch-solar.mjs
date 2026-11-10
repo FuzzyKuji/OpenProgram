@@ -39,6 +39,8 @@ const ICONS = {
   // environment row chips + their menus
   "monitor": "bold-duotone",
   "earth": "bold-duotone",
+  // the composer's Goal chip
+  "target": "bold-duotone",
   "pip-2": "bold-duotone",
   "folder-with-files": "bold-duotone",
   // sidebar project rows: closed / open (folder-open above)

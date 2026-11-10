@@ -109,16 +109,11 @@ def _resume_eligibility(store: Any, execution: ExecutionRecord) -> tuple[bool, b
     if execution.status is not ExecutionStatus.PAUSED or execution.current_attempt_id is not None:
         return False, False
     try:
-        with closing(store._connect()) as connection:
-            connection.execute("BEGIN")
+        with closing(store._connect()) as connection, store.tables.lock:
             current = store._get_execution(connection, execution.execution_id)
             if current is None or current.status_version != execution.status_version:
                 return False, False
-            if connection.execute(
-                "SELECT 1 FROM effects WHERE execution_id = ? "
-                "AND status IN ('dispatched', 'uncertain') LIMIT 1",
-                (execution.execution_id,),
-            ).fetchone() is not None:
+            if store._first_unresolved_effect(connection, execution.execution_id) is not None:
                 return False, False
             checkpoint_id = execution.checkpoint_head_id or execution.source_checkpoint_id
             checkpoint = (ExecutionCheckpointStore(store)._get(connection, checkpoint_id)
@@ -126,17 +121,14 @@ def _resume_eligibility(store: Any, execution: ExecutionRecord) -> tuple[bool, b
             if checkpoint is not None:
                 if (checkpoint.execution_id != execution.execution_id
                         or checkpoint.revision_id != execution.revision_id):
-                    if (connection.execute("SELECT 1 FROM attempts WHERE execution_id = ? LIMIT 1", (execution.execution_id,)).fetchone()
+                    if (connection.exists("attempts", execution_id=execution.execution_id)
                             or not RuntimeControlService._agent_branch_checkpoint_is_valid(store, connection, execution, checkpoint)):
                         return False, False
                 return (execution.capabilities.pause,
                         execution.capabilities.step
                         and not RuntimeControlService._agent_step_has_no_next_action(checkpoint))
-            previous_attempt = connection.execute(
-                "SELECT 1 FROM attempts WHERE execution_id = ? LIMIT 1",
-                (execution.execution_id,),
-            ).fetchone()
-            return execution.capabilities.pause and previous_attempt is None, False
+            previous_attempt = connection.exists("attempts", execution_id=execution.execution_id)
+            return execution.capabilities.pause and not previous_attempt, False
     except Exception:
         _log.debug("resume eligibility lookup failed for execution snapshot", exc_info=True)
         return False, False

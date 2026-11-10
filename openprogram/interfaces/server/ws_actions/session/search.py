@@ -9,21 +9,22 @@ from .load import _session_io
 async def handle_search_session(ws, cmd: dict) -> None:
     """Find text in the conversation this connection is showing.
 
-    Searches the same branch snapshot the history pages come from, so each
-    match's ``id`` can be loaded with ``history_around``. A snapshot this
-    connection no longer holds is ``invalid_request``: the client renews its
-    history window and asks again.
+    Each match's ``id`` is a row of the branch, which a page read accepts as
+    ``history_around``.
     """
-    from openprogram.interfaces.server.session_history import HistorySnapshot
+    from openprogram.interfaces.server.transcript import reader
+    from openprogram.interfaces.server.transcript.turn_index import get_view
     from openprogram.interfaces.server.ws_errors import OperationError
+    from openprogram.runtime.context.session_db import default_db
     session_id = cmd.get("session_id")
     query = cmd.get("query")
     if not isinstance(query, str) or len(query) > _SEARCH_QUERY_MAX:
         raise OperationError("invalid_request", scope="session")
-    cached = getattr(ws, "_history_snapshots", {}).get(session_id)
-    if not isinstance(cached, HistorySnapshot) or cached.token != cmd.get("history_snapshot"):
+    db = default_db()
+    if not await _session_io(db.get_session, session_id):
         raise OperationError("invalid_request", scope="session")
-    matches = await _session_io(cached.search, query.strip())
+    view = await _session_io(get_view, db, session_id)
+    matches = await _session_io(reader.search, db, view, query.strip())
     await ws.send_text(json.dumps({"type": "session_search_results", "data": {
         "id": session_id, "query": query, "matches": matches, "total": sum(m["count"] for m in matches),
         "request_id": cmd.get("request_id"), "action": "search_session",
@@ -47,7 +48,8 @@ async def handle_search_messages(ws, cmd: dict):
         return
     try:
         from openprogram.runtime.context.session_db import default_db
-        hits = default_db().search_messages(
+        hits = await _session_io(
+            default_db().search_messages,
             query, agent_id=agent_id_filter, limit=limit,
         )
     except Exception as e:

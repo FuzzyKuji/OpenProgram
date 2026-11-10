@@ -1,5 +1,5 @@
 // The design system's guard. Every size, shape and ink comes from the
-// tiers in app/styles/design/ (docs/reference/design/ui/visual-system/design-tokens.md);
+// tiers in app/styles/design/ (docs/reference/design/ui/visual-system/design-tokens.html);
 // a value written by hand is how pages drifted apart before, so this
 // refuses one in any stylesheet or .ts / .tsx file:
 //

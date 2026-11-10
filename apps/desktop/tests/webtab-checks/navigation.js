@@ -596,7 +596,22 @@ async function checkSenderOwnership() {
     "webtab:find-result",
     { id: "fresh-b", activeMatchOrdinal: 2, matches: 5, finalUpdate: true },
   ]);
+  // Keys an Agent sends to a page nobody is looking at stay in the page: they
+  // open no App UI and do not focus the App's window.
   let shortcutPrevented = false;
+  const sentBeforeAgentKey = winB.sent.length;
+  for (const key of ["f", "l", "k", "p"]) {
+    fresh.emit("before-input-event", {
+      preventDefault() { shortcutPrevented = true; },
+    }, { type: "keyDown", meta: true, key });
+  }
+  testContext.assert.equal(shortcutPrevented, false);
+  testContext.assert.equal(winB.sent.length, sentBeforeAgentKey);
+  // The user at the page: it is on screen, in the window they are in, and has the keyboard.
+  const freshRecord = ctxB.views.get("fresh-b");
+  freshRecord.nativeVisible = true;
+  testContext.focusedWindow = winB;
+  fresh.isFocused = () => true;
   fresh.emit("before-input-event", {
     preventDefault() { shortcutPrevented = true; },
   }, { type: "keyDown", meta: true, key: "f" });

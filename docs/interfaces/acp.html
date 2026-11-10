@@ -1,0 +1,40 @@
+<title>Editor (ACP)</title>
+<meta name="description" content="Run OpenProgram as a chat agent inside Zed or another ACP editor.">
+<h1>Editor (ACP)</h1>
+<p><code translate="no">openprogram acp</code> is the agent side of <a href="https://agentclientprotocol.com">ACP</a>, the Agent Client Protocol. Zed speaks it natively, so no extension is needed. The editor launches the command; it speaks JSON-RPC on stdin and stdout and exits when the editor disconnects.</p>
+<h2 id="configuring-zed">Zed</h2>
+<p>Add this under <code translate="no">agent_servers</code> in <code translate="no">settings.json</code> (<code translate="no">cmd-shift-p</code> → <code translate="no">zed: open settings file</code>), then pick <strong>OpenProgram</strong> from the Agent Panel's new-thread menu. If <code translate="no">openprogram</code> is not on Zed's <code translate="no">PATH</code>, use <code translate="no">which openprogram</code> as <code translate="no">command</code>.</p>
+<pre translate="no" tabindex="0"><code>{
+  "agent_servers": {
+    "OpenProgram": {
+      "type": "custom",
+      "command": "openprogram",
+      "args": ["acp"],
+      "env": {}
+    }
+  }
+}</code></pre>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Flag</th><th scope="col">Effect</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">--agent &lt;id&gt;</code></th><td>Run sessions as this agent instead of <code translate="no">main</code>, with its own system prompt and tools</td></tr>
+<tr><th scope="row"><code translate="no">--permission &lt;mode&gt;</code></th><td><code translate="no">bypass</code> (Bypass permissions, default), <code translate="no">auto</code>, <code translate="no">ask</code>, <code translate="no">plan</code> or <code translate="no">acceptEdits</code>: <a href="../capabilities/permissions.html">Permissions</a></td></tr>
+</tbody></table>
+<pre translate="no" tabindex="0"><code>"args": ["acp", "--agent", "coding", "--permission", "acceptEdits"]</code></pre>
+<h2 id="what-works-in-the-editor">What works</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Feature</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Streaming</th><td>Token by token; reasoning as a separate thought stream when the model produces one</td></tr>
+<tr><th scope="row">Tool calls</th><td>Reported at start and finish with arguments and result; file tools report the path so Zed can follow</td></tr>
+<tr><th scope="row">Editor context</th><td>An attached selection or file goes into the prompt under its path; the model can read more</td></tr>
+<tr><th scope="row">Permission prompts</th><td><strong>Allow</strong>, <strong>Always allow</strong>, <strong>Reject</strong>. Always allow writes a persistent rule for that tool to the project's settings, as in the Web UI.</td></tr>
+<tr><th scope="row">Cancellation</th><td>Stopping a thread cancels the turn and withdraws any open prompt</td></tr>
+<tr><th scope="row">Resuming</th><td>Reopened threads replay from the session store. Sessions are ordinary ones, visible in <a href="web.html">Web</a> and the <a href="tui.html">TUI</a> and continuable from either.</td></tr>
+</tbody></table>
+<h2 id="scope">Scope</h2>
+<ul>
+<li>Sessions run with local owner authority, which is what allows approval prompts. Do not expose the command over a network transport.</li>
+<li>MCP servers passed in <code translate="no">session/new</code> are ignored; OpenProgram uses its own <a href="../capabilities/mcp.html">MCP configuration</a>. Audio prompts are not supported.</li>
+<li>Protocol version 1: <code translate="no">initialize</code>, <code translate="no">session/new</code>, <code translate="no">session/load</code>, <code translate="no">session/prompt</code>, <code translate="no">session/cancel</code> from the editor; <code translate="no">session/update</code>, <code translate="no">session/request_permission</code> back.</li>
+</ul>

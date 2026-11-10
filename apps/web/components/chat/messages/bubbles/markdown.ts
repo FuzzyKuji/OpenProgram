@@ -19,11 +19,12 @@ import {
   renderA2ui,
   unescapeHtml,
 } from "@/lib/chat/markdown/a2ui";
+import { markOpenVisualFence, withVisuals } from "@/lib/chat/markdown/visual";
 
 export function renderMarkdown(src: string, { cache = true }: { cache?: boolean } = {}): string {
   if (typeof window === "undefined") return escapeHtml(src);
   try {
-    return withTableScroll(withCodeChrome(withA2ui(renderMd(markOpenA2uiFence(src), { cache })), cache));
+    return withTableScroll(withCodeChrome(withVisuals(withA2ui(renderMd(markOpenVisualFence(markOpenA2uiFence(src)), { cache }))), cache));
   } catch {
     return escapeHtml(src);
   }

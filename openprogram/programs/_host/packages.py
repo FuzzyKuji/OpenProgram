@@ -11,10 +11,18 @@ paths, and of the user's packages.
 
 User packages live in ``~/.openprogram/programs/<name>/`` and import under
 their own top-level name. Each is its own Git repository. ``openprogram
-programs check`` validates the package, runs its tests and commits; only a
-clean, committed package loads, so a passing check is what makes a change
-callable. A package with uncommitted edits keeps serving the version that
-loaded last.
+programs check`` validates the package, runs its tests, commits and records
+the commit in ``refs/openprogram/checked``. That ref is the only thing the
+loader reads: a plain ``git commit`` is not loaded, and a working copy with
+uncommitted edits keeps serving the checked version, across a worker restart
+too.
+
+The loader imports from ``<state>/programs-cache/<name>/<commit>/``, extracted
+by ``git archive``, so an edit in the working directory cannot reach a lazy
+import. A new version replaces the old one after the calls running in the
+worker have finished, up to 30 seconds; past that the next pass tries again.
+When the new version fails to import, the previous one is imported back from
+the cache and the status reads ``error`` with a note naming both versions.
 """
 from __future__ import annotations
 
@@ -24,13 +32,18 @@ import importlib
 import importlib.machinery
 import importlib.util
 import inspect
+import io
 import logging
 import os
+import re
 import shutil
 import subprocess
 import sys
+import tarfile
+import tempfile
 import threading
 import traceback
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -38,6 +51,15 @@ logger = logging.getLogger(__name__)
 
 _IGNORED_DIRS = {".git", "__pycache__", ".pytest_cache", ".venv", "venv", "node_modules"}
 _lock = threading.RLock()
+
+CHECKED_REF = "refs/openprogram/checked"
+CACHE_DIRECTORY = "programs-cache"
+GIT_MISSING = "Git is not available"
+CALL_WAIT_SECONDS = 30.0
+_CACHE_KEEP = 3
+_GOOD_FILE = "good"
+_MIGRATED_MARKER = ".checked-refs-migrated"
+_COMMIT = re.compile(r"[0-9a-f]{40,64}")
 
 
 @dataclass
@@ -62,6 +84,24 @@ class PackageStatus:
 
 _status: dict[str, PackageStatus] = {}
 _fingerprints: dict[str, tuple] = {}
+# A checked commit that failed to import: not tried again while the version
+# before it is serving, or every edit would dispose the working version.
+_failed: dict[str, str] = {}
+# Bumped when a replace is put off, so the watcher's next look sees a change.
+_retries = 0
+_calls: dict[str, int] = {}
+_calls_changed = threading.Condition()
+
+
+def _reset_calls() -> None:
+    """A forked tool process starts with no calls and an unheld lock."""
+    global _calls_changed
+    _calls_changed = threading.Condition()
+    _calls.clear()
+
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(after_in_child=_reset_calls)
 
 
 def programs_root() -> Path:
@@ -75,18 +115,42 @@ def programs_root() -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _bound_entry(entry, fn):
+@contextmanager
+def _running_call(owner: str):
+    """Count a call of ``owner`` in this process while it runs."""
+    with _calls_changed:
+        _calls[owner] = _calls.get(owner, 0) + 1
+    try:
+        yield
+    finally:
+        with _calls_changed:
+            remaining = _calls.get(owner, 1) - 1
+            if remaining > 0:
+                _calls[owner] = remaining
+            else:
+                _calls.pop(owner, None)
+                _calls_changed.notify_all()
+
+
+def _wait_for_calls(owner: str, timeout: float | None = None) -> bool:
+    """Whether the calls of ``owner`` finished within ``timeout`` seconds."""
+    with _calls_changed:
+        return _calls_changed.wait_for(lambda: not _calls.get(owner),
+                                       CALL_WAIT_SECONDS if timeout is None else timeout)
+
+
+def _bound_entry(entry, fn, owner: str = ""):
     """Call ``entry`` (decorators included) with ``fn`` bound as the running entry."""
     from openprogram.runtime.agent.workflow_site import bind_entry
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def bound(*args, **kwargs):
-            with bind_entry(fn):
+            with _running_call(owner), bind_entry(fn):
                 return await entry(*args, **kwargs)
     else:
         @functools.wraps(fn)
         def bound(*args, **kwargs):
-            with bind_entry(fn):
+            with _running_call(owner), bind_entry(fn):
                 return entry(*args, **kwargs)
     return bound
 
@@ -177,7 +241,7 @@ def register_entries(module, *, owner: str = "") -> list[str]:
         # Runs in the worker process instead of a forked subprocess, for
         # tools that use worker-owned registries.
         run_in_worker = bool(options.pop("run_in_worker", False))
-        bound = _bound_entry(entry, fn)
+        bound = _bound_entry(entry, fn, owner)
         if options.get("resumable"):
             bound._workflow_revision = functools.partial(_revision, owner, fn)
         wrapper = wrap_agent_method(bound, options)
@@ -234,10 +298,38 @@ def _install_finder() -> None:
 
 
 def _candidates(root: Path) -> dict[str, Path]:
-    """The program directories under ``root`` that are Python packages."""
+    """The program directories under ``root`` that are Python packages.
+
+    A working copy that lost its ``__init__.py`` still counts while it has a
+    checked version: that is an uncommitted edit like any other.
+    """
     from openprogram.state.program_directory import program_dirs
-    return {name: path for name, path in program_dirs(root).items()
-            if (path / "__init__.py").is_file()}
+    found = {name: path for name, path in program_dirs(root).items()
+             if (path / "__init__.py").is_file()}
+    if root.is_dir():
+        for child in root.iterdir():
+            if (child.name not in found and not child.name.startswith((".", "_"))
+                    and child.is_dir() and not child.is_symlink() and _checked_commit(child)):
+                found[child.name] = child
+    return dict(sorted(found.items()))
+
+
+def _cache_root(root: Path) -> Path:
+    """``<state>/programs-cache``, beside the ``programs`` directory ``root``."""
+    return root.parent / CACHE_DIRECTORY
+
+
+def working_copy_path(source: Path) -> Path:
+    """Where a resolved file of a loaded version lives in the working copy.
+
+    A file that is not in the version cache comes back unchanged.
+    """
+    root = programs_root()
+    try:
+        name, _commit, *rest = source.relative_to(_cache_root(root).resolve()).parts
+    except ValueError:
+        return source
+    return root.resolve().joinpath(name, *rest)
 
 
 def name_problem(name: str, directory: Path | None = None) -> str:
@@ -246,10 +338,13 @@ def name_problem(name: str, directory: Path | None = None) -> str:
         return f"{name!r} is not a valid Python package name."
     if name in sys.builtin_module_names or name in getattr(sys, "stdlib_module_names", ()):
         return f"{name!r} is a Python standard library module."
-    root = os.path.realpath(directory.parent) if directory is not None else os.path.realpath(programs_root())
+    base = directory.parent if directory is not None else programs_root()
+    root = os.path.realpath(base)
+    # A loaded user package comes from its checked copy in the cache.
+    mine = (root + os.sep, os.path.realpath(_cache_root(base)) + os.sep)
     loaded = sys.modules.get(name)
     origin = getattr(loaded, "__file__", None) if loaded is not None else None
-    if origin and not os.path.realpath(origin).startswith(root + os.sep):
+    if origin and not os.path.realpath(origin).startswith(mine):
         return f"{name!r} is already an imported module ({origin})."
     try:
         spec = importlib.machinery.PathFinder.find_spec(name)
@@ -286,6 +381,7 @@ def fingerprint(directory: Path) -> tuple:
     # A commit made within the file clock's granularity leaves every mtime
     # as it was; the commit the checkout points at tells it apart.
     rows.append((".git/commit", _git_head_commit(git), 0))
+    rows.append((".git/checked", _read_ref(git, CHECKED_REF), 0))
     return tuple(rows)
 
 
@@ -297,7 +393,11 @@ def _git_head_commit(git: Path) -> str:
         return ""
     if not head.startswith("ref: "):
         return head
-    ref = head[len("ref: "):].strip()
+    return _read_ref(git, head[len("ref: "):].strip())
+
+
+def _read_ref(git: Path, ref: str) -> str:
+    """The commit a ref names, from the files alone; ``""`` without one."""
     try:
         return (git / ref).read_text(encoding="utf-8").strip()
     except OSError:
@@ -309,6 +409,27 @@ def _git_head_commit(git: Path) -> str:
     except OSError:
         pass
     return ""
+
+
+def _checked_commit(directory: Path) -> str:
+    """The commit ``openprogram programs check`` passed; ``""`` without one."""
+    commit = _read_ref(directory / ".git", CHECKED_REF)
+    return commit if _COMMIT.fullmatch(commit) else ""
+
+
+def git_available() -> bool:
+    try:
+        return subprocess.run(["git", "--version"], capture_output=True, timeout=10).returncode == 0
+    except (OSError, subprocess.SubprocessError):
+        return False
+
+
+def record_checked(directory: Path, commit: str) -> None:
+    """Record ``commit`` as the version of the package that may load."""
+    completed = subprocess.run(["git", "-C", str(directory), "update-ref", CHECKED_REF, commit],
+                               capture_output=True, text=True, timeout=60)
+    if completed.returncode != 0:
+        raise RuntimeError("git update-ref failed: " + (completed.stderr or completed.stdout).strip())
 
 
 def git_state(directory: Path) -> tuple[str, bool]:
@@ -340,20 +461,6 @@ def _evict(name: str) -> None:
     importlib.invalidate_caches()
 
 
-def _purge_bytecode(directory: Path) -> None:
-    """Drop the package's cached bytecode before a (re)load.
-
-    Python trusts a ``.pyc`` whose recorded source mtime (whole seconds)
-    and size still match, so a source edited within a second of the last
-    import, to the same length, would load as the old code. The package's
-    fingerprint says the source changed; its caches are rebuilt from it.
-    """
-    for cache in directory.rglob("__pycache__"):
-        if not cache.is_dir() or _IGNORED_DIRS.intersection(cache.relative_to(directory).parts[:-1]):
-            continue
-        shutil.rmtree(cache, ignore_errors=True)
-
-
 def _unregister(name: str) -> None:
     """Dispose the package's context: its tools leave the registry."""
     from openprogram.programs._host.registry import dispose_program
@@ -362,10 +469,141 @@ def _unregister(name: str) -> None:
 
 def _error_text(exc: BaseException) -> str:
     frames = traceback.extract_tb(exc.__traceback__)
+    roots = (str(programs_root()), str(_cache_root(programs_root())))
     where = next((f"{frame.filename}:{frame.lineno}" for frame in reversed(frames)
-                  if str(programs_root()) in frame.filename), "")
+                  if frame.filename.startswith(roots)), "")
     message = f"{type(exc).__name__}: {exc}"
     return f"{message} ({where})" if where else message
+
+
+def _materialize(directory: Path, cache: Path, commit: str) -> Path:
+    """The extracted copy of ``commit``, made once with ``git archive``."""
+    target = cache / commit
+    if (target / "__init__.py").is_file():
+        return target
+    cache.mkdir(parents=True, exist_ok=True)
+    scratch = Path(tempfile.mkdtemp(prefix=f".{commit[:12]}-", dir=cache))
+    try:
+        archive = subprocess.run(["git", "-C", str(directory), "archive", "--format=tar", commit],
+                                 capture_output=True, timeout=120)
+        if archive.returncode != 0:
+            raise RuntimeError("git archive failed: " + archive.stderr.decode(errors="replace").strip())
+        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
+            tar.extractall(scratch, filter="data")
+        if not (scratch / "__init__.py").is_file():
+            raise RuntimeError(f"Commit {commit[:7]} has no __init__.py.")
+        try:
+            os.replace(scratch, target)
+        except OSError:
+            # Another process extracted the same commit first.
+            if not (target / "__init__.py").is_file():
+                raise
+    finally:
+        shutil.rmtree(scratch, ignore_errors=True)
+    return target
+
+
+def _last_good(cache: Path) -> str:
+    """The commit that last imported cleanly, while its copy still exists."""
+    try:
+        commit = (cache / _GOOD_FILE).read_text(encoding="utf-8").strip()
+    except OSError:
+        return ""
+    return commit if _COMMIT.fullmatch(commit) and (cache / commit / "__init__.py").is_file() else ""
+
+
+def _remember_good(cache: Path, commit: str) -> None:
+    scratch = cache / f".{_GOOD_FILE}-{os.getpid()}-{threading.get_ident()}"
+    scratch.write_text(commit, encoding="utf-8")
+    os.replace(scratch, cache / _GOOD_FILE)
+
+
+def _prune(cache: Path, keep: set[str]) -> None:
+    """Drop old copies; a process that still imports from one is long replaced."""
+    versions = [path for path in cache.iterdir() if path.is_dir() and _COMMIT.fullmatch(path.name)]
+    versions.sort(key=lambda path: path.stat().st_mtime_ns, reverse=True)
+    for path in versions[_CACHE_KEEP:]:
+        if path.name not in keep:
+            shutil.rmtree(path, ignore_errors=True)
+
+
+def _working_copy_note(directory: Path, checked: str, head: str, dirty: bool) -> str:
+    if dirty:
+        return "Uncommitted changes. The last checked version is still loaded."
+    if head != checked:
+        return f"Commit {head[:7]} is not checked. Run `openprogram programs check {directory}` to load it."
+    return ""
+
+
+def _import_version(name: str, version: Path) -> list[str]:
+    """Replace whatever ``name`` serves with the copy at ``version``."""
+    from openprogram.programs._host.registry import program_context
+    _unregister(name)
+    _evict(name)
+    _finder.packages[name] = version
+    try:
+        module = importlib.import_module(name)
+        return program_context(name, name, str(version)).tools_from(module)
+    except BaseException:
+        _unregister(name)
+        _evict(name)
+        raise
+
+
+def _replace(name: str, directory: Path, status: PackageStatus, new: str, note: str, loaded: bool) -> None:
+    """Serve ``new``, or keep the version before it when ``new`` fails."""
+    global _retries
+    cache = _cache_root(directory.parent) / name
+    old = status.revision if loaded else _last_good(cache)
+    if old == new:
+        old = ""
+    reason = ""
+    target = None
+    try:
+        target = _materialize(directory, cache, new)
+    except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as exc:
+        reason = f"{type(exc).__name__}: {exc}"
+    if loaded and not reason and not _wait_for_calls(name):
+        _fingerprints.pop(name, None)
+        _retries += 1
+        status.note = f"Version {new[:7]} is waiting for running calls to finish."
+        logger.info("Program package %s: waiting for running calls before loading %s", name, new[:7])
+        return
+    tools: list[str] = []
+    if target is not None:
+        try:
+            tools = _import_version(name, target)
+        except BaseException as exc:  # a broken package must not stop the others
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            reason = _error_text(exc)
+    if not reason:
+        status.state, status.error, status.revision, status.note = "loaded", "", new, note
+        status.entries = list(tools)
+        _failed.pop(name, None)
+        _remember_good(cache, new)
+        _prune(cache, {new, old})
+        return
+    logger.warning("Cannot load Program package %s at %s: %s", name, new[:7], reason)
+    _failed[name] = new
+    if old and target is None and loaded:
+        # Nothing was disposed: the old version is still in place.
+        status.state, status.error = "error", reason
+        status.note = f"Kept version {old[:7]}; version {new[:7]} failed."
+        return
+    if old:
+        try:
+            tools = _import_version(name, cache / old)
+        except BaseException as exc:
+            if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+                raise
+            logger.warning("Cannot load Program package %s back at %s: %s", name, old[:7], _error_text(exc))
+        else:
+            status.state, status.error, status.revision = "error", reason, old
+            status.note = f"Kept version {old[:7]}; version {new[:7]} failed."
+            status.entries = list(tools)
+            return
+    status.state, status.error, status.revision, status.entries, status.note = "error", reason, "", [], ""
 
 
 def _load_one(name: str, directory: Path) -> None:
@@ -375,38 +613,70 @@ def _load_one(name: str, directory: Path) -> None:
     if problem:
         _unregister(name)
         status.state, status.error, status.entries, status.note = "error", problem, [], ""
+        status.revision = ""
         return
-    from openprogram.programs._host.registry import program_context, program_tools
-    head, dirty = git_state(directory)
+    from openprogram.programs._host.registry import program_tools
     loaded = bool(program_tools(name))
-    if not head or dirty:
-        note = (f"Run `openprogram programs check {directory}` to make it callable."
-                if not head else f"Uncommitted changes. Run `openprogram programs check {directory}` to load them.")
+    if not git_available():
+        if loaded:
+            status.note = GIT_MISSING
+        else:
+            status.state, status.error, status.entries, status.note = "error", GIT_MISSING, [], ""
+        return
+    checked = _checked_commit(directory)
+    if not checked:
+        note = f"Run `openprogram programs check {directory}` to make it callable."
         if loaded:
             status.note = note
-            return
-        status.state, status.error, status.note = "pending", "", note
+        else:
+            status.state, status.error, status.note = "pending", "", note
         return
-    if loaded and status.revision == head and status.state == "loaded":
-        status.note = ""
+    if loaded and _failed.get(name) == checked:
         return
-    _unregister(name)
-    _evict(name)
-    _purge_bytecode(directory)
-    _finder.packages[name] = directory
+    head, dirty = git_state(directory)
+    note = _working_copy_note(directory, checked, head, dirty)
+    if loaded and status.revision == checked and status.state == "loaded":
+        status.note = note
+        return
+    _replace(name, directory, status, checked, note, loaded)
+
+
+def _migrate_checked_refs(root: Path, found: dict[str, Path]) -> None:
+    """Once per directory: a clean package with a commit counts as checked.
+
+    The packages the loader served before it read the checked ref keep
+    loading; a commit made after this needs the check like any other.
+    """
+    marker = root / _MIGRATED_MARKER
+    if marker.exists() or not root.is_dir() or not git_available():
+        return
+    for directory in found.values():
+        if _checked_commit(directory):
+            continue
+        head, dirty = git_state(directory)
+        if head and not dirty:
+            try:
+                record_checked(directory, head)
+            except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+                logger.warning("Cannot mark %s as checked: %s", directory, exc)
+    marker.write_text("", encoding="utf-8")
+
+
+def _point_finder(name: str, directory: Path) -> None:
+    """Let packages import ``name`` by its serving or last good version."""
+    from openprogram.programs._host.registry import program_tools
+    cache = _cache_root(directory.parent) / name
+    status = _status.get(name)
+    version = status.revision if status is not None and status.revision and program_tools(name) else ""
+    version = version or _last_good(cache) or _checked_commit(directory)
+    if not version:
+        _finder.packages.pop(name, None)
+        return
     try:
-        module = importlib.import_module(name)
-        tools = program_context(name, name, str(directory)).tools_from(module)
-    except BaseException as exc:  # a broken package must not stop the others
-        if isinstance(exc, (KeyboardInterrupt, SystemExit)):
-            raise
-        _unregister(name)
-        _evict(name)
-        status.state, status.error, status.entries, status.note = "error", _error_text(exc), [], ""
-        logger.warning("Cannot load Program package %s: %s", name, status.error)
-        return
-    status.state, status.error, status.revision, status.note = "loaded", "", head, ""
-    status.entries = list(tools)
+        _finder.packages[name] = _materialize(directory, cache, version)
+    except (OSError, RuntimeError, subprocess.SubprocessError, tarfile.TarError) as exc:
+        _finder.packages.pop(name, None)
+        logger.warning("Cannot extract Program package %s at %s: %s", name, version[:7], exc)
 
 
 def load_user_packages(root: Path | None = None) -> dict[str, PackageStatus]:
@@ -415,8 +685,10 @@ def load_user_packages(root: Path | None = None) -> dict[str, PackageStatus]:
     root = root or programs_root()
     with _lock:
         add_workflow_root(root)
+        add_workflow_root(_cache_root(root))
         _install_finder()
         found = _candidates(root)
+        _migrate_checked_refs(root, found)
         for name in list(_status):
             if name not in found:
                 _unregister(name)
@@ -424,9 +696,11 @@ def load_user_packages(root: Path | None = None) -> dict[str, PackageStatus]:
                 _finder.packages.pop(name, None)
                 _status.pop(name, None)
                 _fingerprints.pop(name, None)
+                _failed.pop(name, None)
+                shutil.rmtree(_cache_root(root) / name, ignore_errors=True)
         for name, directory in found.items():
             if not name_problem(name, directory):
-                _finder.packages[name] = directory
+                _point_finder(name, directory)
         for name, directory in found.items():
             current = fingerprint(directory)
             if _fingerprints.get(name) == current and name in _status:
@@ -437,17 +711,18 @@ def load_user_packages(root: Path | None = None) -> dict[str, PackageStatus]:
 
 
 def package_statuses() -> list[dict]:
-    with _lock:
-        return [status.to_dict() for status in sorted(_status.values(), key=lambda s: s.name)]
+    # Without ``_lock``: a load pass holds it while running calls finish.
+    return [status.to_dict() for status in sorted(list(_status.values()), key=lambda s: s.name)]
 
 
 def root_fingerprint() -> tuple:
     root = programs_root()
-    return tuple((name, fingerprint(directory)) for name, directory in _candidates(root).items())
+    rows = [(name, fingerprint(directory)) for name, directory in _candidates(root).items()]
+    return (*rows, ("", _retries))
 
 
 __all__ = [
-    "PackageStatus", "entry_problems", "fingerprint", "git_state",
+    "CHECKED_REF", "PackageStatus", "entry_problems", "fingerprint", "git_available", "git_state",
     "load_user_packages", "name_problem", "package_statuses", "programs_root",
-    "register_entries", "root_fingerprint",
+    "record_checked", "register_entries", "root_fingerprint", "working_copy_path",
 ]

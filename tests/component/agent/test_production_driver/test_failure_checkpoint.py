@@ -48,5 +48,4 @@ def test_distinct_rejections_commit_results_without_reconciliation(tmp_path):
             )
     asyncio.run(run())
     assert len(_committed_tool_ids(store, execution.execution_id)) == 24
-    assert EffectStore(store).list_unresolved(execution.execution_id) == []
     assert store.get_execution(execution.execution_id).reason_code is None

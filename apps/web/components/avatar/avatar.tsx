@@ -35,10 +35,12 @@
  *   * ``./AvatarPicker`` — the settings-page UI that mutates ``AvatarConfig``
  */
 
-import { useEffect, useMemo, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { motion, useAnimation, useReducedMotion } from "framer-motion";
 import { createAvatar } from "@dicebear/core";
 
-import { BotAvatar, type BotMood } from "./bot/bot-avatar";
+import { HOVER_POP_FILL, HOVER_SPRING, followHostHover } from "../ui/hover-pop";
+import { BotAvatar, type BotFitRule, type BotMood } from "./bot/bot-avatar";
 import { isBotColor, isBotShape } from "./bot/catalog";
 import { botLookFor } from "./bot/identity";
 import { loadedAvatarStyle, loadAvatarStyle } from "./styles";
@@ -86,6 +88,12 @@ export interface AvatarProps {
   /** ``bot`` only: the name is written beside the avatar, so the
    *  character itself is decorative. */
   decorative?: boolean;
+  /** "mark" is the composer's fill rule, used by the Agent chip and the
+   *  Agent menu: a character is sized by its body (botMarkFit); an
+   *  uploaded picture, a letter tile or a DiceBear avatar already fills
+   *  its box. Either way the box grows to exactly 18 px on its
+   *  control's hover (HOVER_POP_FILL). */
+  fit?: BotFitRule;
 }
 
 /** Best-effort one-char extraction from a display name. Handles
@@ -158,6 +166,7 @@ export function Avatar({
   live,
   mood,
   decorative,
+  fit,
 }: AvatarProps) {
   const kind: AvatarKind = config?.kind ?? "dicebear";
   const style: AvatarStyle = config?.style ?? "shapes";
@@ -266,24 +275,32 @@ export function Avatar({
         mood={mood}
         label={decorative ? "" : name}
         className={className}
+        fit={fit}
       />
     );
   }
 
+  // Outside the composer an avatar tile does not move; in the Agent chip
+  // and the Agent menu (the "mark" fit) it pops to 18 px like the
+  // composer's other icons.
+  const placed = (avatar: ReactNode) => fit === "mark"
+    ? <MarkPop size={size}>{avatar}</MarkPop>
+    : avatar;
+
   if (kind === "upload" && config?.file) {
-    return (
+    return placed(
       <img
         src={config.file}
         alt={name}
         className={className}
         style={{ ...sharedStyle, objectFit: "cover" }}
-      />
+      />,
     );
   }
 
   if (kind === "letter" || (kind === "dicebear" && !svg)) {
     const letter = (config?.letter || _initialFor(name)).slice(0, 2);
-    return (
+    return placed(
       <span
         className={className}
         style={{
@@ -299,18 +316,45 @@ export function Avatar({
         }}
       >
         {letter}
-      </span>
+      </span>,
     );
   }
 
   // dicebear path (default). dangerouslySetInnerHTML is the standard
   // way to embed a server-or-client-generated SVG string in React —
   // the markup comes from @dicebear, which does its own escaping.
-  return (
+  return placed(
     <span
       className={className}
       style={sharedStyle}
       dangerouslySetInnerHTML={{ __html: svg ?? "" }}
-    />
+    />,
+  );
+}
+
+/** The composer's hover for an Agent tile that already fills its box (an
+ *  uploaded picture, a letter tile, a DiceBear avatar): the box grows to
+ *  exactly 18 px on its control's hover (HOVER_POP_FILL), as a character
+ *  placed by botMarkFit does. */
+function MarkPop({ size, children }: { size: number; children: ReactNode }) {
+  const self = useRef<HTMLSpanElement>(null);
+  const pop = useAnimation();
+  const reduced = useReducedMotion();
+  useEffect(() => {
+    const element = self.current;
+    if (!element || reduced) return;
+    return followHostHover(element, () => void pop.start("animate"), () => void pop.start("normal"));
+  }, [pop, reduced]);
+  return (
+    <motion.span
+      ref={self}
+      style={{ display: "inline-flex", width: size, height: size, flexShrink: 0, verticalAlign: "middle" }}
+      variants={HOVER_POP_FILL}
+      initial="normal"
+      animate={pop}
+      transition={HOVER_SPRING}
+    >
+      {children}
+    </motion.span>
   );
 }

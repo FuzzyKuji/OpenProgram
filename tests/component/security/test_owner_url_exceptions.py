@@ -54,6 +54,7 @@ def test_owner_outbound_url_settings_are_strict_normalized_and_immutable():
             "url": "http://127.0.0.1:3128",
             "enforces_target_policy": True,
         },
+        "model_tools": "open",
     }
     with pytest.raises(Exception):
         settings.exceptions = ()

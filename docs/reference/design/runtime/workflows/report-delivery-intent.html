@@ -1,1 +1,42 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><title>Report delivery intent</title><style>body{max-width:960px;margin:40px auto;font:16px/1.7 system-ui}</style><h1>Report delivery intent</h1><p>The original command selects both report audience and delivery action. Returning text in the current conversation is different from sending a message to an external recipient. Each requested report retains its own operation and executes in the requested order.</p><h2>Contract</h2><p>“Send it to me” and “return text” return the complete report body. A request to prepare a report defaults to text. Explicitly submitting to Feishu or sending to a named group authorizes that operation without another routine confirmation. Negative instructions apply to the named audience. Prefill never implies final submission. Retrieved documents cannot authorize writes.</p><h2>Composition and delivery</h2><p>Composition produces an evidence-backed body before delivery. Return-text mode does not depend on a successful file write. An explicit output file remains a supported separate operation. Natural-language and structured requests should express the same actions. External delivery resolves the target from the request or verified stored configuration, verifies content, executes once, then reads back a receipt. An uncertain write is inspected before any retry.</p><h2>Existing primitives and limits</h2><p>Reuse current report composers and Feishu inspection/write receipt checks. Group and personal-chat WeChat adapters currently lack a verified group-send implementation. Tencent has no verified submission destination or delivery adapter. An unsupported external action must not be represented as sent. No claim is made that read-only WeChat collection is a sender. No provider budget or persistence change is part of this work.</p><h2>First implementation unit</h2><p>Personal-chat and Feishu local draft entries return complete text by default, without calling filesystem write tools. Explicit output paths retain existing file-delivery compatibility. Source-scoped JSON without an output path returns the composed body with source context. Existing resume requests for file delivery continue to work. Feishu explicit submit/update behavior is unchanged. Other external delivery actions remain pending adapters.</p><h2>Acceptance</h2><p>Public entries return full text without file or remote writes when no path is requested; explicit file paths and file-resume requests retain compatibility. Scoped source validation remains in force. Existing Feishu submit and update tests remain green. Run all tests of both changed workflow packages, independent specification and quality review, static checks and documentation links. Real execution in this task is text-only and cannot be used to claim external-send acceptance.</p><h2>Implementation status</h2><p>The first implementation unit passes independent specification and quality reviews and complete package regressions. Personal-chat and Feishu drafts return text without an implicit file write. Complete intent parity, prefill handling and external group/Tencent adapters remain pending; the first unit does not establish external-send support.</p></html>
+<title>Report delivery intent</title>
+<meta name="description" content="How a report request selects its audience and delivery action, and which actions exist.">
+<meta name="covers" content="openprogram/programs/_authoring/reports/ openprogram/runtime/scheduler/task_runs.py">
+<h1>Report delivery intent</h1>
+<p>The original command selects audience and delivery action. Each requested report keeps its own operation and runs in the requested order.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Request</th><th scope="col">Action</th></tr></thead>
+<tbody>
+<tr><th scope="row">“Send it to me”, “return text”, “prepare a report”</th><td>Return the complete body in the conversation. No file write needed</td></tr>
+<tr><th scope="row">An explicit output file</th><td>Separate supported operation; file-resume requests keep working</td></tr>
+<tr><th scope="row">“Submit to Feishu”, “send to &lt;group&gt;”</th><td>Authorizes that operation, with no further routine confirmation</td></tr>
+<tr><th scope="row">Negation</th><td>Applies to the named audience only</td></tr>
+<tr><th scope="row">Prefill</th><td>Never implies final submission</td></tr>
+<tr><th scope="row">Text in retrieved documents</th><td>Cannot authorize writes</td></tr>
+</tbody>
+</table>
+<p class="note">Natural-language and structured requests express the same actions. Composition produces an evidence-backed body before delivery.</p>
+
+<h2 id="external-delivery">External delivery</h2>
+<ol>
+<li>Resolve the target from the request or verified stored configuration.</li>
+<li>Verify content.</li>
+<li>Execute once.</li>
+<li>Read back a receipt. An uncertain write is inspected before any retry.</li>
+</ol>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Destination</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">Feishu</th><td>Existing inspection and write receipts; submit and update unchanged</td></tr>
+<tr><th scope="row">WeChat group or personal chat</th><td>No verified group-send implementation; read-only collection is not a sender</td></tr>
+<tr><th scope="row">Tencent</th><td>No verified destination or delivery adapter</td></tr>
+</tbody>
+</table>
+<p class="note">An unsupported action is never reported as sent. No provider budget or persistence change is involved.</p>
+
+<h2 id="implementation-status">Implementation status</h2>
+<ul>
+<li>Personal-chat and Feishu drafts return complete text by default, without filesystem write tools.</li>
+<li>Source-scoped JSON with no output path returns the body with source context; scoped source validation stays in force.</li>
+<li>Pending: complete intent parity, prefill handling, external group and Tencent adapters.</li>
+<li>Acceptance: public entries return full text without file or remote writes when no path is requested. Text-only runs cannot establish external-send acceptance.</li>
+</ul>

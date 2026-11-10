@@ -52,4 +52,48 @@ test("a box gets its thumb on its first scroll, never on hover", async () => {
   document.body.appendChild(document.createElement("i"));
   await wait(10);
   assert.equal(document.querySelectorAll(".overlay-thumb").length, 0, "a removed box takes its thumb with it");
+
+  // A box marked data-scrollbar-layer="content" keeps its thumb in the
+  // content layer, under a control floating on its edge.
+  const list = document.createElement("div");
+  list.setAttribute("data-scrollbar-layer", "content");
+  Object.assign(list, { scrollHeight: 1000, clientHeight: 200, scrollWidth: 100, clientWidth: 100, scrollTop: 300 });
+  list.getBoundingClientRect = box.getBoundingClientRect;
+  document.body.appendChild(list);
+  list.dispatchEvent(new window.Event("scroll", { bubbles: true }));
+  await wait(10);
+  const low = document.querySelectorAll(".overlay-thumb");
+  assert.equal(low.length, 1);
+  assert.ok(low[0].classList.contains("overlay-thumb-content"), "the marked box's thumb is in the content layer");
+});
+
+test("a scroll caused by the box changing size does not show the thumb; a later one does", async () => {
+  const { window, document } = parseHTML("<html><body><div id=box></div></body></html>");
+  let resized;
+  Object.assign(globalThis, { window, document, HTMLElement: window.HTMLElement, Event: window.Event, MutationObserver: window.MutationObserver,
+    ResizeObserver: class { constructor(callback) { resized = callback; } observe() {} disconnect() {} },
+    requestAnimationFrame: (cb) => setTimeout(cb, 0), cancelAnimationFrame: clearTimeout,
+    getComputedStyle: () => ({ borderTopRightRadius: "0", borderBottomRightRadius: "0" }) });
+  window.innerWidth = 800;
+  const box = document.getElementById("box");
+  Object.assign(box, { scrollHeight: 1000, clientHeight: 200, scrollWidth: 300, clientWidth: 300, scrollTop: 0 });
+  box.getBoundingClientRect = () => ({ top: 0, left: 0, right: 300, bottom: 200, width: 300, height: 200 });
+  const detach = api.attachOverlayScrollbar(box);
+  await wait(150);
+  const thumb = document.querySelector(".overlay-thumb");
+  const scroll = () => box.dispatchEvent(new window.Event("scroll", { bubbles: true }));
+
+  box.clientWidth = 200;
+  resized();
+  box.scrollTop = 40;
+  scroll();
+  await wait(10);
+  assert.equal(thumb.classList.contains("visible"), false, "the drag's own scroll stays quiet");
+
+  await wait(230);
+  scroll();
+  await wait(10);
+  assert.ok(thumb.classList.contains("visible"), "someone scrolling afterwards still shows it");
+  detach();
+  delete globalThis.ResizeObserver;
 });

@@ -15,6 +15,26 @@ from openprogram.runtime.execution.store import default_store
 from . import catalog, state
 
 
+_WORKER_STOPPED = "The worker stopped. Review saved progress before starting a new operation."
+
+
+def _settled_status(operation: dict) -> str:
+    """The end status of an operation whose execution record is gone.
+
+    Execution retention deletes a finished execution 30 days after its end;
+    the operation row keeps what it ended with: a result (completed), the
+    worker-stopped note (interrupted), another error (failed), or neither
+    (cancelled, which writes nothing).
+    """
+    if operation.get("result") is not None:
+        return Status.COMPLETED.value
+    if operation.get("error") == _WORKER_STOPPED:
+        return Status.INTERRUPTED.value
+    if operation.get("error"):
+        return Status.FAILED.value
+    return Status.CANCELLED.value
+
+
 class ApplicationService:
     def __init__(self):
         self.tasks: dict[str, asyncio.Task] = {}
@@ -37,7 +57,7 @@ class ApplicationService:
         catalog.get(instance["app_id"])
         record = default_store().get_execution(run_id)
         return {"id": run_id, "instance_id": instance["id"], "operation": value["operation"],
-                "status": record.status.value if record else "interrupted",
+                "status": record.status.value if record else _settled_status(value),
                 "result": json.loads(value["result"]) if value["result"] else None,
                 "error": value["error"], "question": json.loads(value["question"]) if value["question"] else None}
 
@@ -79,7 +99,7 @@ class ApplicationService:
             from openprogram.runtime.execution.driver import DriverBinding
             record = store.get_execution(run_id)
             attempt, leased = self.control.attempts.lease(run_id, expected_version=record.status_version,
-                                                        owner_id="application-worker", ttl_seconds=60)
+                                                        owner_id="application-worker")
             attempt, _ = self.control.attempts.activate(attempt.attempt_id, generation=attempt.generation,
                                                        expected_execution_version=leased.status_version)
             self.control.attempts.set_process_owner(attempt.attempt_id, generation=attempt.generation, active=True)
@@ -114,14 +134,6 @@ class ApplicationService:
         loop = asyncio.get_running_loop()
         process = None
         waiter = None
-        async def heartbeat():
-            while True:
-                await asyncio.sleep(10)
-                attempt = self.attempts.get(run_id)
-                if attempt is None:
-                    return
-                self.control.attempts.heartbeat(attempt.attempt_id, generation=attempt.generation, ttl_seconds=60)
-        lease = asyncio.create_task(heartbeat())
         try:
             executable = await asyncio.to_thread(catalog.ensure_environment, app)
             root = Path(app["path"])
@@ -170,7 +182,7 @@ class ApplicationService:
             record = default_store().get_execution(run_id)
             if record.status != Status.CANCELLING:
                 with state.connect() as db:
-                    db.execute("UPDATE operations SET error=? WHERE id=?", ("The worker stopped. Review saved progress before starting a new operation.", run_id))
+                    db.execute("UPDATE operations SET error=? WHERE id=?", (_WORKER_STOPPED, run_id))
             self.transition(run_id, Status.CANCELLED if record.status == Status.CANCELLING else Status.INTERRUPTED)
             raise
         except Exception as exc:
@@ -190,8 +202,6 @@ class ApplicationService:
                         pass
             io_pool.shutdown(wait=False, cancel_futures=True)
             self.processes.pop(run_id, None)
-            lease.cancel()
-            await asyncio.gather(lease, return_exceptions=True)
             with state.connect() as db:
                 db.execute("UPDATE operations SET question=NULL WHERE id=?", (run_id,))
 
@@ -259,4 +269,4 @@ class ApplicationService:
                 else:
                     self.transition(run_id, Status.CANCELLED if record.status == Status.CANCELLING else Status.INTERRUPTED)
                 with state.connect() as db:
-                    db.execute("UPDATE operations SET question=NULL,error=? WHERE id=?", ("The worker stopped. Review saved progress before starting a new operation.", run_id))
+                    db.execute("UPDATE operations SET question=NULL,error=? WHERE id=?", (_WORKER_STOPPED, run_id))

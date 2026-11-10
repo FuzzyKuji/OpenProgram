@@ -1,32 +1,23 @@
 "use client";
 
 /**
- * System settings — schema-driven editor, styled to match the other
- * settings tabs (same .section/.row/.label/.control from settings-page.module
- * .css). Renders the SAME settings the TUI panel and `openprogram config`
+ * System settings — schema-driven editor on the shared Settings rows.
+ * Renders the SAME settings the TUI panel and `openprogram config`
  * edit, fetched from /api/settings (backed by openprogram.state.settings).
  * One SettingSpec server-side → one row here. See docs/design/cli/redesign.md.
  */
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { SystemAccess } from "./system-access";
+import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
 import { SimpleSelect } from "@/components/ui/select";
 import { useTranslation } from "@/lib/i18n";
-import styles from "../settings-page.module.css";
-
-interface Row {
-  key: string;
-  group: string;
-  label: string;
-  widget: "number" | "toggle" | "enum" | "status" | "text" | "json";
-  apply: "live" | "next_start";
-  help?: string;
-  value?: unknown;
-  choices?: string[];
-  set?: boolean;
-}
+import { settingRowsQuery, systemAccessQuery, type SettingRow } from "@/lib/settings/system-page-queries";
+import { cn } from "@/lib/utils";
+import { SettingsPage, SettingsRow, SettingsSection } from "../settings-ui";
 
 // On the web, only show settings that have NO dedicated page. Providers,
 // Search, Memory, and Tools already have their own surfaces (the Providers,
@@ -38,17 +29,12 @@ const WEB_GROUPS = ["Models", "Ports"];
 
 export function SystemSettings() {
   const { t, text } = useTranslation();
-  const [rows, setRows] = useState<Row[]>([]);
+  const client = useQueryClient();
+  const settings = useQuery(settingRowsQuery);
+  const access = useQuery(systemAccessQuery);
   const [status, setStatus] = useState<Record<string, string>>({});
-  const [loaded, setLoaded] = useState(false);
-
-  useEffect(() => {
-    fetch("/api/settings")
-      .then((r) => r.json())
-      .then((d) => setRows((d.settings || []).filter((r: Row) => WEB_GROUPS.includes(r.group))))
-      .catch(() => {})
-      .finally(() => setLoaded(true));
-  }, []);
+  const rows = (settings.data ?? []).filter((r) => WEB_GROUPS.includes(r.group));
+  const loaded = !settings.isPending && !access.isPending;
 
   async function save(key: string, value: unknown) {
     let res: { applied?: string; value?: unknown; note?: string; error?: string };
@@ -65,11 +51,23 @@ export function SystemSettings() {
       setStatus((s) => ({ ...s, [key]: `✗ ${res.error}` }));
       return;
     }
-    setRows((rs) => rs.map((r) => (r.key === key ? { ...r, value: res.value } : r)));
+    client.setQueryData(settingRowsQuery.queryKey, (all) =>
+      all?.map((r) => (r.key === key ? { ...r, value: res.value } : r)));
     const when = res.applied === "next_start"
       ? text("Saved · takes effect on next start", "已保存 · 下次启动后生效")
       : text("Saved", "已保存");
-    setStatus((s) => ({ ...s, [key]: `✓ ${when}${res.note ? ` · ${res.note}` : ""}` }));
+    const saved = `✓ ${when}${res.note ? ` · ${res.note}` : ""}`;
+    setStatus((s) => ({ ...s, [key]: saved }));
+    // "Takes effect on next start" stays true; a plain "Saved" is only news for a moment.
+    if (res.applied !== "next_start") {
+      window.setTimeout(() => {
+        setStatus((s) => {
+          if (s[key] !== saved) return s;
+          const { [key]: _done, ...rest } = s;
+          return rest;
+        });
+      }, 3000);
+    }
   }
 
   const groups: string[] = [];
@@ -77,85 +75,57 @@ export function SystemSettings() {
     if (!groups.includes(r.group)) groups.push(r.group);
   });
 
-  // The header stays put while rows load, like the Memory page, so the
-  // title does not pop in after the body.
-  const pageHeader = (
-    <div className={styles.pageHeader}>
-      <h2 className={styles.pageTitle}>{t("settings.tab.system")}</h2>
-      <p className={styles.pageMeta}>
-        {text(
-          "Settings with no dedicated page. Some take effect on the next start.",
-          "没有独立页面的设置。部分项会在下次启动后生效。",
-        )}
-      </p>
-    </div>
-  );
-
-  if (!loaded) {
-    return (
-      <div className={styles.page}>
-        {pageHeader}
-        <div className={styles.pageBody}>
-          <div className={styles.rowHelp}>{text("Loading…", "加载中…")}</div>
-        </div>
-      </div>
-    );
-  }
-
-  // Same shell as GeneralSection: .page > .pageHeader > .pageBody, then a
-  // <section> per group with its .sectionTitle + a .card wrapping the rows.
   return (
-    <div className={styles.page}>
-      {pageHeader}
-      <div className={styles.pageBody}>
-        <SystemAccess />
-        {groups.map((g) => (
-          <section key={g}>
-            <h3 className={styles.sectionTitle}>{g}</h3>
-            <div className={styles.card}>
-              {rows
-                .filter((r) => r.group === g)
-                .map((r) => {
-                  const st = status[r.key];
-                  return (
-                    <div className={`${styles.row} ${styles.rowTop} ${styles.systemRow}`} key={r.key}>
-                      <div className={styles.label}>
-                        <div>{r.label}</div>
-                        {r.help ? (
-                          <div className={styles.rowHelp}>{r.help}</div>
-                        ) : null}
-                        {st ? (
-                          <div className={st.startsWith("✗") ? styles.rowStatusError : styles.rowStatusOk}>
-                            {st}
-                          </div>
-                        ) : r.apply === "next_start" ? (
-                          <div className={styles.rowStatus}>
-                            {text("Takes effect on next start", "下次启动后生效")}
-                          </div>
-                        ) : null}
-                      </div>
-                      <div className={styles.control}>
-                        <Control row={r} onSave={save} />
-                      </div>
-                    </div>
-                  );
-                })}
-            </div>
-          </section>
-        ))}
-      </div>
-    </div>
+    <SettingsPage
+      title={t("settings.tab.system")}
+      description={text(
+        "Settings with no dedicated page. Some take effect on the next start.",
+        "没有独立页面的设置。部分项会在下次启动后生效。",
+      )}
+    >
+      {loaded ? (
+        <>
+          <SystemAccess />
+          {groups.map((g) => (
+            <SettingsSection key={g} title={g === "Ports" ? text("Web server", "网页服务") : g}>
+              {rows.filter((r) => r.group === g).map((r) => (
+                <SettingsRow
+                  key={r.key}
+                  label={r.label}
+                  description={<Description row={r} status={status[r.key]} />}
+                >
+                  <Control row={r} onSave={save} />
+                </SettingsRow>
+              ))}
+            </SettingsSection>
+          ))}
+        </>
+      ) : null}
+    </SettingsPage>
   );
 }
 
-function Control({ row, onSave }: { row: Row; onSave: (k: string, v: unknown) => void }) {
+/** A setting's help, then its save result or when a change takes effect. */
+function Description({ row, status }: { row: SettingRow; status?: string }) {
+  const { text } = useTranslation();
+  const note = status || (row.apply === "next_start" ? text("Takes effect on next start", "下次启动后生效") : "");
+  const tone = status?.startsWith("✗") ? "text-danger-soft" : status ? "text-accent-green" : "";
+  return (
+    <>
+      {row.help}
+      {note ? <span className={cn("mt-1 block", tone)}>{note}</span> : null}
+    </>
+  );
+}
+
+function Control({ row, onSave }: { row: SettingRow; onSave: (k: string, v: unknown) => void }) {
   const { text } = useTranslation();
   if (row.widget === "status") {
     const ok = !!row.value;
     return (
-      <span className={ok ? styles.rowStatusOk : styles.rowStatus}>
-        {ok ? `✓ ${text("Configured", "已配置")}` : `✗ ${text("Not configured", "未配置")}`}
-      </span>
+      <Badge variant={ok ? "default" : "secondary"}>
+        {ok ? text("Configured", "已配置") : text("Not configured", "未配置")}
+      </Badge>
     );
   }
   if (row.widget === "toggle") {
@@ -191,7 +161,7 @@ function Control({ row, onSave }: { row: Row; onSave: (k: string, v: unknown) =>
       spellCheck={false}
       data-kind={isNumber ? "number" : "text"}
       defaultValue={initial}
-      className={isNumber ? "w-[120px] text-right" : "w-[min(320px,100%)] text-left font-mono"}
+      className={isNumber ? undefined : "font-mono"}
       onBlur={(e) => {
         if (e.target.value !== initial) onSave(row.key, e.target.value);
       }}

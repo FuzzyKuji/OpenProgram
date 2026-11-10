@@ -47,6 +47,10 @@ EFFECT_ADMISSION_CLOSED_STATUSES = frozenset(
 )
 
 
+#: A durable function's steps are effects whose record is the function's log.
+FUNCTION_STEP_PREFIX = "function-step:"
+
+
 @dataclass(frozen=True)
 class EffectRecord:
     effect_id: str
@@ -79,6 +83,20 @@ class EffectRecord:
             "updated_at": self.updated_at,
             "resolved_at": self.resolved_at,
         }
+
+
+def _function_step_record(execution_id: str, step) -> EffectRecord:
+    settled = step.settled_at
+    return EffectRecord(
+        effect_id=f"{FUNCTION_STEP_PREFIX}{execution_id}:{step.action_id}",
+        execution_id=execution_id, attempt_id=step.attempt_id, action_id=step.action_id,
+        classification=EffectClassification.UNKNOWN, idempotency_key=None,
+        metadata={"function_step": dict(step.identity), "input_hash": step.input_hash,
+                  "code_hash": step.code_hash},
+        status=EffectStatus(step.status), receipt=dict(step.receipt or {}),
+        created_at=step.started_at, updated_at=settled or step.started_at,
+        dispatched_at=step.started_at, resolved_at=settled,
+    )
 
 
 class EffectConflict(RuntimeError):
@@ -142,9 +160,7 @@ class EffectStore:
         }
         fingerprint = hashlib.sha256(_json(identity).encode("utf-8")).hexdigest()
         with self.executions._transaction() as connection:
-            row = connection.execute(
-                "SELECT * FROM effects WHERE effect_id = ?", (effect_id,)
-            ).fetchone()
+            row = connection.get("effects", effect_id)
             if row is not None:
                 if row["fingerprint"] != fingerprint:
                     raise EffectConflict(
@@ -155,11 +171,7 @@ class EffectStore:
             execution = self.executions._require_execution(connection, execution_id)
             _require_effect_admission(execution)
             now = self._clock()
-            attempt = connection.execute(
-                "SELECT execution_id, status, lease_expires_at FROM attempts "
-                "WHERE attempt_id = ?",
-                (attempt_id,),
-            ).fetchone()
+            attempt = connection.get("attempts", attempt_id)
             if attempt is None or attempt["execution_id"] != execution_id:
                 raise EffectConflict(
                     "attempt_mismatch",
@@ -168,34 +180,29 @@ class EffectStore:
             if (
                 execution.current_attempt_id != attempt_id
                 or attempt["status"] != "active"
-                or float(attempt["lease_expires_at"]) <= now
             ):
                 raise EffectConflict(
                     "stale_attempt",
                     "only the current active attempt can register an effect",
                 )
-            connection.execute(
-                "INSERT INTO effects "
-                "(effect_id, execution_id, attempt_id, action_id, classification, "
-                "idempotency_key, metadata_json, fingerprint, status, receipt_json, "
-                "created_at, dispatched_at, updated_at, resolved_at) VALUES "
-                "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                (
-                    effect_id,
-                    execution_id,
-                    attempt_id,
-                    action_id,
-                    classification.value,
-                    idempotency_key,
-                    _json(metadata),
-                    fingerprint,
-                    EffectStatus.PLANNED.value,
-                    "{}",
-                    now,
-                    None,
-                    now,
-                    None,
-                ),
+            connection.insert(
+                "effects",
+                {
+                    "effect_id": effect_id,
+                    "execution_id": execution_id,
+                    "attempt_id": attempt_id,
+                    "action_id": action_id,
+                    "classification": classification.value,
+                    "idempotency_key": idempotency_key,
+                    "metadata_json": _json(metadata),
+                    "fingerprint": fingerprint,
+                    "status": EffectStatus.PLANNED.value,
+                    "receipt_json": "{}",
+                    "created_at": now,
+                    "dispatched_at": None,
+                    "updated_at": now,
+                    "resolved_at": None,
+                },
             )
             record = self._require(connection, effect_id)
             self._append_event(connection, execution.status_version, record, now)
@@ -277,6 +284,10 @@ class EffectStore:
                 else "invalid_transition"
             )
             raise EffectConflict(code, "effect is not awaiting a resolution")
+        if effect_id.startswith(FUNCTION_STEP_PREFIX):
+            return self._resolve_function_step(
+                effect_id, expected_status=expected_status, outcome=outcome, receipt=receipt,
+            )
         return self._transition(
             effect_id,
             expected_status=expected_status,
@@ -286,30 +297,42 @@ class EffectStore:
             owner_generation=generation,
         )
 
-    def get(self, effect_id: str) -> EffectRecord | None:
-        with closing(self.executions._connect()) as connection:
-            row = connection.execute(
-                "SELECT * FROM effects WHERE effect_id = ?", (effect_id,)
-            ).fetchone()
-            return self._record(row) if row is not None else None
+    def _function_step(self, effect_id: str):
+        """The function log and step behind a ``function-step:`` effect id."""
+        execution_id, action_id = effect_id[len(FUNCTION_STEP_PREFIX):].rsplit(":", 1)
+        log = self.executions.function_log(execution_id)
+        return execution_id, log, (log.step(action_id) if log is not None else None)
 
-    def has_kind(self, execution_id: str, kind: str) -> bool:
+    def _resolve_function_step(
+        self, effect_id: str, *, expected_status: EffectStatus, outcome: EffectStatus,
+        receipt: Mapping[str, Any],
+    ) -> EffectRecord:
+        execution_id, log, step = self._function_step(effect_id)
+        if step is None:
+            raise EffectConflict("not_found", f"effect not found: {effect_id}")
+        if step.status != expected_status.value:
+            raise EffectConflict("status_conflict", "function step changed before it was resolved")
+        log.resolve_step(step.action_id, outcome.value, receipt)
+        return _function_step_record(execution_id, log.step(step.action_id))
+
+    def get(self, effect_id: str) -> EffectRecord | None:
+        if effect_id.startswith(FUNCTION_STEP_PREFIX):
+            execution_id, _log, step = self._function_step(effect_id)
+            return None if step is None else _function_step_record(execution_id, step)
         with closing(self.executions._connect()) as connection:
-            return connection.execute(
-                "SELECT 1 FROM effects WHERE execution_id = ? "
-                "AND json_extract(metadata_json, '$.kind') = ? LIMIT 1",
-                (execution_id, kind),
-            ).fetchone() is not None
+            row = connection.get("effects", effect_id)
+            return self._record(row) if row is not None else None
 
     def list_unresolved(self, execution_id: str) -> list[EffectRecord]:
         values = tuple(status.value for status in UNRESOLVED_EFFECT_STATUSES)
         with closing(self.executions._connect()) as connection:
-            rows = connection.execute(
-                "SELECT * FROM effects WHERE execution_id = ? "
-                "AND status IN (?, ?) ORDER BY created_at, effect_id",
-                (execution_id, *values),
+            rows = connection.rows(
+                "effects", order=("created_at", "effect_id"), execution_id=execution_id, status=values,
             )
-            return [self._record(row) for row in rows]
+            recorded = [self._record(row) for row in rows]
+        log = self.executions.function_log(execution_id)
+        steps = log.unresolved() if log is not None else ()
+        return [*recorded, *(_function_step_record(execution_id, step) for step in steps)]
 
     def _transition(
         self,
@@ -338,16 +361,13 @@ class EffectStore:
                 raise EffectConflict("invalid_owner", "effect resolution requires both attempt and generation")
             if owner_attempt_id is not None:
                 execution = self.executions._require_execution(connection, current.execution_id)
-                row = connection.execute(
-                    "SELECT generation, status, lease_expires_at FROM attempts WHERE attempt_id = ?",
-                    (owner_attempt_id,),
-                ).fetchone()
+                row = connection.get("attempts", owner_attempt_id)
                 if (
                     current.attempt_id != owner_attempt_id
                     or execution.current_attempt_id != owner_attempt_id
                     or execution.owner_lease.get("generation") != owner_generation
                     or row is None or int(row["generation"]) != owner_generation
-                    or row["status"] != "active" or float(row["lease_expires_at"]) <= self._clock()
+                    or row["status"] != "active"
                 ):
                     raise EffectConflict("stale_attempt", "effect resolution owner is stale")
             now = self._clock()
@@ -362,17 +382,12 @@ class EffectStore:
                     execution = self.executions._require_execution(
                         connection, current.execution_id
                     )
-                attempt = connection.execute(
-                    "SELECT status, lease_expires_at FROM attempts "
-                    "WHERE attempt_id = ?",
-                    (current.attempt_id,),
-                ).fetchone()
+                attempt = connection.get("attempts", current.attempt_id)
                 if (
                     attempt is None
                     or execution.current_attempt_id != current.attempt_id
                     or attempt["status"] != "active"
-                    or float(attempt["lease_expires_at"]) <= now
-                ):
+                    ):
                     raise EffectConflict(
                         "stale_attempt",
                         "only the current active attempt can dispatch an effect",
@@ -391,11 +406,7 @@ class EffectStore:
             refs: set[str] = set()
             self.executions._collect_state_refs(receipt_value, refs)
             for ref in refs:
-                blob = connection.execute(
-                    "SELECT sha256, payload, byte_length, media_type, schema_version "
-                    "FROM execution_state_blobs WHERE execution_id = ? AND ref = ?",
-                    (current.execution_id, ref),
-                ).fetchone()
+                blob = connection.get("execution_state_blobs", current.execution_id, ref)
                 if blob is None:
                     raise EffectConflict("receipt_ref_invalid", "effect receipt references missing or foreign state")
                 payload = bytes(blob["payload"])
@@ -405,18 +416,16 @@ class EffectStore:
                     or not blob["media_type"] or int(blob["schema_version"]) < 1
                 ):
                     raise EffectConflict("receipt_ref_invalid", "effect receipt references corrupt state")
-            connection.execute(
-                "UPDATE effects SET status = ?, receipt_json = ?, "
-                "dispatched_at = ?, updated_at = ?, resolved_at = ? "
-                "WHERE effect_id = ?",
-                (
-                    target.value,
-                    _json(receipt_value),
-                    dispatched_at,
-                    now,
-                    resolved_at,
-                    effect_id,
-                ),
+            connection.update(
+                "effects",
+                {
+                    "status": target.value,
+                    "receipt_json": _json(receipt_value),
+                    "dispatched_at": dispatched_at,
+                    "updated_at": now,
+                    "resolved_at": resolved_at,
+                },
+                effect_id=effect_id,
             )
             updated = self._require(connection, effect_id)
             execution = self.executions._require_execution(
@@ -443,9 +452,7 @@ class EffectStore:
 
     @classmethod
     def _require(cls, connection, effect_id: str) -> EffectRecord:
-        row = connection.execute(
-            "SELECT * FROM effects WHERE effect_id = ?", (effect_id,)
-        ).fetchone()
+        row = connection.get("effects", effect_id)
         if row is None:
             raise EffectConflict("not_found", f"effect not found: {effect_id}")
         return cls._record(row)

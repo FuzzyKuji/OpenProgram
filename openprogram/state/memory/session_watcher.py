@@ -134,7 +134,7 @@ def _save_processed(state: dict[str, float]) -> None:
         # like the rest of the profile.
         os.chmod(temporary, 0o600)
         os.replace(temporary, path)
-        from openprogram.state.store.session.git_session import _fsync_directory
+        from openprogram.state.store.session.atomic_file import _fsync_directory
 
         _fsync_directory(path.parent)
     except BaseException:
@@ -311,8 +311,3 @@ def _process_session(
             retryable=left.retryable,
         )
     return left
-
-
-def run_now(*, idle_minutes: int = DEFAULT_IDLE_MINUTES) -> int:
-    """Manual entry point — process every idle session right now."""
-    return _scan(idle_minutes)

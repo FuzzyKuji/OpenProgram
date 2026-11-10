@@ -20,11 +20,8 @@ from __future__ import annotations
 
 import logging
 import json
-import os
-import tempfile
 import threading
 import time
-from pathlib import Path
 from typing import Any
 
 _log = logging.getLogger(__name__)
@@ -46,11 +43,13 @@ def lock(session_id: str) -> threading.RLock:
         return _locks.setdefault(session_id, threading.RLock())
 
 
-def path(session_id: str) -> Path | None:
+def path(session_id: str):
     """The conversation's open_work.json; None when the conversation is gone."""
     from openprogram.runtime.context.session_db import default_db
-    directory = default_db()._session_dir(session_id)  # noqa: SLF001 — same as todos.json
-    return directory / "open_work.json" if directory.exists() else None
+    sessions = default_db()
+    if not sessions._session_dir(session_id).exists():  # noqa: SLF001 — same as todos.json
+        return None
+    return sessions.state_file(session_id, "open_work.json")
 
 
 def load(session_id: str) -> list[dict[str, Any]]:
@@ -73,14 +72,7 @@ def _save(session_id: str, items: list[dict[str, Any]]) -> None:
     target = path(session_id)
     if target is None:
         raise ValueError(f"conversation {session_id!r} not found")
-    descriptor, temporary = tempfile.mkstemp(prefix=target.name + ".", dir=target.parent)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            json.dump({"version": 1, "items": items}, handle, ensure_ascii=False, indent=2)
-        os.replace(temporary, target)
-    finally:
-        if os.path.exists(temporary):
-            os.unlink(temporary)
+    target.write_text(json.dumps({"version": 1, "items": items}, ensure_ascii=False, indent=2), encoding="utf-8")
     _publish(session_id, items)
 
 

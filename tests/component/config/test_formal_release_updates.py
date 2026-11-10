@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import html
 import json
+import re
 import subprocess
 import sys
 from pathlib import Path
@@ -125,6 +127,38 @@ def test_release_wheel_probe_runs_outside_the_checkout():
     assert 'python -P -m openprogram.interfaces.cli --version' in workflow
 
 
+def test_release_workflow_builds_and_signs_official_update_assets():
+    workflow = Path(".github/workflows/release.yml").read_text(encoding="utf-8")
+
+    assert "create-update-assets.py platform" in workflow
+    assert "--previous" not in workflow, "every release carries its base, for machines that skipped some"
+    trust = workflow[workflow.index("id: update-key") : workflow.index("name: Select release platforms")]
+    assert "official/assets.py" in trust and "self-update/update-service.js" in trust
+    assert "name: update-assets-${{ matrix.platform }}-${{ matrix.arch }}" in workflow
+    assert "create-update-assets.py finalize" in workflow
+    assert "secrets.OPENPROGRAM_UPDATE_SIGNING_KEY" in workflow
+    sign = workflow.index("name: Sign official update assets")
+    publish = workflow.index("name: Publish GitHub Release")
+    manifest = workflow.index("name: Create release manifest")
+    assert sign < manifest < publish
+    move = workflow.index('mv "$directory"/* "$RUNNER_TEMP/official-update/"')
+    guard = workflow.index('if [ -z "$UPDATE_SIGNING_KEY" ]; then')
+    assert move < guard, "unsigned update assets must leave release-artifacts before the guard"
+
+
+def test_upgrade_docs_describe_replay_of_own_commits():
+    for name, phrase in (
+        ("docs/install/upgrade.html", "unreplayable/<release>/<commit>.patch"),
+        ("docs/install/upgrade.zh.html", "unreplayable/<release>/<commit>.patch"),
+    ):
+        assert phrase in html.unescape(Path(name).read_text(encoding="utf-8"))
+    for name in (
+        "docs/reference/design/distribution/automatic-updates.html",
+        "docs/reference/design/distribution/automatic-updates.zh.html",
+    ):
+        assert 'id="official-replay"' in Path(name).read_text(encoding="utf-8")
+
+
 def test_system_version_reports_managed_release(monkeypatch):
     from openprogram.operations.self_update.github_release.detect import InstallMethod
     from openprogram.interfaces.server.routes.settings.config import register
@@ -146,6 +180,10 @@ def test_system_version_reports_managed_release(monkeypatch):
     assert response.json() == {
         "currentVersion": "0.6.7",
         "installType": "managed_release",
+        "updateRoute": "command_line_release",
+        "latestVersion": None,
+        "updateAvailable": False,
+        "latestCheckedAt": None,
     }
 
 
@@ -157,20 +195,12 @@ def test_automatic_update_design_is_one_accessible_review_page():
     ).read_text(encoding="utf-8")
 
     for contract in (
-        'data-document="automatic-updates"',
-        'id="question"',
-        'id="audience"',
-        'id="scope"',
-        'id="exclusions"',
         'id="architecture"',
+        '<title>Stable release automatic updates</title>',
+        'role="img"',
         'id="desktop-states"',
         'id="trust-boundaries"',
         'id="implementation-evidence"',
-        '<title>Automatic update architecture</title>',
-        '<desc>',
-        'data-update-state="available"',
-        'data-update-state="error"',
-        'prefers-reduced-motion',
         'https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/desktop/main/self-update/update-service.js',
         'https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/interfaces/cli/commands/upgrade.py',
     ):
@@ -181,31 +211,26 @@ def test_automatic_update_design_is_one_accessible_review_page():
     ).exists()
 
     source_design = Path(
-        "docs/server/upgrading.md"
+        "docs/server/upgrading.html"
     ).read_text(encoding="utf-8")
-    source_contract = " ".join(source_design.split())
-    faq = Path("docs/start/faq.md").read_text(encoding="utf-8")
-    assert "Upgrading a release installation" in source_contract
-    assert "`stable` follows `origin/main`" in source_contract
-    assert (
-        "Managed releases use the stable GitHub Release path; source checkouts "
-        "use the gated Git pipeline"
-    ) in source_contract
-    assert "first updater-enabled release" in faq
-    assert "managed CLI/server and source-checkout users both run" in faq
-    assert (
-        "an explicit `--channel`, that source-channel choice is still persisted"
-    ) in source_contract
-    assert "Automatic rollback is not implemented yet" in source_contract
-    assert "command prints the manual escape hatch" in source_contract
+    source_contract = " ".join(re.sub(r"<[^>]+>", "", source_design).split())
+    faq = " ".join(re.sub(r"<[^>]+>", "", Path("docs/start/faq.html").read_text(encoding="utf-8")).split())
+    assert '<a href="../install/upgrade.html">Upgrade</a>' in source_design
+    assert "stable, which here tracks origin/main" in source_contract
+    assert "It is not the stable GitHub Release" in source_contract
+    assert "For Desktop and managed releases" in source_contract
+    assert "Stable installations move only to a published version" in faq
+    assert "openprogram upgrade, which picks the path from the installation type" in faq
+    assert "An explicit --channel is still persisted" in source_contract
+    assert "No automatic rollback; run the printed command" in source_contract
     assert 'class="diagram-mobile" aria-hidden' not in design
 
-    design_index = Path("docs/reference/design/README.md").read_text(encoding="utf-8")
-    design_index_zh = Path("docs/reference/design/README.zh.md").read_text(
+    design_index = Path("docs/reference/design/README.html").read_text(encoding="utf-8")
+    design_index_zh = Path("docs/reference/design/README.zh.html").read_text(
         encoding="utf-8"
     )
-    assert "](distribution/automatic-updates.html)" in design_index
-    assert "](distribution/automatic-updates.zh.html)" in design_index_zh
+    assert 'href="distribution/automatic-updates.html"' in design_index
+    assert 'href="distribution/automatic-updates.zh.html"' in design_index_zh
 
     docs_root = Path("docs")
     design_tab = next(

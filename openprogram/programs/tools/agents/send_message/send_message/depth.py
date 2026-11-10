@@ -4,11 +4,11 @@ A chain is everything that grows out of one user turn: spawns
 (``agent``), messages (``send_message``), and task dispatches
 (``agent(to=…)``).
 
-  * **generation budget** (``agent.max_spawn_depth``, default 1) — how
+  * **generation budget** (``agent.max_spawn_depth``, off by default) — how
     many generations of NEW agents the chain has created. Only ``agent``
     creating an agent adds to it. 1 = the main agent spawns workers, a
     worker does the work itself.
-  * **message budget** (``agent.max_messages``, default 8) — how many
+  * **message budget** (``agent.max_messages``, off by default) — how many
     messages the chain has passed, whatever the tool. A spawn, a
     ``send_message`` delivery, an ``agent(to=…)`` dispatch and a result
     flowing back each cost one, so A→B→A costs the same as A→B→C.
@@ -28,7 +28,7 @@ ContextVars set by the task runner on the child turn (cross-thread) and
 by the sync spawn path inline.
 
 A third budget bounds the chain sideways instead of downward and lives
-with the tool it guards: ``agent.max_spawn_fanout`` (default 8) caps
+with the tool it guards: ``agent.max_spawn_fanout`` (off by default) caps
 the agents ONE turn may create, because a spawn hands its count to the
 child and leaves the parent's own untouched, so nothing here counts
 siblings. See ``programs/tools/agent/agent/agent.MAX_SPAWN_FANOUT``.
@@ -63,11 +63,11 @@ _chain_generations: contextvars.ContextVar[int] = contextvars.ContextVar(
 #
 # Raise it for long negotiations between two agents (openclaw's own
 # ceiling of 20 is a defensible upper bound), lower it if chains are
-# spending their budget on acknowledgements instead of work. 0 removes
+# spending their budget on acknowledgements instead of work. 0, the default, removes
 # the limit. Worth knowing when tuning: openclaw also injects "turn N of
 # M" into each prompt and gives the agents a token to end early, so its
 # agents can stop themselves; ours only find out by being refused.
-MAX_MESSAGES = 8
+MAX_MESSAGES = 0
 
 
 def current_chain_messages() -> int:

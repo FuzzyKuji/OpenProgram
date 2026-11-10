@@ -1,26 +1,16 @@
 /**
- * activity-view — how this browser shows the Activity panel: which agents
- * to show, how to arrange them, and which sections are folded. A view preference, so it
- * lives in localStorage like the sidebar's recents view; it falls back to
- * the defaults wherever storage is unavailable.
+ * activity-view: which sections of the Activity panel this browser keeps
+ * folded. A view preference, so it lives in localStorage like the sidebar's
+ * recents view; it falls back to the default wherever storage is unavailable.
  */
 import { useSyncExternalStore } from "react";
 
-/** all: every agent · attention: the ones waiting on the reader ·
- *  running: the ones running now. */
-export type ActivityShow = "all" | "attention" | "running";
-/** structure: each sub-agent under the agent that started it ·
- *  time: one list, most recent activity first. */
-export type ActivityArrange = "structure" | "time";
-
 export interface ActivityView {
-  show: ActivityShow;
-  arrange: ActivityArrange;
   /** Keys of the overview sections folded to their header. */
   collapsed: string[];
 }
 
-export const DEFAULT_ACTIVITY_VIEW: ActivityView = { show: "all", arrange: "structure", collapsed: [] };
+export const DEFAULT_ACTIVITY_VIEW: ActivityView = { collapsed: [] };
 
 const KEY = "openprogram.activity-view";
 const EVENT = "openprogram:activity-view";
@@ -34,8 +24,6 @@ function read(): ActivityView {
     saved = raw ? JSON.parse(raw) as Partial<ActivityView> : {};
   } catch { saved = {}; }
   cached = {
-    show: (["all", "attention", "running"] as const).includes(saved.show as ActivityShow) ? saved.show as ActivityShow : DEFAULT_ACTIVITY_VIEW.show,
-    arrange: (["structure", "time"] as const).includes(saved.arrange as ActivityArrange) ? saved.arrange as ActivityArrange : DEFAULT_ACTIVITY_VIEW.arrange,
     collapsed: Array.isArray(saved.collapsed) ? saved.collapsed.filter(key => typeof key === "string") : DEFAULT_ACTIVITY_VIEW.collapsed,
   };
   return cached;

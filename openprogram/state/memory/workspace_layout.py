@@ -112,9 +112,3 @@ def ensure_runtime_dir(memory_dir: Path | str) -> Path:
     except OSError:
         pass
     return path
-
-
-def has_runtime_dir(memory_dir: Path | str) -> bool:
-    """True when this directory already carries a runtime area."""
-    root = Path(memory_dir)
-    return any((root / name).is_dir() for name in RUNTIME_DIR_NAMES)

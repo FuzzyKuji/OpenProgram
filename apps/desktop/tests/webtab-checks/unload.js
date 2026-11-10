@@ -19,7 +19,14 @@ module.exports = async function checkUnloadConfirmation(t, dialog) {
     controlled.emitWebContents("will-prevent-unload", { preventDefault() { allowed = true; } });
     return allowed;
   }
+  const focusedBefore = t.focusedWindow;
   try {
+    // Nobody is looking at the page: an Agent's navigation goes on without a
+    // dialog that would bring the App in front of what the user is doing.
+    t.assert.equal(requestUnload(), true, "an unwatched page leaves without asking");
+    t.assert.equal(prompts.length, 0, "an unwatched page shows no confirmation");
+    record.nativeVisible = true;
+    t.focusedWindow = win;
     t.assert.equal(requestUnload(), false, "Stay must preserve the page");
     t.assert.equal(prompts.length, 1, "blocked navigation must show a confirmation");
     t.assert.strictEqual(prompts[0].owner, win);
@@ -41,6 +48,7 @@ module.exports = async function checkUnloadConfirmation(t, dialog) {
     ctx.views.delete(record.id);
     record.ownerId = nextCtx.id;
     nextCtx.views.set(record.id, record);
+    t.focusedWindow = nextWin;
     t.assert.equal(requestUnload(), true);
     t.assert.strictEqual(prompts.at(-1).owner, nextWin, "confirmation follows current ownership");
     duringPrompt = () => nextCtx.views.delete(record.id);
@@ -50,6 +58,7 @@ module.exports = async function checkUnloadConfirmation(t, dialog) {
     t.assert.equal(prompts.length, count, "no dialog without an owner");
     t.hooks.windows.delete(nextCtx.id);
   } finally {
+    t.focusedWindow = focusedBefore;
     dialog.showMessageBoxSync = original;
     controlled.emitWebContents("destroyed");
     t.hooks.windows.delete(ctx.id);

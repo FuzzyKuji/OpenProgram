@@ -41,6 +41,7 @@ from openprogram.runtime.agent.loop.guards import (
 from openprogram.runtime.agent.loop.message_context import _durable_message
 from openprogram.runtime.agent.loop.streaming import _stream_assistant_response
 from openprogram.runtime.agent.loop.tool_dispatch import _execute_tool_calls
+from openprogram.runtime.agent.loop.tool_loop_guard import ToolLoopGuard
 
 
 async def _run_loop(current_context, new_messages, config, cancel_event, ev_stream, stream_fn):
@@ -198,6 +199,7 @@ async def _run_loop_with_recovery(
         has_more_tool_calls = True
         steering_after_tools: list[AgentMessage] | None = None
         repeat_failures: dict[str, int] = {}
+        tool_loop = ToolLoopGuard()
         incomplete_responses = 0
 
         while has_more_tool_calls or len(pending_messages) > 0:
@@ -599,6 +601,28 @@ async def _run_loop_with_recovery(
                 pending_messages = []
                 if config.get_steering_messages:
                     pending_messages = await config.get_steering_messages()
+
+            # Anything the user says mid-turn is progress; otherwise a round
+            # that repeats the last ones exactly ends the turn with a notice.
+            if pending_messages:
+                tool_loop.reset()
+            elif tool_results and (stuck := tool_loop.observe(message, tool_results)):
+                notice = AssistantMessage(
+                    content=[],
+                    api=config.model.api,
+                    provider=config.model.provider,
+                    model=config.model.id,
+                    stop_reason="error",
+                    error_message=stuck.notice(),
+                    error_retryable=False,
+                    timestamp=int(time.time() * 1000),
+                )
+                ev_stream.push(AgentEventMessageStart(message=notice))
+                ev_stream.push(AgentEventMessageEnd(message=notice))
+                new_messages.append(notice)
+                ev_stream.push(AgentEventAgentEnd(messages=new_messages))
+                ev_stream.end(new_messages)
+                return
 
         # Check for follow-up messages
         follow_up_messages: list[AgentMessage] = []

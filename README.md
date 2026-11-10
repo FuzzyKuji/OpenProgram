@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-On Windows: `irm https://openprogram.io/install.ps1 | iex`. The macOS desktop App is a signed DMG on the [releases page](https://github.com/FuzzyKuji/OpenProgram/releases). More options in [installation](docs/install/install.md).
+On Windows (from v1.1.0): `irm https://openprogram.io/install.ps1 | iex`. The macOS desktop App is a DMG on the [releases page](https://github.com/FuzzyKuji/OpenProgram/releases); the Linux and Windows Apps arrive in v1.1.0. If openprogram.io does not answer: `curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`. More options in [installation](https://openprogram.io/docs/install/install.html).
 
 ## Quick start
 
@@ -59,7 +59,7 @@ openprogram        # setup wizard, then terminal chat
 openprogram web    # workspace at http://localhost:18100
 ```
 
-Next: [getting started](docs/start/GETTING_STARTED.md) · [models](docs/models/README.md) · [all docs](docs/README.md)
+Next: [getting started](docs/start/GETTING_STARTED.html) · [models](docs/models/README.html) · [all docs](docs/README.html)
 
 ## A quick look
 
@@ -76,7 +76,7 @@ class SupportAgent(Agent):
         return self("Draft a short reply.")
 ```
 
-The model decides; Python makes sure the required steps run. See [writing agents](docs/capabilities/agentic-programming/writing-functions/agent.md).
+The model decides; Python makes sure the required steps run. See [writing agents](docs/capabilities/agentic-programming/writing-functions/agent.html).
 
 ## Features
 
@@ -101,7 +101,7 @@ Each entry links to its design document.
 
 | | |
 |---|---|
-| **[Desktop and web UI](https://openprogram.io/docs/reference/design/ui/README.html)** | One workspace on macOS, Windows, Linux or a server. |
+| **[Desktop and web UI](https://openprogram.io/docs/reference/design/ui/README.html)** | The App on macOS, and from v1.1.0 on Linux and Windows; the web UI on any of them or a server. |
 | **[Split panes](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | Chats, files, terminals and web pages side by side. |
 | **[Built-in browser](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | A browser the agent reads and operates while you watch. |
 | **[Integrated terminal](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | Terminals in the workspace, shared with the agent. |

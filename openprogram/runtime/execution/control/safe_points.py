@@ -1,5 +1,6 @@
 """Execution control safe points operations on the owning service."""
 from __future__ import annotations
+import json
 from dataclasses import replace
 from typing import Any, Mapping
 from .. import hooks
@@ -27,11 +28,14 @@ class SafePointsOperations:
                     or command.kind is not CommandKind.PAUSE
                     or command.status is not CommandStatus.APPLYING):
                 raise AttemptConflict("command_mismatch", "initial pause no longer belongs to this owner")
-            if connection.execute(
-                "SELECT 1 FROM effects WHERE execution_id = ? AND "
-                "(status != 'not_committed' OR COALESCE(json_extract(receipt_json, '$.pause_before_dispatch'), 0) != 1) LIMIT 1",
-                (execution.execution_id,),
-            ).fetchone():
+            if connection.exists(
+                "effects",
+                where=lambda effect: (
+                    effect["status"] != "not_committed"
+                    or json.loads(effect["receipt_json"]).get("pause_before_dispatch") != 1
+                ),
+                execution_id=execution.execution_id,
+            ):
                 raise AttemptConflict("effect_state_invalid", "initial pause requires no dispatched work")
             ended, paused = self.attempts._finish_in_transaction(
                 connection, attempt_id, generation=generation,
@@ -46,6 +50,50 @@ class SafePointsOperations:
         self.registry.unbind(execution.execution_id, attempt_id=attempt_id, generation=generation)
         self._observe_paused(paused)
         return SafePointCompletion(command=command, execution=paused, attempt=ended, checkpoint=None)
+
+    def take_steers(self, *, execution_id: str, attempt_id: str, generation: int) -> tuple:
+        """Claim open steering for the running owner's next model call."""
+        with self.executions._transaction() as connection:
+            attempt = self.attempts._require(connection, attempt_id)
+            self.attempts._validate_generation(attempt, generation)
+            execution = self.executions._require_execution(connection, execution_id)
+            if execution.current_attempt_id != attempt_id or any(
+                self._applying_command(connection, execution_id, kind) is not None
+                for kind in (CommandKind.CANCEL, CommandKind.PAUSE, CommandKind.STEP)
+            ):
+                return ()
+            taken = []
+            for row in connection.rows(
+                "commands",
+                order=("submitted_at", "command_id"),
+                execution_id=execution_id,
+                kind=CommandKind.STEER.value,
+                status=[CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value],
+            ):
+                steer = self.executions._command(row)
+                if steer.status is CommandStatus.ACCEPTED:
+                    steer = self.executions._transition_command(
+                        connection, steer.command_id,
+                        expected_status=CommandStatus.ACCEPTED, target=CommandStatus.APPLYING,
+                    )
+                taken.append(steer)
+            return tuple(taken)
+
+    def publish_agent_position(self, *, attempt_id: str, generation: int, fragment: CheckpointFragment):
+        """Publish where a running turn stands without ending its owner."""
+        with self.executions._transaction() as connection:
+            attempt = self.attempts._require(connection, attempt_id)
+            self.attempts._validate_generation(attempt, generation)
+            execution = self.executions._require_execution(connection, attempt.execution_id)
+            checkpoint, _ = self.checkpoints._publish_in_transaction(
+                connection, execution_id=execution.execution_id,
+                expected_version=execution.status_version, revision_id=execution.revision_id,
+                parent_checkpoint_id=execution.checkpoint_head_id, frontier=fragment.frontier,
+                completed_frontier=fragment.completed_frontier, state_refs=fragment.state_refs,
+                completed_actions=(), effect_receipts=(), child_frontier={},
+                pending_command_ids=fragment.pending_command_ids, created_by_attempt_id=attempt_id,
+            )
+        return checkpoint
 
     def arrive_safe_point(
         self,
@@ -257,17 +305,14 @@ class SafePointsOperations:
                 raise AttemptConflict("unsupported_safe_point", "driver reported an undeclared safe point")
             steering_commands = [
                 self.executions._command(row)
-                for row in connection.execute(
-                    "SELECT * FROM commands WHERE execution_id = ? AND kind = ? "
-                    "AND status IN (?, ?) ORDER BY submitted_at, command_id",
-                    (
-                        execution.execution_id,
-                        CommandKind.STEER.value,
-                        CommandStatus.ACCEPTED.value,
-                        CommandStatus.APPLYING.value,
-                    ),
-                ).fetchall()
-            ]
+                for row in connection.rows(
+                    "commands",
+                    order=("submitted_at", "command_id"),
+                    execution_id=execution.execution_id,
+                    kind=CommandKind.STEER.value,
+                    status=[CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value],
+                )
+            ] if not fragment.leaves_steering_open else []
             state_refs = dict(fragment.state_refs)
             if steering_commands:
                 steering = list(state_refs.get("steering", ()))
@@ -368,7 +413,7 @@ class SafePointsOperations:
             if command is None or command.execution_id != execution.execution_id:
                 raise AttemptConflict("command_mismatch", "safe point does not match this execution")
             if command.status is CommandStatus.APPLIED:
-                self.attempts._validate_lease(attempt, self.attempts._clock())
+                self.attempts._validate_held(attempt)
                 self.attempts._validate_owner(
                     execution, attempt, expected_execution_version
                 )
@@ -406,16 +451,13 @@ class SafePointsOperations:
                 raise AttemptConflict("invalid_state", f"steer safe point arrived while execution is {execution.status.value}")
             steering_commands = [
                 self.executions._command(row)
-                for row in connection.execute(
-                    "SELECT * FROM commands WHERE execution_id = ? AND kind = ? "
-                    "AND status IN (?, ?) ORDER BY submitted_at, command_id",
-                    (
-                        execution.execution_id,
-                        CommandKind.STEER.value,
-                        CommandStatus.ACCEPTED.value,
-                        CommandStatus.APPLYING.value,
-                    ),
-                ).fetchall()
+                for row in connection.rows(
+                    "commands",
+                    order=("submitted_at", "command_id"),
+                    execution_id=execution.execution_id,
+                    kind=CommandKind.STEER.value,
+                    status=[CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value],
+                )
             ]
             state_refs = dict(fragment.state_refs)
             steering = list(state_refs.get("steering", ()))
@@ -608,16 +650,13 @@ class SafePointsOperations:
 
             state_refs = dict(fragment.state_refs)
             steering = list(state_refs.get("steering", ()))
-            steering_commands = connection.execute(
-                "SELECT * FROM commands WHERE execution_id = ? AND kind = ? "
-                "AND status IN (?, ?) ORDER BY submitted_at, command_id",
-                (
-                    execution.execution_id,
-                    CommandKind.STEER.value,
-                    CommandStatus.ACCEPTED.value,
-                    CommandStatus.APPLYING.value,
-                ),
-            ).fetchall()
+            steering_commands = connection.rows(
+                "commands",
+                order=("submitted_at", "command_id"),
+                execution_id=execution.execution_id,
+                kind=CommandKind.STEER.value,
+                status=[CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value],
+            ) if not fragment.leaves_steering_open else []
             for row in steering_commands:
                 steer = self.executions._command(row)
                 steering.append({"command_id": steer.command_id, "payload": dict(steer.payload)})
@@ -678,14 +717,23 @@ class SafePointsOperations:
                 )
                 applied.append(pause)
             else:
+                action_id = (fragment.managed_action or {}).get("action_id")
                 command = self.executions._transition_command(
                     connection,
                     command_id,
                     expected_status=CommandStatus.APPLYING,
                     target=CommandStatus.APPLIED,
                     result_version=paused.status_version,
-                    receipt=receipt,
+                    receipt={**receipt, "managed_action_id": action_id} if action_id else receipt,
+                    result_json={"managed_action_id": action_id} if action_id else None,
                 )
+                if action_id:
+                    self.executions._append_event(
+                        connection, execution_id=execution.execution_id,
+                        execution_version=paused.status_version, kind="agent.action.completed",
+                        payload={"action_id": action_id, "command_id": command_id},
+                        created_at=paused.updated_at,
+                    )
                 applied = [command]
             for row in steering_commands:
                 steer = self.executions._command(row)
@@ -725,6 +773,7 @@ class SafePointsOperations:
         outcome: str,
         command_id: str | None = None,
         reason_code: str | None = None,
+        failure_text: str | None = None,
     ) -> AttemptCompletion:
         if target not in TERMINAL_EXECUTION_STATUSES:
             raise AttemptConflict(
@@ -759,6 +808,7 @@ class SafePointsOperations:
             target=actual_target,
             outcome=("reconciliation_required" if needs_reconciliation else outcome),
             reason_code=("effect_reconciliation" if needs_reconciliation else reason_code),
+            failure_text=failure_text,
         )
         self.registry.unbind(
             execution.execution_id,

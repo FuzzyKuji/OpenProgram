@@ -21,28 +21,17 @@ export type ClearedTaskIdentity = {
   execution_id?: string;
 };
 
-export function executionKey(
-  task?: RunningTaskIdentity | ClearedTaskIdentity | null,
-): string {
-  if (!task) return "";
-  const exec = (task.execution_id || "").trim();
-  if (exec) return exec;
-  const mid = (task.msg_id || "").trim();
-  return mid ? `${mid}_reply` : "";
-}
-
+/** Two identities name the same turn: by execution when both know theirs,
+ *  else by message. A slot learned before admission (a load during the
+ *  reservation) names only its message, and a clear may too. */
 export function shouldHonorRunningTaskClear(
   current: RunningTaskIdentity | undefined,
   cleared?: ClearedTaskIdentity,
 ): boolean {
   if (!current) return true;
-  const cur = executionKey(current);
-  const gone = executionKey(cleared);
-  if (cur && gone && cur === gone) return true;
-  // A slot learned before admission (a load during the reservation) names
-  // only its message, while the clear names the execution admission minted:
-  // the same message is the same turn.
+  const execution = (current.execution_id || "").trim();
+  const clearedExecution = (cleared?.execution_id || "").trim();
+  if (execution && clearedExecution) return execution === clearedExecution;
   const mid = (current.msg_id || "").trim();
-  return Boolean(mid && !(current.execution_id || "").trim()
-    && mid === (cleared?.msg_id || "").trim());
+  return Boolean(mid && mid === (cleared?.msg_id || "").trim());
 }

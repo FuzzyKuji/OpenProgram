@@ -49,6 +49,8 @@ export interface PendingDoc {
   loading?: boolean;
   /** Monotonic insertion rank shared with images in the same chat. */
   order?: number;
+  /** Set on an attachment a rewind put back. */
+  refillId?: number;
   /** Read failure shown on this item; blocks send. */
   error?: string;
 }

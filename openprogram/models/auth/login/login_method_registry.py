@@ -61,8 +61,3 @@ def default_method(provider: str) -> str:
         from openprogram.models.auth.provider_policy import API_KEY_REQUIRED
         raise AuthConfigError(API_KEY_REQUIRED)
     return methods[0][0]
-
-
-def known_providers() -> list[str]:
-    """Providers with an explicit (non-default) login-method list."""
-    return list(_METHODS.keys())

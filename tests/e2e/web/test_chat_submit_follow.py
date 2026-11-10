@@ -55,11 +55,12 @@ window.fetch = async (url, init = {}) => {
   }});
   throw new Error(`Unexpected request: ${path}`);
 };
-const messagesById = {}, messageOrder = {}, runningTasks = {};
+const rowsByView = {}, messageOrder = {}, runningTasks = {};
 for (const sid of ['main', 'peer']) {
   messageOrder[sid] = Array.from({length: 40}, (_, i) => `${sid}-${i}`);
+  rowsByView[sid] = {};
   for (const id of messageOrder[sid]) {
-    messagesById[id] = {id, role: 'user', content: id, status: 'done'};
+    rowsByView[sid][id] = {id, role: 'user', content: id, status: 'done'};
   }
   runningTasks[sid] = {
     session_id: sid, msg_id: `${sid}-39`, execution_id: `exec-${sid}`,
@@ -68,14 +69,14 @@ for (const sid of ['main', 'peer']) {
 }
 useSessionStore.setState({
   currentSessionId: 'main', activeChatKey: 'main', welcomeVisible: false,
-  messagesById, messageOrder, runningTasks, composerDrafts: {},
+  rowsByView, messageOrder, runningTasks, composerDrafts: {},
 });
 runtimeState.currentSessionId = 'main';
 window.readQueue = sid => queueFor(sid);
 window.readNote = sid => peekTakeLatest(sid, sid === 'peer' ? 'peer:peer' : 'main');
-window.grow = sid => useSessionStore.getState().appendMessage(sid, {
-  id: `${sid}-delayed-growth`, role: 'assistant', content: 'delayed growth', status: 'done',
-});
+window.grow = sid => useSessionStore.getState().applyLocalChange(sid, {kind: 'local_append', row: {
+  id: `${sid}-delayed-growth`, role: 'assistant', rowKind: 'assistant', content: 'delayed growth', status: 'done',
+}});
 
 function Pane({sid, peer = false}) {
   const areaRef = useRef(null), columnRef = useRef(null);

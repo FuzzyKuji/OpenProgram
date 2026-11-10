@@ -8,13 +8,15 @@
  * on this computer (/api/voice/status). The microphone itself has no
  * options of its own: everything about it is set here.
  */
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useCallback, useEffect, useState } from "react";
 
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { useTranslation } from "@/lib/i18n";
 import { SPOKEN_LANGUAGES, type SpokenLanguage } from "@/lib/voice/spoken-languages";
 import { SettingsDropdown, type DropdownOption } from "./general-section";
-import styles from "../settings-page.module.css";
+import { SettingsPage, SettingsRow, SettingsSection } from "../settings-ui";
 
 type Engine = "auto" | "openai" | "groq" | "local";
 type Language = "auto" | SpokenLanguage;
@@ -60,16 +62,15 @@ export function VoiceSettings() {
   async function save(key: string, value: string) {
     setMessage("");
     try {
-      const response = await fetch("/api/settings", {
+      const result = await jsonFetch<{ error?: string }>("/api/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ key, value }),
       });
-      const result = await response.json();
-      if (!response.ok || result.error) throw new Error(result.error || String(response.status));
+      if (result.error) throw new Error(result.error);
       await load();
     } catch (error) {
-      setMessage(text(`Save failed: ${error}`, `保存失败：${error}`));
+      const reason = (error as Error).message;
+      setMessage(text(`Save failed: ${reason}`, `保存失败：${reason}`));
     }
   }
 
@@ -100,100 +101,73 @@ export function VoiceSettings() {
   };
 
   return (
-    <div className={styles.page}>
-      <div className={styles.pageHeader}>
-        <h2 className={styles.pageTitle}>{text("Voice", "语音")}</h2>
-        <p className={styles.pageMeta}>
-          {text(
-            "Speak into the microphone in the bottom-left corner of the input box, or hold ⌥Space while typing. Each phrase is transcribed when you pause and lands in the box for you to edit and send.",
-            "点输入框左下角的麦克风说话，或在输入时按住 ⌥空格。每说完一句停顿一下就会转写，文字落进输入框，改完再发。",
-          )}
-        </p>
-      </div>
-      <div className={styles.pageBody}>
-        <section>
-          <h3 className={styles.sectionTitle}>{text("Speech to text", "语音转文字")}</h3>
-          <div className={styles.card}>
-            <div className={styles.row}>
-              <div className={styles.label}>
-                {text("Engine", "识别服务")}
-                <div className={styles.rowHelp}>
-                  {status?.resolved_engine
-                    ? text(
-                      `In use: ${engineName(status.resolved_engine)} · ${status.resolved_model}`,
-                      `当前使用：${engineName(status.resolved_engine)} · ${status.resolved_model}`,
-                    )
-                    : text("No engine is usable yet.", "还没有可用的识别服务。")}
-                </div>
-              </div>
-              <div className={styles.control}>
-                {status ? (
-                  <SettingsDropdown
-                    label={text("Engine", "识别服务")}
-                    value={status.engine}
-                    options={engineOptions}
-                    onChange={(value) => void save("voice.engine", value)}
-                  />
-                ) : null}
-              </div>
-            </div>
-            <div className={styles.row}>
-              <div className={styles.label}>{text("Spoken language", "说话语言")}</div>
-              <div className={styles.control}>
-                {status ? (
-                  <SettingsDropdown
-                    label={text("Spoken language", "说话语言")}
-                    value={status.language}
-                    options={languageOptions}
-                    onChange={(value) => void save("voice.language", value)}
-                  />
-                ) : null}
-              </div>
-            </div>
-            {status && status.engine !== "auto" ? (
-              <div className={styles.row}>
-                <div className={styles.label}>
-                  {text("Model", "模型")}
-                  <div className={styles.rowHelp}>
-                    {text(
-                      `Empty uses ${status.default_models[status.engine]}.`,
-                      `留空使用 ${status.default_models[status.engine]}。`,
-                    )}
-                  </div>
-                </div>
-                <div className={styles.control}>
-                  <Input
-                    className={styles.authMono}
-                    spellCheck={false}
-                    placeholder={status.default_models[status.engine]}
-                    value={model}
-                    onChange={(event) => setModel(event.target.value)}
-                    onBlur={() => {
-                      if (model.trim() !== status.model) void save("voice.model", model.trim());
-                    }}
-                  />
-                </div>
-              </div>
-            ) : null}
-          </div>
-        </section>
+    <SettingsPage
+      title={text("Voice", "语音")}
+      description={text(
+        "Speak into the microphone in the bottom-left corner of the input box, or hold ⌥Space while typing. Each phrase is transcribed when you pause and lands in the box for you to edit and send.",
+        "点输入框左下角的麦克风说话，或在输入时按住 ⌥空格。每说完一句停顿一下就会转写，文字落进输入框，改完再发。",
+      )}
+    >
+      {status ? <>
+      <SettingsSection title={text("Speech to text", "语音转文字")}>
+        <SettingsRow
+          label={text("Engine", "识别服务")}
+          description={status.resolved_engine
+            ? text(
+              `In use: ${engineName(status.resolved_engine)} · ${status.resolved_model}`,
+              `当前使用：${engineName(status.resolved_engine)} · ${status.resolved_model}`,
+            )
+            : text("No engine is usable yet.", "还没有可用的识别服务。")}
+        >
+          <SettingsDropdown
+            label={text("Engine", "识别服务")}
+            value={status.engine}
+            options={engineOptions}
+            onChange={(value) => void save("voice.engine", value)}
+          />
+        </SettingsRow>
+        <SettingsRow label={text("Spoken language", "说话语言")}>
+          <SettingsDropdown
+            label={text("Spoken language", "说话语言")}
+            value={status.language}
+            options={languageOptions}
+            onChange={(value) => void save("voice.language", value)}
+          />
+        </SettingsRow>
+        {status.engine !== "auto" ? (
+          <SettingsRow
+            label={text("Model", "模型")}
+            description={text(
+              `Empty uses ${status.default_models[status.engine]}.`,
+              `留空使用 ${status.default_models[status.engine]}。`,
+            )}
+          >
+            <Input
+              className="font-mono"
+              spellCheck={false}
+              placeholder={status.default_models[status.engine]}
+              value={model}
+              onChange={(event) => setModel(event.target.value)}
+              onBlur={() => {
+                if (model.trim() !== status.model) void save("voice.model", model.trim());
+              }}
+            />
+          </SettingsRow>
+        ) : null}
+      </SettingsSection>
 
-        <section>
-          <h3 className={styles.sectionTitle}>{text("Engines on this computer", "这台电脑上的识别服务")}</h3>
-          <div className={styles.card}>
-            {(status?.engines ?? []).map((row) => (
-              <div key={row.id} className={styles.row}>
-                <div className={styles.label}>
-                  {engineName(row.id)}
-                  <div className={row.available ? styles.rowStatusOk : styles.rowHelp}>{detail(row)}</div>
-                </div>
-              </div>
-            ))}
-          </div>
-        </section>
+      <SettingsSection title={text("Engines on this computer", "这台电脑上的识别服务")}>
+        {status.engines.map((row) => (
+          <SettingsRow key={row.id} label={engineName(row.id)} description={detail(row)}>
+            <Badge variant={row.available ? "default" : "secondary"}>
+              {row.available ? text("Ready", "可用") : text("Not set up", "未配置")}
+            </Badge>
+          </SettingsRow>
+        ))}
+      </SettingsSection>
+      </> : null}
 
-        {message ? <p className={styles.rowStatusError}>{message}</p> : null}
-      </div>
-    </div>
+      {message ? <p className="text-fs-xs text-danger-soft">{message}</p> : null}
+    </SettingsPage>
   );
 }

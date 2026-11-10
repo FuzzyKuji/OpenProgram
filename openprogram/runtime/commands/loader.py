@@ -78,12 +78,3 @@ def load_user() -> list[LoadedCommand]:
 
 def load_project(cwd: Path | None = None) -> list[LoadedCommand]:
     return _load_dir(project_commands_dir(cwd), "project", "(project)")
-
-
-def ensure_user_dir() -> Path:
-    """Create ``~/.openprogram/commands/`` if it doesn't exist. The
-    web UI calls this when the user first opens the commands page so
-    a fresh install has a place to drop ``.md`` files into."""
-    d = user_commands_dir()
-    d.mkdir(parents=True, exist_ok=True)
-    return d

@@ -111,7 +111,10 @@ _CAPABILITY_SPECS = (
         request_style='eventkit_events', settings_pane='Privacy_Calendars',
         settings_label='Calendars', usage_key='NSCalendarsUsageDescription',
         tcc_service='Calendar',
-        package_declarations=('NSCalendarsUsageDescription', 'NSCalendarsFullAccessUsageDescription'),
+        package_declarations=(
+            'NSCalendarsUsageDescription', 'NSCalendarsFullAccessUsageDescription',
+            'com.apple.security.personal-information.calendars',
+        ),
         usage_descriptions=(
             ('NSCalendarsUsageDescription', 'OpenProgram accesses your calendars to carry out tasks you request.'),
             ('NSCalendarsFullAccessUsageDescription', 'OpenProgram reads and updates calendar events when you request it.'),
@@ -167,7 +170,7 @@ _CAPABILITY_SPECS = (
         request_method='requestAccessForMediaType_completionHandler_',
         request_style='avfoundation_video', settings_pane='Privacy_Camera',
         settings_label='Camera', tcc_service='Camera',
-        package_declarations=('NSCameraUsageDescription',),
+        package_declarations=('NSCameraUsageDescription', 'com.apple.security.device.camera'),
         usage_descriptions=(('NSCameraUsageDescription', 'OpenProgram accesses the camera when you request camera tasks.'),),
         identity_role='runtime',
         identity_application='/Applications/OpenProgram.app/Contents/Resources/runtime/OpenProgram.app',
@@ -307,8 +310,8 @@ def _capability_row(spec: CapabilitySpec, *, status: str, detail: str) -> dict:
         if spec.settings_pane else None
     )
     instruction = (
-        f'On this execution Mac, open System Settings > {settings}. '
-        'Authorize the executing application shown by macOS. Return here to check again.'
+        f'Open System Settings > {settings} on this Mac and turn on OpenProgram. '
+        'This page updates when you come back.'
         if spec.settings_pane else
         'Access is checked when the operation runs. Select the path or target application explicitly.'
     )
@@ -688,7 +691,7 @@ def _desktop_operation(tool_name: str, args: dict | None) -> str | None:
         named = isinstance(args.get('args'), dict) and bool(args['args'].get('app'))
         opening = 'get_app_state' if named else 'list_apps'  # A call without an action reads the app, or lists apps.
         steps = args.get('actions') if isinstance(args.get('actions'), list) else [{'action': args.get('action') or opening}]
-        if not args.get('code') and args.get('context') != 'fresh' and steps and all(
+        if not args.get('code') and steps and all(
                 isinstance(step, dict) and str(step.get('action') or '').strip() in {'list_apps', 'guide'}
                 for step in steps):
             return None
@@ -696,17 +699,26 @@ def _desktop_operation(tool_name: str, args: dict | None) -> str | None:
     return None
 
 
-def required_access_state(tool_name: str, args: dict | None) -> dict | None:
+def required_access_state(tool_name: str, args: dict | None, found: set[str] | None = None) -> dict | None:
     """Return one registry-derived preflight result for a host-bound tool.
 
     ``waiting`` is recoverable by the durable system-access wait. Native
     dependency and platform failures are terminal for this operation, so they
     do not create a wait that can never become granted. Direct function calls
     and the canonical safe point consume this same result.
+
+    ``found`` is the caller's record of the operations whose grants a probe
+    has already found. A probe starts a fresh process (about 0.4 s), so a
+    turn keeps one record and probes before its first desktop step only,
+    not before each. A grant goes away only when the user withdraws it in
+    System Settings; the desktop backend then fails the step and names the
+    setting, and the next turn probes again.
     """
     operation = _desktop_operation(tool_name, args)
     if operation is None:
         return None
+    if found is not None and operation in found:
+        return {'state': 'ready', 'capabilities': [], 'required_capabilities': []}
     snapshot = report()
     if snapshot.get('platform') != 'Darwin':
         return None
@@ -717,6 +729,8 @@ def required_access_state(tool_name: str, args: dict | None) -> dict | None:
     capabilities = [dict(row) for row in snapshot.get('capabilities', ())
                     if isinstance(row, dict) and row.get('id') in required_ids]
     if not capabilities or all(row.get('status') == 'granted' for row in capabilities):
+        if found is not None:
+            found.add(operation)
         return {'state': 'ready', 'capabilities': capabilities, 'required_capabilities': []}
     terminal = [row for row in capabilities
                 if row.get('status') in {'unsupported', 'unavailable'}]
@@ -737,20 +751,35 @@ def required_access_state(tool_name: str, args: dict | None) -> dict | None:
     }
 
 
-def access_manifest_for_tool(tool_name: str, args: dict | None) -> dict | None:
+def access_manifest_for_tool(tool_name: str, args: dict | None, found: set[str] | None = None) -> dict | None:
     """Return a pre-effect durable wait manifest for local desktop GUI use.
 
     Default tasks select their capability before requesting desktop access.
     Explicit macOS desktop entries retain their pre-effect access boundary.
+    ``found`` is a turn's record of grants already found (see
+    :func:`required_access_state`).
     """
     if _desktop_operation(tool_name, args) is None:
         return None
-    state = required_access_state(tool_name, args)
+    state = required_access_state(tool_name, args, found)
     if not state or state.get('state') != 'waiting':
         return None
     capabilities = list(state['capabilities'])
     required = list(state['required_capabilities'])
     return _desktop_access_manifest(tool_name, args, capabilities, required)
+
+
+def missing_access_error(tool_name: str, args: dict | None, found: set[str] | None = None) -> str | None:
+    """The tool error for a missing macOS grant in a turn nobody can answer a card in."""
+    if _desktop_operation(tool_name, args) is None:
+        return None
+    state = required_access_state(tool_name, args, found)
+    if not state or state.get('state') != 'waiting':
+        return None
+    required = set(state['required_capabilities'])
+    rows = [row for row in state['capabilities'] if row.get('id') in required]
+    return (f'{tool_name} cannot run: macOS has not granted ' + ', '.join(str(row['label']) for row in rows) + '. '
+            + ' '.join(str(row['instruction']) for row in rows))
 
 
 def _desktop_access_manifest(tool_name, args, capabilities, required):

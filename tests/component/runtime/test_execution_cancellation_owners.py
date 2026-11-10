@@ -127,7 +127,6 @@ def _canonical_running_execution(tmp_path, monkeypatch, execution_id="exec-1"):
         execution_id,
         expected_version=execution.status_version,
         owner_id="question-owner",
-        ttl_seconds=30,
     )
     _active, running = attempts.activate(
         leased.attempt_id,

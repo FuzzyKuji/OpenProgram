@@ -72,7 +72,7 @@ def _peer_final_text(
     pair = store._open(sid)
     if not pair:
         return "", None
-    _git, idx = pair
+    _session_log, idx = pair
     head = head_id or idx.head_id
     if not head or head not in idx.nodes_by_id:
         return "", head
@@ -297,10 +297,9 @@ def process_merge_turn(
     from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
 
     # ``history_override=None`` lets the dispatcher load the active
-    # branch — the attach pointers we just wrote get spliced in via
-    # the predecessor chain and reach ensure_latest_commit. With
-    # history_override=[] (legacy behaviour) the generator wouldn't
-    # see them and the attach expansion path would be a no-op.
+    # branch, so the attach pointers just written are part of the
+    # history the merge turn renders.
+    from openprogram.runtime.conversation.session_config import conversation_permission
     from openprogram.runtime.permissions.authority import authority_from_message, runtime_authority
     _parent_authority = authority_from_message(
         target_session_id, target_head or "",
@@ -311,6 +310,7 @@ def process_merge_turn(
         agent_id=agent_id,
         source="merge_turn",
         history_override=None,
+        **conversation_permission(target_session_id),
         **runtime_authority(_parent_authority, "merge_turn"),
     )
     try:
@@ -360,10 +360,8 @@ def process_merge_turn(
             }, default=str),
         }
         try:
-            store.append_message(target_session_id, attach_msg)
+            store.append_message(target_session_id, attach_msg, advance_head=False)
             attach_node_ids.append(attach_node_id)
-            if target_head:
-                store.set_head(target_session_id, target_head)
         except Exception:
             # The merge still runs; this peer just has no attach card.
             _log.warning("merge attach node not recorded in session %s", target_session_id, exc_info=True)
@@ -388,7 +386,9 @@ def process_merge_turn(
         _active, turn = asyncio.run(adapter.activate(admission))
     except Exception as e:  # noqa: BLE001
         try:
-            adapter.fail_admission(admission, reason_code="agent_runner_error")
+            adapter.fail_admission(
+                admission, reason_code="agent_runner_error", failure_text=f"{type(e).__name__}: {e}",
+            )
         except Exception:
             # The activation error is reported below; admission cleanup is best-effort.
             _log.warning("merge admission not failed for session %s", target_session_id, exc_info=True)

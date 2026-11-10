@@ -1,0 +1,186 @@
+<title>Compaction</title>
+<meta name="description" content="How compaction stores a rolling summary, changes what the model reads, composes with branches, and protects HEAD.">
+<h1 id="context-compaction">Compaction</h1>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 196" role="img" aria-label="The stored chain stays unchanged: root, then covered turns A, B and C, then kept turns K1 and K2. Summary node S has the root as predecessor and lists A, B and C in covers_ids. The request sent to the model is: system prompt, S, the kept tail verbatim, then the new user message.">
+  <defs><marker id="cp-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-soft" x="0" y="34">Stored</text>
+  <text class="t-big" x="84" y="34">ROOT</text>
+  <line class="ln" x1="132" y1="28" x2="166" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="176" y="34">A</text>
+  <line class="ln" x1="196" y1="28" x2="238" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="248" y="34">B</text>
+  <line class="ln" x1="268" y1="28" x2="310" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="320" y="34">C</text>
+  <line class="ln" x1="340" y1="28" x2="392" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="402" y="34">K1</text>
+  <line class="ln" x1="430" y1="28" x2="472" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="482" y="34">K2</text>
+  <text class="t-soft" x="524" y="34">HEAD stays here</text>
+  <path class="ln-faint" d="M172 46V54H332V46"/>
+  <text class="t-cmd notranslate" translate="no" x="184" y="74">covers_ids</text>
+  <path class="ln" d="M104 42V104H238" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="248" y="110">S</text>
+  <text class="t-soft" x="272" y="110">one summary node; predecessor is the splice point</text>
+  <text class="t-soft" x="0" y="168">Sent</text>
+  <text x="84" y="168">system prompt</text>
+  <text class="t-big" x="196" y="168">S</text>
+  <text x="222" y="168">kept tail, verbatim</text>
+  <text x="372" y="168">new user message</text>
+</svg>
+<dl class="pairs fig-narrow">
+<dt>Stored</dt><dd>ROOT, A, B, C, K1, K2; HEAD stays on K2</dd>
+<dt>Summary</dt><dd>S: predecessor ROOT, <code translate="no">covers_ids</code> A, B, C</dd>
+<dt>Sent</dt><dd>system prompt, S, kept tail verbatim, new user message</dd>
+</dl>
+</figure>
+
+<p>A session has at most one active summary. Compacting again feeds the previous summary to the summarizer and replaces it. <code translate="no">extra_meta._last_summary_id</code> names the active one, <code translate="no">_last_summary_text</code> carries its text for chaining; older nodes stay on disk as inert relics. The capsule that draws a summary: <a href="../runtime/dag/rendering.html">DAG rendering §9</a>.</p>
+
+<h2 id="data-model">Summary node</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Field</th><th scope="col">Value</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">id</code></th><td><code translate="no">summary_&lt;hex&gt;</code></td></tr>
+<tr><th scope="row"><code translate="no">role</code></th><td><code translate="no">llm</code>, <code translate="no">name = "context/summary"</code></td></tr>
+<tr><th scope="row"><code translate="no">output</code></th><td><code translate="no">[Previous conversation summary]\n&lt;text&gt;</code></td></tr>
+<tr><th scope="row"><code translate="no">predecessor</code></th><td>Predecessor of the first covered node</td></tr>
+<tr><th scope="row"><code translate="no">metadata.covers_ids</code></th><td>Ordered ids of the chain nodes it replaces</td></tr>
+<tr><th scope="row"><code translate="no">metadata.compaction</code></th><td><code translate="no">true</code></td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>Append-only.</strong> One node written, nothing mutated: no cloned tail, no edge rewrites, no head movement. Ignoring the summary reconstructs the original view.</li>
+<li><strong>Ids, not seq intervals.</strong> Sibling branches interleave seqs, so an interval would drag in dead forks and change with HEAD.</li>
+<li><strong><code translate="no">covers_ids</code> is a contiguous segment of real turns.</strong> It never names a summary: re-compaction extends the old segment by the new turns.</li>
+</ul>
+
+<h2 id="rendering-rule">Rendering rule</h2>
+<p><code translate="no">render_context</code> in <code translate="no">context/nodes.py</code> decides what the model reads, for chat and <code translate="no">runtime.exec</code>. Let S be the active summary and L its <code translate="no">covers_ids</code>. From head H: <strong>if every node of L is on H's predecessor spine, drop L and admit S at its position; otherwise render the spine raw.</strong></p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Compacted branch</th><td><code translate="no">[ROOT, S, kept tail…]</code></td></tr>
+<tr><th scope="row">Fork without the whole segment (retry inside it, dead sibling)</th><td>Raw; does not inherit a summary of turns it never had</td></tr>
+<tr><th scope="row">Any checkout, any time</th><td>Deterministic from data; nothing depends on where HEAD was</td></tr>
+<tr><th scope="row">Superseded summaries</th><td>Never elide anything</td></tr>
+</tbody>
+</table>
+<p class="note">The DAG capsule folds by the same rule over the same <code translate="no">covers_ids</code>.</p>
+
+<h2 id="pipeline">Pipeline</h2>
+<p><code translate="no">/compact</code> (<code translate="no">trigger_compaction</code>), auto-compact (budget at <code translate="no">context.auto_compact_percent</code>, default 80%, before a turn) and reactive compact (provider overflow) all run <code translate="no">engine.compact</code>:</p>
+<ol>
+<li><strong>Freeze the rendered input.</strong> <code translate="no">compaction.view.load_compaction_view</code> uses <code translate="no">render_context</code> and <code translate="no">render_dag_messages</code>, with tool results, expose, spill references and the aging boundary. Top-level turns define coverage; visible child calls count toward input and budgets.</li>
+<li><strong>Select whole turns.</strong> Retain 10% of the window, bounded to 8,000–40,000 tokens (an explicit override wins). Prefer at least four conversational messages at a user boundary; a posted report is a boundary too. Below target: no-op. If the last two turns exceed the target, the cut can advance to the latest user boundary. That latest turn stays intact unless only reports follow it.</li>
+<li><strong>Summarize the whole covered prefix</strong>: every replaced turn, the initial request, any applicable previous summary, rendered child calls. Other branches' caches are not injected. Non-text media becomes a reference notice. Requests the user cancelled or replaced are marked so; what the assistant or a tool said stays attributed, not stated as fact.</li>
+<li><strong>Validate before writing.</strong> Reject empty, failed, cancelled, oversized or non-reducing summaries; a candidate is rendered in memory with the same aging boundary and must be strictly smaller. Recheck the head and rendered nodes after the model call; a change is a retryable no-op, and other branches do not count. Provider failure keeps the history, with no lossy structural fallback.</li>
+<li><strong>Persist and report.</strong> One node; <code translate="no">covers_ids</code> expands any previous summary to real turn ids. Coverage count and before and after estimates use the context panel's renderer. No-ops write nothing and do not count.</li>
+</ol>
+<p class="note">The context display uses provider input usage. Each request also records a local estimate of the same messages, so a later graph edit scales its estimate by the measured ratio, labelled as an estimate until the next report. Legacy usage with no matched estimate does not calibrate.</p>
+
+<details id="repeated-failures">
+<summary>Automatic compaction that keeps failing</summary>
+<p>Each failed try still pays for the whole conversation. After <code translate="no">FAILS_MOST</code> (3) failures in a row of one conversation on one model, each within <code translate="no">HELD_FOR_S</code> (5 minutes) of the last, automatic compaction waits five minutes from the last failure, then tries once (<code translate="no">runtime/context/compaction/hold.py</code>, consulted by <code translate="no">DefaultContextEngine.compact</code>).</p>
+<ul>
+<li>Failures: summarizer error (a 429, for example), empty summary with an error, over the render budget, no reduction.</li>
+<li>Not failures: cancellation, changed source.</li>
+<li>A summary that installs clears the count. <code translate="no">/compact</code> always goes.</li>
+<li>Follows magpie's compaction guard (yetone/magpie, MIT).</li>
+</ul>
+</details>
+
+<h2 id="head-integrity">HEAD integrity</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Writer</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">SessionStore.set_head</code></th><td>The way HEAD changes, for explicit moves: send-turn advance, retry or edit fork, checkout, rewind, branch delete. Compaction, session load, worker restart, model switch and meta saves never call it</td></tr>
+<tr><th scope="row"><code translate="no">append_message</code></th><td>Moves HEAD only when the node's predecessor is the current HEAD. Summary splices, side-branch writes and relics leave it alone</td></tr>
+<tr><th scope="row">Spawned turns</th><td>Same-session sub-agent turns run with <code translate="no">TurnRequest.advance_head=False</code>; every inner write is head-neutral, so the user's window is not switched mid-run. Cross-session sends do advance the target's head</td></tr>
+<tr><th scope="row">Writes that are not moves</th><td>Attach cards, inbox and sub-agent paths that append through the store restore <code translate="no">head_before</code> afterwards</td></tr>
+<tr><th scope="row"><code translate="no">TurnWriter</code> (<code translate="no">turn_runtime/turn_writer.py</code>)</th><td>Performs a turn's chain writes and alone applies <code translate="no">advance_head</code>. In that package only this file moves HEAD, plus the user-initiated function-run path in <code translate="no">forced_tool.py</code> and the restores in <code translate="no">slash_actions.py</code></td></tr>
+<tr><th scope="row">Mirrors</th><td>The webui <code translate="no">conv</code> mirror and one-shot <code translate="no">load_session</code> snapshot are read-only. The React session store is the only live transcript. <code translate="no">save_meta</code> strips <code translate="no">head_id</code>; no mirror row becomes stored</td></tr>
+<tr><th scope="row">Stored HEAD on a call</th><td>Older sessions can hold one; a call has no predecessor, so the next request would have no history. <code translate="no">_conversation_head</code> in <code translate="no">store/session/memory_index.py</code> reads it as the reply that made the call</td></tr>
+</tbody>
+</table>
+
+<h2 id="graph-contract">Graph contract</h2>
+<ul>
+<li>The active summary row carries <code translate="no">covers_ids</code>: <code translate="no">metadata.covers_ids</code>, extended with covered turns' caller subtrees, minus ids no longer present.</li>
+<li>Superseded rows carry <code translate="no">superseded_summary: true</code> and no <code translate="no">covers_ids</code>.</li>
+<li>The builder does no seq arithmetic or head-dependent filtering.</li>
+</ul>
+
+<details id="inside-one-message">
+<summary>Compaction inside one user message</summary>
+<p>Before every AgentLoop provider request, including tool continuations and function-local <code translate="no">llm()</code> and <code translate="no">agent()</code>, the runtime budgets converted messages, actual tools, system prompt, output cap and a safety margin. This view belongs to the request: execution messages and the DAG stay intact, and no summary node is created.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Step</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Output cap</th><td>Unspecified: the smallest of model capability, 16,384 and a quarter of the window, used for budgeting and dispatch alike. Explicit caps are never reduced</td></tr>
+<tr><th scope="row">Tool results</th><td>Text-only results of complete tool groups are summarized without waiting for a user message. User messages, tool arguments, result ids, error flags and multimodal content are unchanged</td></tr>
+<tr><th scope="row">Checkpoint</th><td>Still over: older complete text-only history becomes a task summary. All user messages and the latest assistant segment stay verbatim. Incomplete tool groups, multimodal input and signed reasoning are not eligible</td></tr>
+<tr><th scope="row">Reuse</th><td>Within the invocation, matching original content and model settings; checkpoints also need an unchanged source prefix</td></tr>
+<tr><th scope="row">Summary calls</th><td>Bounded chunks, retried smaller on overflow; at most 32 requests and 60 seconds; bypass AgentLoop. Failures leave history intact</td></tr>
+<tr><th scope="row">Over budget</th><td>Local estimates only. Protected content that cannot fit fails explicitly; a request estimated over budget is not sent</td></tr>
+</tbody>
+</table>
+</details>
+
+<details id="tuning">
+<summary>Choosing the share from the user's own calls</summary>
+<p>Compacting sooner reads less per call but pays for more summaries and rework. <code translate="no">context.auto_compact_percent</code> (Settings → System → Models → Summarize long conversations at, 50–95, read at each decision) is advised by <code translate="no">GET /api/usage/tuning?days=30</code> (<code translate="no">runtime/context/tuning.py</code>), replaying every share from 50% to 95% on the period's chat, exec and subagent calls, per model. Follows magpie's tune (yetone/magpie, MIT).</p>
+<ul>
+<li>Calls replay in order, each prompt growing as it really grew, with recorded compactions (a drop to under 60% of a prompt of at least 20K) removed.</li>
+<li>Past the threshold (the share of the window less the reply reserve), a compaction reads the whole prompt and writes a summary as long as those seen (or 10K over the start when none were). The next call writes it to cache; later ones read back what recorded compactions were followed by (at least 10K until five were seen).</li>
+<li>Tokens are weighed against plain input with catalog prices or the vendor's usual ratios.</li>
+<li>Shares leaving less than half a summary, or twenty calls' growth, of room are not tried. Of those within 1% of the cheapest, the largest is advised, only if it saves at least 3% over the current one. Fewer than 50 calls: no advice.</li>
+<li>The same endpoint advises <code translate="no">models.prompt_cache_ttl</code> (<code translate="no">5m</code> or <code translate="no">1h</code>) for Anthropic API and Bedrock calls: hour-long writes cost twice input, and a call after expiry writes its whole prompt again. The setting lengthens only a plain cache (<code translate="no">with_lifetime_setting</code> in <code translate="no">providers/settings/cache_spec.py</code>).</li>
+</ul>
+</details>
+
+<details id="extension-points">
+<summary>Other compaction schemes</summary>
+<p>A single rolling summary matches Claude Code, Codex CLI and Gemini CLI and keeps the cache prefix stable. It is policy, not storage: schemes differ only in which summaries are active and how the renderer substitutes them, so switching migrates no data.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Scheme</th><th scope="col">Change</th></tr></thead>
+<tbody>
+<tr><th scope="row">Segmented (several live)</th><td>N nodes over disjoint segments; the rule applies per summary; an active set replaces <code translate="no">_last_summary_id</code></td></tr>
+<tr><th scope="row">Nested</th><td><code translate="no">covers_ids</code> admits summary ids; substitution is recursive</td></tr>
+<tr><th scope="row">External memory</th><td>Same node; the renderer stops inlining it</td></tr>
+</tbody>
+</table>
+<p>Any future context still keeps two contracts. The DAG is the ledger, not the context: context is a deterministic view over append-only nodes, and existing deviations (<code translate="no">render_range</code>, <code translate="no">expose</code>, attach and merge, memory prefetch) are data, not hidden state. Provenance is mandatory: the ids that entered a prompt are stamped on the call as <code translate="no">reads</code>, for replay, audit and per-node marking.</p>
+<p>A summary is the first view node: one standing in for other content. Retrieved memory, injected documents and cross-session references generalize it, with the capsule as the generic treatment. No view-composition framework is built ahead of a second scheme.</p>
+</details>
+
+<h2 id="invariants">Invariants</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Invariant</th><th scope="col">Tested in</th></tr></thead>
+<tbody>
+<tr><th scope="row">After compaction, the active branch renders <code translate="no">[ROOT, S, kept tail…]</code></th><td><code translate="no">tests/unit/context/test_compaction_covers.py</code>; scenario suite</td></tr>
+<tr><th scope="row">Compaction never moves HEAD</th><td>Scenario suite</td></tr>
+<tr><th scope="row">A branch without the whole segment renders raw</th><td><code translate="no">render_context</code> branch-isolation tests</td></tr>
+<tr><th scope="row">Re-compaction input has no covered raw turns; new <code translate="no">covers_ids</code> extends the old</th><td>Compaction pipeline tests</td></tr>
+<tr><th scope="row">At most one row per session carries <code translate="no">covers_ids</code>; older ones are <code translate="no">superseded_summary</code></th><td><code translate="no">tests/unit/dag/test_graph_builder_covers.py</code></td></tr>
+<tr><th scope="row"><code translate="no">covers_ids</code> never names a node off the summarized chain</th><td><code translate="no">tests/unit/dag/test_graph_builder_covers.py</code></td></tr>
+<tr><th scope="row">HEAD survives restart, session load, model switch, meta save</th><td><code translate="no">tests/integration/dag/test_dag_mutation_scenarios.py</code></td></tr>
+<tr><th scope="row">No mirror row or head writes back into the store</th><td>Web UI persistence tests</td></tr>
+</tbody>
+</table>
+<p class="note">The scenario suite runs chat, fork, checkout, compact, chat, compact, chat, restart-load on a real <code translate="no">SessionStore</code>, checking head and rendering after every step.</p>
+
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Part</th><th scope="col">Code</th></tr></thead>
+<tbody>
+<tr><th scope="row">Node shape and pipeline</th><td><code translate="no">runtime/context/persistence.py</code> (<code translate="no">insert_summary_node</code>, <code translate="no">covered_chain_ids</code>, <code translate="no">rendered_history</code>), <code translate="no">runtime/context/engine.py</code></td></tr>
+<tr><th scope="row">Segment substitution</th><td><code translate="no">runtime/context/nodes.py</code> (<code translate="no">render_context</code>, <code translate="no">active_summary</code>, <code translate="no">summary_covers_ids</code>)</td></tr>
+<tr><th scope="row">HEAD integrity</th><td><code translate="no">state/store/session/session_store/messages.py</code>; <code translate="no">interfaces/server/persistence.py</code> strips <code translate="no">head_id</code></td></tr>
+<tr><th scope="row">Graph contract</th><td><code translate="no">state/store/session/graph/builder.py</code></td></tr>
+<tr><th scope="row">Request-local compaction</th><td><code translate="no">runtime/context/compaction/request.py</code>, <code translate="no">bounded_summary.py</code></td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="compaction-diagram.html">Compaction tiers</a></p>

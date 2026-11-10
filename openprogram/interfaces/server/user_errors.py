@@ -2,22 +2,23 @@
 
 from __future__ import annotations
 
-import os
 import math
 import re
-import sqlite3
-import threading
 import time
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 from pathlib import Path
+
+from openprogram.state.store.record_log import RecordLog, record_log
 
 
 MAX_RECORDS_PER_PRINCIPAL = 1_000
 RETENTION_SECONDS = 7 * 24 * 60 * 60
 MAX_PAGE_SIZE = 100
 MAX_CURSOR_LENGTH = 96
-_INITIALIZE_TIMEOUT_SECONDS = 5.0
 _CURSOR_PREFIX = "v1"
+_SCOPES = frozenset({"session", "job", "settings", "channel", "agent", "transport", "system"})
+_SEVERITIES = frozenset({"info", "warning", "error", "fatal"})
+_CLOSE_REASONS = frozenset({None, "acknowledged", "recovered", "entity_deleted"})
 _ERROR_ID_PATTERN = re.compile(r"err_[0-9a-f]{32}")
 
 
@@ -100,13 +101,11 @@ class UserErrorPage:
 
 
 class UserErrorStore:
-    """SQLite error ledger scoped to one active OpenProgram profile."""
+    """Error ledger scoped to one active OpenProgram profile."""
 
     def __init__(self, path: str | Path | None = None) -> None:
         self._explicit_path = Path(path) if path is not None else None
         self._resolved_path: Path | None = None
-        self._lock = threading.RLock()
-        self._initialized = False
 
     @property
     def path(self) -> Path:
@@ -114,165 +113,45 @@ class UserErrorStore:
             if self._explicit_path is None:
                 from openprogram.state.paths import (
                     ensure_state_dir,
-                    get_user_errors_db_path,
+                    get_user_errors_path,
                 )
 
                 ensure_state_dir()
-                path = get_user_errors_db_path()
+                path = get_user_errors_path()
             else:
                 path = self._explicit_path
                 path.parent.mkdir(parents=True, exist_ok=True)
             self._resolved_path = path
         return self._resolved_path
 
-    def _connect(self) -> sqlite3.Connection:
-        path = self.path
-        existed = path.exists()
-        conn = sqlite3.connect(str(path), timeout=5.0)
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA busy_timeout=5000")
-        conn.execute("PRAGMA synchronous=FULL")
-        if not existed:
-            try:
-                os.chmod(path, 0o600)
-            except OSError:
-                pass
-        return conn
-
-    def _initialize_schema(self) -> None:
-        with self._connect() as conn:
-            current_mode = str(
-                conn.execute("PRAGMA journal_mode").fetchone()[0]
-            ).lower()
-            if current_mode != "wal":
-                conn.execute("PRAGMA journal_mode=WAL")
-            conn.executescript(
-                """
-                CREATE TABLE IF NOT EXISTS user_errors (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT,
-                    error_id TEXT NOT NULL UNIQUE,
-                    principal_id TEXT NOT NULL,
-                    request_id TEXT,
-                    scope TEXT NOT NULL CHECK (
-                        scope IN (
-                            'session', 'job', 'settings', 'channel',
-                            'agent', 'transport', 'system'
-                        )
-                    ),
-                    code TEXT NOT NULL,
-                    message TEXT NOT NULL,
-                    action TEXT,
-                    session_id TEXT,
-                    operation_id TEXT,
-                    retryable INTEGER NOT NULL CHECK (retryable IN (0, 1)),
-                    severity TEXT NOT NULL CHECK (
-                        severity IN ('info', 'warning', 'error', 'fatal')
-                    ),
-                    correlation_id TEXT NOT NULL,
-                    occurred_at TEXT NOT NULL,
-                    occurred_at_epoch REAL NOT NULL,
-                    closed_at TEXT,
-                    close_reason TEXT CHECK (
-                        close_reason IS NULL OR close_reason IN (
-                            'acknowledged', 'recovered', 'entity_deleted'
-                        )
-                    ),
-                    CHECK (
-                        (closed_at IS NULL AND close_reason IS NULL) OR
-                        (closed_at IS NOT NULL AND close_reason IS NOT NULL)
-                    )
-                );
-                CREATE INDEX IF NOT EXISTS idx_user_errors_open
-                    ON user_errors(principal_id, seq DESC)
-                    WHERE closed_at IS NULL;
-                CREATE INDEX IF NOT EXISTS idx_user_errors_open_order_v2
-                    ON user_errors(
-                        principal_id, occurred_at_epoch DESC, error_id DESC
-                    )
-                    WHERE closed_at IS NULL;
-                CREATE INDEX IF NOT EXISTS idx_user_errors_open_session
-                    ON user_errors(principal_id, session_id, seq DESC)
-                    WHERE closed_at IS NULL;
-                CREATE INDEX IF NOT EXISTS idx_user_errors_request
-                    ON user_errors(principal_id, request_id, seq DESC);
-                """
-            )
-
-    def initialize(self) -> None:
-        with self._lock:
-            if self._initialized:
-                return
-            deadline = time.monotonic() + _INITIALIZE_TIMEOUT_SECONDS
-            delay = 0.005
-            while True:
-                try:
-                    self._initialize_schema()
-                    break
-                except sqlite3.OperationalError as exc:
-                    busy = "locked" in str(exc).lower() or "busy" in str(exc).lower()
-                    if not busy or time.monotonic() >= deadline:
-                        raise
-                    time.sleep(delay)
-                    delay = min(delay * 2, 0.1)
-            self._initialized = True
+    @property
+    def _log(self) -> RecordLog:
+        return record_log(self.path)
 
     @staticmethod
-    def _prune(
-        conn: sqlite3.Connection,
-        principal_id: str,
-        now: float,
-    ) -> None:
+    def _prune(log: RecordLog, principal_id: str, now: float) -> None:
         cutoff = now - RETENTION_SECONDS
-        conn.execute(
-            "DELETE FROM user_errors WHERE occurred_at_epoch < ?",
-            (cutoff,),
-        )
-        conn.execute(
-            "DELETE FROM user_errors WHERE principal_id = ? AND seq NOT IN ("
-            "SELECT seq FROM user_errors WHERE principal_id = ? "
-            "ORDER BY occurred_at_epoch DESC, error_id DESC LIMIT ?)",
+        removed = [key for key, row in log.records.items() if row["occurred_at_epoch"] < cutoff]
+        expired = set(removed)
+        owned = sorted(
             (
-                principal_id,
-                principal_id,
-                MAX_RECORDS_PER_PRINCIPAL,
+                row for key, row in log.records.items()
+                if row["principal_id"] == principal_id and key not in expired
             ),
+            key=_position,
+            reverse=True,
         )
+        removed.extend(row["error_id"] for row in owned[MAX_RECORDS_PER_PRINCIPAL:])
+        log.delete(removed)
 
     def record(self, record: UserErrorRecord, *, now: float | None = None) -> None:
-        self.initialize()
+        _require_valid(record)
         prune_now = time.time() if now is None else float(now)
-        with self._lock, self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                """
-                INSERT INTO user_errors (
-                    error_id, principal_id, request_id, scope, code, message,
-                    action, session_id, operation_id, retryable, severity,
-                    correlation_id, occurred_at, occurred_at_epoch,
-                    closed_at, close_reason
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                """,
-                (
-                    record.error_id,
-                    record.principal_id,
-                    record.request_id,
-                    record.scope,
-                    record.code,
-                    record.message,
-                    record.action,
-                    record.session_id,
-                    record.operation_id,
-                    int(record.retryable),
-                    record.severity,
-                    record.correlation_id,
-                    record.occurred_at,
-                    record.occurred_at_epoch,
-                    record.closed_at,
-                    record.close_reason,
-                ),
-            )
-            self._prune(conn, record.principal_id, prune_now)
-            conn.commit()
+        with self._log.locked() as log:
+            if record.error_id in log.records:
+                raise ValueError("user error id already exists")
+            log.put(record.error_id, asdict(record))
+            self._prune(log, record.principal_id, prune_now)
 
     def get(
         self,
@@ -281,21 +160,11 @@ class UserErrorStore:
         *,
         now: float | None = None,
     ) -> UserErrorRecord | None:
-        self.initialize()
         prune_now = time.time() if now is None else float(now)
-        cutoff = prune_now - RETENTION_SECONDS
-        with self._lock, self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            conn.execute(
-                "DELETE FROM user_errors WHERE occurred_at_epoch < ?",
-                (cutoff,),
-            )
-            row = conn.execute(
-                "SELECT * FROM user_errors WHERE principal_id = ? AND error_id = ?",
-                (principal_id, error_id),
-            ).fetchone()
-            conn.commit()
-        return _record_from_row(row) if row is not None else None
+        with self._log.locked() as log:
+            self._prune(log, principal_id, prune_now)
+            row = log.records.get(error_id)
+        return UserErrorRecord(**row) if row and row["principal_id"] == principal_id else None
 
     def list_open(
         self,
@@ -305,54 +174,34 @@ class UserErrorStore:
         limit: int = MAX_PAGE_SIZE,
         now: float | None = None,
     ) -> UserErrorPage:
-        self.initialize()
         if isinstance(limit, bool) or not isinstance(limit, int):
             raise ValueError("user error page limit must be an integer")
         if not 1 <= limit <= MAX_PAGE_SIZE:
             raise ValueError(
                 f"user error page limit must be between 1 and {MAX_PAGE_SIZE}"
             )
-        page_size = limit
         before = None if cursor is None else _decode_cursor(cursor)
         prune_now = time.time() if now is None else float(now)
-        with self._lock, self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self._prune(conn, principal_id, prune_now)
-            if before is None:
-                rows = conn.execute(
-                    "SELECT * FROM user_errors "
-                    "WHERE principal_id = ? AND closed_at IS NULL "
-                    "ORDER BY occurred_at_epoch DESC, error_id DESC LIMIT ?",
-                    (principal_id, page_size + 1),
-                ).fetchall()
-            else:
-                before_epoch, before_error_id = before
-                rows = conn.execute(
-                    "SELECT * FROM user_errors "
-                    "WHERE principal_id = ? AND closed_at IS NULL AND ("
-                    "occurred_at_epoch < ? OR "
-                    "(occurred_at_epoch = ? AND error_id < ?)) "
-                    "ORDER BY occurred_at_epoch DESC, error_id DESC LIMIT ?",
-                    (
-                        principal_id,
-                        before_epoch,
-                        before_epoch,
-                        before_error_id,
-                        page_size + 1,
-                    ),
-                ).fetchall()
-            conn.commit()
-        visible = rows[:page_size]
-        next_cursor = (
-            _encode_cursor(
-                float(visible[-1]["occurred_at_epoch"]),
-                str(visible[-1]["error_id"]),
+        with self._log.locked() as log:
+            self._prune(log, principal_id, prune_now)
+            rows = sorted(
+                (
+                    row for row in log.records.values()
+                    if row["principal_id"] == principal_id
+                    and row["closed_at"] is None
+                    and (before is None or _position(row) < before)
+                ),
+                key=_position,
+                reverse=True,
             )
-            if len(rows) > page_size and visible
+        visible = rows[:limit]
+        next_cursor = (
+            _encode_cursor(float(visible[-1]["occurred_at_epoch"]), str(visible[-1]["error_id"]))
+            if len(rows) > limit
             else None
         )
         return UserErrorPage(
-            records=tuple(_record_from_row(row) for row in visible),
+            records=tuple(UserErrorRecord(**row) for row in visible),
             next_cursor=next_cursor,
         )
 
@@ -364,46 +213,28 @@ class UserErrorStore:
         now: float | None = None,
     ) -> UserErrorRecord | None:
         """Idempotently close one exact record owned by ``principal_id``."""
-        self.initialize()
         prune_now = time.time() if now is None else float(now)
-        with self._lock, self._connect() as conn:
-            conn.execute("BEGIN IMMEDIATE")
-            self._prune(conn, principal_id, prune_now)
-            row = conn.execute(
-                "SELECT * FROM user_errors WHERE principal_id = ? AND error_id = ?",
-                (principal_id, error_id),
-            ).fetchone()
-            if row is not None and row["closed_at"] is None:
-                conn.execute(
-                    "UPDATE user_errors SET closed_at = ?, close_reason = ? "
-                    "WHERE principal_id = ? AND error_id = ? AND closed_at IS NULL",
-                    (occurred_at, "acknowledged", principal_id, error_id),
-                )
-                row = conn.execute(
-                    "SELECT * FROM user_errors "
-                    "WHERE principal_id = ? AND error_id = ?",
-                    (principal_id, error_id),
-                ).fetchone()
-            conn.commit()
-        return _record_from_row(row) if row is not None else None
+        with self._log.locked() as log:
+            self._prune(log, principal_id, prune_now)
+            row = log.records.get(error_id)
+            if row is None or row["principal_id"] != principal_id:
+                return None
+            if row["closed_at"] is None:
+                row = {**row, "closed_at": occurred_at, "close_reason": "acknowledged"}
+                log.put(error_id, row)
+        return UserErrorRecord(**row)
 
 
-def _record_from_row(row: sqlite3.Row) -> UserErrorRecord:
-    return UserErrorRecord(
-        principal_id=str(row["principal_id"]),
-        error_id=str(row["error_id"]),
-        request_id=row["request_id"],
-        scope=str(row["scope"]),
-        code=str(row["code"]),
-        message=str(row["message"]),
-        action=row["action"],
-        session_id=row["session_id"],
-        operation_id=row["operation_id"],
-        retryable=bool(row["retryable"]),
-        severity=str(row["severity"]),
-        correlation_id=str(row["correlation_id"]),
-        occurred_at=str(row["occurred_at"]),
-        occurred_at_epoch=float(row["occurred_at_epoch"]),
-        closed_at=row["closed_at"],
-        close_reason=row["close_reason"],
-    )
+def _require_valid(record: UserErrorRecord) -> None:
+    if record.scope not in _SCOPES:
+        raise ValueError(f"unknown user error scope: {record.scope}")
+    if record.severity not in _SEVERITIES:
+        raise ValueError(f"unknown user error severity: {record.severity}")
+    if record.close_reason not in _CLOSE_REASONS:
+        raise ValueError(f"unknown user error close reason: {record.close_reason}")
+    if (record.closed_at is None) != (record.close_reason is None):
+        raise ValueError("user error close time and reason must be set together")
+
+
+def _position(row: dict) -> tuple[float, str]:
+    return (row["occurred_at_epoch"], row["error_id"])

@@ -1,52 +1,30 @@
 /**
- * Chat-stream WS reducer.
+ * Chat-frame WS reducer.
  *
- * Translates the backend's chat WebSocket protocol into session-store
- * mutations — the data half of the React message-stream port. Pure:
- * call `applyChatWsMessage(msg)` with a parsed `{ type, data }`
- * envelope and it updates `messagesById` / `messageOrder`.
+ * Numbered `transcript_update` frames own every server row (see
+ * runtime-bridge/session/transcript-updates.ts). What is left here is what
+ * the chat frames still say on their own:
  *
- * NOT attached to a socket here — `use-ws.ts` owns the connection and
- * feeds envelopes in. The socket itself lives in `runtimeState.ws`,
- * reachable via `getSocket()`; nothing reads it off `window`.
- *
- * Protocol:
- *   chat_ack       { session_id, msg_id, text }
- *       → the user turn registered; create the assistant reply
- *         placeholder so streaming deltas have somewhere to land.
+ *   chat_ack       the send was accepted: its local row takes the server id.
  *   chat_response  { type, msg_id, session_id, ... }
- *       type === "stream_event"  { event: { type, ... } }
- *           text        → coalesce into reply.content (one store stamp / frame)
- *           thinking    → coalesce into reply.thinking (same rAF budget)
- *           tool_use    → flush pending text, then push a ChatToolCall (status "running")
- *           tool_result → fill the matching tool's result + status
- *           sub_agent   → upsert a spawn card into reply.attachCards
- *                         (running → completed), keyed on card_id so a
- *                         reload rebuilds the same card from the DAG's
- *                         `function === "attach"` row.
- *           The first four ALSO build `reply.blocks` incrementally in arrival
- *           order (trailing-block extend or append), so the streaming
- *           timeline shows the true thinking/tool interleaving live.
- *       type === "result" | "error" | "cancelled"
- *           → finalize the reply (status + any final text)
- *   other chat_response types (status / tree_update / context_stats /
- *   user_message / follow_up_question) are NOT message-stream concerns
- *   and are left to their own handlers.
+ *       stream_event  text, thinking and text_end are placed by offset;
+ *                     retry sets the client-only retryStatus.
+ *       error         a send refused before its ack, or the end of a turn.
+ *       result, cancelled  the end of a turn: no row is written here.
+ *
+ * NOT attached to a socket here: `use-ws.ts` owns the connection and feeds
+ * envelopes in.
  */
 
-import { readPastedElements, type PastedTextElement } from "../../chat/send/paste-elements.ts";
-import { readNotice } from "../../chat/transcript/agent-notices.ts";
-import { rememberSystemAccessFromTree } from "../../access/system-access-result";
-import { verificationForMessage } from "../../runtime-bridge/actions/goal-state";
+import type { PastedTextElement } from "../../chat/send/paste-elements.ts";
 import {
   applyExecutionStreamFromChat,
   useExecutionStreamStore,
 } from "@/lib/execution-stream";
 import {
+  selectRow,
   useSessionStore,
-  type AssistantBlock,
   type ChatMsg,
-  type ChatToolCall,
 } from "@/lib/session-store";
 import { chatAckIsActive, useCenterTabs } from "@/lib/tabs/center-tabs-store";
 import { settleAgentInvocation } from "@/lib/agents/settle-agent-invocation";
@@ -56,19 +34,14 @@ import {
   clearPendingFirstAck,
   getPendingUserTimestamp,
   getPendingUserMessageId,
+  hasPendingUserText,
   getPendingUserText,
   pendingUserHasAttachments,
   rejectPendingUserText,
 } from "@/lib/chat/send/pending-user-text";
-import {
-  agentJobFor,
-  ensureSubAgentPrompt,
-  rememberJobPrompt,
-  subAgentChatKey,
-} from "@/lib/chat/transcript/sub-agent-transcripts";
 import { frameNamesPendingSend } from "./unacked-sends";
+import { patchHeldRow, placeCitations, queueTextFrame } from "./text-frames.ts";
 import { normalizeCitations } from "../../chat/transcript/web-sources.ts";
-
 
 function requestExecutionStreamSnapshot(event: {
   session_id: string;
@@ -101,87 +74,41 @@ useExecutionStreamStore.getState().setSnapshotRequester((ev) => {
   requestExecutionStreamSnapshot(ev);
 });
 
+
 interface StreamEvent {
-  type: "text" | "thinking" | "tool_use" | "tool_result" | "sub_agent" | "retry" | "structured_output_retry";
+  type: string;
   attempt?: number;
   next_attempt?: number;
   max_attempts?: number;
   reason?: string;
   issues?: { code?: string }[];
   delay_ms?: number;
+  /** retry: what failed, one short line. */
+  error?: string;
   text?: string;
-  tool?: string;
-  input?: string;
-  tool_call_id?: string;
-  result?: string;
-  is_error?: boolean;
-  /** tool_use / tool_result: the model's provider ran the call itself
-   *  (a provider web search); nothing ran locally. */
-  provider_executed?: boolean;
-  /** text: sources the provider cited for the text block this event closes. */
+  /** text_end: sources the provider cited for the block it closes. */
   citations?: unknown;
-  outcome?: AssistantBlock["outcome"];
-  elapsed?: number;
-  /** sub_agent only: stable id of the spawn card, identical to the
-   *  ``attach`` DAG node a reload reads back — the running and terminal
-   *  events for one spawn share it so the card patches in place. */
-  card_id?: string;
-  content?: string;
-  attach?: ChatMsg["attach"];
-  agent_id?: string;
 }
 
 interface ChatResponseData {
-  /** On a user_message: the turn's source and, for an agent notice, its items. */
-  source?: string;
-  notice?: unknown;
-  trigger?: unknown;
-  goal_verification?: import("../../chat/decisions/goal-verification").GoalVerification;
   type: string;
   msg_id?: string;
   session_id?: string;
-  function?: string;
-  display?: "runtime" | "normal";
   event?: StreamEvent;
   content?: string;
   text?: string;
-  timestamp?: number | string | null;
-  /** Ordered execution blocks (thinking / text / tool) the persisted
-   *  message carries. conv-mapper rebuilds these on reload; the final
-   *  chat_response envelope also ships them so a live turn can converge
-   *  to the same collapsed ExecutionStrip shape without a refresh. */
-  blocks?: unknown[];
   cancelled?: boolean;
-  context_tree?: unknown;
-  /** Live execution tree carried by `tree_update` envelopes. */
-  tree?: unknown;
-  usage?: unknown;
-  attempts?: { content: string; timestamp: number; tree?: unknown; usage?: unknown }[];
-  current_attempt?: number;
-  /** predecessor for runtime-block placeholder rows written by the
-   *  dispatcher's Agent method wrapper — anchors the row to the
-   *  assistant reply that called the tool. */
-  predecessor?: string;
-  status?: string;
-  /** Structured error taxonomy on a `type:"error"` response — lets the
-   *  bubble show a categorized, actionable error (rate-limit retry hint vs
-   *  fatal auth/context) instead of an opaque string. See
-   *  docs/design/providers/reliability/error-taxonomy-propagation.md. */
+  /** Structured error taxonomy on a `type:"error"` response. */
   error_detail?: string;
   reason?: string;
   retryable?: boolean;
-  retry_after_s?: number;
   /** Rejection code. ``"run_active"`` means the backend refused the turn
    *  because that session already had one running. */
   code?: string;
   /** The rejected message text, echoed back so the client can re-send it
    *  without the user retyping. Only present on a ``run_active`` error. */
   retry_query?: string;
-  steering?: boolean;
-  assistant_msg_id?: string;
-  command_id?: string;
-  /** Set on every frame of a Job's turn: a sub-agent working in this
-   *  session. See lib/chat/transcript/sub-agent-transcripts.ts. */
+  /** Set on every frame of a Job's turn: a sub-agent working in this session. */
   job_id?: string;
   /** Echo of the chat frame's `client_request_id`: names the exact send an
    *  ack or a rejection before the ack answers. */
@@ -189,20 +116,12 @@ interface ChatResponseData {
   /** Set on the error frame of a failed function Retry; it answers that
    *  request and ends no chat turn. */
   retry_request_id?: string;
-  /** stream_event only: the reply's stream position, increasing per turn. */
-  seq?: number;
+  /** Text frames: the block this frame writes, and where in it. */
+  row_id?: string;
+  item_id?: string;
+  item_index?: number;
+  offset?: number;
 }
-
-
-/** Names of LLM-callable Agent method tools. When the LLM invokes
- *  one of these we DON'T want it to show up under the assistant bubble
- *  as a folded chat-tool card — the dispatcher writes a separate
- *  ``display=runtime`` placeholder row for it which renders as a
- *  full RuntimeBlock + ExecutionDAG. Keeping a parallel folded row
- *  would just duplicate the call. */
-const AGENTIC_TOOL_NAMES: ReadonlySet<string> = new Set([
-  "gui_agent",
-]);
 
 interface WsEnvelope {
   type: string;
@@ -211,147 +130,13 @@ interface WsEnvelope {
 
 const sessionByMsgId = new Map<string, string>();
 
-type PendingDelta = {
-  sid: string;
-  lastMessage: ChatMsg | undefined;
-  content: string;
-  thinking: string;
-  blocks: AssistantBlock[];
-  /** Stream position of the last buffered delta, when frames carry one. */
-  seq?: number;
-};
-
-type SequencedEvent = { seq: number; event: StreamEvent };
-
-/** Sequenced stream events per reply since the session's last load. A load
- *  whose row predates some of them (its `streamSeq` is older) gets them
- *  applied again, so the reply has no hole where they were. */
-const sequencedEvents = new Map<string, { sid: string; events: SequencedEvent[] }>();
-const SEQUENCED_EVENTS_MAX = 4000;
-
-function rememberSequencedEvent(sid: string, rid: string, seq: number, event: StreamEvent): void {
-  const entry = sequencedEvents.get(rid) ?? { sid, events: [] };
-  entry.sid = sid;
-  entry.events.push({ seq, event });
-  if (entry.events.length > SEQUENCED_EVENTS_MAX) entry.events.splice(0, entry.events.length - SEQUENCED_EVENTS_MAX);
-  sequencedEvents.set(rid, entry);
+/** Connection teardown forgets which session each turn belongs to. */
+export function clearSessionByMsgId(): void {
+  sessionByMsgId.clear();
 }
 
-/** After a load: apply each reply's buffered events newer than the stream
- *  position its loaded row reflects. Rows kept from the live stream already
- *  carry their own position, so nothing is applied twice. */
-export function replayStreamAfterLoad(sessionId: string): void {
-  for (const [rid, entry] of sequencedEvents) {
-    if (entry.sid !== sessionId) continue;
-    const row = useSessionStore.getState().messagesById[rid];
-    const from = row?.streamSeq;
-    if (from === undefined || !row || !isOpenReply(row)) continue;
-    for (const { seq, event } of entry.events) {
-      if (seq > from) applySequencedEvent(entry.sid, rid, seq, event);
-    }
-    flushPendingDelta(rid);
-  }
-}
-
-function isOpenReply(row: ChatMsg): boolean {
-  return !["done", "completed", "cancelled", "interrupted", "error"].includes(row.status ?? "");
-}
-
-/** The stream position a reply has applied, buffered deltas included. */
-function appliedSeq(rid: string): number | undefined {
-  const pending = pendingDeltas.get(rid)?.seq;
-  const stored = useSessionStore.getState().messagesById[rid]?.streamSeq;
-  if (pending === undefined) return stored;
-  return stored === undefined ? pending : Math.max(pending, stored);
-}
-
-function applySequencedEvent(sid: string, rid: string, seq: number, event: StreamEvent): void {
-  const applied = appliedSeq(rid);
-  if (applied !== undefined && seq <= applied) return;
-  applyStreamEvent(sid, rid, event, seq);
-}
-
-// ponytail: one rAF for every in-flight reply. Split per-rid frames if
-// many concurrent streams starve a single callback.
-const pendingDeltas = new Map<string, PendingDelta>();
-let deltaRaf = 0;
-
-function cancelDeltaRaf(): void {
-  if (!deltaRaf) return;
-  const caf = globalThis.cancelAnimationFrame;
-  if (typeof caf === "function") caf(deltaRaf);
-  deltaRaf = 0;
-}
-
-function flushPendingDelta(rid: string): void {
-  const pending = pendingDeltas.get(rid);
-  if (!pending) return;
-  pendingDeltas.delete(rid);
-  if (pendingDeltas.size === 0) cancelDeltaRaf();
-  const store = useSessionStore.getState();
-  const current = store.messagesById[rid];
-  const status = current?.status;
-  if (status && ['done', 'completed', 'cancelled', 'interrupted'].includes(status)) return;
-  // Error/pause changes after the last received delta own the status. New
-  // output received after a recoverable error or pause may resume streaming.
-  const changedAfterDelta = current !== pending.lastMessage;
-  if (status === 'error' && changedAfterDelta) return;
-  store.updateMessage(pending.sid, rid, {
-    content: pending.content,
-    thinking: pending.thinking,
-    blocks: pending.blocks,
-    ...(pending.seq === undefined ? {} : { streamSeq: pending.seq }),
-    status: status === "cancelling" || (status === "paused" && changedAfterDelta) ? status : "streaming",
-  });
-}
-
-function dropPendingDelta(rid: string): void {
-  pendingDeltas.delete(rid);
-  if (pendingDeltas.size === 0) cancelDeltaRaf();
-}
-
-function flushAllPendingDeltas(): void {
-  deltaRaf = 0;
-  for (const rid of [...pendingDeltas.keys()]) flushPendingDelta(rid);
-}
-
-function scheduleDeltaFlush(): void {
-  if (deltaRaf) return;
-  const raf = globalThis.requestAnimationFrame;
-  if (typeof raf !== "function") {
-    flushAllPendingDeltas();
-    return;
-  }
-  deltaRaf = raf(flushAllPendingDeltas);
-}
-
-/** Commit received progress before a snapshot or connection cleanup. */
-export function flushPendingChatDeltas(sessionId?: string): void {
-  for (const [rid, pending] of pendingDeltas) {
-    if (sessionId === undefined || pending.sid === sessionId) flushPendingDelta(rid);
-  }
-}
-
-/** A session refresh releases only its routing and buffers. Connection teardown
- * clears all routing after flushing received progress. */
-export function clearSessionByMsgId(sessionId?: string): void {
-  for (const [id, sid] of sessionByMsgId) {
-    if (sessionId === undefined || sid === sessionId) sessionByMsgId.delete(id);
-  }
-  for (const [id, pending] of pendingDeltas) {
-    if (sessionId === undefined || pending.sid === sessionId) pendingDeltas.delete(id);
-  }
-  for (const [id, entry] of sequencedEvents) {
-    if (sessionId === undefined || entry.sid === sessionId) sequencedEvents.delete(id);
-  }
-  if (!pendingDeltas.size) cancelDeltaRaf();
-}
-
-/** Store key for an assistant turn's reply bubble. The user turn is
- *  keyed by its bare `msg_id`; the reply gets a `_reply` suffix so the
- *  two never collide in `messagesById`. */
-function replyId(msgId: string): string {
-  return `${msgId}_reply`;
+function isTurnEnd(type: string): boolean {
+  return type === "result" || type === "error" || type === "cancelled";
 }
 
 export function applyChatWsMessage(msg: WsEnvelope): void {
@@ -372,12 +157,11 @@ export function applyChatWsMessage(msg: WsEnvelope): void {
 
 /** A `chat_ack` tells us which conversation the turn belongs to — for a
  *  brand-new chat that's the first time the server-assigned id is known.
- *  Add the locally stashed user turn first, then create its assistant
- *  placeholder so both rows and both start times appear on the ACK. */
+ *  The locally stashed user turn takes the server's id here. */
 function handleAck(
-  d: { session_id?: string; msg_id?: string; text?: string; job_id?: string; client_request_id?: string; goal_verification?: ChatResponseData["goal_verification"] } | undefined,
+  d: { session_id?: string; msg_id?: string; text?: string; job_id?: string; client_request_id?: string } | undefined,
 ): void {
-  // A Job's ack names the Job's own turn; its user_message frame renders it.
+  // A Job's ack names the Job's own turn; numbered updates draw it.
   if (!d?.session_id || d.job_id) return;
   const sid = d.session_id;
   const tabs = useCenterTabs.getState();
@@ -390,12 +174,6 @@ function handleAck(
   if (isActive) useSessionStore.getState().setCurrentConv(sid);
   if (d.msg_id) sessionByMsgId.set(d.msg_id, sid);
 
-  // The server does NOT echo a web-originated user turn back as a
-  // `user_message` broadcast (only channel/peer turns get that). So the
-  // user bubble is created here, from the text the composer stashed on
-  // `lib/chat/send/pending-user-text` just before sending. `chat_ack.msg_id`
-  // IS the user turn's id — keying it here lets the reply (`_reply`
-  // suffix) and the later result anchor to the same turn.
   // An ack naming another request is not this client's pending send's.
   const ours = frameNamesPendingSend(sid, d);
   const text = ours ? getPendingUserText(sid) : undefined;
@@ -404,59 +182,27 @@ function handleAck(
   if (d.msg_id && typeof text === "string" && text) {
     // The ack echoes the STORED text, which differs from the draft in
     // one way that matters: attachment mentions now carry the absolute
-    // path the backend wrote once the bytes hit disk. Rendering the
-    // draft instead would give the bubble a chip with nothing to open
-    // until the next reload. Whether the turn is a function run is the
-    // server's call (a runtime stream event says so); the text itself
-    // never decides it.
+    // path the backend wrote once the bytes hit disk.
     const content = typeof d.text === "string" && d.text ? d.text : text;
-    if (pendingId) {
-      useSessionStore.getState().rekeyMessage(sid, pendingId, d.msg_id);
-      if (useSessionStore.getState().messagesById[d.msg_id]) {
-        useSessionStore.getState().updateMessage(sid, d.msg_id, {
-          content,
-          status: "done",
-          ...(timestamp === undefined ? {} : { timestamp }),
-        });
-      } else {
-        appendLocalUserTurn(sid, d.msg_id, content, undefined, timestamp);
-      }
+    const store = useSessionStore.getState();
+    const local = pendingId ? selectRow(sid, pendingId)(store) : undefined;
+    if (selectRow(sid, d.msg_id)(store)) {
+      // The server's own row beat this ack and already replaced the local one.
+      if (local) store.applyLocalChange(sid, { kind: "local_remove", rowId: pendingId! });
+    } else if (local) {
+      store.applyLocalChange(sid, {
+        kind: "local_replace", rowId: pendingId!,
+        row: { ...local, content, status: "done", ...(timestamp === undefined ? {} : { timestamp }), id: d.msg_id, localAnchor: undefined },
+      });
     } else {
-      appendLocalUserTurn(sid, d.msg_id, content, undefined, timestamp);
+      appendLocalUserTurn(sid, d.msg_id, content, undefined, timestamp, "done", undefined, d.client_request_id);
     }
-    // Create the reply bubble right away (after the user turn, so the
-    // order is right) — gives an immediate typing indicator instead of
-    // a gap until the first stream event.
-    ensureReply(sid, replyId(d.msg_id));
   }
   // The frame is the backend's durable acceptance boundary. Run the
   // composer cleanup only now; socket.write success is not acceptance.
-  if (d.goal_verification && d.msg_id) {
-    const rid = replyId(d.msg_id);
-    const current = ensureReply(sid, rid).goalVerification;
-    useSessionStore.getState().updateMessage(sid, rid, {
-      goalVerification: verificationForMessage(sid, rid, d.goal_verification, current),
-    });
-  }
   if (!ours) return;
   acknowledgePendingUserText(sid);
   clearPendingFirstAck(sid);
-}
-
-/** Fetch the assistant reply bubble, creating it on first use. Keeps
- *  reply creation after the user turn in `messageOrder`. */
-function ensureReply(sid: string, rid: string): ChatMsg {
-  const store = useSessionStore.getState();
-  const existing = store.messagesById[rid];
-  if (existing) return existing;
-  store.appendMessage(sid, {
-    id: rid,
-    role: "assistant",
-    content: "",
-    status: "streaming",
-    timestamp: Date.now(),
-  });
-  return useSessionStore.getState().messagesById[rid];
 }
 
 function handleResponse(d: ChatResponseData | undefined): void {
@@ -464,15 +210,17 @@ function handleResponse(d: ChatResponseData | undefined): void {
   // Older envelopes may lack `session_id`; their turn is then known from its
   // `chat_ack` or from the running task that owns the msg_id. Never the
   // conversation on screen: after a reload, a run started earlier would
-  // stream its reply into whichever chat the user opened (a new one too).
+  // land in whichever chat the user opened.
   const sid = d.session_id || sessionByMsgId.get(d.msg_id)
     || Object.values(useSessionStore.getState().runningTasks)
       .find(task => task?.msg_id === d.msg_id)?.session_id;
   if (!sid) return;
-  // A sub-agent's turn belongs to its own transcript (opened from its
-  // step row), never to the conversation it shares a session with.
+  if (d.type === "stream_event") {
+    if (d.event) applyStreamFrame(d, d.event);
+    return;
+  }
   if (d.job_id) {
-    handleSubAgentResponse(sid, d.job_id, d);
+    if (isTurnEnd(d.type)) sessionByMsgId.delete(d.msg_id);
     return;
   }
   // A failed function Retry answers its request (runtime-block restores the
@@ -481,12 +229,11 @@ function handleResponse(d: ChatResponseData | undefined): void {
   // A frame of a turn this client already saw acknowledged (or loaded)
   // answers that turn, never the send still waiting for its ACK.
   const ownsTurn = sessionByMsgId.has(d.msg_id)
-    || !!useSessionStore.getState().messagesById[replyId(d.msg_id)];
+    || (!!d.row_id && !!selectRow(sid, d.row_id)(useSessionStore.getState()));
   const answersSend = !ownsTurn && frameNamesPendingSend(sid, d);
   const pendingId = getPendingUserMessageId(sid);
-  if (d.type === "result" || d.type === "error" || d.type === "cancelled") {
-    sessionByMsgId.delete(d.msg_id);
-  }
+  if (isTurnEnd(d.type)) sessionByMsgId.delete(d.msg_id);
+
 
   // `run_active`: the client believed the session was idle and dispatched
   // a turn the backend then refused, because a run really was in flight
@@ -495,7 +242,7 @@ function handleResponse(d: ChatResponseData | undefined): void {
   // wait. Put it back in the send queue instead of surfacing an error
   // bubble for a race they didn't cause and can't act on. The frame
   // carries a msg_id of its own with no reply row behind it, so this
-  // must return BEFORE finalize() would mint a stray error bubble.
+  // must return here: it ends no turn.
   if (d.type === "error" && d.code === "run_active") {
     // Another send's rejection: this client's pending send is untouched.
     if (!answersSend) return;
@@ -510,13 +257,14 @@ function handleResponse(d: ChatResponseData | undefined): void {
       );
     }
     if (hasAttachments) {
-      if (pendingId) useSessionStore.getState().updateMessage(sid, pendingId, {
-        status: "error", rawType: "error", errorReason: "run_active",
+      if (pendingId) useSessionStore.getState().applyLocalChange(sid, {
+        kind: "local_patch", rowId: pendingId,
+        fields: { status: "error", rawType: "error", errorReason: "run_active", ...notSentDetail(d) },
       });
       rejectPendingUserText(sid);
     } else {
       clearPendingUserText(sid);
-      if (pendingId) useSessionStore.getState().removeMessage(sid, pendingId);
+      if (pendingId) useSessionStore.getState().applyLocalChange(sid, { kind: "local_remove", rowId: pendingId });
     }
     clearPendingFirstAck(sid);
     useCenterTabs.getState().markSessionSent(sid, false);
@@ -527,9 +275,10 @@ function handleResponse(d: ChatResponseData | undefined): void {
   // ACK reservation so the user can submit the unchanged composer draft
   // again; the composer cleanup callback is deliberately discarded.
   if (d.type === "error" && answersSend) {
-    if (pendingId) useSessionStore.getState().updateMessage(sid, pendingId, {
-      status: "error", rawType: "error", errorReason: d.reason,
-      errorRetryable: d.retryable,
+    const hadSend = !!pendingId || hasPendingUserText(sid);
+    if (pendingId) useSessionStore.getState().applyLocalChange(sid, {
+      kind: "local_patch", rowId: pendingId,
+      fields: { status: "error", rawType: "error", errorReason: d.reason, errorRetryable: d.retryable, ...notSentDetail(d) },
     });
     // With no bubble to carry "Not sent", the refusal would be invisible:
     // the draft just stays in the composer. Say why.
@@ -541,187 +290,70 @@ function handleResponse(d: ChatResponseData | undefined): void {
     rejectPendingUserText(sid);
     clearPendingFirstAck(sid);
     useCenterTabs.getState().markSessionSent(sid, false);
+    // The local row says why; the turn never started, so no reply stands behind it.
+    if (hadSend) return;
   }
 
-  // A user turn — either echoed back by the server or broadcast from a
-  // peer. Keyed by the bare `msg_id` (the reply takes the `_reply`
-  // suffix), so it never collides with its own assistant bubble.
-  if (d.type === "user_message") {
-    handleUserMessage(sid, d);
-    return;
+  if (isTurnEnd(d.type)) endTurn(sid, d, answersSend);
+}
+
+/** The server's words for a refused send, shown after "Not sent". */
+function notSentDetail(d: ChatResponseData): { errorDetail?: string } {
+  const text = d.error_detail ?? d.content ?? d.text;
+  return typeof text === "string" && text ? { errorDetail: text } : {};
+}
+
+function applyStreamFrame(d: ChatResponseData, event: StreamEvent): void {
+  if (d.row_id && d.item_id) {
+    if ((event.type === "text" || event.type === "thinking") && typeof d.offset === "number" && typeof d.item_index === "number") {
+      queueTextFrame({ rowId: d.row_id, itemId: d.item_id, itemIndex: d.item_index, offset: d.offset, type: event.type, text: event.text ?? "" });
+      return;
+    }
+    if (event.type === "text_end") {
+      const citations = normalizeCitations(event.citations);
+      if (citations) placeCitations(d.row_id, d.item_id, citations);
+      return;
+    }
   }
-
-  // Runtime-block placeholder rows are written by the dispatcher
-  // (``_wrap_agentic_runtime_block``) as separate ChatMsgs with their
-  // own server-assigned id (NOT the ``_reply`` suffix). They carry the
-  // execution DAG for an LLM-issued Agent method call and render
-  // as a standalone RuntimeBlock. Detect by ``display=runtime`` and
-  // route by the raw msg_id, so we mutate the right row (not the
-  // owning assistant reply).
-  if (d.display === "runtime" && (d.type === "status" || d.type === "result")) {
-    if (d.predecessor) flushPendingDelta(d.predecessor);
-    if (d.msg_id) flushPendingDelta(d.msg_id);
-    handleRuntimeRow(sid, d);
-    return;
-  }
-
-  const rid = replyId(d.msg_id);
-
-  if (d.goal_verification) {
-    const current = ensureReply(sid, rid).goalVerification;
-    useSessionStore.getState().updateMessage(sid, rid, {
-      goalVerification: verificationForMessage(sid, rid, d.goal_verification, current),
+  if (event.type === "retry" || event.type === "structured_output_retry") {
+    if (d.row_id) patchHeldRow(d.row_id, {
+      retryStatus: {
+        attempt: event.next_attempt ?? event.attempt ?? 2,
+        maxAttempts: event.max_attempts,
+        reason: event.reason ?? event.issues?.[0]?.code,
+        delayMs: event.delay_ms,
+        error: event.error || undefined,
+        receivedAt: Date.now(),
+      },
     });
   }
+}
 
-  // Live execution tree for a streaming `/run` — store it on the reply
-  // so <RuntimeBlock />'s <ExecutionTree /> renders it as it grows.
-  if (d.type === "tree_update" && d.tree) {
-    if (useSessionStore.getState().currentSessionId === sid) {
-      rememberSystemAccessFromTree(sid, d.msg_id, d.tree, d.function);
+/** The row's end comes as an update; these are the parts only the frame says. */
+function endTurn(sid: string, d: ChatResponseData, answersSend: boolean): void {
+  const rowId = d.row_id;
+  const store = useSessionStore.getState();
+  if (rowId) {
+    patchHeldRow(rowId, { retryStatus: undefined });
+    const finished = d.type === "result" && !d.cancelled;
+    if (finished && store.currentSessionId === sid && selectRow(sid, rowId)(store)?.autoPreviewFiles === undefined) {
+      patchHeldRow(rowId, { autoPreviewFiles: true });
     }
-    flushPendingDelta(rid);
-    if (d.msg_id) flushPendingDelta(d.msg_id);
-    // The same tree_update channel carries the run's terminal state:
-    // live ticks send a root with status="running"; the final flush
-    // (live_progress.__exit__) sends the root flipped to
-    // "completed"/"error". Derive the card's status from the tree root
-    // so the card finalizes in place — no separate result envelope, no
-    // duplicate row. (Bug 6: the deleted result broadcast left the card
-    // spinning forever.)
-    const rootStatus = (d.tree as { status?: string } | null)?.status;
-    const cardStatus: ChatMsg["status"] | undefined =
-      rootStatus === "completed"
-        ? "done"
-        : rootStatus === "error"
-          ? "error"
-          : rootStatus === "running"
-            ? "running"
-            : undefined;
-    // LLM-issued Agent method path: the dispatcher anchors
-    // live_progress on the runtime-block id (not a `_reply` row), so a
-    // tree_update arrives with msg_id == runtime_id. If that row exists
-    // — either as a top-level ChatMsg or nested inside a parent
-    // assistant's runtimeChildren — update IT in place instead of
-    // creating a phantom `<runtime_id>_reply` placeholder.
-    const store0 = useSessionStore.getState();
-    const existingRuntime = d.msg_id ? store0.messagesById[d.msg_id] : undefined;
-    // A model-issued function is owned by the assistant reply whose id is
-    // carried in msg_id. Keep its live DAG in that reply's execution strip;
-    // creating `<assistant-id>_reply` here duplicates the same call as a
-    // standalone RuntimeBlock below the assistant message.
-    if (existingRuntime?.role === "assistant" && existingRuntime.display !== "runtime") {
-      const incoming = d.tree as { path?: string; name?: string; status?: string };
-      const roots = [
-        ...((existingRuntime.callRoots as typeof incoming[] | undefined) ?? []),
-      ];
-      const exact = incoming.path
-        ? roots.findIndex((root) => root.path === incoming.path)
-        : -1;
-      const runningSameFunction = !incoming.path && exact < 0
-        ? roots.findIndex((root) =>
-            root.status === "running"
-            && root.name === (incoming.name || d.function))
-        : -1;
-      const replaceAt = exact >= 0 ? exact : runningSameFunction;
-      if (replaceAt >= 0) roots[replaceAt] = incoming;
-      else roots.push(incoming);
-      store0.updateMessage(sid, d.msg_id!, { callRoots: roots as never });
-      return;
-    }
-    if (existingRuntime && existingRuntime.display === "runtime") {
-      store0.updateMessage(sid, d.msg_id!, {
-        function: d.function ?? existingRuntime.function,
-        contextTree: d.tree as never,
-        ...(cardStatus ? { status: cardStatus } : {}),
-      });
-      return;
-    }
-    // Search inside runtimeChildren of any assistant message.
-    if (d.msg_id) {
-      let foundParent: string | null = null;
-      for (const [pid, m] of Object.entries(store0.messagesById)) {
-        const kids = m.runtimeChildren;
-        if (!kids) continue;
-        if (kids.some((c) => c.id === d.msg_id)) {
-          foundParent = pid;
-          break;
-        }
-      }
-      if (foundParent) {
-        const parent = store0.messagesById[foundParent];
-        const list = parent?.runtimeChildren ?? [];
-        const next = list.map((c) =>
-          c.id === d.msg_id
-            ? {
-                ...c,
-                function: d.function ?? c.function,
-                contextTree: d.tree as never,
-                ...(cardStatus ? { status: cardStatus } : {}),
-              }
-            : c,
-        );
-        store0.updateMessage(sid, foundParent, { runtimeChildren: next });
-        return;
-      }
-    }
-    ensureReply(sid, rid);
-    useSessionStore.getState().updateMessage(sid, rid, {
-      display: "runtime",
-      function: d.function,
-      contextTree: d.tree as never,
-      ...(cardStatus ? { status: cardStatus } : {}),
-    });
-    return;
   }
-
-  if (d.type === "stream_event" && d.event) {
-    const existingReply = useSessionStore.getState().messagesById[rid];
-    if (
-      existingReply?.status === "cancelled"
-      || existingReply?.status === "cancelling"
-    ) {
-      dropPendingDelta(rid);
-      return;
-    }
-    // A `/run` turn: tag the reply as a runtime turn up front so
-    // <MessageList /> routes it to <RuntimeBlock />, which renders the
-    // `#runtime_pending` host the legacy CLI/tree stream handlers
-    // target. `_chat` / `chat` are plain chat — left as assistant.
-    const isRuntime =
-      d.display === "runtime" ||
-      (!!d.function && d.function !== "_chat" && d.function !== "chat");
-    if (isRuntime) {
-      ensureReply(sid, rid);
-      useSessionStore.getState().updateMessage(sid, rid, {
-        display: "runtime",
-        function: d.function,
-      });
-    }
-    if (typeof d.seq === "number") {
-      rememberSequencedEvent(sid, rid, d.seq, d.event);
-      applySequencedEvent(sid, rid, d.seq, d.event);
-    } else {
-      applyStreamEvent(sid, rid, d.event);
-    }
-    return;
-  }
-  if (d.type === "result" || d.type === "error" || d.type === "cancelled") {
-    flushPendingDelta(rid);
-    sequencedEvents.delete(rid);
-    finalize(sid, rid, d);
-    if (d.type === "error") releaseTurnAfterError(sid, d.msg_id);
-  }
+  if (d.type === "error" && !answersSend) releaseTurnAfterError(sid, d.msg_id as string, rowId);
 }
 
 /** A reply that failed is the end of its turn on the user's screen: the
  *  composer sends again instead of queueing behind a run that is over.
- *  The server's own clear usually lands a beat later and finds nothing
- *  to do; if the run really is still held, the send comes back as
- *  `run_active` and re-queues on its own. */
-function releaseTurnAfterError(sid: string, msgId: string): void {
+ *  The frame decides, not the row: the reply's error status is published
+ *  on the next update tick, after this frame. Only a reply already settled
+ *  as done says the error is a late one of a finished turn. The server's
+ *  own clear usually lands a beat later and finds nothing to do; if the
+ *  run really is still held, the send comes back as `run_active` and
+ *  re-queues on its own. */
+function releaseTurnAfterError(sid: string, msgId: string, rowId: string | undefined): void {
   const store = useSessionStore.getState();
-  if (store.messagesById[replyId(msgId)]?.status !== "error") return;
+  if (rowId && selectRow(sid, rowId)(store)?.status === "done") return;
   const current = store.runningTasks[sid];
   if (!current || (current.msg_id || "") !== msgId) return;
   void import("@/lib/runtime-bridge/session/chat-handlers").then(({ handleRunningTaskClear }) =>
@@ -729,221 +361,9 @@ function releaseTurnAfterError(sid: string, msgId: string): void {
   );
 }
 
-function handleSubAgentResponse(sid: string, jobId: string, d: ChatResponseData): void {
-  if (!d.msg_id) return;
-  const key = subAgentChatKey(sid, agentJobFor(jobId));
-  const rid = replyId(d.msg_id);
-  if (d.type === "stream_event" && d.event) {
-    ensureSubAgentPrompt(key, jobId, d.msg_id);
-    applyStreamEvent(key, rid, d.event);
-    return;
-  }
-  if (d.type === "result" || d.type === "error" || d.type === "cancelled") {
-    sessionByMsgId.delete(d.msg_id);
-    ensureSubAgentPrompt(key, jobId, d.msg_id);
-    flushPendingDelta(rid);
-    finalize(key, rid, d);
-  }
-}
-
-/** True iff the predecessor refers to an assistant ChatMsg already in the
- *  store. LLM-issued Agent method runtime blocks have predecessor =
- *  assistant reply id; fn-form / direct-run runtime blocks have
- *  predecessor = user msg id. Only the former gets merged INSIDE the
- *  assistant bubble; the latter stays as a top-level row. */
-function _isAssistantCaller(calledBy: string | undefined): boolean {
-  if (!calledBy) return false;
-  const p = useSessionStore.getState().messagesById[calledBy];
-  return !!p && p.role === "assistant";
-}
-
-/** Push or replace a runtime child inside its parent assistant's
- *  ``runtimeChildren`` array. Mutation goes through
- *  ``updateMessage`` so subscribers (the AssistantBubble) re-render. */
-function _mergeRuntimeIntoParent(
-  sid: string,
-  calledBy: string,
-  child: ChatMsg,
-): void {
-  const store = useSessionStore.getState();
-  const parent = store.messagesById[calledBy];
-  if (!parent) return;
-  const existing = parent.runtimeChildren ?? [];
-  const idx = existing.findIndex((c) => c.id === child.id);
-  const nextChildren =
-    idx >= 0
-      ? existing.map((c, i) => (i === idx ? { ...c, ...child } : c))
-      : [...existing, child];
-  store.updateMessage(sid, calledBy, { runtimeChildren: nextChildren });
-}
-
-/** Materialize / update a runtime-block row for an LLM-issued
- *  Agent method call. Two routing paths:
- *    - parent is an assistant ChatMsg → merge into the assistant's
- *      ``runtimeChildren`` so the bubble renders the runtime card
- *      inside its own body (no separate top-level row).
- *    - parent is a user / unknown row (fn-form, direct /api/function/)
- *      → fall back to the legacy behaviour: own ChatMsg, rendered as a
- *      standalone <RuntimeBlock /> by <MessageList />. */
-function handleRuntimeRow(sid: string, d: ChatResponseData): void {
-  if (!d.msg_id) return;
-  const store = useSessionStore.getState();
-  const existing = store.messagesById[d.msg_id];
-  const calledBy = d.predecessor;
-  const mergeIntoAssistant = _isAssistantCaller(calledBy);
-  const parent = mergeIntoAssistant && calledBy
-    ? store.messagesById[calledBy]
-    : undefined;
-  const nestedExisting = parent?.runtimeChildren?.find(
-    (child) => child.id === d.msg_id,
-  );
-  const current = existing ?? nestedExisting;
-
-  if (d.type === "status") {
-    // First sighting — create the row. Idempotent on duplicate
-    // broadcasts (e.g. cross-tab re-emit).
-    if (current) return;
-    const child: ChatMsg = {
-      id: d.msg_id,
-      role: "assistant",
-      content: "",
-      display: "runtime",
-      function: d.function,
-      status: d.status === "running" ? "running" : "streaming",
-      calledBy,
-      timestamp: Date.now(),
-    };
-    if (mergeIntoAssistant && calledBy) {
-      _mergeRuntimeIntoParent(sid, calledBy, child);
-    } else {
-      // Parent is user / unknown / not-yet-present — keep the legacy
-      // top-level row. If the assistant parent shows up between
-      // status and result, the result branch will migrate the row
-      // into the parent's runtimeChildren and remove it from order.
-      store.appendMessage(sid, child);
-    }
-    return;
-  }
-  // type === "result": finalize the row with the rebuilt DAG + return
-  // text.
-  const patch: Partial<ChatMsg> = {
-    content: d.content ?? "",
-    display: "runtime",
-    function: d.function ?? current?.function,
-    status: "done",
-    rawType: d.type,
-    contextTree: (d.context_tree as never) || undefined,
-  };
-  if (store.currentSessionId === sid) {
-    rememberSystemAccessFromTree(sid, d.msg_id, d.context_tree, patch.function);
-  }
-  const resultTimestamp = current?.timestamp ?? Date.now();
-  if (mergeIntoAssistant && calledBy) {
-    // Update inside the parent's runtimeChildren.
-    const list = parent?.runtimeChildren ?? [];
-    const idx = list.findIndex((c) => c.id === d.msg_id);
-    if (idx >= 0) {
-      const next = list.map((c, i) =>
-        i === idx ? { ...c, ...patch } : c,
-      );
-      store.updateMessage(sid, calledBy, { runtimeChildren: next });
-    } else {
-      const child: ChatMsg = {
-        id: d.msg_id,
-        role: "assistant",
-        content: patch.content ?? "",
-        display: "runtime",
-        function: patch.function,
-        status: "done",
-        rawType: patch.rawType,
-        contextTree: patch.contextTree,
-        timestamp: resultTimestamp,
-        calledBy,
-      };
-      _mergeRuntimeIntoParent(sid, calledBy, child);
-    }
-    // Also clean up any top-level copy from the status branch (when
-    // the assistant parent didn't yet exist at status time).
-    if (store.messagesById[d.msg_id]) {
-      // Remove the standalone row from message order.
-      useSessionStore.setState((s) => {
-        const order = s.messageOrder[sid];
-        if (!order) return {};
-        const i = order.indexOf(d.msg_id!);
-        if (i < 0) return {};
-        const nextOrder = [...order];
-        nextOrder.splice(i, 1);
-        const byId = { ...s.messagesById };
-        delete byId[d.msg_id!];
-        return {
-          messagesById: byId,
-          messageOrder: { ...s.messageOrder, [sid]: nextOrder },
-        };
-      });
-    }
-    return;
-  }
-  if (existing) {
-    store.updateMessage(sid, d.msg_id, patch);
-  } else {
-    store.appendMessage(sid, {
-      id: d.msg_id,
-      role: "assistant",
-      calledBy,
-      content: patch.content ?? "",
-      display: "runtime",
-      function: patch.function,
-      status: "done",
-      rawType: patch.rawType,
-      contextTree: patch.contextTree,
-      timestamp: resultTimestamp,
-    });
-  }
-}
-
-function handleUserMessage(sid: string, d: ChatResponseData): void {
-  if (!d.msg_id) return;
-  const store = useSessionStore.getState();
-  if (store.messagesById[d.msg_id]) return;
-  const replyId = d.steering ? d.assistant_msg_id : undefined;
-  if (replyId && store.messagesById[replyId]) {
-    flushPendingDelta(replyId);
-    const reply = useSessionStore.getState().messagesById[replyId];
-    store.updateMessage(sid, replyId, {blocks: [...(reply.blocks ?? []), {
-      type: "steering", message_id: d.msg_id, text: d.content ?? d.text ?? "",
-      timestamp: typeof d.timestamp === "number" ? d.timestamp : undefined,
-    }]});
-  }
-  store.appendMessage(sid, {
-    id: d.msg_id,
-    role: "user",
-    content: d.content ?? d.text ?? "",
-    display: d.display === "runtime" ? "runtime" : undefined,
-    status: "done",
-    timestamp:
-      typeof d.timestamp === "number"
-      && Number.isFinite(d.timestamp)
-      && d.timestamp > 0
-        ? d.timestamp
-        : undefined,
-    steering: d.steering === true,
-    steeringReplyId: replyId && store.messagesById[replyId] ? replyId : undefined,
-    calledBy: d.predecessor,
-    pastedElements: readPastedElements((d as { text_elements?: unknown }).text_elements),
-    source: typeof d.source === "string" ? d.source : undefined,
-    notice: readNotice(d.notice),
-    trigger: d.trigger === "restart" ? "restart" : undefined,
-  });
-  // The reply this turn writes continues the one the restart cut off.
-  const cut = d.trigger === "restart" && d.predecessor ? store.messagesById[d.predecessor] : undefined;
-  if (cut?.role === "assistant") store.updateMessage(sid, cut.id, { continuedBy: `${d.msg_id}_reply` });
-}
-
 /**
- * Optimistically add the just-sent user turn to the store so the
- * bubble appears immediately — before the server echoes it back.
- * The composer's send path calls this; the later `user_message` /
- * `chat_ack` for the same id is de-duped by id.
+ * Add the just-sent user turn so the bubble appears immediately, before the
+ * server has it. Later frames for the same send replace it by request id.
  */
 export function appendLocalUserTurn(
   sessionId: string,
@@ -953,328 +373,20 @@ export function appendLocalUserTurn(
   timestamp = Date.now(),
   status: ChatMsg["status"] = "done",
   pastedElements?: PastedTextElement[],
+  clientRequestId?: string,
 ): void {
   const store = useSessionStore.getState();
-  if (store.messagesById[msgId]) return;
+  if (selectRow(sessionId, msgId)(store)) return;
   // The composer's optimistic turn: a draft holding it is no longer an
   // empty New chat, even before the backend acknowledges it.
   if (status === "pending") useCenterTabs.getState().markSessionSent(sessionId);
-  store.appendMessage(sessionId, {
-    id: msgId,
-    role: "user",
-    content: text,
-    display: display === "runtime" ? "runtime" : undefined,
-    status,
-    timestamp,
-    ...(pastedElements?.length ? { pastedElements } : {}),
+  store.applyLocalChange(sessionId, {
+    kind: "local_append",
+    row: {
+      id: msgId, role: "user", rowKind: "user", content: text,
+      display: display === "runtime" ? "runtime" : undefined,
+      status, timestamp, clientRequestId,
+      ...(pastedElements?.length ? { pastedElements } : {}),
+    },
   });
-}
-
-/** Extend the trailing block of `kind` with `delta`, or open a new one
- *  when the tail is a different kind (e.g. thinking resumed after a tool
- *  call → new thinking segment). This is what preserves the LLM's real
- *  thinking/tool interleaving during streaming: events arrive in strict
- *  chronological order, so appending in arrival order rebuilds the same
- *  ordered timeline the dispatcher persists on turn_end. */
-function appendDeltaBlock(
-  blocks: AssistantBlock[] | undefined,
-  kind: "thinking" | "text",
-  delta: string,
-): AssistantBlock[] {
-  const next = [...(blocks ?? [])];
-  const last = next[next.length - 1];
-  if (last && last.type === kind) {
-    next[next.length - 1] = { ...last, text: (last.text ?? "") + delta };
-  } else {
-    next.push({ type: kind, text: delta });
-  }
-  return next;
-}
-
-function applyStreamEvent(sid: string, rid: string, evt: StreamEvent, seq?: number): void {
-  if (evt.type === "text" || evt.type === "thinking") {
-    if (evt.text && useSessionStore.getState().messagesById[rid]?.retryStatus) {
-      useSessionStore.getState().updateMessage(sid, rid, { retryStatus: undefined });
-    }
-    let cur = pendingDeltas.get(rid);
-    if (!cur) {
-      const msg = ensureReply(sid, rid);
-      cur = {
-        sid,
-        lastMessage: msg,
-        content: msg.content ?? "",
-        thinking: msg.thinking ?? "",
-        blocks: msg.blocks ?? [],
-      };
-    }
-    const delta = evt.text ?? "";
-    if (evt.type === "text") {
-      cur.content += delta;
-      cur.blocks = appendDeltaBlock(cur.blocks, "text", delta);
-      const citations = normalizeCitations(evt.citations);
-      const last = cur.blocks[cur.blocks.length - 1];
-      if (citations && last?.type === "text") {
-        cur.blocks = [...cur.blocks.slice(0, -1), { ...last, citations }];
-      }
-    } else {
-      cur.thinking += delta;
-      cur.blocks = appendDeltaBlock(cur.blocks, "thinking", delta);
-    }
-    cur.sid = sid;
-    if (seq !== undefined) cur.seq = seq;
-    if (delta) cur.lastMessage = useSessionStore.getState().messagesById[rid];
-    pendingDeltas.set(rid, cur);
-    scheduleDeltaFlush();
-    return;
-  }
-
-  flushPendingDelta(rid);
-  applyEventToReply(sid, rid, evt);
-  if (seq !== undefined && useSessionStore.getState().messagesById[rid]) {
-    useSessionStore.getState().updateMessage(sid, rid, { streamSeq: seq });
-  }
-}
-
-function applyEventToReply(sid: string, rid: string, evt: StreamEvent): void {
-  const store = useSessionStore.getState();
-  const cur = ensureReply(sid, rid);
-
-  // An event arriving on an error-marked reply means the run survived
-  // whatever that error frame reported (a failed provider attempt the
-  // backend failed over from). The live attempt is the truth. text /
-  // thinking below stamp "streaming" themselves, but tool events carry
-  // no status — without this the bubble stays red for the whole tool
-  // run after a mid-turn failover.
-  if (cur.status === "error") {
-    store.updateMessage(sid, rid, { status: "streaming" });
-  }
-
-  switch (evt.type) {
-    case "retry":
-    case "structured_output_retry": {
-      store.updateMessage(sid, rid, {
-        status: "streaming",
-        retryStatus: {
-          attempt: evt.next_attempt ?? evt.attempt ?? 2,
-          maxAttempts: evt.max_attempts,
-          reason: evt.reason ?? evt.issues?.[0]?.code,
-          delayMs: evt.delay_ms,
-        },
-      });
-      break;
-    }
-    case "tool_use": {
-      const blocks: AssistantBlock[] = [
-        ...(cur.blocks ?? []),
-        {
-          type: "tool",
-          tool: evt.tool || "?",
-          tool_call_id: evt.tool_call_id,
-          input: evt.input ?? "",
-          ...(evt.provider_executed ? { provider_executed: true } : {}),
-        },
-      ];
-      // Agentic tools (gui_agent) render
-      // as their own RuntimeBlock row (via handleRuntimeRow) — skip
-      // the folded chat-tool card so they don't appear twice. The
-      // BLOCK is still recorded so the timeline keeps the call in its
-      // chronological slot (the bubble maps agentic tool blocks to the
-      // runtime child, not a plain function row).
-      if (evt.tool && AGENTIC_TOOL_NAMES.has(evt.tool)) {
-        store.updateMessage(sid, rid, { blocks, status: "streaming" });
-        break;
-      }
-      const tools: ChatToolCall[] = [...(cur.tools ?? [])];
-      tools.push({
-        id: evt.tool_call_id || `t_${Date.now()}_${tools.length}`,
-        tool: evt.tool || "?",
-        input: evt.input ?? "",
-        ...(evt.provider_executed ? { providerExecuted: true } : {}),
-        status: "running",
-      });
-      store.updateMessage(sid, rid, { tools, blocks, status: "streaming" });
-      break;
-    }
-    case "tool_result": {
-      // Truthy-id match only: an empty/missing tool_call_id would
-      // "match" every id-less tool block. When the id is absent the
-      // result simply doesn't land in the live blocks — finalize's
-      // authoritative overwrite fills it in.
-      const blocks = (cur.blocks ?? []).map((b): AssistantBlock =>
-        b.type === "tool" && !!evt.tool_call_id
-        && b.tool_call_id === evt.tool_call_id
-          ? {
-              ...b,
-              result: evt.result ?? "",
-              is_error: !!evt.is_error,
-              outcome: evt.outcome,
-              ...(evt.provider_executed ? { provider_executed: true } : {}),
-            }
-          : b,
-      );
-      // Agentic tool results were never pushed into `tools` above —
-      // only their block gets the result. The runtime row takes care
-      // of the rich result display.
-      if (evt.tool && AGENTIC_TOOL_NAMES.has(evt.tool)) {
-        store.updateMessage(sid, rid, { blocks });
-        break;
-      }
-      const tools = (cur.tools ?? []).map((t): ChatToolCall =>
-        t.id === evt.tool_call_id
-          ? {
-              ...t,
-              result: evt.result ?? "",
-              isError: !!evt.is_error,
-              status: evt.outcome === "cancelled"
-                ? "cancelled" : evt.is_error ? "error" : "done",
-            }
-          : t,
-      );
-      store.updateMessage(sid, rid, { tools, blocks });
-      break;
-    }
-    case "sub_agent": {
-      // Live twin of the reload path in conv-mapper (`m.function ===
-      // "attach"` rows folded into the caller's `attachCards`). Build
-      // the SAME ChatMsg shape here so a mid-stream card and the row a
-      // refresh reads from the DAG render identically — SubAgentStep
-      // only ever reads `.attach`, `.content` and `.id`.
-      const cardId = evt.card_id;
-      if (!cardId) break;
-      rememberJobPrompt(evt.attach?.job_id, evt.attach?.prompt, sid);
-      const running = evt.attach?.status === "running";
-      const prev = cur.attachCards ?? [];
-      const at = prev.findIndex((c) => c.id === cardId);
-      const existingCard = at >= 0 ? prev[at] : undefined;
-      const card: ChatMsg = {
-        id: cardId,
-        role: "assistant",
-        content: evt.content ?? "",
-        function: "attach",
-        display: "runtime",
-        status: running
-          ? "running"
-          : evt.attach?.status === "errored"
-            ? "error"
-            : "done",
-        attach: evt.attach,
-        agentId: evt.agent_id || undefined,
-        timestamp: existingCard?.timestamp ?? Date.now(),
-        // The block this spawn was called from; the bubble prefers it
-        // over FIFO when placing the card in the execution timeline.
-        calledBy: rid,
-      };
-      const attachCards =
-        at >= 0
-          // Terminal event for a card already on screen: patch in
-          // place. Appending would double-render the same spawn.
-          ? prev.map((c, i) => (i === at ? { ...c, ...card } : c))
-          : [...prev, card];
-      store.updateMessage(sid, rid, { attachCards, status: "streaming" });
-      break;
-    }
-  }
-}
-
-function isOpenToolBlock(block: AssistantBlock): boolean {
-  return block.type === "tool" && block.result == null && !block.outcome && !block.is_error;
-}
-
-function finalize(sid: string, rid: string, d: ChatResponseData): void {
-  const store = useSessionStore.getState();
-  const cur = ensureReply(sid, rid);
-
-  // A late `error` frame must not repaint a reply that already reached
-  // a terminal state: auxiliary work sharing the turn's msg_id (context
-  // spill compaction, background attempts) can fail AFTER the result
-  // landed, and the reply the user was delivered is not retroactively
-  // wrong. The store keeps the terminal state; the failure goes to the
-  // console for diagnosis.
-  if (
-    d.type === "error" &&
-    (cur.status === "done" || cur.status === "cancelled")
-  ) {
-    console.error("[chat-stream] late error frame for a settled reply:", d);
-    return;
-  }
-  // Stop already patched this reply to cancelled. A later result from
-  // the aborted stream has empty content and would flip it to "done",
-  // which looks like a finished blank reply. Leave cancelled as-is.
-  if (
-    (cur.status === "cancelled" || cur.status === "cancelling")
-    && d.type === "result"
-    && !d.cancelled
-  ) {
-    return;
-  }
-
-  const status: ChatMsg["status"] =
-    d.type === "error"
-      ? "error"
-      : d.type === "cancelled" || d.cancelled
-        ? "cancelled"
-        : "done";
-
-  const patch: Partial<ChatMsg> = { status, rawType: d.type, retryStatus: undefined };
-  if (cur.status !== "done" && status === "done" && store.currentSessionId === sid) patch.autoPreviewFiles = true;
-  if (status === "error") {
-    if (d.reason) patch.errorReason = d.reason;
-    if (typeof d.retryable === "boolean") patch.errorRetryable = d.retryable;
-    if (typeof d.retry_after_s === "number") patch.errorRetryAfterS = d.retry_after_s;
-  }
-  if (d.function) patch.function = d.function;
-  if (d.display) patch.display = d.display;
-  // A `/run` result carries the execution tree, usage and attempt
-  // history that the runtime block renders in its body / footer.
-  if (d.context_tree) patch.contextTree = d.context_tree as never;
-  if (d.usage) patch.usage = d.usage;
-  if (d.attempts) patch.attempts = d.attempts as never[];
-  if (typeof d.current_attempt === "number") {
-    patch.current_attempt = d.current_attempt;
-  }
-
-  // `result` carries the final text. Streaming usually already built
-  // `content` delta-by-delta, but a dropped or missed delta leaves a hole:
-  // the frame's text wins when it ships the authoritative blocks with it,
-  // or when it holds more than what streamed.
-  const finalText = d.content ?? d.text;
-  const authoritative = Array.isArray(d.blocks) && d.blocks.length > 0;
-  // A function run's result text is its return value, not the reply prose.
-  const chatTurn = cur.display !== "runtime" && d.display !== "runtime";
-  if (status === "error") {
-    patch.errorDetail = d.error_detail ?? finalText ?? cur.errorDetail;
-  } else if (finalText && (!cur.content || (chatTurn && (authoritative || finalText.length > cur.content.length)))) {
-    patch.content = finalText;
-  }
-
-  // Converge the live turn to the reloaded shape. Streaming built
-  // `blocks` incrementally in event-arrival order; the final envelope
-  // carries the dispatcher's authoritative ordered blocks (rebuilt from
-  // the provider's content list on turn_end). Overwrite with those so
-  // any segmentation drift (e.g. two consecutive provider thinking
-  // blocks the live builder merged into one) is corrected — order and
-  // counts match what a page refresh would render from conv-mapper.
-  if (authoritative) {
-    patch.blocks = d.blocks as ChatMsg["blocks"];
-  }
-
-  // Any tool still "running" at terminal time gets closed out — no
-  // tool_result will arrive after the turn ends. A call the turn's stop or
-  // failure cut off did not complete: stopped it was interrupted, failed
-  // its result is unknown.
-  if (cur.tools?.some((t) => t.status === "running")) {
-    const terminalToolStatus: ChatToolCall["status"] =
-      status === "cancelled" ? "cancelled" : status === "error" ? "error" : "done";
-    patch.tools = cur.tools.map((t): ChatToolCall =>
-      t.status === "running" ? { ...t, status: terminalToolStatus } : t,
-    );
-  }
-  const openToolOutcome: AssistantBlock["outcome"] =
-    status === "cancelled" ? "cancelled" : status === "error" ? "unknown" : undefined;
-  const blocks = patch.blocks ?? cur.blocks;
-  if (openToolOutcome && blocks?.some(isOpenToolBlock)) {
-    patch.blocks = blocks.map((b) => isOpenToolBlock(b) ? { ...b, outcome: openToolOutcome } : b);
-  }
-
-  store.updateMessage(sid, rid, patch);
 }

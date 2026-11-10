@@ -78,7 +78,7 @@ def test_system_access_waits_are_scoped_and_not_questions(monkeypatch, tmp_path)
     attempt_store = AttemptStore(store)
     leased, reserved = attempt_store.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="route-test", ttl_seconds=30,
+        owner_id="route-test",
     )
     attempt_store.activate(
         leased.attempt_id, generation=leased.generation,

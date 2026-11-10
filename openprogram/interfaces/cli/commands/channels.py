@@ -49,7 +49,55 @@ def _dispatch_accounts_verb(args, parser) -> None:
         print(f"{args.channel}:{args.id} {args.key} = {args.value} "
               f"(restart the worker to apply)")
         return
+    if verb == "group-users":
+        _dispatch_group_users_verb(args, parser)
+        return
     parser.print_help()
+
+
+def _dispatch_group_users_verb(args, parser) -> None:
+    from openprogram.interfaces.channels import _access
+    from openprogram.interfaces.channels import accounts as _acc
+    verb = getattr(args, "group_users_verb", None)
+    if verb not in ("list", "add", "remove", "reset"):
+        parser.print_help()
+        return
+    if _acc.get(args.channel, args.id) is None:
+        print(f"[error] no account {args.channel}:{args.id}")
+        sys.exit(1)
+    group = (args.group or "").strip()
+    where = f"group {group}" if group else "the account's lists"
+    target = f"{args.channel}:{args.id}"
+    if verb == "add":
+        try:
+            user_id = _access.add_group_user(args.channel, args.id, args.user_id,
+                                             args.access, chat_id=group)
+        except ValueError as e:
+            print(f"[error] {e}")
+            sys.exit(1)
+        print(f"{user_id} has {args.access} access on {target} ({where})")
+        return
+    if verb == "remove":
+        removed = _access.remove_group_user(args.channel, args.id, args.user_id,
+                                            chat_id=group)
+        print(f"Removed {args.user_id} from {target} ({where})" if removed
+              else f"{args.user_id} was not on {target} ({where})")
+        return
+    if verb == "reset":
+        if not group:
+            print("[error] reset needs --group")
+            sys.exit(1)
+        reset = _access.reset_group_users(args.channel, args.id, group)
+        print(f"Group {group} now uses the account's lists on {target}" if reset
+              else f"Group {group} has no lists of its own on {target}")
+        return
+    data = _access.group_users(args.channel, args.id, chat_id=group)
+    heading = f"{where} (its own lists)" if data["own_lists"] else "the account's lists"
+    print(f"{target}: {heading}")
+    print("  bound contacts always have full access: see `channels access list`")
+    for label, key in (("full", "group_full_access"), ("chat", "group_chat_only")):
+        for uid, row in sorted(data[key].items()):
+            print(f"  {label:6} {uid:24} {row.get('display', '')}")
 
 
 def _dispatch_access_verb(args, parser) -> None:

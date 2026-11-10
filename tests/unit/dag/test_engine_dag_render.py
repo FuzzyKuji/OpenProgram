@@ -115,6 +115,36 @@ def test_dag_render_skips_abandoned_running_llm_node(db):
     ]
 
 
+@pytest.mark.parametrize("status", ["cancelled", "failed", "done"])
+def test_dag_render_skips_an_empty_reply_however_it_ended(db, status):
+    sess = "s_stopped"
+    db.create_session(sess, "agent")
+    db.append_message(sess, {"id": "u1", "role": "user", "content": "first"})
+    db.append_message(sess, {"id": "a_empty", "role": "assistant", "content": "",
+                             "predecessor": "u1", "status": status})
+    db.append_message(sess, {"id": "u2", "role": "user", "content": "TRAILING",
+                             "predecessor": "a_empty"})
+
+    msgs = _engine()._build_messages_from_dag(session_id=sess, history=[], model=None)
+    assert _roles(msgs) == ["user"]
+
+
+def test_dag_render_keeps_a_sub_agent_report_with_no_text(db):
+    """An attach node speaks for its sub-agent even when the reply was empty."""
+    sess = "s_attach"
+    db.create_session(sess, "agent")
+    db.append_message(sess, {"id": "u1", "role": "user", "content": "first"})
+    db.append_message(sess, {"id": "a1", "role": "assistant", "content": "answer", "predecessor": "u1"})
+    db.append_message(sess, {"id": "a_report", "role": "assistant", "content": "", "predecessor": "a1",
+                             "function": "attach", "status": "done",
+                             "attach": {"label": "fox", "status": "failed"}})
+    db.append_message(sess, {"id": "u2", "role": "user", "content": "TRAILING", "predecessor": "a1"})
+    db.set_head(sess, "u2")
+
+    blob = "\n".join(_texts(_engine()._build_messages_from_dag(session_id=sess, history=[], model=None)))
+    assert '[Report from sub-agent "fox"]' in blob and "(no output)" in blob
+
+
 def test_dag_render_keeps_empty_llm_node_that_owns_tool_calls(db):
     """An assistant turn with no text but real tool calls must stay — its
     ToolCall entries would otherwise orphan the following tool_result."""

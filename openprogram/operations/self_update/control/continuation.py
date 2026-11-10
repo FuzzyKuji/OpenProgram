@@ -5,6 +5,8 @@ from __future__ import annotations
 from copy import deepcopy
 import json
 
+from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
+
 from .projection import _optional
 from .projection import _project
 from .projection import _records
@@ -13,6 +15,10 @@ from ..types import is_terminal
 from ..verification.verification_channel import _digest
 
 _PREFIX = "continuation-config-sha256:"
+
+
+#: In an update's directory: this update never starts its follow-up turn.
+CONTINUATION_CLOSED = "continuation-closed"
 
 
 def freeze_config(request, turn):
@@ -36,7 +42,7 @@ def freeze_config(request, turn):
         profile_snapshot=profile,
         model_override=getattr(turn, "model_override", None),
         tools_override=deepcopy(getattr(turn, "tools_override", None)),
-        permission=dict(mode="ask", rules=deepcopy(rules)),
+        permission=dict(mode=getattr(turn, "permission_mode", None) or DEFAULT_PERMISSION, rules=deepcopy(rules)),
     )
 
 
@@ -124,6 +130,8 @@ def reconcile(runner):
             if not evidence:
                 continue  # Older updates never acquire new unattended authority.
             directory = store.root / record.request.update_id
+            if (directory / CONTINUATION_CLOSED).exists():
+                continue
             config = _optional(directory / "continuation-config.json")
             if config is None or evidence != [config_evidence(config)]:
                 raise ValueError("self-update continuation configuration changed")

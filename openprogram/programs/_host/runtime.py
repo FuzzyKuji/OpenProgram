@@ -65,6 +65,7 @@ from __future__ import annotations
 
 import asyncio
 import contextvars
+import copy
 import hashlib
 import inspect
 import json
@@ -79,6 +80,7 @@ from typing import Any, Callable, Optional, Union, get_args, get_origin
 
 from openprogram.models.providers.types import AgentTool, AgentToolResult
 from openprogram.models.providers.types import TextContent
+from openprogram.runtime.permissions.refusal import Refused
 
 from .execution import (
     DEFAULT_HEAD_RATIO,
@@ -291,6 +293,27 @@ def unregister(name: str) -> None:
 def get(name: str) -> Optional[AgentTool]:
     with _registry_lock:
         return _registry.get(name)
+
+
+def current_tool(tool: AgentTool) -> AgentTool:
+    """``tool`` as it describes itself now: a copy with its ``describe`` hook applied, or ``tool`` itself."""
+    describe = getattr(tool, "_describe", None)
+    if describe is None:
+        return tool
+    try:
+        fresh = describe() or {}
+    except Exception:
+        # A failing hook leaves the registered description, which names everything.
+        _log.debug("describe hook failed for %s", tool.name, exc_info=True)
+        return tool
+    if not fresh:
+        return tool
+    copied = copy.copy(tool)
+    if "description" in fresh:
+        copied.description = fresh["description"]
+    if "parameters" in fresh:
+        copied.parameters = fresh["parameters"]
+    return copied
 
 
 def all_tools() -> list[AgentTool]:
@@ -825,6 +848,7 @@ def function(
     check_fn: Optional[Callable[[], bool]] = None,
     requires_env: tuple = (),
     can_use: Optional[Callable[[], bool]] = None,
+    describe: Optional[Callable[[], dict[str, Any]]] = None,
     requires_approval: Union[bool, Callable[..., Any], None] = None,
     accept_edits_safe: bool = False,   # acceptEdits 档下自动放行（写安全工具）
     # Selection metadata
@@ -880,6 +904,12 @@ def function(
         the function from this session's tool list. Modelled on
         Claude Code's role/policy gating; distinct from ``check_fn``
         (env presence) and ``unsafe_in`` (channel blacklist).
+      describe: no-arg callable returning ``description`` and/or
+        ``parameters`` as they stand now. The tool list is resolved
+        with them each time (``current_tool``), so a tool names only
+        what this computer offers at the moment: a target that is not
+        configured, or a browser without its extension, is left out
+        instead of described and then refused.
       requires_approval: True | False | callable(**args) -> bool|str.
         Read by the dispatcher's approval wrapper.
 
@@ -938,7 +968,7 @@ def function(
                 timeout_max=timeout_max,
                 cache=cache, cache_ttl=cache_ttl,
                 check_fn=check_fn, requires_env=requires_env,
-                can_use=can_use,
+                can_use=can_use, describe=describe,
                 requires_approval=requires_approval,
                 accept_edits_safe=accept_edits_safe,
                 toolset=toolset, unsafe_in=unsafe_in, expose=expose,
@@ -1096,6 +1126,9 @@ def function(
         except asyncio.CancelledError:
             _clear_tool_call(None)
             raise
+        except Refused as refused:
+            from openprogram.runtime.agent.turn_request import get_turn_request
+            return _clear_tool_call(refused.result(mode=getattr(get_turn_request(), "permission_mode", None)))
         except Exception as e:
             return _clear_tool_call(AgentToolResult(
                 content=[TextContent(text=f"[error] {type(e).__name__}: {e}")],
@@ -1140,6 +1173,7 @@ def function(
         check_fn=check_fn,
         requires_env=requires_env,
         can_use=can_use,
+        describe=describe,
         defer=defer,
         toolsets=toolset,
         unsafe_in=unsafe_in,
@@ -1162,6 +1196,7 @@ def _build_and_register_tool(
     check_fn: Optional[Callable[[], bool]] = None,
     requires_env: Any = (),
     can_use: Optional[Callable[[], bool]] = None,
+    describe: Optional[Callable[[], dict[str, Any]]] = None,
     defer: bool = False,
     toolsets: Any = (),
     unsafe_in: Any = (),
@@ -1195,11 +1230,12 @@ def _build_and_register_tool(
     if implementation is not None:
         setattr(agent_tool, "_runtime_implementation", implementation)
     # acceptEdits 档下自动放行的"写安全"工具（read/write/edit 等）。命令类
-    # （bash/exec）保持 False，acceptEdits 下仍审批。见 permission-model.md §3.3。
+    # （bash/exec）保持 False，acceptEdits 下仍审批。见 docs/reference/design/runtime/security/permission-decision.html。
     setattr(agent_tool, "_accept_edits_safe", bool(accept_edits_safe))
     setattr(agent_tool, "_check_fn", check_fn)
     setattr(agent_tool, "_requires_env", tuple(requires_env))
     setattr(agent_tool, "_can_use", can_use)
+    setattr(agent_tool, "_describe", describe)
     # Stream/DAG projections need the function's visibility policy before the
     # body enters. ``@function`` only has a boolean tool exposure switch;
     # false means no persisted node, while the agentic decorator overwrites
@@ -1291,10 +1327,6 @@ _open_applications: contextvars.ContextVar[frozenset[str]] = (
 def install_open_applications(app_ids: Any) -> Any:
     """Install the ids of the applications open for this session; returns the token."""
     return _open_applications.set(frozenset(app_ids or ()))
-
-
-def open_applications() -> frozenset[str]:
-    return _open_applications.get()
 
 
 def resident_now(t: Any, loaded: Optional[set[str]] = None) -> bool:
@@ -1444,6 +1476,7 @@ def _tool_schema_line(t: AgentTool) -> str:
     This result uses the same encoding to describe the discovered tool.
     """
     import json as _json
+    t = current_tool(t)
     try:
         params = _json.dumps(t.parameters, ensure_ascii=False, default=str)
     except Exception:

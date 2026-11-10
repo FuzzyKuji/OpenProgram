@@ -10,12 +10,13 @@ from pathlib import Path
 import platform
 import shutil
 import subprocess
+import sys
 import tempfile
 import time
 
 from ..control.supervisor import _tree_digest
 from ..store import SelfUpdateStore
-from openprogram.state.store.session.git_session import atomic_write_text
+from openprogram.state.store.session.atomic_file import atomic_write_text
 
 
 # Official release hashes (electron's checksums.json); a package.json bump must
@@ -273,6 +274,56 @@ def prepare_controller(update_dir: Path) -> ControllerBundle:
         SelfUpdateStore._fsync_directory(update_dir)
     # Paths used in the relocation probe refer to the staging directory.
     return ControllerBundle(_runtime_python(target / "runtime"), hashlib.sha256(content).hexdigest(), digest)
+
+
+def running_runtime() -> Path:
+    """The runtime this worker was started from, else the installed App's.
+
+    A runtime is a directory with a ``runtime-manifest.json``; a worker running
+    from a source checkout has none, so the controller falls back to the App's.
+    """
+    for candidate in Path(sys.prefix).resolve().parents:
+        if (candidate / "runtime-manifest.json").is_file():
+            return candidate
+    return _installed_resources() / "runtime"
+
+
+def _private_python(runtime: Path) -> Path:
+    """The interpreter a runtime's manifest names, which must be inside it."""
+    data = json.loads((runtime / "runtime-manifest.json").read_text(encoding="utf-8"))
+    relative = data.get("python")
+    if not isinstance(relative, str) or not relative or Path(relative).is_absolute():
+        raise ValueError("controller runtime manifest is invalid")
+    python = (runtime / relative).resolve(strict=True)
+    if not python.is_relative_to(runtime.resolve()) or not os.access(python, os.X_OK):
+        raise ValueError("controller Python is unavailable or escapes the runtime")
+    return python
+
+
+def clone_private_runtime(update_dir: Path, runtime: Path,
+                          module: str = "openprogram.operations.self_update.control.dev_stable") -> Path:
+    """Copy a runtime into this update's directory and return its Python.
+
+    Deploying and promoting replace the development runtime and the App's
+    runtime while the controller runs, and this codebase imports lazily, so
+    the controller runs from a copy that neither can touch. A clone costs
+    nothing on APFS. Re-entry probes the saved copy.
+    """
+    target = update_dir / "controller" / "runtime"
+    if not target.exists():
+        if not (runtime / "runtime-manifest.json").is_file():
+            raise ValueError("no installed runtime is available to run the controller from")
+        target.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".controller-", dir=target.parent) as temporary:
+            staged = Path(temporary) / "runtime"
+            clone = ["/bin/cp", "-cR"] if sys.platform == "darwin" else ["cp", "-R", "--reflink=auto"]
+            result = subprocess.run([*clone, str(runtime), str(staged)], capture_output=True, text=True, timeout=600)
+            if result.returncode != 0:
+                raise ValueError("could not copy the runtime for the controller: " + result.stderr.strip()[:500])
+            os.replace(staged, target)
+    python = _private_python(target)
+    _probe_runtime(target, python, module)
+    return python
 
 
 def prepare_build_inputs(update_dir: Path, candidate: Path, build_home: Path, *, deadline: float,

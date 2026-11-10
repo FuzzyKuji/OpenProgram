@@ -10,6 +10,12 @@ from .. import server as state
 _log = logging.getLogger(__name__)
 
 
+def reply_row_id(task: dict) -> str | None:
+    """The reply row a running task writes: the server mints it from the turn's message id."""
+    msg_id = task.get("msg_id")
+    return task.get("reply_id") or (f"{msg_id}_reply" if msg_id else None)
+
+
 def _get_messages(session_id: str) -> list[dict]:
     """Return the active-branch messages for a conversation.
 
@@ -149,6 +155,7 @@ def _emit_running_task_event(
                 "data": {
                     "session_id": session_id,
                     "msg_id": task.get("msg_id"),
+                    "reply_id": reply_row_id(task),
                     "func_name": task.get("func_name"),
                     "started_at": task.get("started_at"),
                     "display_params": task.get("display_params", ""),
@@ -305,20 +312,6 @@ def _default_agent_id() -> str:
         # Registry unreadable: fall back to the built-in default agent.
         _log.debug("default agent lookup failed", exc_info=True)
     return "main"
-
-
-def _delete_session_files(session_id: str):
-    """Destroy a session by id via the source of truth (SessionStore).
-
-    No agent_id lookup: SessionStore deletes by session_id alone. The
-    old "find the owning agent, then delete its dir" path could not see
-    sessions whose meta had no agent_id (forced-tool-call shells), which
-    is what left orphans that reappeared on refresh."""
-    try:
-        from openprogram.runtime.context.session_db import default_db
-        default_db().delete_session(session_id)
-    except Exception as e:
-        state._log(f"[delete_session_files] {session_id} error: {e}")
 
 
 def _restore_sessions():

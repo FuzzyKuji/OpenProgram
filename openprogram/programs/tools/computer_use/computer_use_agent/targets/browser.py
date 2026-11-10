@@ -10,9 +10,10 @@ unavailable and computer_use_agent operates the desktop only.
 """
 from __future__ import annotations
 
+import json
+import sys
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from openprogram.programs._host.execution import ToolReturn
 
@@ -30,8 +31,60 @@ _EXTENSION_NAMES = {"tabs": "list_pages", "read": "observe", "open": "observe", 
                     "network": "network_requests"}
 
 
+_BUILT_IN = "OpenProgram's built-in browser: the tabs in the App's windows, and tabs you open in the background."
+
+
+def own_browsers() -> tuple[str, ...]:
+    """The user's browsers reachable now: ``chrome`` and ``edge`` where the extension is installed."""
+    browser = _browser()
+    return browser.extension.installed_browsers() if browser is not None else ()
+
+
+def _browsers_text() -> str:
+    """Which browsers the actions reach, as found now: the user's own only where the extension is installed."""
+    browser = _browser()
+    reachable = own_browsers()
+    if not reachable:
+        text = (f"The pages are in {_BUILT_IN} The user's own Chrome and Edge are not reachable as web pages here "
+                "(no Playwright Extension is installed in them)")
+        from . import app as app_target
+        if app_target.available():
+            text += ("; operate a page open in one of them as an application window: target=\"app\" with "
+                     "args.app=\"Google Chrome\" or \"Microsoft Edge\"")
+        return text + "."
+    names = browser.user_browser_names
+    own = " or ".join(f'"{name}"' for name in reachable)
+    lines = ["Choose the browser first with args.browser; every action below is the same in each:",
+             f"- omitted: {_BUILT_IN}",
+             f"- {own}: the user's own {' or '.join(names[name] for name in reachable)}, with their tabs and "
+             "sign-ins, through the Playwright Extension. Use it only when the user names it or the task needs "
+             "their signed-in state, and keep to the browser the user named. On the first call the extension may "
+             "ask the user which tab to share; there, tab is an index from tabs."]
+    missing = [names[name] for name in browser.extension.BROWSERS if name not in reachable]
+    if missing:
+        lines.append(f"The user's {missing[0]} has no Playwright Extension and is not reachable here.")
+    return "\n".join(lines)
+
+
 def guide() -> str:
-    return _GUIDE
+    return _GUIDE.replace("{browsers}", _browsers_text())
+
+
+def reachable(chosen: str) -> bool:
+    """Whether the user's ``chrome`` or ``edge`` can be operated: its extension is installed."""
+    return _browser().extension.installed(chosen)
+
+
+def missing(chosen: str) -> str:
+    """What to use instead of a user's browser that has no extension."""
+    from . import app as app_target
+    name = _browser().user_browser_names[chosen]
+    text = f"the user's {name} cannot be operated as web pages here: it has no Playwright Extension."
+    if app_target.available():
+        app = {"chrome": "Google Chrome", "edge": "Microsoft Edge"}[chosen]
+        text += f" Operate a page open in it as an application window: target=\"app\" with args.app=\"{app}\"."
+    return text + (" When the site does not need the user's own sign-in, use the built-in browser "
+                   "(omit args.browser).")
 
 
 def _browser():
@@ -50,11 +103,6 @@ def actions() -> tuple[str, ...]:
     return tuple(browser.tabs.ACTIONS) if browser is not None else ()
 
 
-def _is_local(url: str) -> bool:
-    host = (urlparse(url).hostname or "").lower()
-    return host in {"localhost", "127.0.0.1", "::1"} or host.endswith((".localhost", ".test"))
-
-
 def user_browser(args: dict) -> str:
     """``chrome`` or ``edge`` when the call operates the user's own browser, else ``""``."""
     browser = _browser()
@@ -62,27 +110,28 @@ def user_browser(args: dict) -> str:
 
 
 def approval(steps: list[tuple[str, dict]], args: dict) -> str | bool:
-    """Uploads and new external origins ask; the App's own tabs are the conversation's to use.
+    """What a call needs granted: the user's own browser, or an upload from the built-in one.
 
-    The user's own Chrome or Edge holds their sign-ins: one grant covers it."""
+    The built-in browser's tabs are the conversation's to use: opening a
+    site, acting on it and running a script in it ask nothing. The user's
+    own Chrome or Edge holds their sign-ins: one grant covers everything
+    done in it."""
     chosen = user_browser(args)
+    if chosen and not reachable(chosen):
+        # Nothing runs: the call is turned back with what to use instead.
+        return False
     if chosen:
         names = _browser().user_browser_names
         if any(action == "upload" for action, _ in steps):
             return f"computer_use_agent uploads a local file to a website in your {names[chosen]}"
         return f"computer_use_agent controls your {names[chosen]}"
-    for action, step in steps:
-        merged = {**args, **step}
-        if action == "upload":
-            return "Upload the selected local file to the website; this can transmit file contents immediately."
-        url = str(merged.get("url") or "")
-        if url and not _is_local(url):
-            return f"computer_use_agent opens {urlparse(url).scheme}://{urlparse(url).netloc}"
+    if any(action == "upload" for action, _ in steps):
+        return "Upload the selected local file to the website; this can transmit file contents immediately."
     return False
 
 
 def evaluates(steps: list[tuple[str, dict]]) -> bool:
-    """Whether a call runs page JavaScript, which is approved every time."""
+    """Whether a call runs page JavaScript, which reads all a signed-in page holds."""
     return any(action == "evaluate" for action, _ in steps)
 
 
@@ -96,11 +145,14 @@ def render(result: dict[str, Any]) -> str:
         lines = [f"Error ({result.get('reason_code')}): {result.get('error') or result.get('message') or ''}".rstrip()]
     elif "tabs" in result:
         rows = result["tabs"]
+        others = (f"\n{result['other_tabs']} other tabs are open (the user's or other conversations'); "
+                  "tabs(all=true) lists them." if result.get("other_tabs") else "")
         if not rows:
-            return "No tabs are open. open(url) opens one."
+            return "This conversation has no tabs open. open(url) opens one." + others
         return "Tabs (the current one is used when tab is omitted):\n" + "\n".join(
             f"- {row['tab']}{' (current)' if row.get('current') else ''}: {row.get('title') or '(untitled)'} — "
-            f"{row.get('url') or ''} [{row.get('shown')}{', focused' if row.get('focused') else ''}]" for row in rows)
+            f"{row.get('url') or ''} [{row.get('shown')}{', focused' if row.get('focused') else ''}]" for row in rows
+        ) + others
     else:
         lines = [result["done"]] if result.get("done") else []
     if result.get("tab") and result.get("url") is not None:
@@ -147,6 +199,9 @@ def _one(action: str, step: dict, args: dict, session: str = "") -> ToolReturn:
 
 def _in_user_browser(chosen: str, action: str, merged: dict, session: str) -> ToolReturn:
     extension_browser = _browser().extension
+    if not reachable(chosen):
+        return ToolReturn(text=f"Error: {missing(chosen)}", json_data={"ok": False, "action_dispatched": False},
+                          is_error=True)
     try:
         browser = extension_browser.ExtensionBrowser(session, chosen)
     except extension_browser.Unavailable as exc:
@@ -159,11 +214,45 @@ def _in_user_browser(chosen: str, action: str, merged: dict, session: str) -> To
     else:
         result = browser.run("act", {"action": name, **merged})
     images = result.pop("_images", [])
-    return ToolReturn(json_data=result, images=images, is_error=result.get("ok") is False)
+    return ToolReturn(text=str(result.get("result") or result.get("message") or json.dumps(result, ensure_ascii=False)),
+                      json_data=result, images=images, is_error=result.get("ok") is False)
+
+
+# The user's browsers by the name a call gives them, as bundle identifiers.
+# The built-in browser is drawn by the App itself.
+_BROWSER_BUNDLES = {"chrome": ("com.google.Chrome",), "edge": ("com.microsoft.edgemac",)}
+# The same browsers by executable, where applications are told apart by process.
+_BROWSER_PROGRAMS = {"chrome": ("chrome", "google-chrome", "google-chrome-stable"),
+                     "edge": ("msedge", "microsoft-edge", "microsoft-edge-stable")}
+_APP_PROGRAMS = ("openprogram", "openprogram dev")
+
+
+def _operated(steps: list[tuple[str, dict]], args: dict, session: str):
+    """Which processes belong to the browser this call operates, for keeping the user's front application."""
+    from openprogram.host._platform import front
+
+    browser = _browser()
+    if browser is None:
+        return None
+    chosen = next((name for name in (user_browser({**args, **step}) for _, step in steps) if name),
+                  user_browser(args))
+    if chosen and not browser.extension.token() and not browser.extension.connected(session, chosen):
+        # Without a token the user approves the connection on the page the browser opens, so it stays in front.
+        return None
+    if sys.platform != "darwin":
+        return front.programs(*_BROWSER_PROGRAMS.get(chosen, _APP_PROGRAMS))
+    return front.bundles(*_BROWSER_BUNDLES.get(chosen, front.APP_BUNDLES))
 
 
 def run(steps: list[tuple[str, dict]], args: dict, session: str) -> ToolReturn:
-    """Run one action, or several in order, stopping at the first failure."""
+    """Run one action, or several in order, stopping at the first failure; the user's front application is kept."""
+    from openprogram.host._platform import front
+
+    with front.kept(_operated(steps, args, session)):
+        return _run(steps, args, session)
+
+
+def _run(steps: list[tuple[str, dict]], args: dict, session: str) -> ToolReturn:
     browser = _browser()
     if browser is None:
         return ToolReturn(text="Error: the browser is not enabled; computer_use_agent operates the desktop only.",
@@ -196,5 +285,5 @@ def _steps(steps: list[tuple[str, dict]], args: dict, session: str, check_cancel
     return ToolReturn(text="\n".join(texts), json_data=results, images=images)
 
 
-__all__ = ["NAME", "READS", "actions", "approval", "available", "evaluates", "guide", "open_target", "render", "run",
-           "user_browser"]
+__all__ = ["NAME", "READS", "actions", "approval", "available", "evaluates", "guide", "missing", "open_target",
+           "own_browsers", "reachable", "render", "run", "user_browser"]

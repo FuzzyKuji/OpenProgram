@@ -778,18 +778,6 @@
 .message.user .user-md code { background: color-mix(in srgb, var(--bg-primary) 70%, transparent); }
 .message.user .user-md .md-code code { background: none; }
 
-/* Multi-agent sessions: replies from a named agent (not the default
-   "main") carry its name, since nothing else says which agent wrote them. */
-.message-agent-name {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  margin: 0 0 6px;
-  font-size: var(--fs-xs);
-  font-weight: 500;
-  color: var(--text-secondary);
-}
-
 /* Collapsed pasted span in a sent user message (Codex text_elements). */
 .message.user .user-paste-chip {
   display: inline-flex;
@@ -830,3 +818,44 @@
   vertical-align: -5px;
 }
 .message.user .user-secret-toggle:hover { color: var(--text-primary); background: var(--bg-hover); }
+
+/* A conversation with an always-on Agent: messages only (bot-message.tsx). */
+/* The accent at a fixed lightness per mode, so the text on it stays readable in every theme. */
+:root { --bot-said-bg: light-dark(oklch(from var(--theme-accent) 0.93 calc(c * 0.15) h), oklch(from var(--theme-accent) 0.375 calc(c * 0.63) h)); }
+.bot-time { padding: 18px 0 8px; text-align: center; font-size: var(--fs-xs); color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.bot-row { display: flex; flex-direction: column; align-items: flex-start; gap: 6px; padding: 3px 0; }
+.bot-bubble { --reply-gap: 12px; max-width: 100%; padding: 10px 16px; background: var(--bg-input); box-shadow: var(--composer-shadow); transition: box-shadow var(--motion-medium) var(--ease-standard); border-radius: var(--radius-2xl); overflow-wrap: anywhere; }
+.bot-bubble:not(.bot-typing, .bot-failed):hover { box-shadow: var(--composer-shadow-focus); }
+.bot-bubble img { display: block; max-width: 100%; height: auto; max-height: 420px; border-radius: var(--radius-lg); }
+/* A drawing takes the reply's width; a bubble sized to its text would hold it at 300px. */
+.bot-bubble:has(.op-visual, [data-mermaid]) { width: 100%; }
+/* Keeps the last reply where the normal view holds it above its action buttons. */
+.bot-end-room { height: 55.2px; }
+.bot-failed { color: var(--text-muted); }
+.bot-said .message-actions-footer { visibility: hidden; }
+.bot-said .message.user .message-content,
+[data-bot-look] .message.user .message-content { background: var(--bot-said-bg); color: var(--text-primary); }
+/* The normal rows take the chat look while the view switches (use-bot-view-transition.ts). */
+[data-bot-look] .message.assistant .chat-stream-body > .chat-text { --reply-gap: 12px; padding: 10px 16px; line-height: 1.7; background: var(--bg-input); box-shadow: var(--composer-shadow); }
+/* A chat bubble keeps full line boxes; the normal view trims them. Padding
+   gives each trimmed block its line box back (Inter's cap height and descent
+   at that block's line height), so the rows land on the bubbles' height. */
+[data-bot-look] .message.assistant .chat-stream-body > .chat-text > .md-rendered > :is(p, ul, ol) { padding-block: 0.486em; }
+[data-bot-look] .message.assistant .chat-stream-body > .chat-text > .md-rendered > :is(h1, h2, h3, h4, h5, h6) { padding-block: 0.336em; }
+[data-bot-look] .message.assistant { padding-block: 3px; }
+[data-bot-look] .message.assistant .chat-stream-body { gap: 0; }
+[data-bot-look] .message.assistant .chat-stream-body > .chat-text,
+[data-bot-moving] .message.assistant .chat-stream-body > .chat-text { width: fit-content; border-radius: var(--radius-2xl); }
+[data-bot-moving] .message.user,
+[data-bot-moving] .message.assistant,
+[data-bot-moving] .message.user .message-content,
+[data-bot-moving] .message.assistant .chat-stream-body,
+[data-bot-moving] .message.assistant .chat-stream-body > .chat-text,
+[data-bot-moving] .message-content .md-rendered { transition: background-color 500ms ease, color 500ms ease, box-shadow 500ms ease, padding 500ms ease, gap 500ms ease, line-height 500ms ease; }
+[data-bot-moving] .message-content .md-rendered :is(p, ul, ol, h1, h2, h3, h4, h5, h6, blockquote > *, li > *) { transition: margin 500ms ease, padding 500ms ease; }
+.bot-said .message.user .message-content .user-md { color: inherit; }
+.bot-typing { display: flex; gap: 4px; padding: 13px 14px; }
+.bot-typing i { width: 6px; height: 6px; border-radius: 50%; background: var(--text-muted); animation: bot-typing 1.2s ease-in-out infinite; }
+@keyframes bot-typing { 50% { opacity: 0.35; } }
+.bot-typing i:nth-child(2) { animation-delay: .2s; }
+.bot-typing i:nth-child(3) { animation-delay: .4s; }

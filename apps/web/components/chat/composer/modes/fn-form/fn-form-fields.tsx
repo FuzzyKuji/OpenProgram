@@ -12,6 +12,7 @@ import { useTranslation } from "@/lib/i18n";
 import type { FnParam } from "@/lib/session-store";
 import { useWindowGlobals } from "@/components/sidebar/use-window-globals";
 import { SimpleSelect } from "@/components/ui/select";
+import { FillIcon } from "@/components/ui/fill-icon";
 
 import styles from "./fn-form.module.css";
 
@@ -327,7 +328,7 @@ function AutoTextarea({
         aria-pressed={expanded}
         onClick={() => setExpanded((v) => !v)}
       >
-        <ExpandGlyph expanded={expanded} />
+        <FillIcon><ExpandGlyph expanded={expanded} /></FillIcon>
       </button>
     </div>
   );

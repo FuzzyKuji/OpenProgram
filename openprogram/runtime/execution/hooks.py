@@ -102,6 +102,7 @@ PermissionWaitReconciler = Callable[..., Awaitable[None]]
 JobRunnerLookup = Callable[[Any], Any]
 TurnRequestFields = Callable[[], frozenset[str]]
 TerminalSettler = Callable[[Any, Any], None]
+OwnerlessRunCloser = Callable[[Any, Any], None]
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,10 @@ _SLOTS = {
         # (execution store, terminal execution) -> None; settles the chat
         # Goal that owned the execution (usage, next turn)
         _Slot("terminal_settler", "openprogram.runtime.conversation", False),
+        # (execution store, execution ended with no turn running) -> None
+        _Slot("ownerless_run_closer", "openprogram.runtime.conversation", False),
+        # (execution store, cut-off execution no restart will continue) -> None
+        _Slot("restart_abandoned", "openprogram.runtime.conversation", False),
         _Slot("session_goals", "openprogram.runtime.conversation", True),
     )
 }
@@ -218,10 +223,20 @@ def settle_terminal(executions: Any, execution: Any) -> None:
     settler: TerminalSettler | None = registered("terminal_settler")
     if settler is not None:
         settler(executions, execution)
-    # A finished execution keeps its effects' identity, not their replay
-    # payloads, and no state blob nothing references.
-    from .retention import compact_later
-    compact_later(executions, execution)
+
+
+def close_ownerless_run(executions: Any, execution: Any) -> None:
+    """Tell the engine an execution ended where no turn was left to report it."""
+    closer: OwnerlessRunCloser | None = registered("ownerless_run_closer")
+    if closer is not None:
+        closer(executions, execution)
+
+
+def restart_abandoned(executions: Any, execution: Any) -> None:
+    """Tell the engine no restart will continue this cut-off execution."""
+    notify: OwnerlessRunCloser | None = registered("restart_abandoned")
+    if notify is not None:
+        notify(executions, execution)
 
 
 def session_goals() -> SessionGoals:

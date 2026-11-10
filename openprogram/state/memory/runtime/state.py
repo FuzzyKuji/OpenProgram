@@ -27,6 +27,7 @@ class ChatTurn:
     timestamp: str | None = None
     speaker_id: str | None = None
     speaker_display: str | None = None
+    from_owner: bool = True
 
     @property
     def ref(self) -> str:

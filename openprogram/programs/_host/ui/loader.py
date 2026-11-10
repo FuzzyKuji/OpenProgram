@@ -195,7 +195,7 @@ def _entry(definition: dict, operation: str, spec: dict):
     )
     options = {
         "name": name, "label": f"{title}: {operation}", "parameters": parameters,
-        "toolset": ("applications",), "unsafe_in": ("wechat", "telegram", "plan"),
+        "toolset": ("applications",), "unsafe_in": ("plan",),
         "requires_approval": True, "defer": True, "timeout": 360,
         # Calls the worker's application service, like the resource tool.
         "run_in_worker": True,
@@ -346,5 +346,17 @@ def watch_stamp() -> tuple:
         except FileNotFoundError:
             stamp.append((row["application"]["id"], None))
             continue
+        if _sealed_in_a_version(root):
+            continue
         stamp.append((row["application"]["id"], str(root), catalog.tree_stamp(root)))
     return tuple(stamp)
+
+
+def _sealed_in_a_version(root: Path) -> bool:
+    """A built-in application inside a sealed version changes only by switching."""
+    from openprogram.operations.self_update.versions import layout
+    from openprogram.programs._host.registry import _builtin_applications_root
+
+    if not layout.managed():
+        return False
+    return root.resolve().is_relative_to(Path(_builtin_applications_root()).resolve())

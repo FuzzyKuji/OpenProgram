@@ -49,12 +49,12 @@ def test_skill_allowed_tools_round_trip(tmp_db: SessionDB) -> None:
     assert tools_override_from_config(load_session_run_config("c1")) == ["read", "grep"]
 
 
-def test_permission_from_config_defaults_to_auto_never_bypass() -> None:
+def test_permission_from_config_defaults_to_unrestricted() -> None:
     empty = SessionRunConfig()
-    assert permission_from_config(empty) == "auto"
-    assert permission_from_config(empty, default=None) == "auto"
-    assert permission_from_config(empty, default="bogus") == "auto"
-    assert permission_from_config(empty, default="bypass") == "bypass"
+    assert permission_from_config(empty) == "bypass"
+    assert permission_from_config(empty, default=None) == "bypass"
+    assert permission_from_config(empty, default="bogus") == "bypass"
+    assert permission_from_config(empty, default="auto") == "auto"
     assert permission_from_config(
         SessionRunConfig(permission_mode="acceptEdits"), default="ask",
     ) == "acceptEdits"

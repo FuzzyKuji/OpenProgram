@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import asyncio
 import json
-import sqlite3
 
 from openprogram.runtime.permissions.authority import owner_authority
 from openprogram.runtime.execution import CapabilitySet, ExecutionStore
@@ -37,27 +36,15 @@ def test_snapshot_recovery_never_reads_event_payloads(tmp_path, monkeypatch):
     from openprogram.interfaces.server.ws_actions.runtime import handle_execution_replay
 
     store, record = _admit(tmp_path, monkeypatch)
-    connect = store._connect
-    denied = []
-
-    def no_event_payload_connection():
-        connection = connect()
-        def authorize(action, table, column, _db, _source):
-            if action == sqlite3.SQLITE_READ and table == "execution_events" and column == "payload_json":
-                denied.append(column)
-                return sqlite3.SQLITE_DENY
-            return sqlite3.SQLITE_OK
-        connection.set_authorizer(authorize)
-        return connection
-
-    monkeypatch.setattr(store, "_connect", no_event_payload_connection)
+    # Decoding an event body would now raise, and the replay would answer with an error.
+    with store._transaction() as connection:
+        connection.update("execution_events", {"payload_json": "not json"}, execution_id=record.execution_id)
     socket = Socket()
     asyncio.run(handle_execution_replay(socket, {
         "execution_id": record.execution_id, "after_sequence": 0, "snapshot_only": True,
     }))
     frame = socket.frames[-1]
     assert "snapshot" in frame, frame
-    assert denied == []
     assert frame["snapshot"]["status_version"] == record.status_version
     assert frame["event_cursor"]["next_sequence"] == 2
     assert frame["events"] == []

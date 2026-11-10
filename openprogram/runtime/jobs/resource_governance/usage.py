@@ -12,25 +12,39 @@ from openprogram.runtime.jobs.resource_governance.limits import (
 )
 
 
+def _scope_chain(tables, scope_id: str | None) -> list[dict]:
+    """A budget scope followed by each scope above it."""
+    chain: list[dict] = []
+    seen: set[str] = set()
+    while scope_id is not None and scope_id not in seen:
+        seen.add(scope_id)
+        scope = tables.get("budget_scopes", scope_id)
+        if scope is None:
+            break
+        chain.append(scope)
+        scope_id = scope["parent_scope_id"]
+    return chain
+
+
+def _job_scope_chain(ledger: UsageLedger, tables, job_id: str) -> list[dict]:
+    ledger.ensure_job_session(tables, job_id)
+    admission = tables.first("job_admissions", job_id=job_id)
+    return [] if admission is None else _scope_chain(tables, admission["budget_scope_id"])
+
+
+def _smallest(rows: list[dict], column: str) -> Any:
+    return min((row[column] for row in rows if row[column] is not None), default=None)
+
+
 def _durable_job_time_limits(
     ledger: UsageLedger, job_id: str,
 ) -> tuple[int | None, int | None]:
-    with ledger.read() as conn:
-        row = conn.execute(
-            """WITH RECURSIVE ancestors AS (
-                   SELECT b.* FROM job_admissions a
-                   JOIN budget_scopes b ON b.budget_scope_id = a.budget_scope_id
-                   WHERE a.job_id = ?
-                   UNION ALL
-                   SELECT parent.* FROM budget_scopes parent
-                   JOIN ancestors child
-                     ON child.parent_scope_id = parent.budget_scope_id
-               )
-               SELECT MIN(max_runtime_seconds), MIN(idle_timeout_seconds)
-               FROM ancestors WHERE scope_kind = 'job'""",
-            (job_id,),
-        ).fetchone()
-    return (None, None) if row is None else (row[0], row[1])
+    tables = ledger.run_tables().handle
+    chain = [
+        scope for scope in _job_scope_chain(ledger, tables, job_id)
+        if scope["scope_kind"] == "job"
+    ]
+    return _smallest(chain, "max_runtime_seconds"), _smallest(chain, "idle_timeout_seconds")
 
 
 def _job_fingerprint(job: Job) -> str:
@@ -69,31 +83,36 @@ def _microusd_text(value: int) -> str:
     return format(ResourceLimits.microusd_to_usd(value), ".6f")
 
 
-def _scope_usage_breakdown(conn, scope_id: str) -> dict[str, int]:
-    events = conn.execute(
-        """WITH RECURSIVE descendants(id) AS (
-                SELECT ? UNION ALL
-                SELECT b.budget_scope_id FROM budget_scopes b
-                JOIN descendants d ON b.parent_scope_id = d.id
-            )
-            SELECT total_tokens, cost_total, cost_source
-            FROM usage_events
-            WHERE budget_scope_id IN (SELECT id FROM descendants)""",
-        (scope_id,),
-    ).fetchall()
-    reserved = conn.execute(
-        """WITH RECURSIVE descendants(id) AS (
-                SELECT ? UNION ALL
-                SELECT b.budget_scope_id FROM budget_scopes b
-                JOIN descendants d ON b.parent_scope_id = d.id
-            )
-            SELECT COALESCE(SUM(reserved_tokens), 0),
-                   COALESCE(SUM(reserved_cost_microusd), 0)
-            FROM usage_reservations
-            WHERE budget_scope_id IN (SELECT id FROM descendants)
-              AND state IN ('reserved','started')""",
-        (scope_id,),
-    ).fetchone()
+def _scope_descendants(tables, scope_id: str) -> list[str]:
+    """A budget scope's id and the id of every scope under it."""
+    found = [scope_id]
+    seen = {scope_id}
+    frontier = [scope_id]
+    while frontier:
+        children = [
+            row["budget_scope_id"]
+            for row in tables.rows("budget_scopes", parent_scope_id=frontier)
+            if row["budget_scope_id"] not in seen
+        ]
+        seen.update(children)
+        found.extend(children)
+        frontier = children
+    return found
+
+
+def _scope_usage_breakdown(ledger: UsageLedger, tables, scope_id: str) -> dict[str, int]:
+    scope_ids = _scope_descendants(tables, scope_id)
+    for session_id in {
+        row["session_id"] for row in tables.rows("budget_scopes", budget_scope_id=scope_ids)
+    }:
+        tables.tables.ensure_session(session_id)
+    # A settlement commits its event before it clears the reservation. Reading
+    # reservations under the run tables' lock and the events after them can
+    # only count one twice for a moment, never miss it.
+    reservations = tables.rows(
+        "usage_reservations", budget_scope_id=scope_ids, state=("reserved", "started"),
+    )
+    events = ledger.scope_usage_events(scope_ids)
     return {
         "actual_tokens": sum(int(row["total_tokens"] or 0) for row in events),
         "actual_cost_microusd": sum(
@@ -102,8 +121,10 @@ def _scope_usage_breakdown(conn, scope_id: str) -> dict[str, int]:
         "unknown_cost_events": sum(
             (row["cost_source"] or "unknown") == "unknown" for row in events
         ),
-        "reserved_tokens": int(reserved[0] or 0),
-        "reserved_cost_microusd": int(reserved[1] or 0),
+        "reserved_tokens": sum(int(row["reserved_tokens"] or 0) for row in reservations),
+        "reserved_cost_microusd": sum(
+            int(row["reserved_cost_microusd"] or 0) for row in reservations
+        ),
     }
 
 

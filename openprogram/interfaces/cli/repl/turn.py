@@ -80,7 +80,7 @@ def _run_turn_with_history(
         "role": "user", "id": user_id,
         "predecessor": messages[-1]["id"] if messages else None,
         "content": message, "timestamp": _time.time(),
-        "source": "cli", "peer_display": "you",
+        "source": "cli", "origin": "person", "peer_display": "you",
         **owner,
     })
     messages.append(user_msg)

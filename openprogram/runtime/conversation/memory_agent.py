@@ -15,6 +15,8 @@ import time
 from pathlib import Path
 from typing import Any
 
+from openprogram.models.usage import usage_scope
+from openprogram.models.usage.event import CALL_KIND_MEMORY
 from openprogram.runtime.agent.loop.session import AgentSession
 from openprogram.models.providers.types import AgentTool, AgentToolResult
 from openprogram.models.providers.types import (
@@ -295,7 +297,9 @@ class OpenProgramAgent:
             stream_fn=self._stream_fn,
         )
         try:
-            final = asyncio.run(session.run(prompt))
+            # Every memory write, organize and verify pass comes through here.
+            with usage_scope(call_kind=CALL_KIND_MEMORY):
+                final = asyncio.run(session.run(prompt))
             messages = session.messages
         finally:
             session.close()

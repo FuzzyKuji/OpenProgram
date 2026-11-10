@@ -16,6 +16,9 @@ def session_dirs(tmp_path, monkeypatch):
         def _session_dir(self, session_id):
             return tmp_path / session_id
 
+        def state_file(self, session_id, name):
+            return tmp_path / session_id / name
+
     for sid in ("s1", "s2"):
         (tmp_path / sid).mkdir()
     monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: Db())

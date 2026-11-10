@@ -1,7 +1,6 @@
 """Execution control waits operations on the owning service."""
 from __future__ import annotations
 import inspect
-import time
 from typing import Any, Mapping
 from ..attempts import AttemptConflict, AttemptStatus
 from ..checkpoints import CheckpointFragment
@@ -222,7 +221,6 @@ class WaitsOperations:
         policy_snapshot: Mapping[str, Any],
         expires_at: float,
         wait_id: str | None = None,
-        agent_checkpoint: Any | None = None,
     ) -> WaitSuspension:
         """Publish a checkpoint, open a wait, and end its owner atomically.
 
@@ -256,7 +254,6 @@ class WaitsOperations:
                     or execution.status is not ExecutionStatus.RUNNING
                     or execution.current_attempt_id != attempt_id
                     or execution.owner_lease.get("generation") != generation
-                    or attempt.lease_expires_at <= time.time()
                 ):
                     raise AgentSafePointConflict("stale_attempt", "wait safe-point owner is stale")
                 if execution.status_version != expected_version:
@@ -264,29 +261,6 @@ class WaitsOperations:
                 if fragment.safe_point_kind not in execution.capabilities.safe_point_kinds:
                     raise AgentSafePointConflict("invalid_safe_point", "wait is not at a declared execution safe point")
                 state_refs = dict(fragment.state_refs)
-                if agent_checkpoint is not None:
-                    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-
-                    if not isinstance(agent_checkpoint, AgentCheckpointV1):
-                        raise AgentSafePointConflict("checkpoint_schema_invalid", "wait checkpoint must use AgentCheckpointV1")
-                    agent_checkpoint.validate()
-                    for descriptor_ref, payload in agent_checkpoint.blob_payloads.items():
-                        descriptor = self.executions._put_state_blob_in_transaction(
-                            connection, execution_id=execution_id, payload=payload,
-                            media_type="application/json", schema_version=1,
-                        )
-                        if descriptor["ref"] != descriptor_ref:
-                            raise AgentSafePointConflict("state_ref_invalid", "Agent checkpoint blob descriptor does not match payload")
-                    descriptor = self.executions._put_state_blob_in_transaction(
-                        connection, execution_id=execution_id,
-                        payload=agent_checkpoint.to_bytes(),
-                        media_type="application/json", schema_version=1,
-                    )
-                    state_refs["agent_checkpoint"] = descriptor
-                    state_refs["agent_checkpoint_v1"] = {
-                        key: agent_checkpoint.payload[key]
-                        for key in ("safe_point", "frontier", "turn", "current_decision", "next_tool_index")
-                    }
                 checkpoint, updated = self.checkpoints._publish_in_transaction(
                     connection,
                     execution_id=execution_id,

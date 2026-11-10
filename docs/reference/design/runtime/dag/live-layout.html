@@ -2,6 +2,8 @@
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Live layout</title>
+<meta name="description" content="Interactive demo of the live DAG layout.">
+<meta name="covers" content="apps/web/lib/runtime-bridge/dag/layout/">
 <style>
 :root{--bg:#1a1a18;--pan:#232320;--bd:#3a3a36;--tx:#d8d6cc;--tx2:#9a988e;--acc:#d19a66;--cb:#15140f}
 *{box-sizing:border-box}
@@ -24,7 +26,7 @@ h1{font-size:23px;border-bottom:2px solid var(--acc);padding-bottom:10px}
 .tbl td,.tbl th{border:1px solid var(--bd);padding:4px 8px;text-align:left}
 .tbl th{background:var(--pan);color:var(--acc)}
 code{background:var(--cb);color:var(--acc);padding:1px 5px;border-radius:4px;font:12px Menlo,monospace}
-/* 软连接线(通信/合并/attach 回流): 默认隐藏; hover 它的任一端点节点才显示 + 流动动画 */
+/* Reference edges: hidden until hover on either endpoint node, then animated. */
 .soft-link{opacity:0;transition:opacity .15s;pointer-events:none}
 .soft-link.active{opacity:.95;animation:flow 0.6s linear infinite}
 @keyframes flow{to{stroke-dashoffset:-20}}
@@ -43,7 +45,7 @@ text{font-family:-apple-system,sans-serif;pointer-events:none}
 </style></head>
 <body><div class="w">
 <h1>Live layout</h1>
-<p class="sub">This page uses an executable layout algorithm matching the backend <code>graph_layout</code> (lane / tier / depth and column-allocation rules). Supply node data → <b>the algorithm computes every node position</b> → render the result. Switch scenarios below to inspect layouts from different datasets. Communication edges are hidden until you hover over the graph.</p>
+<p class="sub">Sample nodes run through a port of the backend <code>annotate_graph</code> (lane, tier, depth, column offset). Pick a scenario; the graph and the table are computed, not drawn by hand. Hover a node to reveal its cross-branch reference edges. The real canvas then applies <a href="layout.html">the frontend geometry</a>: fork spines, thread columns and round icon chips. Those are not simulated here.</p>
 
 <div class="bar" id="bar"></div>
 <div class="stage">
@@ -60,73 +62,6 @@ text{font-family:-apple-system,sans-serif;pointer-events:none}
   </div>
 </div>
 
-<div class="principles">
-  <h2>Design principles (all DAG rendering rules)</h2>
-
-  <h3>1. Edges: connect each node to its parent, down first and then right</h3>
-  <p><b>One edge-routing rule</b>: connect each node to its parent, routing from the parent <b>down to the child’s row, then right to the child</b>. Every edge follows this rule.</p>
-  <ul>
-    <li>Parent = caller first (the invoking node); use predecessor only when caller is absent.</li>
-    <li>ROOT → question: down from ROOT, then right to the question. The question <b>must</b> connect to ROOT.</li>
-    <li>Question → reply A and reply A → tool: route down then right, increasing indentation for nested function calls.</li>
-    <li>Nodes in the same column (question / B replied) connect with a vertical line from the upper node.</li>
-    <li><b>There is no </b>single line spanning an entire column. Each vertical segment runs from a parent to its child’s row; parent links define the tree without arbitrary connections.</li>
-  </ul>
-
-  <h3>2. Node shape = role</h3>
-  <p>◇ ROOT (white-filled diamond) · ○ user (human message, circle) · △ llm (AI/agent message, triangle) · □ code (tool/function call, square) · ◉ merge (filled circle with a hole).<br>
-  <b>Messages from another agent use △, not ○</b>; circles are reserved for human users.</p>
-
-  <h3>3. Color = branch identity, not edge type</h3>
-  <p>Each lane (branch) has one color. Every edge uses the color of the branch it belongs to or targets.<b>Never</b> distinguish edge types by color, which would conflict with branch identity.</p>
-
-  <h3>4. Line style = edge type, independent of color</h3>
-  <ul>
-    <li>━ Solid: calls within a branch (parent → child; ordinary chat/nested calls)</li>
-    <li>- - Dashed 5 4: retry fork (manual retry/rewrite)</li>
-    <li>-·- Dash-dot 4 2 1 2: model-created branch (spawn_branch)</li>
-    <li>··· Dotted 1 5: cross-branch communication (send_to_branch)</li>
-    <li>═ Thick solid 2.4: merge input</li>
-    <li>┄ Long dash 4 4: attach return (child result embedded in parent)</li>
-  </ul>
-
-  <h3>5. Columns (lane / tier)</h3>
-  <ul>
-    <li><b>tier (indentation)</b>: fixed by role. ROOT=0, user=1, llm=2, tools=3; nested calls add 1 per level. Children sit down and right of parents.</li>
-    <li><b>lane (branch column)</b>: allocate branches in appearance order 0,1,2, without gaps.</li>
-    <li><b>A fork uses two columns</b>: its own vertical axis plus node column. Place the entire new branch to the right of all content in the originating branch, without overlap.</li>
-    <li><b>Square grid</b>: horizontal and vertical spacing match; children sit diagonally down-right at 45°.</li>
-    <li><b>Compact layout</b>: shift rows upward and columns leftward to fill space released by collapsed nodes.</li>
-  </ul>
-
-  <h3>6. Rows (depth) follow time</h3>
-  <p>Order by global created_at (seq), earlier events above. An <b>existing</b> branch (such as communication target B) appears <b>before</b> the send operation referencing it, rather than appearing newly created at send time. Retry siblings share a row as parallel alternatives.</p>
-
-  <h3>7. Cross-branch communication (agent ↔ agent) is asynchronous</h3>
-  <p>Synchronous blocking would make A wait for B, serializing parallel branches or causing deadlock. Asynchronous execution allows a background agent to work while conversation continues:</p>
-  <ul>
-    <li>A’s △ invokes send_to_branch → A gets a □ tool node. The tool <b>returns immediately without blocking A</b>, which continues its own work.</li>
-    <li>The message reaches B from another agent → △ “B received,” followed by △ “B responds.”<b>Both nodes belong to branch B</b> (B’s color and connections), not A.</li>
-    <li>After B responds, the result is <b>delivered asynchronously to A’s end</b> → △ “B replied.” It is a new externally supplied input turn for A, <b>at the same level as “Question”</b> (user level, attached to A’s main conversation).</li>
-    <li>A responds to it → △ “A responds.”</li>
-    <li>Two dotted communication edges: A → B and B → A. Neither branch blocks.</li>
-  </ul>
-
-  <h3>8. Branch merges / child-branch work</h3>
-  <ul>
-    <li><b>Merge</b>: N branches converge on one ◉ merge node with multiple parents. It sits in the base lane; other branches connect with thick merge-input edges.</li>
-    <li><b>Child-branch work</b>: A invokes spawn_branch to create B (dash-dot edge; B starts on the spawn row) → B runs independently → its result returns through an attach edge.</li>
-  </ul>
-
-  <h3>9. Cross-branch reference edges: hidden until endpoint hover, then animated</h3>
-  <p><b>Call edges</b> (same branch / retry / spawn, defining graph structure) remain visible.<br>
-  <b>Reference edges</b> (send → received, response → replied, merge inputs, and attach returns: cross-branch references) are <b>hidden by default</b>: reveal an edge only while hovering <b>either endpoint node</b>, with a <b>directional animation</b> (moving dashes). Hide it again when the pointer leaves.<br>
-  Rationale: many such edges would obscure the graph if always visible. Hover reveals a node’s connections without persistent clutter.</p>
-
-  <h3>10. What this diagram does</h3>
-  <p>This page uses an executable layout algorithm matching the backend <code>graph_layout</code> layout algorithm is implemented here with matching lane/tier/depth and column-allocation rules. Input node data → compute positions → render. Switch scenarios above to see actual computed layouts for different datasets.</p>
-</div>
-
 <script>
 document.querySelectorAll('[data-scroll-region]').forEach(region=>region.addEventListener('keydown',event=>{
   const step=Math.max(80,Math.round(region.clientWidth*.75));
@@ -136,20 +71,13 @@ document.querySelectorAll('[data-scroll-region]').forEach(region=>region.addEven
   else if(event.key==='End'){event.preventDefault();region.scrollLeft=region.scrollWidth}
 }));
 
-/* ============================================================
-   真实布局算法 — 1:1 移植自后端 openprogram/state/store/session/graph/layout/
-   （lane.py / topology.py / tier.py / depth.py / __init__.py）
-   输入: nodes [{id, role, caller, predecessor, display, created_at, comm_to?}]
-   输出: 每个 node 带 _lane(列偏移) / _tier(缩进) / _depth(行)
-   ============================================================ */
+
 
 const LANE_COLORS = ["#4f8ef7","#5aad4e","#d4843a","#9d6fe0","#e0445a","#2db3d5","#e0b020","#35b89a"];
 
 function isRoot(m){ return m.display === "root"; }
 function predOf(byId, m){ const p=m.predecessor; return (p && byId[p] && p!==m.id) ? p : null; }
 function callerOf(byId, m){ const c=m.caller; return (c && byId[c] && c!==m.id) ? c : null; }
-
-// topology.build_maps
 function buildMaps(byId, nodes){
   const callerCh={}, predCh={}, fork={};
   for(const m of nodes){
@@ -162,8 +90,6 @@ function buildMaps(byId, nodes){
   for(const k in fork)fork[k].sort(bySeq);
   return {callerCh,predCh,fork};
 }
-
-// tier.compute_tier — 按 role/caller 链
 function computeTier(byId, nodes){
   const tier={};
   function t(id,depth){
@@ -171,7 +97,7 @@ function computeTier(byId, nodes){
     if(depth>200){tier[id]=0;return 0;}
     const m=byId[id];
     if(isRoot(m)){tier[id]=0;return 0;}
-    if(m.tierHint!=null){tier[id]=m.tierHint;return m.tierHint;}  // 强制 tier(如跨分支收到的消息紧贴目标竖线)
+    if(m.tierHint!=null){tier[id]=m.tierHint;return m.tierHint;}
     const caller=m.caller||"";
     const pn=caller?byId[caller]:null;
     if(pn && !isRoot(pn)){ const v=t(caller,depth+1)+1; tier[id]=v; return v; }
@@ -182,15 +108,9 @@ function computeTier(byId, nodes){
   for(const m of nodes)t(m.id,0);
   return tier;
 }
-
-// depth.compute_depth — 行号 = 主干 DFS pre-order(沿 caller 子树紧贴：子调用
-// 紧跟它的父，不被平行分支的节点隔开)。fork/独立分支在 remaining pass 对齐到
-// 首兄弟同行、其子树独立向下生长(所以 send 紧贴 A回复，B 平行对齐问题)。
-// 1:1 移植自后端 depth.py。
 function computeDepth(byId, nodes, maps){
   const {callerCh,fork}=maps;
   const depth={}; const counter=[0];
-  // 非首 fork 兄弟：DFS 时跳过，留到 remaining pass 与首兄弟对齐
   const skip=new Set();
   for(const pid in fork){ const k=fork[pid]; if(k.length>1) k.slice(1).forEach(x=>skip.add(x)); }
   function walkDfs(id){
@@ -207,16 +127,13 @@ function computeDepth(byId, nodes, maps){
       for(const gk of (callerCh[kid]||[])) walkBranch(gk, depth[kid]+1);
     }
   }
-  // 主干：从 root DFS
   const roots=nodes.filter(isRoot).map(m=>m.id).sort((a,b)=>(byId[a].created_at||0)-(byId[b].created_at||0));
   for(const r of roots) walkDfs(r);
-  // fork/独立分支：对齐到首兄弟行，子树独立下长
   const remaining=nodes.filter(m=>!(m.id in depth)).map(m=>m.id).sort((a,b)=>(byId[a].created_at||0)-(byId[b].created_at||0));
   for(const id of remaining){
     if(id in depth)continue;
     const pid=predOf(byId,byId[id]); let start=0;
     if(pid && pid in depth){
-      // 找同 predecessor 的首兄弟的行，对齐过去
       let aligned=false;
       for(const m of nodes){
         if(m.id===id)continue;
@@ -228,7 +145,6 @@ function computeDepth(byId, nodes, maps){
   }
   return depth;
 }
-// 一个节点的 caller+predecessor 子树(含自己)
 function descendants(byId,nodes,rootId){
   const out=new Set([rootId]); let grew=true;
   while(grew){ grew=false;
@@ -237,8 +153,6 @@ function descendants(byId,nodes,rootId){
       if((c&&out.has(c))||(p&&out.has(p))){ out.add(m.id); grew=true; } } }
   return [...out];
 }
-
-// lane.compute_lane — 数分支按序发号, 续聊跟 predecessor lane
 function computeLane(byId, nodes, maps, tier){
   const {callerCh,predCh,fork}=maps;
   const lane={}; let next=0;
@@ -264,16 +178,12 @@ function computeLane(byId, nodes, maps, tier){
   }
   return lane;
 }
-
-// __init__.annotate_graph — 把 lane(分支号) 转成列偏移, fork 占两列
 function annotate(nodes){
   const byId={}; for(const m of nodes)byId[m.id]=m;
   const maps=buildMaps(byId,nodes);
   const tier=computeTier(byId,nodes);
   const depth=computeDepth(byId,nodes,maps);
   const laneNum=computeLane(byId,nodes,maps,tier);
-
-  // 每条 lane 的节点 + 首节点(最小 depth)
   const laneNodes={}, laneFirst={};
   for(const m of nodes){ const ln=laneNum[m.id]; (laneNodes[ln]=laneNodes[ln]||[]).push(m.id);
     if(laneFirst[ln]===undefined || depth[m.id]<depth[laneFirst[ln]]) laneFirst[ln]=m.id; }
@@ -291,7 +201,7 @@ function annotate(nodes){
       const baseRight=rightmost(baseLane);
       let placedRight=baseRight;
       for(const pl in laneOff)placedRight=Math.max(placedRight,rightmost(Number(pl)));
-      off=Math.max(baseRight,placedRight)+2-firstTier;  // fork 占两列: +1竖线 +1节点
+      off=Math.max(baseRight,placedRight)+2-firstTier;
     }else{
       let mx=-1; for(const pl in laneOff)mx=Math.max(mx,rightmost(Number(pl))); off=mx+2;
     }
@@ -304,9 +214,7 @@ function annotate(nodes){
   return nodes;
 }
 
-/* ============================================================
-   渲染 — 网格 + 节点形状 + 6 种线型
-   ============================================================ */
+
 const COL=58, ROW=58, PADX=44, PADY=40, R=11;
 function svgEl(tag,attrs){ const e=document.createElementNS("http://www.w3.org/2000/svg",tag); for(const k in attrs)e.setAttribute(k,attrs[k]); return e; }
 function laneColor(ln){ return LANE_COLORS[(ln||0)%LANE_COLORS.length]; }
@@ -320,8 +228,6 @@ function shapeEl(m,cx,cy,color){
   if(role==="merge")return [svgEl("circle",{cx,cy,r,fill:color,stroke:color,"stroke-width":2.5}),svgEl("circle",{cx,cy,r:r*0.45,fill:"#141413"})];
   return [svgEl("circle",{cx,cy,r,fill:"none",stroke:color,"stroke-width":2})];
 }
-
-// 行紧凑: depth → 连续行号
 function render(nodes){
   annotate(nodes);
   const byId={}; for(const m of nodes)byId[m.id]=m;
@@ -334,18 +240,6 @@ function render(nodes){
   svg.innerHTML=""; svg.setAttribute("width",maxX+PADX+60); svg.setAttribute("height",maxY+PADY);
   const edgeG=svgEl("g",{}), nodeG=svgEl("g",{});
   svg.appendChild(edgeG); svg.appendChild(nodeG);
-
-  // 连线 = caller 树(照 dag/overview.md): 每个节点连它的【父(caller)】, 父在左上、
-  // 子在右下,父正下方竖线 + 横到子(├─/└─ 树形)。
-  //   - 同对话链: user 连 ROOT(竖线), llm 连它的 user, tool 连它的 llm —— 函数调用
-  //     逐层缩进的树。竖线只是"The segment directly below its parent",不是贯穿整条 lane。
-  //   - 跨分支(fork/spawn/通信): 子在别的 lane, 从源到子用对应 dash 线型。
-  // 唯一规则：每个节点连它的【父】，从父【先往下、再往右】到子(父正下方竖线
-  // 到子的行，再横到子)。所有连线都这样，无例外。父 = caller 优先，否则 predecessor。
-  //   - ROOT→问题：从 ROOT 下面竖 + 右到问题(连上 ROOT)
-  //   - 问题→A回复：问题下面竖 + 右
-  //   - 问题→B回复了(同列)：问题下面竖到 B回复了(同列横段≈0)
-  //   - 跨分支(fork/spawn/通信)：父在别的 lane，同样"Down, then right"，只是线型用 dash 区分。
   for(const m of nodes){
     if(m.display==="root")continue;
     const c=pos(m), color=laneColor(m._laneNum);
@@ -355,18 +249,16 @@ function render(nodes){
     const parent=byId[parentId], p=pos(parent);
     const isFork=(m._laneNum!==parent._laneNum);
     if(!isFork){
-      // 父正下方竖到子行，再横到子 —— 先下后右
       edgeG.appendChild(svgEl("path",{
         d:`M ${p.x} ${p.y+R} L ${p.x} ${c.y} L ${c.x-R-3} ${c.y}`,
         fill:"none",stroke:color,"stroke-width":1.8}));
     }else{
-      // 跨分支：源(retry兄弟/spawn工具/通信源) 先下后右到子，线型 dash 区分类型。
       const isSpawn=!!m.spawn_from&&byId[m.spawn_from];
       const dash = isSpawn?"4 2 1 2":(m.commLine||m.commFrom?"1 5":(m.independent?"":"5 4"));
-      let src=parent;   // 默认从 caller(独立分支 = ROOT) 引出
+      let src=parent;
       if(isSpawn) src=byId[m.spawn_from];
       else if(m.commFrom&&byId[m.commFrom]) src=byId[m.commFrom];
-      else if(!m.independent){   // retry: 从被 retry 的兄弟引出；独立分支: 保持从 ROOT 引出
+      else if(!m.independent){
         const pred=predOf(byId,m); if(pred){ const sib=(buildMapsCache.fork[pred]||[]).filter(x=>x!==m.id)[0]; if(sib&&byId[sib]) src=byId[sib]; }
       }
       const sp=pos(src);
@@ -374,9 +266,6 @@ function render(nodes){
         fill:"none",stroke:color,"stroke-width":1.6,"stroke-dasharray":dash,opacity:dash?0.8:1}));
     }
   }
-  // ===== 软连接线(非调用): merge 汇入 / attach 回流 / 通信。本质都是"Which nodes connect"。
-  // 默认隐藏；鼠标放到它连接的【任一端点节点】上才显示 + 流动动画。=====
-  // merge 汇入线
   for(const m of nodes){
     if(m.role!=="merge"||!m.mergeFrom)continue;
     const c=pos(m);
@@ -384,13 +273,11 @@ function render(nodes){
       edgeG.appendChild(svgEl("path",{class:"soft-link","data-from":pid,"data-to":m.id,
         d:`M ${pp.x} ${pp.y+R} L ${pp.x} ${c.y} L ${c.x+R+3} ${c.y}`,fill:"none",stroke:laneColor(peer._laneNum),"stroke-width":2.4})); }
   }
-  // attach 回流线
   for(const m of nodes){
     if(!m.attach_from)continue; const dst=pos(m); const src=byId[m.attach_from]; if(!src)continue; const sp=pos(src);
     edgeG.appendChild(svgEl("path",{class:"soft-link","data-from":m.attach_from,"data-to":m.id,
       d:`M ${sp.x} ${sp.y+R} C ${sp.x} ${dst.y+ROW}, ${dst.x} ${dst.y+ROW}, ${dst.x+R} ${dst.y}`,fill:"none",stroke:laneColor(src._laneNum),"stroke-width":1.5,"stroke-dasharray":"4 4"}));
   }
-  // 通信线: commFrom = send工具(A) → 本节点。
   for(const m of nodes){
     if(!m.commFrom)continue; const src=byId[m.commFrom]; if(!src)continue;
     const sp=pos(src), c=pos(m);
@@ -398,8 +285,6 @@ function render(nodes){
       d:`M ${sp.x+R} ${sp.y} C ${(sp.x+c.x)/2} ${sp.y}, ${(sp.x+c.x)/2} ${c.y}, ${c.x-R} ${c.y}`,
       fill:"none",stroke:laneColor(m._laneNum),"stroke-width":1.8,"stroke-dasharray":"6 4","stroke-linecap":"round"}));
   }
-
-  // 节点
   for(const m of nodes){
     const c=pos(m), color=laneColor(m._laneNum);
     const g=svgEl("g",{class:"node","data-id":m.id});
@@ -409,9 +294,6 @@ function render(nodes){
     if(m.sub){ const s=svgEl("text",{x:c.x+R+7,y:c.y+18,fill:"#6b6a63","font-size":10}); s.textContent=m.sub; g.appendChild(s); }
     nodeG.appendChild(g);
   }
-
-  // 软连接线 hover 交互: 鼠标放到节点上 → 显示与它相连(data-from/to 含它)的软连接线
-  // + 流动动画; 移开 → 隐藏。鼠标也可直接放到线上(端点的 hit 区)。
   const softLinks=[...edgeG.querySelectorAll(".soft-link")];
   function showLinksFor(id){
     softLinks.forEach(l=>{
@@ -426,17 +308,13 @@ function render(nodes){
     g.addEventListener("mouseenter",()=>showLinksFor(id));
     g.addEventListener("mouseleave",clearLinks);
   });
-
-  // 坐标表
   const tbl=document.getElementById("coords");
   tbl.innerHTML="<tr><th>id</th><th>lane</th><th>tier</th><th>Column</th><th>Row</th></tr>"+
     nodes.map(m=>`<tr><td>${m.label||m.id}</td><td>${m._laneNum}</td><td>${m._tier}</td><td>${m._lane+m._tier}</td><td>${depthRow[m._depth]}</td></tr>`).join("");
 }
 let buildMapsCache={fork:{}};
 
-/* ============================================================
-   场景数据（我自己编的，不是真会话）
-   ============================================================ */
+
 const R0={id:"ROOT",role:"user",display:"root",created_at:0};
 const SCENES=[
  {name:"One turn",desc:"One message. All nodes should use lane 0, with tiers 0/1/2.",nodes:()=>[R0,
@@ -469,33 +347,23 @@ const SCENES=[
    {id:"u1b",role:"user",caller:"ROOT",predecessor:"ROOT",created_at:3,label:"Question (edited)"},
    {id:"l1b",role:"assistant",caller:"u1b",predecessor:"u1b",created_at:4,label:"Reply B"},
    {id:"mg",role:"merge",caller:"l1",predecessor:"l1",created_at:5,label:"merge",sub:"Merge A+B",mergeFrom:["l1b"]}]},
- {name:"Cross-branch communication",desc:"Asynchronously, A invokes send_to_branch (square tool) for B and returns immediately; A continues without blocking. B handles it independently: B received and B responds are triangles on B’s branch. The result returns asynchronously to A’s end as a triangle “B replied,” because another agent sent it. Two communication edges connect A→B and B→A; both branches continue.",nodes:()=>[R0,
-   // A 分支
+ {name:"Cross-branch communication",desc:"Asynchronously, A invokes send_message (square tool) for B and returns immediately; A continues without blocking. B handles it independently: B received and B responds are triangles on B’s branch. The result returns asynchronously to A’s end as a triangle “B replied,” because another agent sent it. Two communication edges connect A→B and B→A; both branches continue.",nodes:()=>[R0,
    {id:"u1",role:"user",caller:"ROOT",predecessor:"ROOT",created_at:1,label:"Question"},
    {id:"l1",role:"assistant",caller:"u1",predecessor:"u1",created_at:2,label:"A replies"},
-   // B 分支(独立,和 A 平行,从 ROOT 来)
    {id:"ub",role:"user",caller:"ROOT",predecessor:"ROOT",created_at:3,label:"B user",independent:true},
    {id:"lb",role:"assistant",caller:"ub",predecessor:"ub",created_at:4,label:"B replies"},
-   // A 调 send 工具(瞬间返回,不阻塞)；B收到/B应答 归 B 分支。
-   {id:"send",role:"code",caller:"l1",predecessor:"l1",created_at:5,label:"send_to_branch",sub:"Immediate; A continues"},
+   {id:"send",role:"code",caller:"l1",predecessor:"l1",created_at:5,label:"send_message",sub:"Immediate; A continues"},
    {id:"bRecv",role:"assistant",caller:"ub",predecessor:"lb",commFrom:"send",created_at:6,label:"B received (agent)"},
    {id:"bAns",role:"assistant",caller:"bRecv",predecessor:"bRecv",created_at:7,label:"B responds"},
-   // B应答 异步送回 A 末尾 → 三角「B回复了」。它是外部推回 A 的新一轮输入,
-   // 和「问题」同级(tierHint=1,挂 A 竖线 user 列),不是 send 的缩进子调用。
    {id:"aRecv",role:"assistant",caller:"ROOT",predecessor:"send",commFrom:"bAns",tierHint:1,created_at:8,label:"B replied",sub:"A’s new turn, directly under ROOT at question level"},
-   // A 收到 B 的回复后,A 的 llm 对它作出回应(B回复了=输入 → A回应=llm,缩进一级)
    {id:"aAns",role:"assistant",caller:"aRecv",predecessor:"aRecv",created_at:9,label:"A responds",sub:"A responds to B"}]},
  {name:"Child-branch work",desc:"A’s llm calls spawn_branch (square tool), creating a temporary child-agent branch B at that moment. B works independently (triangle child agent → triangle completion); its result attaches back to A, which continues. Unlike communication with an existing peer, B is newly created and begins on the spawn row, not the question row. The dash-dot spawn edge remains visible; the attach reference edge appears on hover.",nodes:()=>[R0,
    {id:"u1",role:"user",caller:"ROOT",predecessor:"ROOT",created_at:1,label:"Question"},
    {id:"l1",role:"assistant",caller:"u1",predecessor:"u1",created_at:2,label:"A"},
    {id:"sp",role:"code",caller:"l1",predecessor:"l1",created_at:3,label:"spawn_branch",sub:"A’s tool creates a child"},
-   // B = spawn 当场新建的子 agent 分支。caller=sp(spawn 派的)、无 predecessor →
-   // 不被当独立分支对齐到问题行；从 spawn 那行往下长。首节点是 △ 子agent(非 user)。
    {id:"b1",role:"assistant",caller:"sp",spawn_from:"sp",tierHint:1,created_at:4,label:"Child B",sub:"New child agent at spawn"},
    {id:"b2",role:"assistant",caller:"b1",predecessor:"b1",created_at:5,label:"B done"},
-   // B 干完 → attach 回流嵌回 A → A 收到后继续(新一轮,挂 A 主干 user 级)。
    {id:"a2",role:"assistant",caller:"ROOT",predecessor:"sp",attach_from:"b2",tierHint:1,created_at:6,label:"A receives B",sub:"Attach result; A continues"},
-   // A 收到子分支结果后,继续处理/回应(A收到B=输入 → A回应=llm,缩进一级)
    {id:"a3",role:"assistant",caller:"a2",predecessor:"a2",created_at:7,label:"A responds",sub:"A handles child result"}]},
 ];
 
@@ -503,7 +371,7 @@ function show(i){
   const sc=SCENES[i];
   const nodes=sc.nodes();
   const byId={}; for(const m of nodes)byId[m.id]=m;
-  buildMapsCache=buildMaps(byId,nodes);  // 供渲染线型判定用
+  buildMapsCache=buildMaps(byId,nodes);
   document.getElementById("desc").textContent=sc.desc;
   [...document.querySelectorAll("#bar button")].forEach((b,j)=>b.classList.toggle("on",j===i));
   render(nodes);

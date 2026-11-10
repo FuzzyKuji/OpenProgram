@@ -28,7 +28,7 @@ registerHooks({
 });
 
 const {
-  BOT_SHAPES, BOT_COLORS, BOT_COLOR_IDS, BOT_EXTENTS, BOT_MAX_SIDE, BOT_OPTICAL_SIDE, DEFAULT_BOT_SHAPE, botFit, isBotShape, isBotColor,
+  BOT_SHAPES, BOT_COLORS, BOT_COLOR_IDS, BOT_EXTENTS, BOT_MAX_SIDE, BOT_OPTICAL_SIDE, DEFAULT_BOT_SHAPE, botFit, botMarkFit, isBotShape, isBotColor,
 } = await import("../../components/avatar/bot/catalog.ts");
 const { botLookFor } = await import("../../components/avatar/bot/identity.ts");
 const { loadBotRuntime, loadedBotRuntime } = await import("../../components/avatar/bot/runtime.ts");
@@ -42,7 +42,7 @@ const { renderAvatarSvg, validateAvatar } = await import("open-bot-avatar");
 const { bounds, flattenPath, parsePath } = await import(new URL("../../../../node_modules/open-bot-avatar/dist/path.js", import.meta.url).href);
 
 const BUILT_IN_AGENTS = [
-  "main", "utility", "planner", "decision", "chief-of-staff", "spec-writer", "bug-reproducer",
+  "main", "butler", "utility", "planner", "decision", "chief-of-staff", "spec-writer", "bug-reproducer",
   "pr-producer", "pr-verifier", "research-desk", "inbox-triage", "career-scout", "knowledge-keeper", "writer",
 ];
 
@@ -175,6 +175,15 @@ test("a character avatar renders its own host at the asked size, not the generat
   const body = html.match(/<span style="([^"]*)" data-bot-body="">/);
   assert.ok(body, html);
   assert.equal(body[1], `position:absolute;left:${fit.left * 32}px;top:${fit.top * 32}px;width:${fit.scale * 32}px;height:${fit.scale * 32}px`);
+});
+
+test("a character in a control is placed by the brand-mark rule", () => {
+  const html = renderToStaticMarkup(createElement(AgentAvatar, { agent: { id: "a", avatar: { kind: "bot", shape: "cloud" } }, size: 16, fit: "mark" }));
+  const fit = botMarkFit("cloud");
+  assert.notDeepEqual(fit, botFit("cloud"));
+  const body = html.match(/<span style="([^"]*)" data-bot-body="">/);
+  assert.ok(body, html);
+  assert.equal(body[1], `position:absolute;left:${fit.left * 16}px;top:${fit.top * 16}px;width:${fit.scale * 16}px;height:${fit.scale * 16}px`);
 });
 
 test("a character avatar without a usable shape takes the one its seed gives", () => {

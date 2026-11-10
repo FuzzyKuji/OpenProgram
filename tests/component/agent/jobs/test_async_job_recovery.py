@@ -135,12 +135,8 @@ def test_deferred_resume_recovers_after_ready_publish_crash(
     assert final is not None
     assert final.status == JobStatus.COMPLETED
     assert calls[-1]["branch_from"] == "a2"
-    admission = runner._governor.ledger.connection().execute(
-        "SELECT COUNT(*), state, resume_parent_msg_id "
-        "FROM job_admissions WHERE job_id = ?",
-        (job_id,),
-    ).fetchone()
-    assert tuple(admission) == (1, "released", None)
+    admissions = runner._governor.ledger.run_tables().handle.rows("job_admissions", job_id=job_id)
+    assert [(row["state"], row["resume_parent_msg_id"]) for row in admissions] == [("released", None)]
 
 def test_runner_recovers_deferred_inbox_after_process_crash(
     store_fixture, monkeypatch,
@@ -305,15 +301,8 @@ def test_borrowed_child_system_exit_finalizes_and_cleans_child_ownership(
             finally:
                 child_id = observed["child_id"]
                 observed["child"] = runner.get_job(child_id)
-                observed["child_admission"] = ledger.connection().execute(
-                    "SELECT state, reason_code FROM job_admissions "
-                    "WHERE job_id = ?", (child_id,),
-                ).fetchone()
-                observed["parent_admission"] = ledger.connection().execute(
-                    "SELECT state, owner_instance_id, lease_generation "
-                    "FROM job_admissions WHERE job_id = ?",
-                    (observed["parent_id"],),
-                ).fetchone()
+                observed["child_admission"] = ledger.run_tables().handle.first("job_admissions", job_id=child_id)
+                observed["parent_admission"] = ledger.run_tables().handle.first("job_admissions", job_id=observed["parent_id"])
                 observed["child_token"] = execution_run_control.current_token(
                     session_id, execution_id=child_id,
                 )
@@ -360,13 +349,14 @@ def test_borrowed_child_system_exit_finalizes_and_cleans_child_ownership(
         assert child.status == JobStatus.ERRORED
         assert child.reason_code == "owner_lost"
         assert child.error is None
-        assert tuple(observed["child_admission"]) == (
+        child_admission = observed["child_admission"]
+        assert (child_admission["state"], child_admission["reason_code"]) == (
             "released", "owner_lost",
         )
         parent_admission = observed["parent_admission"]
-        assert parent_admission[0] == "live"
-        assert parent_admission[1] == runner._instance_id
-        assert parent_admission[2] > 0
+        assert parent_admission["state"] == "live"
+        assert parent_admission["owner_instance_id"] == runner._instance_id
+        assert parent_admission["lease_generation"] > 0
         assert observed["child_token"] is None
         assert observed["current_execution_id"] == parent_id
         assert observed["child_in_jobs"] is False
@@ -409,11 +399,9 @@ def test_durable_worker_baseexception_persists_terminal_before_release(
     )
     try:
         job = runner.await_job(job_id, timeout=2)
-        admission = ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()
+        admission = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
         assert job is not None and job.status == JobStatus.ERRORED
-        assert admission[0] == "released"
+        assert admission["state"] == "released"
         def find_terminal():
             return next(
                 (
@@ -473,14 +461,10 @@ def test_running_status_write_failure_reconciles_terminal_and_releases(
     try:
         runner.await_job(job_id, timeout=1)
         job = runner.get_job(job_id)
-        admission = ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()
+        admission = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
         assert job is not None and job.status == JobStatus.QUEUED
-        assert admission[0] == "released"
-        assert ledger.connection().execute(
-            "SELECT state FROM job_finalizations WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "pending"
+        assert admission["state"] == "released"
+        assert ledger.run_tables().handle.first("job_finalizations", job_id=job_id)["state"] == "pending"
         assert len(drivers) == 1
         assert wait_until(lambda: not drivers[0]._handles, timeout=30)
         assert not drivers[0]._continuation_start_gates
@@ -488,9 +472,7 @@ def test_running_status_write_failure_reconciles_terminal_and_releases(
         broadcasts.clear()
         runner._reconcile_resources()
         assert runner.get_job(job_id).status == JobStatus.ERRORED
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()[0] == "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=job_id)["state"] == "released"
         terminal = [
             item for item in broadcasts
             if item.get("type") == "job_status"
@@ -500,9 +482,6 @@ def test_running_status_write_failure_reconciles_terminal_and_releases(
         assert terminal[0]["data"]["status"] == "errored"
         assert "resource_state" not in terminal[0]["data"]["resource"]
         assert terminal[0]["data"]["resource"]["resource"]["resource_state"] == "released"
-        reloads = [item for item in broadcasts if item.get("type") == "session_reload"]
-        assert len(reloads) == 1
-        assert reloads[0]["data"]["reason"] == "job_errored"
         broadcasts.clear()
         runner._reconcile_resources()
         assert broadcasts == []
@@ -551,20 +530,15 @@ def test_vanished_job_row_releases_admission_instead_of_leaking_it(
             session_id="p1", prompt="x", agent_id="main", parent_msg_id="a1",
         )
         def admission_state():
-            row = ledger.connection().execute(
-                "SELECT state FROM job_admissions WHERE job_id = ?", (job_id,),
-            ).fetchone()
-            return row[0] if row else None
+            row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+            return row["state"] if row else None
 
         assert wait_until(
             lambda: admission_state() == "released", timeout=30,
         )
         state = admission_state()
         assert state == "released"
-        assert ledger.connection().execute(
-            "SELECT COUNT(*) FROM job_admissions "
-            "WHERE session_id = ? AND state = 'live'", ("p1",),
-        ).fetchone()[0] == 0
+        assert ledger.run_tables().handle.count("job_admissions", session_id="p1", state="live") == 0
 
         # The session is admissible again.
         vanish = False
@@ -680,23 +654,17 @@ def test_borrowed_child_runtime_budget_cancels_child_and_cleans_runtime(
         assert child_entered.wait(WORKER_START_TIMEOUT)
         child_id = child_ids[0]
         assert child_id != parent_id
-        runtime_row = runner._governor.ledger.connection().execute(
-            "SELECT state, owner_instance_id, lease_generation, started_at, "
-            "lease_expires_at FROM job_admissions WHERE job_id = ?",
-            (child_id,),
-        ).fetchone()
-        assert runtime_row[0] == "queued"
-        assert runtime_row[1] == runner._instance_id
-        assert runtime_row[2] > 0
-        assert runtime_row[3] is not None
-        assert runtime_row[4] is not None
+        runtime_row = runner._governor.ledger.run_tables().handle.first("job_admissions", job_id=child_id)
+        assert runtime_row["state"] == "queued"
+        assert runtime_row["owner_instance_id"] == runner._instance_id
+        assert runtime_row["lease_generation"] > 0
+        assert runtime_row["started_at"] is not None
         with runner._lock:
             assert runner._jobs[child_id]["time_limits"] == (1, None)
-            assert runner._jobs[child_id]["lease_generation"] == runtime_row[2]
-        live_count = runner._governor.ledger.connection().execute(
-            "SELECT COUNT(*) FROM job_admissions "
-            "WHERE state IN ('live','stopping')",
-        ).fetchone()[0]
+            assert runner._jobs[child_id]["lease_generation"] == runtime_row["lease_generation"]
+        live_count = runner._governor.ledger.run_tables().handle.count(
+            "job_admissions", state=("live", "stopping"),
+        )
         assert live_count == 1
         clock.advance(1.1)
         assert cancel_intent_staged.wait(30)
@@ -745,12 +713,9 @@ def test_borrowed_child_runtime_budget_cancels_child_and_cleans_runtime(
         ]
         assert commands[0].payload["reason_code"] == "budget.runtime_exhausted"
         assert len(child_ids) == 1
-        row = runner._governor.ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (child_id,),
-        ).fetchone()
-        assert row[0] == "released"
-        assert row[1] == "budget.runtime_exhausted"
+        row = runner._governor.ledger.run_tables().handle.first("job_admissions", job_id=child_id)
+        assert row["state"] == "released"
+        assert row["reason_code"] == "budget.runtime_exhausted"
     finally:
         release_cancel_signal.set()
         release_child.set()
@@ -846,13 +811,11 @@ def test_borrowed_child_activity_refreshes_child_and_parent_idle(
         record_activity.set()
         assert activity_recorded.wait(30)
         assert activity_results == [True]
-        activity_rows = runner._governor.ledger.connection().execute(
-            "SELECT job_id, last_activity_at FROM job_admissions "
-            "WHERE job_id IN (?, ?)",
-            (child_id, parent_id),
-        ).fetchall()
+        activity_rows = runner._governor.ledger.run_tables().handle.rows(
+            "job_admissions", job_id=(child_id, parent_id),
+        )
         assert len(activity_rows) == 2
-        assert activity_rows[0][1] == activity_rows[1][1]
+        assert activity_rows[0]["last_activity_at"] == activity_rows[1]["last_activity_at"]
         budget_polled.clear()
         clock.advance(0.5)
         assert budget_polled.wait(30)
@@ -1023,15 +986,6 @@ def test_runner_spawn_persists_durable_admission(
     resolved = resolve_resource_limits(ResourceLimits(), scheduler_capacity=1)
     ledger = UsageLedger(tmp_path / "governance.db")
     governor = ResourceGovernor(ledger, limit_resolver=lambda _sid, _job: resolved)
-    renewals = []
-    original_renew = governor.renew_lease
-
-    def record_renewal(*args, **kwargs):
-        renewals.append(args[0])
-        return original_renew(*args, **kwargs)
-
-    monkeypatch.setattr(governor, "renew_lease", record_renewal)
-    monkeypatch.setattr('openprogram.runtime.jobs.runner.shared._LEASE_RENEW_SECS', 0.02)
     runner = JobRunner(
         max_workers=1,
         governor=governor,
@@ -1046,16 +1000,10 @@ def test_runner_spawn_persists_durable_admission(
         assert job.budget_scope_id
         assert job.effective_limits["max_live_per_session"] == 1
         assert fake_worker[3].wait(WORKER_START_TIMEOUT)
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (tid,),
-        ).fetchone()[0] == "live"
-        assert wait_until(lambda: bool(renewals))
-        assert renewals and set(renewals) == {tid}
+        assert ledger.run_tables().handle.first("job_admissions", job_id=tid)["state"] == "live"
         fake_worker[1].set()
         assert runner.await_job(tid, timeout=5).status.value == "completed"
-        assert ledger.connection().execute(
-            "SELECT state FROM job_admissions WHERE job_id = ?", (tid,),
-        ).fetchone()[0] == "released"
+        assert ledger.run_tables().handle.first("job_admissions", job_id=tid)["state"] == "released"
     finally:
         fake_worker[1].set()
         runner.shutdown()

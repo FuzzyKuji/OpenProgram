@@ -90,7 +90,7 @@ class BranchSessionError(ValueError):
 
 
 def _is_chain_turn(node: Call) -> bool:
-    # Same rule as interfaces/server/context_git_routes.is_checkout_target:
+    # Same rule as interfaces/server/routes/chat_branches.is_checkout_target:
     # a node whose caller is another call lives inside an execution subtree.
     return getattr(node, "caller", None) in (None, "", ROOT_ID)
 
@@ -282,6 +282,19 @@ def copy_tip(session_id: str, *, running: bool, store: Any = None) -> str:
     raise BranchSessionError("unknown_message", "this conversation has no finished turn to copy yet")
 
 
+def _carry_checkpoints(store: Any, source: str, target: str, id_map: dict[str, str]) -> None:
+    """Keep "restore code" working on copied messages; a failure only loses that."""
+    from openprogram.state.store.snapshot.checkpoint.prompt_checkpoints import carry_checkpoints
+    try:
+        session_dir = getattr(store, "_session_dir", None)
+        if session_dir is None:
+            from openprogram.state.store.session.session_store import default_store
+            session_dir = default_store()._session_dir
+        carry_checkpoints(session_dir(source), session_dir(target), id_map, source_session_id=source)
+    except Exception:  # noqa: BLE001 — the conversation copy is already complete
+        _log.warning("branch %s: checkpoints not carried", target, exc_info=True)
+
+
 def branch_session(
     session_id: str,
     msg_id: str,
@@ -455,6 +468,7 @@ def branch_session(
             metadata=meta,
         ))
 
+    _carry_checkpoints(store, session_id, new_session_id, id_map)
     store.set_head(new_session_id, id_map[msg_id])
     store.update_session(new_session_id, status="idle")
     try:

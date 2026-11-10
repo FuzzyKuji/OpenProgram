@@ -50,7 +50,8 @@ def register(app):
 
     @app.get("/api/system/version")
     async def get_system_version_api():
-        from openprogram.operations.self_update.github_release.detect import detect_install_method
+        from openprogram.operations.self_update.github_release import availability
+        from openprogram.operations.self_update.github_release.detect import detect_install_method, update_route
 
         try:
             current_version = importlib.metadata.version("openprogram")
@@ -59,6 +60,8 @@ def register(app):
         return JSONResponse(content={
             "currentVersion": current_version,
             "installType": detect_install_method().value,
+            "updateRoute": update_route().value,
+            **availability.view(current_version),
         })
 
     def resource_limits_view(session_id: str) -> dict[str, Any]:

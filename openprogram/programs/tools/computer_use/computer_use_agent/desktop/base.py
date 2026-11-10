@@ -26,6 +26,29 @@ class ComputerUseError(RuntimeError):
     """An action that cannot run; the message is shown to the model."""
 
 
+class NotDispatched(ComputerUseError):
+    """An action stopped before any input reached the app: its target was not found or not reachable.
+
+    The app is as it was, so the operation's outcome is known: nothing
+    happened. Other errors may come after input was posted.
+    """
+
+
+class NotAnswering(NotDispatched):
+    """The application answered nothing for a while: it is busy, so nothing more was sent to it.
+
+    An app that is carrying out a long step, or one that has stopped
+    responding, leaves every request waiting. Its windows read as missing
+    and a step sent now would run whenever it comes back.
+    """
+
+    def __init__(self, app: str, seconds: float) -> None:
+        self.app, self.seconds = app, seconds
+        super().__init__(
+            f"{app} has not answered for {seconds:.0f} s: it is busy (still carrying out its last step, or not "
+            "responding). Nothing was sent, and its windows are still open. Wait (action wait), then try again.")
+
+
 class Report(str):
     """An action result that read something and changed nothing, so no new state follows it."""
 
@@ -49,6 +72,47 @@ class AudioClip:
     @property
     def silent(self) -> bool:
         return self.peak < audio.SILENCE_PEAK
+
+
+class RefusedApps:
+    """Which applications this call may not touch.
+
+    The owner lists any in ``computer_use.refused_apps``. OpenProgram's own
+    windows (``own``) are refused in a mode that shows approval cards, where
+    the Agent could answer its own card.
+    """
+
+    def __init__(self, own: frozenset[str]) -> None:
+        from openprogram.runtime.agent.turn_request import get_turn_request
+        from openprogram.state.config import read_config
+        listed = (read_config().get("computer_use") or {}).get("refused_apps")
+        self.listed = {str(item).strip().lower() for item in listed} if isinstance(listed, list) else set()
+        self.own = own
+        self.mode = getattr(get_turn_request(), "permission_mode", None)
+
+    def _own(self, keys: set[str]) -> bool:
+        return bool(keys & self.own) and self.mode != "bypass"
+
+    def hits(self, *names: str) -> bool:
+        keys = {str(name).lower() for name in names if name}
+        return bool(keys & self.listed) or self._own(keys)
+
+    def refuse(self, label: str, *names: str) -> None:
+        """Raise the standard refusal if any of ``names`` is off limits."""
+        from openprogram.runtime.permissions import refusal
+        keys = {str(name).lower() for name in names if name}
+        if keys & self.listed:
+            raise refusal.computer_use_refused_app(label)
+        if self._own(keys):
+            raise refusal.computer_use_own_window(self.mode or "this mode")
+
+
+def refuse_password_field(what: str) -> None:
+    """Raise the standard refusal when the owner has turned password fields off."""
+    from openprogram.runtime.permissions import refusal
+    from openprogram.state.config import read_config
+    if (read_config().get("computer_use") or {}).get("refuse_password_fields") is True:
+        raise refusal.computer_use_password_field(what)
 
 
 def check_cancelled() -> None:

@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agents Web UI prototype — OpenProgram</title>
+<title>Agents Web UI prototype</title>
+<meta name="description" content="Interactive prototype of the Agent core configuration page.">
 <style>
 
 .ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
@@ -22,7 +23,7 @@
 </style>
 </head>
 <body>
-<div class="reviewbar"><strong>Web UI prototype</strong><span class="review-explain">Example data only. No model calls or live settings changes.</span><div class="reviewlinks"><button id="theme-switch" class="review-theme" aria-label="Switch theme">Light theme</button><a href="agent-configuration-ui.html">Design overview</a><a href="agent-core-configuration-ui.zh.html">中文</a><label><span>State</span><select id="scenario" aria-label="Preview state"><option value="ready">Normal</option><option value="conflict">Save conflict</option><option value="missing">Dependency unavailable</option><option value="load-error">Load error</option><option value="loading">Loading</option><option value="empty">Empty list</option></select></label></div></div>
+<div class="reviewbar"><strong>Web UI prototype</strong><span class="review-explain">Example data only. No model calls or live settings changes.</span><div class="reviewlinks"><button id="theme-switch" class="review-theme" aria-label="Switch theme">Light theme</button><a href="agent-configuration-ui.html">Design overview</a><a href="agent-core-configuration-ui.zh.html">Chinese</a><label><span>State</span><select id="scenario" aria-label="Preview state"><option value="ready">Normal</option><option value="conflict">Save conflict</option><option value="missing">Dependency unavailable</option><option value="load-error">Load error</option><option value="loading">Loading</option><option value="empty">Empty list</option></select></label></div></div>
 <main class="app" aria-label="Agents configuration prototype">
 <aside class="apprail" aria-label="Product context"><img class="logo" src="data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iMTcwIiBoZWlnaHQ9IjE3MCIgdmlld0JveD0iMCAwIDE3MCAxNzAiIHhtbG5zPSJodHRwOi8vd3d3LnczLm9yZy8yMDAwL3N2ZyIgcm9sZT0iaW1nIiBhcmlhLWxhYmVsPSJPcGVuUHJvZ3JhbSI+CiAgPGRlZnM+CiAgICA8bGluZWFyR3JhZGllbnQgaWQ9Im9wLXJpbmciIHgxPSIwIiB5MT0iMCIgeDI9IjEiIHkyPSIxIj4KICAgICAgPHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjM0I5RUZGIi8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjQTg1NUY3Ii8+CiAgICA8L2xpbmVhckdyYWRpZW50PgogICAgPHJhZGlhbEdyYWRpZW50IGlkPSJvcC1iQSIgY3g9IjAuMzUiIGN5PSIwLjMiIHI9IjAuODUiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzdGQzBGRiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzJGN0ZFMCIvPjwvcmFkaWFsR3JhZGllbnQ+CiAgICA8cmFkaWFsR3JhZGllbnQgaWQ9Im9wLWJCIiBjeD0iMC4zNSIgY3k9IjAuMyIgcj0iMC44NSI+PHN0b3Agb2Zmc2V0PSIwIiBzdG9wLWNvbG9yPSIjQzA5QkY3Ii8+PHN0b3Agb2Zmc2V0PSIxIiBzdG9wLWNvbG9yPSIjOEE0NkQ4Ii8+PC9yYWRpYWxHcmFkaWVudD4KICAgIDxyYWRpYWxHcmFkaWVudCBpZD0ib3AtYkMiIGN4PSIwLjM1IiBjeT0iMC4zIiByPSIwLjg1Ij48c3RvcCBvZmZzZXQ9IjAiIHN0b3AtY29sb3I9IiM4RkE2RjIiLz48c3RvcCBvZmZzZXQ9IjEiIHN0b3AtY29sb3I9IiM1QTVGRDAiLz48L3JhZGlhbEdyYWRpZW50PgogICAgPHJhZGlhbEdyYWRpZW50IGlkPSJvcC1iRCIgY3g9IjAuMzUiIGN5PSIwLjMiIHI9IjAuODUiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzZGQjZGRiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iIzNFODZFOCIvPjwvcmFkaWFsR3JhZGllbnQ+CiAgICA8Y2xpcFBhdGggaWQ9Im9wLWluc2lkZSI+PGNpcmNsZSBjeD0iODUiIGN5PSI4NSIgcj0iNjAiLz48L2NsaXBQYXRoPgogIDwvZGVmcz4KCiAgPGNpcmNsZSBjeD0iODUiIGN5PSI4NSIgcj0iNjMiIGZpbGw9Im5vbmUiIHN0cm9rZT0idXJsKCNvcC1yaW5nKSIgc3Ryb2tlLXdpZHRoPSI5Ii8+CgogIDxnIGNsaXAtcGF0aD0idXJsKCNvcC1pbnNpZGUpIj4KICAgIDxjaXJjbGUgY3g9IjY2IiBjeT0iNjgiIHI9IjMwIiBmaWxsPSJ1cmwoI29wLWJBKSIvPgogICAgPGNpcmNsZSBjeD0iMTA2IiBjeT0iOTYiIHI9IjIzIiBmaWxsPSJ1cmwoI29wLWJCKSIvPgogICAgPGNpcmNsZSBjeD0iNzQiIGN5PSIxMTIiIHI9IjE1IiBmaWxsPSJ1cmwoI29wLWJDKSIvPgogICAgPGNpcmNsZSBjeD0iMTEwIiBjeT0iNjIiIHI9IjEzIiBmaWxsPSJ1cmwoI29wLWJEKSIvPgogIDwvZz4KPC9zdmc+Cg==" alt="OpenProgram"><span class="railmark" title="Conversations"><span class="icon" data-animated-icon="chat" aria-hidden="true"></span></span><span class="railmark active" title="Agents"><span class="icon" data-animated-icon="bot" aria-hidden="true"></span></span><span class="railmark" title="Capabilities"><span class="icon" data-animated-icon="grid" aria-hidden="true"></span></span><span class="railbottom" title="Example account">U</span></aside>
 <aside class="library" aria-label="Agent library"><div class="library-title"><h1>Agents</h1><small id="agent-count">3</small><button class="icon-button" data-action="new" aria-label="Create Agent"><span class="icon" data-animated-icon="plus" aria-hidden="true"></span></button></div><div class="library-search"><span class="icon" data-animated-icon="search" aria-hidden="true"></span><input id="agent-search" type="search" placeholder="Search Agents" aria-label="Search Agents"></div><div class="library-label">Your configurations</div><div class="agent-list" id="agent-list"></div><div class="library-foot"><strong>Create once, use across tasks</strong><p>Model, instructions, capabilities and optional memory.</p><button class="reset-demo" data-action="new">+ Create Agent</button></div></aside>
@@ -31,123 +32,105 @@
 <div id="global-banner" class="banner" role="status" hidden></div><div class="tabs" id="config-tabs" role="tablist" aria-label="Agent configuration"></div><div class="body-split"><div class="editor-scroll" id="panels"></div><aside class="testpane" id="trial-pane" aria-label="Trial conversation" hidden><div class="test-head"><strong id="trial-title">Trial conversation</strong><span class="pill soft">Prototype</span><button class="icon-button" data-action="trial-reset" aria-label="Clear conversation"><span class="icon" data-animated-icon="refresh" aria-hidden="true"></span></button><button class="icon-button" data-action="trial-close" aria-label="Close trial"><span class="icon" data-animated-icon="close" aria-hidden="true"></span></button></div><div class="test-meta" id="trial-meta"></div><div class="test-history" id="trial-history" role="log" aria-label="Example messages"></div><div class="test-compose"><textarea id="trial-input" aria-label="Trial message" placeholder="Send a message to see the interaction…"></textarea><div class="compose-foot"><small>Local simulation only</small><button class="button primary" id="trial-submit" data-action="trial-send">Send</button></div></div></aside></div><div class="bottom-strip"><span id="draft-notice"></span><a href="#design-notes" id="show-notes">Interaction specification</a></div></div></div></main><div class="scrim" id="trial-scrim" data-action="trial-close"></div>
 <dialog id="modal" aria-labelledby="dialog-title"></dialog><div class="toast" id="toast" role="status" hidden></div>
 
-<details class="design-notes" id="design-notes"><summary>Interaction specification and implementation status</summary><div class="ad"><section id="ui-contract"><h2>Web UI layout and interaction scope</h2><p>Retain the Agent list and single editor. Eight configuration sections share one draft and one Save action. Desktop keeps the list on the left; narrow screens use a top Agent selector. Trials use a right-hand panel on wide screens and a full-screen panel with bounded focus on narrow screens.</p><p>Icons directly use the repository components/animated-icons pqoqubbw components and their existing start/stop interface, triggered by whole-control hover or keyboard focus; reduced-motion disables animation. The logo is the existing project asset and colors follow neutral light/dark tokens. Embedded HTML assets are built from the existing components, not newly drawn replacement SVGs.</p><p>Trials use the current draft and fresh history with at most read-only memory. New conversation uses the saved version with optional invocation-only model, memory and initial-context overrides. Memory overrides may only narrow existing access. Neither operation edits the saved configuration. Simulated replies are labeled; no model requests, real history reads or real memory writes occur.</p><p>The state selector belongs to the design preview, covering loading, empty, error, conflict and unavailable dependencies; it is not a product setting. Conflicts display both instruction versions and require explicit selection, with no automatic merge. Production uses server-provided model capabilities, authority, effective scope and readiness rather than the prototype calculations.</p><p>Acceptance covers all sections, both languages and themes, desktop/narrow layouts, keyboard tab navigation, animated controls, draft retention, conflict recovery and invocation overrides. Passing the prototype does not establish real API, authorization or execution implementation.</p></section>
-<section id="editing">
-<h2>Editing and inheritance UX</h2>
-<ul>
-<li>Every configurable field offers Use inherited value or Explicit value where meaningful. Show the current effective value and its source beside the control; unavailable data is Unknown, not a fabricated default.</li>
-<li>Model choices come from enabled provider/account model catalogs. Persist qualified IDs, not labels. Effort choices follow the selected model; unsupported saved effort remains visible with an error, not silently changed. Provider/MCP authentication belongs to global connection settings.</li>
-<li>A saved named Agent resolves inherited fields from system defaults, never from whichever Agent happened to open its settings. A call preview may additionally show a selected caller/session context; label that preview scope.</li>
-<li>One draft spans all sections. Switching tabs never saves, clears, or independently commits fields. Leaving with dirty data offers Save, Discard, Cancel; a failed save preserves field values, selection and scroll.</li>
-<li>The saved revision is the draft base. A 409 conflict opens a changed-field comparison; prompt bodies are not auto-merged. Refresh before explicitly applying a new candidate. Missing required dependencies affect readiness, not the ability to retain a draft.</li>
-</ul>
-</section>
-<section id="memory-ui">
-<h2>Memory and context controls</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Control</th>
-<th>Visible result</th>
-<th>Edge case</th>
-</tr>
-</thead>
+<details class="design-notes" id="design-notes"><summary>Interaction specification and implementation status</summary><div class="ad"><section id="ui-contract"><h2>Layout and scope</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
 <tbody>
-<tr>
-<td>Memory off</td>
-<td>No retrieval or writes; show retained existing store separately</td>
-<td>Does not remove facts already in conversation</td>
-</tr>
-<tr>
-<td>Read/write spaces</td>
-<td>Choose owned/project/shared references with read/write labels</td>
-<td>Shared scope change requires explicit selection and authority check</td>
-</tr>
-<tr>
-<td>Read only</td>
-<td>Read badges; no writer controls exposed as active</td>
-<td>Compaction and later writers must also respect read-only execution provenance</td>
-</tr>
-<tr>
-<td>Required backend</td>
-<td>Explain whether unavailable memory blocks execution or degrades</td>
-<td>Never silently switch to the global store</td>
-</tr>
-<tr>
-<td>Context selection</td>
-<td>Inherit / clean / explicitly selected data</td>
-<td>Keeping a conversation is separate from keeping memory</td>
-</tr>
-<tr>
-<td>Instruction files</td>
-<td>Open permitted file; show source and hash/version</td>
-<td>Missing file is an error/warning according to declared requirement; opening a page creates no file</td>
-</tr>
-<tr>
-<td>Channel resets</td>
-<td>Advanced scope, idle timeout, daily time and timezone</td>
-<td>Reset affects future routing, does not merge/delete old sessions</td>
-</tr>
+<tr><th scope="row">Editor</th><td>Agent list plus one editor. Eight sections, one draft, one Save.</td></tr>
+<tr><th scope="row">Narrow screens</th><td>Top Agent selector replaces the left list. One-column forms.</td></tr>
+<tr><th scope="row">Trial panel</th><td>Right-hand on wide screens; full-screen with bounded focus on narrow ones.</td></tr>
+<tr><th scope="row">Icons</th><td>pqoqubbw components from <code translate="no">components/animated-icons</code> with their start/stop interface. Whole-control hover or keyboard focus triggers them; reduced motion stops them. Embedded here as built components, not redrawn SVGs.</td></tr>
+<tr><th scope="row">Logo and colours</th><td>Existing project asset; neutral light and dark tokens.</td></tr>
+<tr><th scope="row">State selector</th><td>Preview only, not a product setting.</td></tr>
+<tr><th scope="row">Prototype data</th><td>Simulated replies are labeled. No model requests, real history reads or memory writes. Production takes model capabilities, authority, effective scope and readiness from the server.</td></tr>
 </tbody>
-</table>
-</div>
-</section>
-<section id="states">
-<h2>Lifecycle and UI states</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>State/action</th>
-<th>Required interaction</th>
-</tr>
-</thead>
+</table></div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Start</th><th scope="col">Configuration</th><th scope="col">History</th><th scope="col">Memory</th></tr></thead>
 <tbody>
-<tr>
-<td>Create</td>
-<td>Inline name input; optional fields later; failure retains name; success selects new config</td>
-</tr>
-<tr>
-<td>Duplicate</td>
-<td>Preview config and shared references; no sessions/memory/schedules copied; optional instruction-content copy is explicit</td>
-</tr>
-<tr>
-<td>Default</td>
-<td>Show one authoritative default; changing default affects new default-resolved sessions</td>
-</tr>
-<tr>
-<td>Delete</td>
-<td>Show owned and referenced resources; default/busy rejects; explicit user confirmation; no misleading all-sessions-in-folder claim</td>
-</tr>
-<tr>
-<td>Empty/loading/network error</td>
-<td>Distinct states; API read failure is not an empty Agent list; Retry retains current draft</td>
-</tr>
-<tr>
-<td>Partial dependency outage</td>
-<td>Unavailable tags in relevant section and readiness summary; other edits remain possible</td>
-</tr>
-<tr>
-<td>Queued/running executions</td>
-<td>Show configuration revision notice, link to execution records; no silent mid-run swap</td>
-</tr>
-<tr>
-<td>Mobile/keyboard</td>
-<td>Top Agent selector at narrow widths; one-column forms; tab arrows/Home/End, visible focus, native controls</td>
-</tr>
-<tr>
-<td>Accessibility</td>
-<td>16px body baseline, secondary text contrast, labeled inputs, status announcements; no hover-only action</td>
-</tr>
+<tr><th scope="row">Try draft</th><td>Current draft</td><td>New</td><td>Read only at most</td></tr>
+<tr><th scope="row">New conversation</th><td>Saved version, with optional invocation-only model, memory and initial-context overrides</td><td>New</td><td>Overrides may only narrow access</td></tr>
 </tbody>
-</table>
-</div>
+</table></div>
+<p class="muted">Neither edits the saved configuration.</p>
 </section>
-<section id="implementation">
-<h2>Component ownership and acceptance</h2>
-<p>Reuse AgentsPage, ManagePageHeader, ManageRow, Tabs, connection/model pickers and existing settings controls. Split panels only where behavior owns separate validation; do not build a new page/window framework. A pure draft normalizer handles set/reset and diff, while the server resolver remains authoritative. Wire permission/readiness errors from typed API responses. Frontend summaries do not implement a second policy engine.</p>
-<p>Acceptance: A01/A02/A07/A09/A10 from the configuration contract. Exercise all eight sections, memory modes, conflict recovery, missing refs, native model selection and keyboard navigation through the built page. Source-string checks alone do not prove these behaviors. The standalone prototype passes the independent specification and quality reviews, English/Chinese browser flows at desktop and narrow widths, and original-component animation checks. Its examples make no model requests. The production page now implements the eight sections with real configuration APIs. Trial opens an independent new conversation with a persisted restricted snapshot; the embedded panel illustrated here remains a target. Effective preview, arbitrary shared spaces and portable import/export remain planned. Runtime delivery checks are recorded separately from this standalone prototype.</p>
+<section id="editing"><h2>Editing and inheritance</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Case</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Inheritable field</th><td>Use inherited value or Explicit value, with the effective value and its source beside it. Unavailable data shows Unknown, never a fabricated default.</td></tr>
+<tr><th scope="row">Model</th><td>Choices come from enabled provider and account catalogs. Qualified IDs are stored, not labels.</td></tr>
+<tr><th scope="row">Effort</th><td>Follows the selected model. An unsupported saved value stays visible with an error.</td></tr>
+<tr><th scope="row">Provider and MCP sign-in</th><td>Global connection settings.</td></tr>
+<tr><th scope="row">Inherited values</th><td>Resolve from system defaults, never from the Agent that opened the settings. A call preview may add a selected caller or session, labeled as its scope.</td></tr>
+<tr><th scope="row">Switching section</th><td>Does not save, clear or commit fields.</td></tr>
+<tr><th scope="row">Leaving with changes</th><td>Save, Discard or Cancel.</td></tr>
+<tr><th scope="row">Failed save</th><td>Keeps field values, selection and scroll.</td></tr>
+<tr><th scope="row"><code translate="no">409</code> on save</th><td>Draft stays based on the saved revision. Changed fields are compared and the user chooses explicitly; instruction bodies never auto-merge.</td></tr>
+<tr><th scope="row">Missing required dependency</th><td>Affects readiness, not the ability to keep a draft.</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="memory-ui"><h2>Memory and context controls</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Control</th><th scope="col">Visible result</th><th scope="col">Edge case</th></tr></thead>
+<tbody>
+<tr><th scope="row">Memory off</th><td>No retrieval or writes; retained store shown separately</td><td>Facts already in the conversation stay</td></tr>
+<tr><th scope="row">Read/write spaces</th><td>Owned, project or shared references with read/write labels</td><td>Shared scope change needs explicit selection and an authority check</td></tr>
+<tr><th scope="row">Read only</th><td>Read badges; writer controls inactive</td><td>Compaction and later writers also respect read-only execution provenance</td></tr>
+<tr><th scope="row">Required backend</th><td>States whether unavailable memory blocks or degrades execution</td><td>Never silently switches to the global store</td></tr>
+<tr><th scope="row">Context selection</th><td>Inherit, clean, or explicitly selected data</td><td>Keeping a conversation is separate from keeping memory</td></tr>
+<tr><th scope="row">Instruction files</th><td>Open a permitted file; show source and hash or version</td><td>Missing file is an error or warning per its declared requirement; opening a page creates no file</td></tr>
+<tr><th scope="row">Channel resets</th><td>Advanced scope, idle timeout, daily time, timezone</td><td>Affects future routing; old sessions are not merged or deleted</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="states"><h2>Lifecycle and UI states</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">State or action</th><th scope="col">Interaction</th></tr></thead>
+<tbody>
+<tr><th scope="row">Create</th><td>Inline name, other fields later. Failure keeps the name; success selects the new configuration.</td></tr>
+<tr><th scope="row">Duplicate</th><td>Previews configuration and shared references. Sessions, memory and schedules are not copied. Copying instruction content is explicit.</td></tr>
+<tr><th scope="row">Default</th><td>One authoritative default; a change affects new default-resolved sessions.</td></tr>
+<tr><th scope="row">Delete</th><td>Shows owned and referenced resources. Default or busy is rejected. Explicit confirmation. No claim that every session lives in the folder.</td></tr>
+<tr><th scope="row">Empty, loading, network error</th><td>Distinct states. A failed read is not an empty list. Retry keeps the draft.</td></tr>
+<tr><th scope="row">Partial dependency outage</th><td>Unavailable tags in the section and readiness summary; other edits stay possible.</td></tr>
+<tr><th scope="row">Queued or running executions</th><td>Configuration revision notice with a link to execution records. No silent mid-run swap.</td></tr>
+<tr><th scope="row">Keyboard</th><td>Tab arrows, Home, End; visible focus; native controls.</td></tr>
+<tr><th scope="row">Accessibility</th><td>16px body, readable secondary text, labeled inputs, status announcements, no hover-only action.</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="implementation"><h2>Components, acceptance and status</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Part</th><th scope="col">Owner</th></tr></thead>
+<tbody>
+<tr><th scope="row">Page</th><td>Reuses <code translate="no">AgentsPage</code>, <code translate="no">ManagePageHeader</code>, <code translate="no">ManageRow</code>, <code translate="no">Tabs</code>, connection and model pickers, existing settings controls. No new page or window framework.</td></tr>
+<tr><th scope="row">Panels</th><td>Split only where behaviour owns separate validation.</td></tr>
+<tr><th scope="row">Draft</th><td>A pure normalizer handles set, reset and diff. The server resolver stays authoritative.</td></tr>
+<tr><th scope="row">Errors</th><td>Permission and readiness errors come from typed API responses; frontend summaries are not a second policy engine.</td></tr>
+</tbody>
+</table></div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Acceptance</th><th scope="col">Covers</th></tr></thead>
+<tbody>
+<tr><th scope="row">Configuration contract</th><td>A01, A02, A07, A09, A10</td></tr>
+<tr><th scope="row">Built page</th><td>All eight sections, memory modes, conflict recovery, missing references, native model selection, keyboard navigation. Source-string checks do not prove these.</td></tr>
+<tr><th scope="row">Prototype</th><td>Both languages and themes, desktop and narrow layouts, animated controls, draft retention, invocation overrides. Passing it proves nothing about real API, authorization or execution.</td></tr>
+</tbody>
+</table></div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">Area</th><th scope="col">Production</th><th scope="col">This prototype</th></tr></thead>
+<tbody>
+<tr><th scope="row">Sections</th><td>General, Programs, Skills, MCP, Memory, Context, Always-on, Advanced</td><td>Overview, Model &amp; instructions, Programs, Skills, MCP, Memory, Context, Advanced</td></tr>
+<tr><th scope="row">Configuration</th><td>Real APIs, including revision conflicts</td><td>Example data</td></tr>
+<tr><th scope="row">Conflict</th><td>Field comparison, then Load server version or Keep my draft</td><td>Both instruction versions, explicit selection</td></tr>
+<tr><th scope="row">Try draft</th><td>Independent new conversation with a restricted snapshot</td><td>Embedded panel (target)</td></tr>
+<tr><th scope="row">New conversation</th><td>Saved version, no overrides on this page</td><td>Overrides (target)</td></tr>
+<tr><th scope="row">Instruction files</th><td><code translate="no">AGENTS.md</code> locations with Copy path</td><td>Open with source and hash (target)</td></tr>
+<tr><th scope="row">Not built</th><td>Effective preview, arbitrary shared spaces, portable import and export</td><td>Not shown</td></tr>
+</tbody>
+</table></div>
 </section>
 </div></details>
 <script>

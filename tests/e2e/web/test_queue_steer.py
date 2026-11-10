@@ -14,28 +14,31 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import {MessageRow} from './components/chat/messages/list/rows/message-rows';
-import {useSessionStore} from './lib/session-store';
-import {applyChatWsMessage} from './lib/net/ws/chat-stream';
+import {useSessionStore,selectRow} from './lib/session-store';
 import {convToChatMsgs} from './lib/chat/transcript/conv-mapper';
+import {publishedTurn} from './tests/_support/published-turn.mjs';
 window.fetch=async()=>new Response('{}',{headers:{'content-type':'application/json'}});
 const sid='steer-test',uid='turn',rid='turn_reply';
 useSessionStore.setState({currentSessionId:sid,activeChatKey:sid});
-window.frame=data=>applyChatWsMessage({type:'chat_response',data:{session_id:sid,...data}});
-window.delta=text=>frame({type:'stream_event',msg_id:uid,event:{type:'text',text}});
-applyChatWsMessage({type:'chat_ack',data:{session_id:sid,msg_id:uid}});
-function App(){const ids=useSessionStore(s=>s.messageOrder[sid]);return <>{ids?.map(id=><MessageRow key={id} id={id} sessionIdOverride={sid}/>)}</>}
+const turn=publishedTurn(sid,{id:uid,role:'user',rowKind:'user',content:'go',status:'done'});
+turn.startReply();
+window.turn=turn;
+window.delta=text=>turn.event({type:'text',text});
+window.steer=(id,text,timestamp)=>turn.event({type:'steer',id,text,timestamp});
+// The opening user row is not part of what this test reads.
+function App(){const ids=useSessionStore(s=>s.messageOrder[sid]);return <>{ids?.filter(id=>id!==uid).map(id=><MessageRow key={id} id={id} sessionIdOverride={sid}/>)}</>}
 createRoot(document.getElementById('root')).render(<QueryClientProvider client={new QueryClient()}><App/></QueryClientProvider>);
 window.reloadHistory=()=>{
- const store=useSessionStore.getState(), reply=store.messagesById[rid];
+ const store=useSessionStore.getState(), reply=selectRow(sid,rid)(store);
  const rows=convToChatMsgs([{id:rid,role:'assistant',content:reply.content,blocks:reply.blocks,status:'completed',predecessor:'steer-2'},
  {id:'steer-1',role:'user',content:'FIRST INPUT',steering:true,predecessor:uid},
  {id:'steer-2',role:'user',content:'SECOND INPUT',steering:true,predecessor:'steer-1'}]);
- useSessionStore.setState({messagesById:Object.fromEntries(rows.map(m=>[m.id,m])),messageOrder:{[sid]:rows.map(m=>m.id)}});
+ useSessionStore.getState().applyRead(sid,rows);
 };
 window.legacy=()=>{
  const rows=convToChatMsgs([{id:'oldreply',role:'assistant',content:'OLD ANSWER',predecessor:'oldsteer'},
  {id:'oldsteer',role:'user',content:'OLD INPUT',steering:true,predecessor:'olduser'}]);
- useSessionStore.setState({messagesById:Object.fromEntries(rows.map(m=>[m.id,m])),messageOrder:{[sid]:rows.map(m=>m.id)}});
+ useSessionStore.getState().applyRead(sid,rows);
 };
 '''
     bundle=tmp_path/'steer.js'
@@ -51,12 +54,12 @@ window.legacy=()=>{
             for sheet in ['base/document.css','base/focus.css','base/list-row.css','base/layout.css','base/scrollbar.css','base/sidebar.css','base/desktop-chrome.css','base/motion.css','base/canvas-drag.css','chat/messages/bubbles.css','chat/messages/stream-blocks.css','chat/messages/message-actions.css']:
                 page.add_style_tag(path=str(WEB/'app/styles'/sheet))
             page.add_script_tag(path=str(bundle))
-            # A steer may arrive before the pending animation-frame delta flush.
-            page.evaluate("delta('BEFORE INPUT'); frame({type:'user_message',msg_id:'steer-1',assistant_msg_id:'turn_reply',steering:true,content:'FIRST INPUT',timestamp:123})")
+            # Text streams by offset; each steer is published as its own row and a block of the reply.
+            page.evaluate("delta('BEFORE INPUT'); steer('steer-1','FIRST INPUT',123)")
             page.evaluate("delta('AFTER FIRST')")
             expect(page.locator('#root')).to_contain_text('AFTER FIRST')
-            page.evaluate("frame({type:'user_message',msg_id:'steer-2',assistant_msg_id:'turn_reply',steering:true,content:'SECOND INPUT',timestamp:124})")
-            page.evaluate("delta('AFTER SECOND')")
+            page.evaluate("steer('steer-2','SECOND INPUT',124)")
+            page.evaluate("delta('AFTER SECOND'); turn.publishReply()")
             expect(page.locator('#root')).to_contain_text('AFTER SECOND')
             def order():
                 texts=[s.strip() for s in page.locator('.chat-text, .message.user .message-content').all_text_contents()]
@@ -64,10 +67,10 @@ window.legacy=()=>{
                 expect(page.locator('[data-msg-id="steer-1"]')).to_have_count(1)
                 expect(page.locator('[data-msg-id="steer-2"]')).to_have_count(1)
             order()
-            # Replayed receipts must not duplicate or move an already consumed input.
-            page.evaluate("frame({type:'user_message',msg_id:'steer-1',assistant_msg_id:'turn_reply',steering:true,content:'FIRST INPUT'})")
+            # A row published again neither duplicates nor moves an input.
+            page.evaluate("turn.putRow({id:'steer-1',role:'user',rowKind:'user',content:'FIRST INPUT',status:'done',steering:true,steeringReplyId:'turn_reply',timestamp:123},'turn')")
             order()
-            page.evaluate("frame({type:'cancelled',msg_id:'turn'})")
+            page.evaluate("turn.frame({type:'cancelled'}); turn.publishReply({status:'cancelled'})")
             order()
             page.evaluate('reloadHistory()');order()
             page.set_viewport_size({'width':390,'height':700})
@@ -88,9 +91,10 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import {QueuedMessages} from './components/chat/messages/editing/queued-messages';
+import {PendingSteers} from './components/chat/messages/bubbles/pending-steers';
 import {useSendQueue,registerChatSender,reconcileAfterSessionLoad,holdSteeringForStop} from './lib/chat/send/send-queue';
 import {steerQueuedMessage} from './lib/chat/send/steer-message';
-import {useSessionStore} from './lib/session-store';
+import {useSessionStore,selectRow} from './lib/session-store';
 const sid='reload-steer';
 window.ordinary=[];
 registerChatSender(args=>{window.ordinary.push(args);return true});
@@ -102,7 +106,9 @@ window.submit=async()=>{
 };
 window.confirm=()=>steerQueuedMessage(sid,rows()[0].id);
 window.hold=()=>holdSteeringForStop(sid);
-createRoot(document.getElementById('root')).render(<QueryClientProvider client={new QueryClient()}><QueuedMessages sessionId={sid}/></QueryClientProvider>);
+// A steer on its way into the turn shows at the end of the running reply; the
+// queue card keeps the ones that failed.
+createRoot(document.getElementById('root')).render(<QueryClientProvider client={new QueryClient()}><PendingSteers sessionId={sid} replyId="u_reply"/><QueuedMessages sessionId={sid}/></QueryClientProvider>);
 // Rows a reload left behind are adopted asynchronously (a Web Lock guards the
 // storage); the run-state reply the adoption asks for is what confirms their
 // receipts. Stand in for that reply once the rows are in.
@@ -141,13 +147,13 @@ adopted();
             page.route('http://localhost/**', route)
             page.goto('http://localhost/')
             page.evaluate('submit()')
-            expect(page.locator('[data-queued-message]')).to_have_count(1)
+            expect(page.locator('[data-queued-message], [data-pending-steer]')).to_have_count(1)
             assert len(commands) == 1
             original = commands[0]
             if delivery == 'stopped':
                 page.evaluate('hold()')
             page.reload()
-            expect(page.locator('[data-queued-message]')).to_contain_text('retain my instruction')
+            expect(page.locator('[data-queued-message], [data-pending-steer]')).to_contain_text('retain my instruction')
             page.wait_for_function('rows()[0]?.steerCommand && !rows()[0].injecting')
             assert len(commands) >= 2
             assert all(command == original for command in commands)
@@ -155,12 +161,12 @@ adopted();
             status[0] = 'rejected' if delivery == 'stopped' else 'applied'
             page.evaluate('confirm()')
             if delivery == 'stopped':
-                expect(page.locator('[data-queued-message]')).to_contain_text('Not sent')
+                expect(page.locator('[data-queued-message], [data-pending-steer]')).to_contain_text('Not sent')
                 page.reload()
-                expect(page.locator('[data-queued-message]')).to_contain_text('Not sent')
+                expect(page.locator('[data-queued-message], [data-pending-steer]')).to_contain_text('Not sent')
                 assert page.evaluate('rows()[0].steerError') == 'cancelled'
             else:
-                expect(page.locator('[data-queued-message]')).to_have_count(0)
+                expect(page.locator('[data-queued-message], [data-pending-steer]')).to_have_count(0)
                 page.reload()
                 assert page.evaluate('rows().length') == 0
             assert page.evaluate('ordinary.length') == 0

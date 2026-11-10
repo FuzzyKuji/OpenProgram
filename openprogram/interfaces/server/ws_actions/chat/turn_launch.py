@@ -64,11 +64,13 @@ def _publish_running_task(_s, turn: _AdmittedTurn) -> None:
                 _running_task["execution_id"] = execution_id
                 _running_task["status_version"] = _admission.status_version
         _s._emit_running_task_event(session_id)
-    except BaseException:
+    except BaseException as exc:
         with _s._running_tasks_lock:
             if (_s._running_tasks.get(session_id) or {}).get("msg_id") == msg_id:
                 _s._running_tasks.pop(session_id, None)
-        turn.adapter.fail_admission(_admission, reason_code="chat_handoff_failed")
+        turn.adapter.fail_admission(
+            _admission, reason_code="chat_handoff_failed", failure_text=f"{type(exc).__name__}: {exc}",
+        )
         turn.release_surface_bindings(turn.surface_context)
         _s._release_run_reservation(session_id, msg_id)
         raise
@@ -101,10 +103,10 @@ def _clear_running_task(_s, turn: _AdmittedTurn) -> None:
 def _make_run_thread(_s, turn: _AdmittedTurn, **kwargs):
     try:
         return threading.Thread(**kwargs)
-    except BaseException:
+    except BaseException as exc:
         turn.release_surface_bindings(turn.surface_context)
         turn.adapter.fail_admission(
-            turn.admission, reason_code="agent_runner_error",
+            turn.admission, reason_code="agent_runner_error", failure_text=f"{type(exc).__name__}: {exc}",
         )
         _s._release_run_reservation(turn.session_id, turn.msg_id)
         _clear_running_task(_s, turn)
@@ -171,17 +173,20 @@ def _start_run_thread(_s, turn: _AdmittedTurn) -> None:
 
     if not _s._activate_run_reservation(session_id, msg_id, run_thread):
         turn.release_surface_bindings(turn.surface_context)
-        turn.adapter.fail_admission(turn.admission, reason_code="agent_runner_error")
+        turn.adapter.fail_admission(
+            turn.admission, reason_code="agent_runner_error",
+            failure_text="chat execution reservation was lost before startup",
+        )
         _s._release_run_reservation(session_id, msg_id)
         _clear_running_task(_s, turn)
         raise RuntimeError("chat execution reservation was lost before startup")
 
     try:
         run_thread.start()
-    except BaseException:
+    except BaseException as exc:
         turn.release_surface_bindings(turn.surface_context)
         turn.adapter.fail_admission(
-            turn.admission, reason_code="agent_runner_error",
+            turn.admission, reason_code="agent_runner_error", failure_text=f"{type(exc).__name__}: {exc}",
         )
         if _s._finish_owned_run(session_id, msg_id):
             _clear_running_task(_s, turn)

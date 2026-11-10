@@ -77,7 +77,7 @@ def _aged_code_ids(graph: Graph, read_ids: list[str],
 
 
 def render_dag_messages(graph: Graph, read_ids: list[str],
-                        history_dir: "str | None" = None,
+                        session_directory: "str | None" = None,
                         manifest: "dict | None" = None) -> list:
     """Translate ``read_ids`` into a pi-ai message list.
 
@@ -90,8 +90,8 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
         graph:    the DAG to look up nodes in.
         read_ids: node ids to include, in chronological order (as
                   produced by :func:`render_context`).
-        history_dir: unused for spilling now; retained because callers
-                  pass it and it still identifies the session on disk.
+        session_directory: the session's directory on disk, when the
+                  caller knows it. Spilling does not read it.
         manifest: a previously recorded ``render_manifest``. When given,
                   its ``aged_before_seq`` overrides live aging policy so
                   the historical render is reproduced exactly.
@@ -179,6 +179,19 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
                 timestamp=ts_ms,
             ))
 
+        elif node.is_llm() and (node.metadata or {}).get("function") == "attach":
+            # A sub-agent's report, stored on the caller's line. It is not
+            # the caller's own reply, so it reaches the model as input that
+            # names its sender and where its full run can be read.
+            report = _attach_report(node)
+            if report:
+                last_assistant = None
+                messages.append(UserMessage(
+                    role="user",
+                    content=[TextContent(type="text", text=report)],
+                    timestamp=ts_ms,
+                ))
+
         elif node.is_llm():
             request_content = (node.metadata or {}).get("request_content")
             if request_content is not None:
@@ -259,6 +272,39 @@ def render_dag_messages(graph: Graph, read_ids: list[str],
                 messages.append(_assistant(ended, ts_ms))
 
     return messages
+
+
+_SETTLED = ("completed", "errored", "failed", "cancelled", "canceled")
+
+
+def _attach_report(node: Call) -> str:
+    """The text a sub-agent's attach node shows the caller, or "" for none.
+
+    A synchronous spawn already returned the reply as the agent tool's
+    result, which carries the branch address, so its node adds nothing.
+    """
+    md = node.metadata or {}
+    attach = md.get("attach") if isinstance(md.get("attach"), dict) else {}
+    if attach.get("delivery") == "tool_result":
+        return ""
+    label = str(attach.get("label") or "").strip()
+    lines = [f'[Report from sub-agent "{label}"]' if label else "[Report from a sub-agent]"]
+    task = str(attach.get("prompt") or "").strip()
+    if task:
+        lines.append(f"Task: {task[:500]}")
+    status = str(attach.get("status") or "").strip()
+    content = _elide(_text(node.output), node).strip()
+    if status in _SETTLED or content:
+        lines.append(f"Final reply ({status}):" if status else "Final reply:")
+        lines.append(content or "(no output)")
+    else:
+        lines.append("Still running; its report arrives when it finishes.")
+    session_id = str(attach.get("session_id") or "").strip()
+    head_id = str(attach.get("head_id") or "").strip()
+    if session_id and head_id:
+        lines.append("Full transcript, if you need its steps: "
+                     f'read_conversation(session_id="{session_id}", head_id="{head_id}")')
+    return "\n".join(lines)
 
 
 def _elide(text: str, node: Call) -> str:

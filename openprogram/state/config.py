@@ -4,8 +4,10 @@ Every layer that reads or changes the user config goes through these four
 functions; the file lives at ``openprogram.state.paths.get_config_path()``
 (profile-aware). Writes are private (0o600), atomic and file-locked.
 
-- ``read_config()``: the whole file as a dict, ``{}`` when it is missing or
-  malformed. For read-only use.
+- ``read_config()``: the whole file as a dict, ``{}`` when it is missing.
+  For read-only use. A file that is not valid JSON is unknown, not empty:
+  it is set aside and its last good copy (``config.json.bak``) is read
+  instead (``openprogram.state.last_good``).
 - ``read_config_with_revision()``: a snapshot plus its exact-byte revision,
   for a later ``write_config`` / ``update_config`` that must refuse to
   clobber a concurrent change.
@@ -23,12 +25,22 @@ from typing import Any, Callable
 from openprogram.state.paths import get_config_path
 
 
+def _document(path, raw: bytes | None) -> dict[str, Any]:
+    """The config in ``raw``; an unreadable file reads as its last good copy."""
+    from openprogram.state.last_good import load_json
+
+    config = load_json(path, raw)
+    return config if isinstance(config, dict) else {}
+
+
 def read_config() -> dict[str, Any]:
-    """The whole config file as a dict, or ``{}`` if it is missing or malformed."""
+    """The whole config file as a dict, or ``{}`` if it is missing."""
+    path = get_config_path()
     try:
-        return json.loads(get_config_path().read_text(encoding="utf-8"))
-    except (FileNotFoundError, UnicodeDecodeError, json.JSONDecodeError):
-        return {}
+        raw = path.read_bytes()
+    except FileNotFoundError:
+        raw = None
+    return _document(path, raw)
 
 
 def read_config_with_revision() -> tuple[dict[str, Any], str]:
@@ -44,11 +56,7 @@ def read_config_with_revision() -> tuple[dict[str, Any], str]:
     with _private_file_lock(path, root=path.parent):
         raw = _read_private_bytes(path, root=path.parent)
         revision = _revision(raw)
-    try:
-        config = json.loads(raw.decode("utf-8")) if raw is not None else {}
-    except (UnicodeDecodeError, json.JSONDecodeError):
-        config = {}
-    return config, revision
+    return _document(path, raw), revision
 
 
 def write_config(cfg: dict[str, Any], *, expected_revision: str | None = None):
@@ -92,10 +100,7 @@ def update_config(
 
     def update(raw: bytes | None) -> bytes:
         nonlocal updated
-        try:
-            cfg = json.loads(raw.decode("utf-8")) if raw is not None else {}
-        except (UnicodeDecodeError, json.JSONDecodeError):
-            cfg = {}
+        cfg = _document(path, raw)
         mutator(cfg)
         updated = cfg
         return (json.dumps(cfg, indent=2) + "\n").encode("utf-8")

@@ -321,7 +321,7 @@ def test_every_graph_change_calls_refresh(monkeypatch):
         "routes/execution/runtime.py": "model switch (REST)",
         "ws_actions/runtime.py": "model switch (WS)",
         "ws_actions/branch.py": "branch checkout / delete",
-        "context_git_routes.py": "sibling checkout",
+        "routes/chat_branches.py": "sibling checkout",
     }
     for rel, what in wired.items():
         text = (root / rel).read_text(encoding="utf-8")

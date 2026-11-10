@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Mapping
 
-from openprogram.state.authority import AuthorityDecision, decide_capability
+from openprogram.state.authority import AuthorityDecision, decide_capability, normalize_authority
 
 _READ_TOOLS = {
     "read", "read_file", "grep", "glob", "list", "list_files",
@@ -51,10 +51,13 @@ def capability_for_tool(tool_name: str, args: Mapping[str, Any] | None = None) -
         )
     if name == "remind":
         return "schedule.create"
+    if name == "save_routine":
+        # Writes a Skill file; with a cron schedule it also creates a task.
+        return "schedule.create" if (args or {}).get("cron") else "fs.write"
     if name == "self_update":
         from openprogram.programs.tools.system.self_update import action_of
         action = action_of(args)
-        return "fs.read" if action == "status" else (
+        return "fs.read" if action in ("status", "versions") else (
             "runtime.control" if action == "cancel" else "process.exec")
     if name == "memory_update":
         return "memory.source.append"
@@ -72,10 +75,9 @@ def capability_for_tool(tool_name: str, args: Mapping[str, Any] | None = None) -
         return "browser.control"
     if name == "computer_use_agent":
         # Built-in browser Pages are browser control; application windows, a
-        # VM, code and a new agent reach further and stay with the owner.
+        # VM and code reach further and stay with the owner.
         call = args or {}
-        page_only = (call.get("target") == "browser" and not call.get("code")
-                     and call.get("context", "inherit") != "fresh")
+        page_only = call.get("target") == "browser" and not call.get("code")
         return "browser.control" if page_only else "process.exec"
     if name in _NETWORK_TOOLS:
         return "network.send"
@@ -87,6 +89,24 @@ def capability_for_tool(tool_name: str, args: Mapping[str, Any] | None = None) -
     return "process.exec"
 
 
+# Their capability depends on the call's arguments, so identity alone cannot hide them.
+_ARGUMENT_DEPENDENT_TOOLS = {"cron", "scheduler", "save_routine", "self_update", "computer_use_agent"}
+
+
+def static_capability(tool_name: str) -> str | None:
+    """The one capability a tool always needs, or ``None`` when its arguments decide."""
+    return None if tool_name in _ARGUMENT_DEPENDENT_TOOLS else capability_for_tool(tool_name)
+
+
+def lacks_static_capability(value: Mapping[str, Any] | Any, tool_name: str) -> bool:
+    """Whether every call of this tool would be refused for this identity."""
+    capability = static_capability(tool_name)
+    if capability is None or not normalize_authority(value):
+        # A request with no identity is refused at the call, which says why.
+        return False
+    return not decide_capability(value, capability).allowed
+
+
 def decide_tool_authority(
     value: Mapping[str, Any] | Any,
     tool_name: str,
@@ -95,4 +115,4 @@ def decide_tool_authority(
     return decide_capability(value, capability_for_tool(tool_name, args))
 
 
-__all__ = ["capability_for_tool", "decide_tool_authority"]
+__all__ = ["capability_for_tool", "decide_tool_authority", "lacks_static_capability", "static_capability"]

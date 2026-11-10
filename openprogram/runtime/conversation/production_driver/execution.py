@@ -3,10 +3,14 @@ from __future__ import annotations
 from contextlib import contextmanager
 from openprogram.runtime.conversation.checkpoint import AgentContinuation
 import inspect
+import time
 from openprogram.runtime.conversation.production_driver import shared
 from openprogram.runtime.execution.attempts import AttemptRecord, AttemptStatus
 from openprogram.runtime.execution.model import CommandKind, CommandStatus
-from openprogram.runtime.execution.agent_checkpoint import canonical_json_bytes
+from openprogram.runtime.execution.runtime_contract import canonical_json_bytes
+
+# How long a resumed attempt waits for the attempt it replaced to leave.
+_PREDECESSOR_EXIT_SECONDS = 30.0
 
 
 class ExecutionOperations:
@@ -122,12 +126,18 @@ class ExecutionOperations:
             set_current_session_id,
         )
 
-        if not claim_cancel_event(
+        # A pause commits while its runner is still unwinding, so an answer can
+        # start the next attempt before that runner frees this slot. The new
+        # attempt holds the durable lease, so the old one can only be leaving.
+        deadline = time.monotonic() + (_PREDECESSOR_EXIT_SECONDS if continuation is not None else 0.0)
+        while not claim_cancel_event(
             request.session_id,
             cancel_event,
             execution_id=attempt.execution_id,
         ):
-            raise shared.AgentDriverError("owner_conflict", "Agent execution already has a live runtime")
+            if cancel_event.is_set() or time.monotonic() >= deadline:
+                raise shared.AgentDriverError("owner_conflict", "Agent execution already has a live runtime")
+            time.sleep(0.01)
         if not isinstance(request, shared.ForcedToolActivation):
             setattr(request, "_execution_revision_id", attempt.execution_id)
             execution = self.executions.get_execution(attempt.execution_id)
@@ -213,7 +223,7 @@ class ExecutionOperations:
                     owner = attempts._require(connection, attempt.attempt_id)
                     execution = self.executions._require_execution(connection, attempt.execution_id)
                     attempts._validate_generation(owner, attempt.generation)
-                    attempts._validate_lease(owner, attempts._clock())
+                    attempts._validate_held(owner)
                     attempts._validate_owner(execution, owner, execution.status_version)
                     if owner.status is not AttemptStatus.ACTIVE:
                         raise shared.AgentDriverError("stale_owner", "steering requires an active attempt")
@@ -250,17 +260,19 @@ class ExecutionOperations:
             if continuation is not None:
                 from openprogram.runtime.conversation.turn_runtime import process_agent_continuation
 
+                safe_point_hook = self._safe_point_hook(
+                    attempt, request, cancel_event,
+                    continuation=continuation,
+                    steer_queue=steer_queue,
+                    steer_consumed_ids=steer_consumed_ids,
+                )
                 execution_context = {
-                    "safe_point_hook": self._safe_point_hook(
-                        attempt, request, cancel_event,
-                        continuation=continuation,
-                        steer_queue=steer_queue,
-                        steer_consumed_ids=steer_consumed_ids,
-                    ),
+                    "safe_point_hook": safe_point_hook,
                     "canonical_execution": True,
                     "steer_inputs": steer_queue,
                     "steer_consumed_ids": steer_consumed_ids,
                     "persist_steer": persist_steer,
+                    "record_steer": safe_point_hook.record_steer,
                 }
                 if getattr(request, "_job_context", None) is not None:
                     execution_context["job_context"] = shared.copy.deepcopy(request._job_context)
@@ -330,12 +342,14 @@ class ExecutionOperations:
                     if "on_event" in parameters:
                         runner_kwargs["on_event"] = self._turn_event_sink(attempt, request)
                     if "execution_context" in parameters:
+                        safe_point_hook = self._safe_point_hook(
+                            attempt, request, cancel_event,
+                            steer_queue=steer_queue,
+                            steer_consumed_ids=steer_consumed_ids,
+                        )
                         runner_kwargs["execution_context"] = {
-                            "safe_point_hook": self._safe_point_hook(
-                                attempt, request, cancel_event,
-                                steer_queue=steer_queue,
-                                steer_consumed_ids=steer_consumed_ids,
-                            ),
+                            "safe_point_hook": safe_point_hook,
+                            "record_steer": safe_point_hook.record_steer,
                             "canonical_execution": True,
                             "restart_initial": attempt.generation > 1,
                             "steer_inputs": steer_queue,

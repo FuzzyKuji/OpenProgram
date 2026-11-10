@@ -156,7 +156,7 @@ const ThinkingEffortSliderPill = React.forwardRef<
       >
         <div
           className={[
-            "effort-pill-collapsed h-full flex items-center px-[7px] cursor-pointer",
+            "effort-pill-collapsed h-full flex items-center px-[8px] cursor-pointer",
             expanded ? "hidden" : "",
           ].join(" ")}
           onClick={onToggle}
@@ -164,7 +164,8 @@ const ThinkingEffortSliderPill = React.forwardRef<
           <SolarIcon
             name="fire"
             ref={effortIconChipRef}
-            size={18}
+            size={16}
+            fit="fill"
             className="effort-pill-compact-icon text-[var(--slider-active-solid)]"
             aria-hidden="true"
           />

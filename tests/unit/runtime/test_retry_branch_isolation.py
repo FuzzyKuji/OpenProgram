@@ -3,7 +3,7 @@
 Simulates the exact webui flow: WS chat pre-persists the user node
 (server._append_msg shape), dispatcher runs with
 user_already_persisted=True, then POST /api/chat/retry forks a sibling
-user message (interfaces/server/context_git_routes._fork_user_turn_and_run +
+user message (interfaces/server/routes/chat_branches._fork_user_turn_and_run +
 persistence.save_messages) and re-runs. Assert:
 
   * the history handed to the agent loop contains ONLY the active

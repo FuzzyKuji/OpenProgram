@@ -12,9 +12,17 @@ registerHooks({
     if (specifier.endsWith(".module.css")) {
       return { url: "data:text/javascript,export default {}", shortCircuit: true };
     }
+    if (specifier === "@/lib/agents/pending-inbox") {
+      // The cross-conversation inbox reads through React Query; nothing waits here.
+      return { url: "data:text/javascript,export const usePendingInbox = () => ({ items: [], loaded: true }); export const pendingInOrder = (items) => items; export const openPendingItem = () => {};", shortCircuit: true };
+    }
     if (specifier === "@/components/agents/agent-avatar") {
       return { url: "data:text/javascript,export const AgentAvatarById = () => null; export const useConversationAgentShape = () => 'cloud'", shortCircuit: true };
     }
+    // Pages this file never opens.
+    const page = { "./program-page": "ProgramPage", "./command-page": "CommandPage", "./scheduled-task-page": "ScheduledTaskPage", "./open-work-page": "OpenWorkPage" }[specifier];
+    if (page) return { url: `data:text/javascript,export const ${page} = () => null`, shortCircuit: true };
+    if (specifier === "./always-on-row") return { url: "data:text/javascript,export const AlwaysOnRow = () => null; export const ReportInside = () => null; export const reportForRun = () => false; export const reportNameForRun = () => null", shortCircuit: true };
     const base = specifier.startsWith("@/")
       ? new URL(specifier.slice(2), webRoot).href
       : specifier.startsWith(".") && !/\.[a-z]+$/i.test(specifier)
@@ -59,6 +67,7 @@ const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
 const { RunningPanel } = await import("../../components/right-sidebar/running/running-panel.tsx");
 const { MessageList } = await import("../../components/chat/messages/list/message-list.tsx");
+const { QueryClient, QueryClientProvider } = await import("@tanstack/react-query");
 const { useSessionStore } = await import("../../lib/session-store/index.ts");
 
 function response(payload, status = 200) {
@@ -121,7 +130,10 @@ test("conversation parent ignores historical update fixtures", async () => {
   const previousSessionId = useSessionStore.getState().currentSessionId;
   useSessionStore.setState({ currentSessionId: "session-one" });
   try {
-    await mount(MessageList, {}, async (host) => {
+    // The transcript asks the Agents list whether this conversation is always-on.
+    const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
+    const WithQueries = () => createElement(QueryClientProvider, { client }, createElement(MessageList));
+    await mount(WithQueries, {}, async (host) => {
       window.dispatchEvent(new CustomEvent("op:self-update-test-object", {
         detail: { phase: "pending", session_id: "session-one", update_id: "update-one" },
       }));
@@ -154,5 +166,6 @@ test("activity list does not load unselected execution events or debugger bodies
   await mount(RunningPanel, { sessionId: "session-one", active: true }, async () => {
     assert.ok(urls.some(url => url.endsWith("/executions")));
     assert.equal(urls.filter(url => /\/(events|debugger)[?]/.test(url)).length, 0);
+    assert.equal(urls.filter(url => url.includes("/activity/runs")).length, 0);
   });
 });

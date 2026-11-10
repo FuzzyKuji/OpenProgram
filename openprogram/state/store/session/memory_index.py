@@ -1,6 +1,6 @@
 """Per-session in-memory DAG index.
 
-Loaded from a session's git repo at startup / first access; rebuilt
+Loaded from a session's log at startup / first access; rebuilt
 on demand if dropped. Holds:
 
   * ``nodes_by_id`` — id → Call lookup. O(1) any read by id.
@@ -10,30 +10,27 @@ on demand if dropped. Holds:
     order matches seq order so retry sibling ordering is preserved.
   * ``children_by_caller`` — caller_id → [callee_id]. For "find tool
     sub-calls of this assistant".
-  * ``head_id`` — current head pointer (mirror of meta.json).
+  * ``head_id`` — current head pointer.
   * ``meta`` — session-level dict (title, agent_id, created_at, ...).
   * ``next_seq`` — monotonic counter, hands out the next seq for
     ``append``.
 
-Git is the truth-of-storage; this object is a query cache. ``rebuild``
-walks ``history/`` and reads ``meta.json`` to repopulate fully.
+The log is the truth; this object is a query cache. ``rebuild``
+repopulates it from the log's fold.
 """
 from __future__ import annotations
 
-import json
 import threading
 from dataclasses import dataclass, field
 from typing import Any, Optional
 
 from openprogram.state.store.session.nodes import ROLE_CODE, Call
-from .git_session import read_text_with_retry
 
 
 @dataclass
 class SessionMemoryIndex:
     """Query index for one session. All operations are in-memory. The
-    GitSession (this index's sibling) handles disk persistence; we
-    only read disk inside ``rebuild_from_git``.
+    SessionLog (this index's sibling) handles disk persistence.
     """
     nodes_by_id: dict[str, Call] = field(default_factory=dict)
     nodes_by_seq: list[Call] = field(default_factory=list)
@@ -42,6 +39,10 @@ class SessionMemoryIndex:
     head_id: Optional[str] = None
     meta: dict = field(default_factory=dict)
     next_seq: int = 0
+    # What a transcript view compares: ``token`` changes when the index is
+    # rebuilt, ``edge_version`` when an existing node is reparented.
+    token: object = field(default_factory=object)
+    edge_version: int = 0
     # Every seq currently held by a node. Guards against handing out a
     # seq an abandoned node already owns (see ``append``); a set instead
     # of scanning nodes_by_seq keeps append O(1) on long sessions.
@@ -111,6 +112,7 @@ class SessionMemoryIndex:
             def _move(index, old: Optional[str], new: Optional[str]) -> None:
                 if old == new:
                     return
+                self.edge_version += 1
                 if old:
                     siblings = index.get(old, [])
                     if node_id in siblings:
@@ -202,25 +204,14 @@ class SessionMemoryIndex:
 
     # Rebuild
 
-    def reset(self) -> None:
-        with self._lock:
-            self.nodes_by_id.clear()
-            self.nodes_by_seq.clear()
-            self.children_by_predecessor.clear()
-            self.children_by_caller.clear()
-            self.head_id = None
-            self.meta.clear()
-            self._taken_seqs.clear()
-            self.next_seq = 0
-
-    def rebuild_from_paths(
+    def rebuild(
         self,
-        history_files: list,
+        payloads: list[dict],
         meta: dict,
         get_predecessor,
         get_caller,
     ) -> None:
-        """Walk a list of ``history/*.json`` paths in seq order and rebuild.
+        """Repopulate from node payloads in seq order.
 
         ``get_predecessor(payload) -> Optional[str]`` and
         ``get_caller(payload) -> Optional[str]`` translate the raw
@@ -229,12 +220,8 @@ class SessionMemoryIndex:
         ``caller``) belongs to the message-dict adapter, not the
         index.
         """
-        self.reset()
-        for fpath in history_files:
-            try:
-                payload = json.loads(read_text_with_retry(fpath))
-            except (json.JSONDecodeError, OSError):
-                continue
+        fresh = SessionMemoryIndex()
+        for payload in payloads:
             # Drop fields not on the Call dataclass; tolerate extras.
             kwargs = {k: payload.get(k) for k in (
                 "id", "created_at", "seq", "role", "name",
@@ -246,14 +233,26 @@ class SessionMemoryIndex:
                 node = Call(**kwargs)
             except TypeError:
                 continue
-            self.append(
+            fresh.append(
                 node,
                 predecessor=get_predecessor(payload),
                 caller=get_caller(payload),
             )
-        self.meta = dict(meta or {})
-        self.head_id = self._conversation_head(
-            self.meta.get("head_id") or self.meta.get("last_node_id"))
+        fresh.meta = dict(meta or {})
+        fresh.head_id = fresh._conversation_head(
+            fresh.meta.get("head_id") or fresh.meta.get("last_node_id"))
+        # A lock-free reader sees the old index or the new one, never a
+        # part-filled one.
+        with self._lock:
+            self.nodes_by_id = fresh.nodes_by_id
+            self.nodes_by_seq = fresh.nodes_by_seq
+            self.children_by_predecessor = fresh.children_by_predecessor
+            self.children_by_caller = fresh.children_by_caller
+            self.meta = fresh.meta
+            self.head_id = fresh.head_id
+            self.next_seq = fresh.next_seq
+            self._taken_seqs = fresh._taken_seqs
+            self.token = object()
 
     def _conversation_head(self, head_id: Optional[str]) -> Optional[str]:
         """HEAD as the conversation knows it.

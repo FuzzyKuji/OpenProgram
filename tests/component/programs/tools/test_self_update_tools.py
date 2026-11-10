@@ -29,7 +29,9 @@ def _isolated_owner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
 
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "profile")
     authority._reset_owner_cache_for_tests()
-    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda _update_id: None)
+    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda *_: None)
+    from openprogram.operations.self_update.control import backend
+    monkeypatch.setattr(backend, "packaged_runtime", lambda: True)
     from types import SimpleNamespace
     monkeypatch.setattr("openprogram.runtime.conversation.model_tools.load_agent_profile", lambda _: {"id": "main"})
     monkeypatch.setattr("openprogram.runtime.conversation.model_tools.resolve_model", lambda *a: SimpleNamespace(provider="fake", id="fixed"))
@@ -147,7 +149,7 @@ def test_public_status_projects_verified_runtime_not_unbound_detail(
     store = SelfUpdateStore(tmp_path / "state")
     prepared = _prepare(worktree, candidate_sha, store)
     update_id = prepared["update_id"]
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(update_id, phase)
     gate = dict(schema=1, candidate_sha=candidate_sha, attempt=1,
                 worker_pid=12345, verified_at=time.time(),
@@ -169,6 +171,8 @@ def test_public_status_projects_verified_runtime_not_unbound_detail(
     assert status["last_verified_runtime"]["verified_at"] == gate["verified_at"]
     assert status["state_revision"] == state.revision
     assert status["target_app"] == "/Applications/OpenProgram.app"
+    assert status["progress"] == "Checking that the new version works on your real setup."
+    assert list(status)[0] == "progress"
 
 
 @pytest.mark.parametrize("mode", [0o600, 0o644])
@@ -234,23 +238,21 @@ def test_prepare_rejects_dirty_or_non_head_candidate(
 
 
 @pytest.mark.parametrize(
-    ("source", "overrides"),
+    "overrides",
     [
-        ("cron", {"interaction": "non-interactive"}),
-        ("scheduler", {"interaction": "non-interactive"}),
-        ("agent_spawn", {"interaction": "non-interactive", "speaker_kind": "runtime"}),
-        ("mcp", {"interaction": "non-interactive", "speaker_kind": "client"}),
-        ("web", {"authority_tier": "paired", "speaker_kind": "human"}),
-        ("web", {"principal_id": "owner/install/ffffffffffffffff"}),
+        {"authority_tier": "paired", "speaker_kind": "human"},
+        {"principal_id": "owner/install/ffffffffffffffff"},
     ],
 )
-def test_prepare_body_rejects_non_owner_authority(
-    tmp_path: Path, source: str, overrides: dict[str, object]
+def test_prepare_body_rejects_anyone_but_the_owner(
+    tmp_path: Path, overrides: dict[str, object]
 ) -> None:
-    worktree, _base_sha, candidate_sha = _candidate(tmp_path)
-    req = _request(source, **overrides)
+    from openprogram.runtime.permissions.refusal import Refused
 
-    with pytest.raises(SelfUpdateToolError, match="interactive local owner"):
+    worktree, _base_sha, candidate_sha = _candidate(tmp_path)
+    req = _request("web", **overrides)
+
+    with pytest.raises(Refused, match="the owner"):
         _prepare(
             worktree,
             candidate_sha,
@@ -259,12 +261,29 @@ def test_prepare_body_rejects_non_owner_authority(
         )
 
 
+@pytest.mark.parametrize(
+    ("source", "overrides"),
+    [
+        ("cron", {"interaction": "non-interactive"}),
+        ("scheduler", {"interaction": "non-interactive"}),
+        ("agent_spawn", {"interaction": "non-interactive", "speaker_kind": "runtime"}),
+        ("mcp", {"interaction": "non-interactive", "speaker_kind": "client"}),
+    ],
+)
+def test_prepare_body_accepts_the_owner_with_nobody_attending(
+    tmp_path: Path, source: str, overrides: dict[str, object]
+) -> None:
+    worktree, _base_sha, candidate_sha = _candidate(tmp_path)
+    store = SelfUpdateStore(tmp_path / "state")
+    prepared = _prepare(worktree, candidate_sha, store, req=_request(source, **overrides))
+    assert store.load(prepared["update_id"]).state.phase is UpdatePhase.PREPARING
+
+
 def test_prepare_rejects_foreign_current_or_inactive_worktree(tmp_path: Path) -> None:
     worktree, _base_sha, candidate_sha = _candidate(tmp_path)
     store = SelfUpdateStore(tmp_path / "state")
 
     for invalid in (
-        replace(worktree, parent_session="other"),
         replace(worktree, status=WorktreeStatus.KEPT),
         replace(worktree, worktree_path=worktree.source_repo),
     ):
@@ -404,7 +423,7 @@ def test_prepare_aborts_request_when_supervisor_submission_fails(
     assert store.load(update_dirs[0].name).state.phase is UpdatePhase.ABORTED
 
 
-def test_status_and_cancel_are_scoped_to_origin_session(tmp_path: Path) -> None:
+def test_status_and_cancel_work_from_any_conversation_of_the_owner(tmp_path: Path) -> None:
     worktree, _base_sha, candidate_sha = _candidate(tmp_path)
     store = SelfUpdateStore(tmp_path / "state")
     prepared = _prepare(worktree, candidate_sha, store)
@@ -419,12 +438,9 @@ def test_status_and_cancel_are_scoped_to_origin_session(tmp_path: Path) -> None:
     assert status["verifier_verdict"] is None
 
     foreign = _request(session_id="other")
-    with pytest.raises(SelfUpdateToolError, match="origin session"):
-        _status_update(update_id=prepared["update_id"], req=foreign, store=store)
-    with pytest.raises(SelfUpdateToolError, match="another session"):
-        _cancel_iteration(update_id=prepared["update_id"], req=foreign, store=store)
+    assert _status_update(update_id=prepared["update_id"], req=foreign, store=store)["phase"] == "preparing"
 
-    cancelled = _cancel_iteration(update_id=None, req=_request(), store=store)
+    cancelled = _cancel_iteration(update_id=prepared["update_id"], req=foreign, store=store)
     assert cancelled == {"root_id": prepared["update_id"], "status": "stopped"}
     assert store.load(prepared["update_id"]).state.phase is UpdatePhase.ABORTED
 
@@ -435,7 +451,7 @@ def test_prepare_publishes_bound_verifier_config_before_launch(tmp_path, monkeyp
     worktree, _, candidate_sha = _candidate(tmp_path)
     store = SelfUpdateStore(tmp_path / "state")
     seen = []
-    def launch(update_id):
+    def launch(_name, _store, update_id, _worktree):
         record = store.load(update_id)
         config = load_verifier_config(store, record)
         assert config_evidence(config) in record.request.pre_update_evidence
@@ -451,7 +467,7 @@ def test_a_config_frozen_with_another_fallback_still_loads(tmp_path, monkeypatch
     from openprogram.operations.self_update.verification import verifier_config
     worktree, _, candidate_sha = _candidate(tmp_path)
     store = SelfUpdateStore(tmp_path / "state")
-    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda _: None)
+    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda *_: None)
     current = verifier_config._response_format
     monkeypatch.setattr(verifier_config, "_response_format",
                         lambda request, attempt: {**current(request, attempt), "fallback": "auto"})
@@ -467,7 +483,7 @@ def test_a_config_frozen_without_the_evidence_pattern_still_loads(tmp_path, monk
     from openprogram.operations.self_update.verification import verifier_config
     worktree, _, candidate_sha = _candidate(tmp_path)
     store = SelfUpdateStore(tmp_path / "state")
-    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda _: None)
+    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda *_: None)
     current = verifier_config._response_format
     def unpatterned(request, attempt):
         frozen = deepcopy(current(request, attempt))
@@ -508,29 +524,184 @@ def test_snapshot_write_failure_does_not_publish_partial_update(tmp_path, monkey
             raise OSError("disk write failed")
         return original_write(path, value)
     monkeypatch.setattr(store, "_write_json", fail_config)
-    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda _: pytest.fail("partial update launched"))
+    monkeypatch.setattr(self_update_module, "_launch_supervisor", lambda *_: pytest.fail("partial update launched"))
     with pytest.raises(OSError, match="disk write failed"):
         _prepare(worktree, candidate_sha, store)
     assert store.load_active() is None
     assert not list(store.root.glob("su_*"))
 
 
-def test_with_a_stable_branch_prepare_deploys_to_the_development_instance(tmp_path, monkeypatch):
+def _with_stable_branch(worktree, base_sha):
+    source = Path(worktree.source_repo)
+    _git(source, "branch", "stable", base_sha)
+    _git(source, "branch", "-f", "dev", base_sha)
+
+
+def test_with_a_stable_branch_prepare_saves_a_request_for_the_detached_controller(tmp_path, monkeypatch):
     worktree, base_sha, candidate_sha = _candidate(tmp_path)
-    _git(Path(worktree.source_repo), "branch", "stable", base_sha)
+    _with_stable_branch(worktree, base_sha)
     launched = []
-    monkeypatch.setattr(self_update_module, "_spawn_detached",
-                        lambda command, *, env, log: launched.append((command, env)))
-    from openprogram.operations.worker import dev_instance
-    monkeypatch.setattr(dev_instance, "dev_state_dir", lambda: tmp_path / "dev")
+    monkeypatch.setattr(self_update_module, "_launch_supervisor",
+                        lambda name, store, update_id, candidate: launched.append((name, update_id, candidate)))
     store = SelfUpdateStore(tmp_path / "state")
 
     result = _prepare(worktree, candidate_sha, store)
 
-    assert result["phase"] == "deploying_to_development_instance"
-    assert result["development_url"] == "http://127.0.0.1:18200"
-    [(command, env)] = launched
-    assert command[-4:] == ["openprogram", "dev", "deploy", candidate_sha]
-    assert env["OPENPROGRAM_SOURCE_REPO"] == worktree.source_repo
-    # Nothing was queued for the App supervisor.
-    assert not (tmp_path / "state").exists() or not any((tmp_path / "state").rglob("*.json"))
+    assert result["backend"] == "dev_stable" and result["phase"] == "preparing"
+    [(name, update_id, candidate)] = launched
+    assert name == "dev_stable" and update_id == result["update_id"]
+    assert candidate == Path(worktree.worktree_path).resolve()
+    record = store.load(update_id)
+    assert "backend:dev_stable" in record.request.pre_update_evidence
+    assert record.request.timeout_seconds == 2 * 3600
+
+
+def test_with_a_stable_branch_a_candidate_from_an_older_commit_is_accepted(tmp_path):
+    worktree, base_sha, candidate_sha = _candidate(tmp_path)
+    source = Path(worktree.source_repo)
+    _git(source, "branch", "stable", base_sha)
+    (source / "elsewhere.txt").write_text("moved on\n")
+    _git(source, "add", "elsewhere.txt")
+    _git(source, "commit", "-q", "-m", "dev moved")
+    _git(source, "branch", "-f", "dev", "HEAD")
+    store = SelfUpdateStore(tmp_path / "state")
+
+    result = _prepare(worktree, candidate_sha, store)
+
+    assert result["backend"] == "dev_stable"
+    # Only the candidate's own paths, not what dev gained since it forked.
+    assert "elsewhere.txt" not in result["changed_paths"]
+    assert store.load(result["update_id"]).request.base_sha == _git(source, "rev-parse", "dev")
+
+
+def _undo(store: SelfUpdateStore, target: str, manager: object) -> dict:
+    return self_update_module._undo_update(
+        target=target, req=_request(), assistant_id="assistant-1", manager=manager, store=store,
+    )
+
+
+def test_with_a_stable_branch_undo_reverts_on_a_worktree_of_dev_and_lands_it(tmp_path, monkeypatch):
+    worktree, base_sha, candidate_sha = _candidate(tmp_path)
+    _with_stable_branch(worktree, base_sha)
+    source = Path(worktree.source_repo)
+    _git(source, "merge", "-q", "--ff-only", candidate_sha)
+    _git(source, "branch", "-f", "dev", "HEAD")
+    monkeypatch.setenv("OPENPROGRAM_SOURCE_REPO", str(source))
+    created: list[Worktree] = []
+
+    class Manager(_Manager):
+        def create_worktree(self, repository: str, *, base_ref: str, label: str, parent_session: str) -> Worktree:
+            path = tmp_path / label
+            _git(Path(repository), "worktree", "add", "-q", "-b", label, str(path), base_ref)
+            self.worktree = Worktree(
+                id="wt_undo", source_repo=repository, worktree_path=str(path), branch_name=label,
+                base_ref=base_ref, status=WorktreeStatus.ACTIVE, parent_session=parent_session,
+            )
+            created.append(self.worktree)
+            return self.worktree
+
+    store = SelfUpdateStore(tmp_path / "state")
+    result = _undo(store, candidate_sha[:12], Manager(None))
+
+    assert result["backend"] == "dev_stable" and result["changed_paths"] == ["feature.txt"]
+    record = store.load(result["update_id"])
+    assert record.request.goal == f"Undo commit {candidate_sha[:12]}: candidate"
+    reverted = Path(created[0].worktree_path)
+    assert not (reverted / "feature.txt").exists()
+    assert _git(reverted, "rev-parse", "HEAD") == record.request.candidate_sha != candidate_sha
+
+
+def test_undo_of_a_commit_dev_does_not_have_changes_nothing(tmp_path, monkeypatch):
+    worktree, base_sha, candidate_sha = _candidate(tmp_path)
+    _with_stable_branch(worktree, base_sha)
+    monkeypatch.setenv("OPENPROGRAM_SOURCE_REPO", worktree.source_repo)
+    with pytest.raises(self_update_module.SelfUpdateToolError, match="not part of the code"):
+        _undo(SelfUpdateStore(tmp_path / "state"), candidate_sha, _Manager(None))
+
+
+def test_a_conflicting_undo_on_dev_stops_and_discards_its_worktree(tmp_path, monkeypatch):
+    worktree, base_sha, candidate_sha = _candidate(tmp_path)
+    _with_stable_branch(worktree, base_sha)
+    source = Path(worktree.source_repo)
+    _git(source, "merge", "-q", "--ff-only", candidate_sha)
+    (source / "feature.txt").write_text("later edit\n", encoding="utf-8")
+    _git(source, "add", "feature.txt")
+    _git(source, "commit", "-q", "-m", "later")
+    _git(source, "branch", "-f", "dev", "HEAD")
+    monkeypatch.setenv("OPENPROGRAM_SOURCE_REPO", str(source))
+    discarded: list[str] = []
+
+    class Manager(_Manager):
+        def create_worktree(self, repository: str, *, base_ref: str, label: str, parent_session: str) -> Worktree:
+            path = tmp_path / label
+            _git(Path(repository), "worktree", "add", "-q", "-b", label, str(path), base_ref)
+            return Worktree(id="wt_undo", source_repo=repository, worktree_path=str(path), branch_name=label,
+                            base_ref=base_ref, status=WorktreeStatus.ACTIVE, parent_session=parent_session)
+
+        def discard_worktree(self, worktree_id: str, *, force: bool) -> None:
+            discarded.append(worktree_id)
+
+    with pytest.raises(self_update_module.SelfUpdateToolError, match="feature.txt"):
+        _undo(SelfUpdateStore(tmp_path / "state"), candidate_sha, Manager(None))
+    assert discarded == ["wt_undo"]
+
+
+def test_undo_in_a_developer_checkout_activates_nothing(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.control import backend
+
+    monkeypatch.setattr(backend, "select", lambda *_: backend.CHECKOUT)
+    assert _undo(SelfUpdateStore(tmp_path / "state"), "abc1234", _Manager(None))["activated"] is False
+
+
+def test_undo_in_a_packaged_app_says_it_has_nothing_to_go_back_to(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.control import backend
+
+    monkeypatch.setattr(backend, "select", lambda *_: backend.LEGACY_APP)
+    with pytest.raises(self_update_module.SelfUpdateToolError, match="keeps no earlier versions"):
+        _undo(SelfUpdateStore(tmp_path / "state"), "abc1234", _Manager(None))
+
+
+def test_undo_needs_a_target(tmp_path):
+    with pytest.raises(self_update_module.SelfUpdateToolError, match="target is required"):
+        _undo(SelfUpdateStore(tmp_path / "state"), "  ", _Manager(None))
+
+
+def test_undo_under_the_version_store_resolves_the_target_before_handing_off(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.control import backend, undo
+
+    monkeypatch.setattr(backend, "select", lambda *_: backend.VERSIONS)
+    monkeypatch.setattr(backend, "require_host", lambda _name: None)
+    seen: list[object] = []
+    plan = undo.UndoPlan(undo.UNDO_TO, "v1", "a" * 40, "b" * 40, "subject", version="v1")
+    monkeypatch.setattr(undo, "plan", lambda layout, target: seen.append((layout.root, target)) or plan)
+    monkeypatch.setattr(self_update_module, "_submit_version_undo", lambda value, **_: {"plan": value})
+
+    assert _undo(SelfUpdateStore(tmp_path / "state"), " v1 ", _Manager(None)) == {"plan": plan}
+    assert seen == [(tmp_path / "profile" / "runtime", "v1")]
+
+
+def test_a_controller_that_cannot_start_aborts_the_saved_request(tmp_path, monkeypatch):
+    worktree, base_sha, candidate_sha = _candidate(tmp_path)
+    _with_stable_branch(worktree, base_sha)
+
+    def fail(*_):
+        raise RuntimeError("no runtime to copy")
+
+    monkeypatch.setattr(self_update_module, "_launch_supervisor", fail)
+    store = SelfUpdateStore(tmp_path / "state")
+    with pytest.raises(SelfUpdateToolError, match="no runtime to copy"):
+        _prepare(worktree, candidate_sha, store)
+    assert store.load_active() is None
+
+
+def test_a_developer_checkout_activates_nothing(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.control import backend
+
+    worktree, _, candidate_sha = _candidate(tmp_path)
+    monkeypatch.setattr(backend, "packaged_runtime", lambda: False)
+    store = SelfUpdateStore(tmp_path / "state")
+
+    result = _prepare(worktree, candidate_sha, store)
+
+    assert result["backend"] == "checkout" and result["activated"] is False
+    assert store.load_active() is None

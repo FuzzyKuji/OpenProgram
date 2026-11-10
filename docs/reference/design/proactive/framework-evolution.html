@@ -1,218 +1,47 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>OpenProgram · Framework evolution</title>
-<style>
-:root{
-  --ink:#0a1322; --panel:#101d31; --panel2:#0d1828;
-  --line:rgba(154,178,204,.22); --line-strong:rgba(154,178,204,.45);
-  --text:#d9e5f1; --muted:#8aa0b8; --faint:#5f7a90;
-  --cyan:#56d9e9; --violet:#b79bf5; --amber:#f2b544; --red:#f07a6a; --green:#6fd98f;
-  --serif:"Noto Serif SC","Songti SC",serif;
-  --sans:"PingFang SC","Hiragino Sans GB",sans-serif;
-  --mono:"JetBrains Mono","SF Mono",Menlo,monospace;
-}
-*{box-sizing:border-box;margin:0;padding:0}
-html{scroll-behavior:smooth}
-body{
-  background:var(--ink); color:var(--text); font-family:var(--sans);
-  font-size:15.5px; line-height:1.85; letter-spacing:.01em;
-  background-image:
-    radial-gradient(1200px 600px at 80% -10%, rgba(111,217,143,.05), transparent 60%),
-    radial-gradient(900px 500px at -10% 30%, rgba(240,122,106,.04), transparent 60%),
-    repeating-linear-gradient(0deg, rgba(154,178,204,.045) 0 1px, transparent 1px 56px),
-    repeating-linear-gradient(90deg, rgba(154,178,204,.045) 0 1px, transparent 1px 56px);
-}
-nav{
-  position:fixed; left:0; top:0; bottom:0; width:200px; padding:42px 0 0 30px;
-  border-right:1px solid var(--line); background:rgba(10,19,34,.82); backdrop-filter:blur(6px); z-index:50;
-}
-nav .brand{font-family:var(--mono); font-size:11px; letter-spacing:.22em; color:var(--green); margin-bottom:6px}
-nav h1{font-family:var(--serif); font-weight:900; font-size:21px; letter-spacing:.06em; margin-bottom:34px}
-nav a{display:block; padding:7px 0 7px 14px; margin-left:-16px; color:var(--muted); text-decoration:none; font-size:13px; border-left:2px solid transparent; transition:all .18s}
-nav a:hover{color:var(--text); border-left-color:var(--green)}
-nav a .no{font-family:var(--mono); font-size:10.5px; color:var(--faint); margin-right:8px}
-nav .foot{position:absolute; bottom:26px; left:30px; right:20px; font-size:11px; color:var(--faint); font-family:var(--mono); line-height:1.8}
-nav .foot a{display:inline; padding:0; margin:0; border:none; color:var(--cyan)}
-main{margin-left:200px; padding:0 56px 120px}
-.wrap{max-width:1080px; margin:0 auto}
-section{padding-top:84px}
-.kicker{font-family:var(--mono); font-size:11px; letter-spacing:.28em; color:var(--green); margin-bottom:10px}
-.kicker.r{color:var(--red)} .kicker.c{color:var(--cyan)}
-h2{font-family:var(--serif); font-weight:900; font-size:30px; letter-spacing:.04em; margin-bottom:18px}
-p.lead{color:var(--muted); max-width:66ch}
-.hl{color:var(--text); font-weight:600}
-code{font-family:var(--mono); font-size:.88em; color:var(--cyan)}
-.figure{margin-top:26px; border:1px solid var(--line); border-radius:14px; overflow:hidden; background:var(--panel2)}
-.figure img{display:block; width:100%}
+<title>Framework signal routing</title>
+<meta name="description" content="Why one event bus routes signals across the framework, what each subsystem contributes, and which parts it leaves alone.">
+<meta name="covers" content="openprogram/runtime/proactive/">
+<h1>Framework signal routing</h1>
 
-header.hero{padding:110px 0 0; opacity:0; transform:translateY(18px)}
-header .sys{font-family:var(--mono); font-size:12px; letter-spacing:.3em; color:var(--muted)}
-header h2.big{font-size:50px; line-height:1.28; margin:14px 0 22px}
-header h2.big em{font-style:normal; color:var(--green)}
-header h2.big s{text-decoration-color:var(--red); color:var(--muted)}
-header .sub{font-size:17px; color:var(--muted); max-width:64ch}
-.shift{display:grid; grid-template-columns:repeat(3,1fr); gap:18px; margin-top:42px}
-.shift .s{padding:20px 24px; border:1px solid var(--line); border-radius:12px; background:linear-gradient(180deg, rgba(16,29,49,.9), rgba(13,24,40,.9))}
-.shift .tag{font-family:var(--mono); font-size:12px; font-weight:600; margin-bottom:8px; display:block}
-.shift .up .tag{color:var(--green)} .shift .down .tag{color:var(--amber)} .shift .new .tag{color:var(--cyan)}
-.shift b{color:var(--text); font-size:15px}
-.shift p{font-size:13px; color:var(--muted); margin-top:6px}
+<table class="stack">
+<thead><tr><th scope="col">Subsystem</th><th scope="col">Without a bus</th><th scope="col">On the bus</th></tr></thead>
+<tbody>
+<tr><th scope="row">EventBus</th><td>Unused</td><td>The sole hub: process singleton, one Event format, subscription by type</td></tr>
+<tr><th scope="row">WebUI server</th><td>Every signal wired to <code translate="no">_broadcast</code> with its own JSON, making a UI component the routing point</td><td>Ordinary subscriber, forwards to the frontend WebSocket</td></tr>
+<tr><th scope="row">Agent loop</th><td>Internal AgentEvent stream; hook returns discarded</td><td>Keeps that stream and emits at key points; <code translate="no">tool.before</code> can veto</td></tr>
+<tr><th scope="row">Dispatcher</th><td><code translate="no">on_event</code> chain to the WebUI</td><td>Keeps the chain and emits <code translate="no">user.prompt_submitted</code> and related events</td></tr>
+<tr><th scope="row">Task runner</th><td>Direct <code translate="no">job_status</code> broadcast</td><td>Emits <code translate="no">subagent.*</code>; the broadcast comes through <code translate="no">ws.frame</code></td></tr>
+<tr><th scope="row">Auth</th><td>Correct events, almost no subscribers</td><td>Unchanged; a bridge translates AuthEvent</td></tr>
+<tr><th scope="row">Context</th><td><code translate="no">on_event</code> callback</td><td>Emits <code translate="no">context.*</code> from that callback</td></tr>
+<tr><th scope="row">Channels</th><td>Direct <code translate="no">channel_turn</code> broadcast</td><td>Emits <code translate="no">channel.*</code>; the direct frontend connection stays</td></tr>
+<tr><th scope="row">Memory</th><td>Polled, no signal</td><td>Emits at processing start and end</td></tr>
+<tr><th scope="row">File changes</th><td>No signal</td><td>File tools emit <code translate="no">file.changed</code></td></tr>
+<tr><th scope="row">Plugin hooks</th><td>Observe only</td><td>Remain a plugin API on bus subscriptions</td></tr>
+</tbody>
+</table>
+<p class="note">A new consumer plugs in with one <code translate="no">subscribe(types=…)</code> instead of integrating five or six mechanisms, some moments of which had no signal at all.</p>
 
-table{width:100%; border-collapse:collapse; margin-top:28px; font-size:13.5px}
-th{font-family:var(--mono); font-size:11px; letter-spacing:.16em; color:var(--faint); text-align:left; font-weight:400; padding:10px 14px; border-bottom:1px solid var(--line-strong)}
-td{padding:11px 14px; border-bottom:1px solid var(--line); color:var(--muted); vertical-align:top}
-td b{color:var(--text); font-weight:600}
-tr:hover td{background:rgba(111,217,143,.025)}
-.chg{display:inline-block; font-family:var(--mono); font-size:11px; border-radius:5px; padding:2px 10px; white-space:nowrap}
-.chg.xs{color:var(--green); border:1px solid rgba(111,217,143,.5); background:rgba(111,217,143,.07)}
-.chg.s{color:var(--cyan); border:1px solid rgba(86,217,233,.5); background:rgba(86,217,233,.07)}
-.chg.m{color:var(--amber); border:1px solid rgba(242,181,68,.5); background:rgba(242,181,68,.07)}
-.chg.core{color:var(--violet); border:1px solid rgba(183,155,245,.5); background:rgba(183,155,245,.07)}
-td .bad{color:var(--red)} td .good{color:var(--green)}
+<ul>
+<li><code translate="no">tool.before</code> is the tool interception point. It sits outside the approval wrapper and applies to subagents. <code translate="no">turn.stop</code> is the other gate.</li>
+<li>A bridge is the pattern for a subsystem that already models its events well: nothing inside auth knows the bus exists.</li>
+<li>Connecting a source is additive: the bus gets a copy and the old path keeps running, so each source is verifiable and reversible alone.</li>
+<li>Switching the WebUI uses a pass-through envelope: broadcast frames are byte-for-byte the same, so no shadow comparison is needed and the frontend does not notice.</li>
+</ul>
 
-.steps{margin-top:30px; position:relative; padding-left:34px}
-.steps::before{content:""; position:absolute; left:11px; top:8px; bottom:8px; width:2px; background:repeating-linear-gradient(180deg, rgba(111,217,143,.5) 0 6px, transparent 6px 12px)}
-.step{position:relative; padding:0 0 30px 18px}
-.step::before{content:""; position:absolute; left:-31px; top:4px; width:18px; height:18px; border-radius:50%; background:var(--ink); border:2px solid var(--green)}
-.step.warn::before{border-color:var(--amber)}
-.step .t{display:flex; align-items:baseline; gap:12px}
-.step b{font-size:15.5px; color:var(--text)}
-.step .badge{font-family:var(--mono); font-size:10.5px; padding:2px 9px; border-radius:99px}
-.step .add{color:var(--green); border:1px solid rgba(111,217,143,.5)}
-.step .touch{color:var(--amber); border:1px solid rgba(242,181,68,.5)}
-.step p{font-size:13.5px; color:var(--muted); margin-top:4px; max-width:70ch}
-.step .ver{font-size:12.5px; color:var(--faint); margin-top:4px}
-.step .ver b{color:var(--muted); font-weight:600; font-size:12.5px}
+<h2>Left untouched</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">Component</th><th scope="col">What stays</th></tr></thead>
+<tbody>
+<tr><th scope="row">Dispatcher</th><td>Seven-stage turn orchestration; the signature of <code translate="no">process_user_turn</code></td></tr>
+<tr><th scope="row">Session storage</th><td>Git DAG and contextgit</td></tr>
+<tr><th scope="row">JobRunner</th><td>Thread-pool model</td></tr>
+<tr><th scope="row"><code translate="no">ApprovalRegistry</code></th><td>Unchanged</td></tr>
+<tr><th scope="row">AuthStore</th><td>Bridged, not modified</td></tr>
+<tr><th scope="row">Frontend</th><td>WebSocket protocol</td></tr>
+</tbody>
+</table>
 
-.keep{display:grid; grid-template-columns:1fr 1fr 1fr; gap:14px; margin-top:28px}
-.keep span{font-size:13px; color:var(--muted); border:1px dashed var(--line-strong); border-radius:9px; padding:12px 16px; background:rgba(16,29,49,.5)}
-.keep span b{color:var(--text); display:block; font-size:13.5px; margin-bottom:2px}
-.note{margin-top:26px; padding:14px 18px; border:1px dashed var(--line-strong); border-radius:8px; color:var(--muted); font-size:13.5px; max-width:74ch; background:rgba(16,29,49,.5)}
-.note a{color:var(--cyan); text-decoration:none}
-footer{margin-top:90px; padding-top:26px; border-top:1px solid var(--line); display:flex; justify-content:space-between; font-size:12.5px; color:var(--faint); font-family:var(--mono)}
-footer a{color:var(--cyan); text-decoration:none}
-@media (max-width:1100px){ nav{display:none} main{margin-left:0} .shift,.keep{grid-template-columns:1fr} header h2.big{font-size:36px} }
-</style>
-</head>
-<body>
+<h2>Implementation status</h2>
+<p>The bus, class-A and class-B sources, <code translate="no">file.changed</code>, the <code translate="no">tool.before</code> gate and the WebUI subscription are in place; producers across runtime, tools and channels send <code translate="no">ws.frame</code> instead of importing the WebUI. The proactive rule layer consumes the bus and adds no sources; its engine is not yet installed.</p>
 
-<nav>
-  <div class="brand">OPENPROGRAM</div>
-  <h1>Framework evolution</h1>
-  <a href="#asis"><span class="no">01</span>Current state</a>
-  <a href="#tobe"><span class="no">02</span>Target</a>
-  <a href="#delta"><span class="no">03</span>Subsystem changes</a>
-  <a href="#migrate"><span class="no">04</span>Migration sequence</a>
-  <a href="#keep"><span class="no">05</span>Intentionally unchanged</a>
-  <div class="foot">design doc · v1<br>Companion → <a href="event-layer.html">Event layer</a></div>
-</nav>
-
-<main><div class="wrap">
-
-<header class="hero">
-  <div class="sys">DESIGN · FRAMEWORK EVOLUTION</div>
-  <h2 class="big">From “<s>independent mechanisms</s>”<br> to “<em>a unified event bus</em>”.</h2>
-  <p class="sub">How the framework changes after introducing the event layer: current and target states, changes to each subsystem and migration order.<span class="hl">No wholesale rewrite: run old and new paths together and migrate one source at a time.</span></p>
-  <div class="shift">
-    <div class="s up"><span class="tag">↑ Promote</span><b>EventBus</b><p>From unused code to the sole event hub: process singleton, unified Event and type-based subscriptions</p></div>
-    <div class="s down"><span class="tag">↓ Reduce responsibility</span><b>webui server</b><p>From a forced signal hub to an ordinary subscriber: subscribe to the bus → forward to frontend WS</p></div>
-    <div class="s new"><span class="tag">＋ Introduce</span><b>Proactive and future features</b><p>Simply another subscriber. Connect with one subscribe(types=…) call; auditing, statistics and replay work the same way.</p></div>
-  </div>
-</header>
-
-<section id="asis">
-  <div class="kicker r">01 · AS-IS</div>
-  <h2>Current state: webui is forced to coordinate signals</h2>
-  <p class="lead">Almost every signal exists to make information visible to the frontend, so all are<span class="hl"> directly connected to webui's <code>_broadcast</code></span>. Five line styles represent five distinct mechanisms. Auth has the right model but no listeners; memory and file changes have no signals; hooks observe but cannot intercept; EventBus is unused. A new consumer must integrate separately with five or six mechanisms, while some useful moments have no signal at all.</p>
-  <div class="figure"><img src="diagrams/framework-asis.svg" alt="Current architecture diagram"></div>
-</section>
-
-<section id="tobe">
-  <div class="kicker">02 · TO-BE</div>
-  <h2>Target: a unified event bus</h2>
-  <p class="lead">Component positions correspond<span class="hl">one to one</span> with the current-state diagram; only connections and roles change. All sources use <code>emit(Event)</code> and all consumers use <code>subscribe(types=…)</code>; the framework's only interception point is <code>tool.before</code> , a synchronous query point reusing existing approval and applying to subagents. Everything else is asynchronous observation.</p>
-  <div class="figure"><img src="diagrams/framework-tobe.svg" alt="Target architecture diagram"></div>
-</section>
-
-<section id="delta">
-  <div class="kicker c">03 · DELTA</div>
-  <h2>Subsystem changes</h2>
-  <table>
-    <tr><th>Subsystem</th><th>Now</th><th>Future</th><th>Change size</th></tr>
-    <tr><td><b>EventBus</b></td><td><span class="bad">Unused, zero subscriptions</span></td><td>Upgrade to type subscriptions and a process singleton, then enable</td><td><span class="chg core">Core</span></td></tr>
-    <tr><td><b>agent loop</b></td><td>Internal AgentEvent stream;<span class="bad">hook return values are discarded</span></td><td>Also emit to the bus at key points; add a synchronous query for tool.before<span class="good">(interception becomes possible)</span></td><td><span class="chg s">Small</span></td></tr>
-    <tr><td><b>webui server</b></td><td><span class="bad">Directly connected by everyone; the de facto hub</span></td><td>Subscribe to the bus and forward to the frontend; retire direct paths source by source</td><td><span class="chg m">Medium</span></td></tr>
-    <tr><td><b>task runner</b></td><td>Direct _broadcast job_status connection</td><td>emit <code>subagent.*</code>, with webui subscribing and forwarding broadcasts</td><td><span class="chg s">Small</span></td></tr>
-    <tr><td><b>dispatcher</b></td><td>on_event callback chain directly to webui</td><td>Retain during transition and additionally emit <code>user.prompt_submitted</code>  and others</td><td><span class="chg s">Small</span></td></tr>
-    <tr><td><b>channels</b></td><td>Direct broadcast_channel_turn connection</td><td>emit <code>channel.*</code>; retain direct connection during transition</td><td><span class="chg s">Small</span></td></tr>
-    <tr><td><b>auth</b></td><td>Its own _emit/subscribe<span class="good">(already correct)</span></td><td><b>Leave the source unchanged</b> and translate into the bus through a small bridge</td><td><span class="chg xs">Very small</span></td></tr>
-    <tr><td><b>context</b></td><td>on_event callback</td><td>Also emit in the callback <code>context.*</code></td><td><span class="chg xs">Very small</span></td></tr>
-    <tr><td><b>memory</b></td><td><span class="bad">Periodic polling with no signal</span></td><td>Emit at start/end of processing and represent timer triggers as events</td><td><span class="chg xs">Very small</span></td></tr>
-    <tr><td><b>File changes</b></td><td><span class="bad">Silent backup with no signal</span></td><td>Emit at checkpoint_before_edit <code>file.changed</code></td><td><span class="chg xs">Very small</span></td></tr>
-    <tr><td><b>plugin hooks</b></td><td>Observe-only, 6 firing points</td><td>Use the bus internally; retain hooks as a plugin API or retire them gradually</td><td><span class="chg m">Decision point</span></td></tr>
-  </table>
-</section>
-
-<section id="migrate">
-  <div class="kicker">04 · MIGRATION</div>
-  <h2>Migration: parallel paths, one source at a time</h2>
-  <p class="lead">The first three steps are<span class="hl">entirely additive</span>: the bus runs beside existing paths with no behavior change and can be stopped or reverted at any time. Only step four changes old paths, protected by shadow comparison.</p>
-  <div class="steps">
-    <div class="step">
-      <div class="t"><b>Enable the bus and connect class-A sources</b><span class="badge add">Additive only</span><span class="badge add">✅ Implemented 2026-06-13</span></div>
-      <p>Upgrade EventBus with type subscriptions and a singleton; agent loop / task runner / dispatcher emit in parallel at key points. Existing paths continue unchanged.</p>
-      <div class="ver"><b>Acceptance</b>: subscribe to the bus and print the complete event sequence for a real turn</div>
-    </div>
-    <div class="step">
-      <div class="t"><b>Fill two gaps</b><span class="badge add">Additive only</span><span class="badge add">✅ Implemented 2026-06-13</span></div>
-      <p><code>file.changed</code>  event at checkpoint_before_edit;<code>tool.before</code>  synchronous query point reusing _approval and applying to subagents.</p>
-      <div class="ver"><b>Acceptance</b>: file edits produce events; a test subscriber can actually block a specified command</div>
-    </div>
-    <div class="step">
-      <div class="t"><b>Bridge class-B sources</b><span class="badge add">Additive only</span><span class="badge add">✅ Implemented 2026-06-13</span></div>
-      <p>One unidirectional bridge each for auth / context / channels / memory translates into a unified Event on the bus. Source logic remains unchanged.</p>
-      <div class="ver"><b>Acceptance</b>: trigger a credential rate limit and a compaction, and receive both from the same bus</div>
-    </div>
-    <div class="step warn">
-      <div class="t"><b>Switch webui to a subscriber</b><span class="badge touch">Changes the old path</span><span class="badge add">✅ Implemented 2026-06-13</span></div>
-      <p>Start in shadow mode: bus forwarding and old direct connections run together and outputs are compared. After confirming equivalence, disconnect each old source path. This is transparent to the frontend.</p>
-      <div class="ver"><b>Acceptance</b>: switch after zero differences in shadow comparison; frontend behavior remains unchanged</div>
-    </div>
-    <div class="step">
-      <div class="t"><b>Connect new consumers</b><span class="badge add">Additive only</span></div>
-      <p>Connect the proactive rule layer; every future feature then needs only the bus and a single subscribe call.</p>
-      <div class="ver"><b>Acceptance</b>: proactive works through subscriptions without accessing subsystem internals</div>
-    </div>
-  </div>
-</section>
-
-<section id="keep">
-  <div class="kicker c">05 · UNCHANGED</div>
-  <h2>Intentionally unchanged</h2>
-  <p class="lead">What changes and what stays unchanged both matter. The following are<span class="hl">outside</span> this evolution:</p>
-  <div class="keep">
-    <span><b>Dispatcher's seven-stage orchestration</b>The public process_user_turn signature remains unchanged</span>
-    <span><b>Session git DAG storage</b>Contextgit and the node model remain unchanged</span>
-    <span><b>JobRunner thread-pool model</b>Subagent execution remains unchanged</span>
-    <span><b>ApprovalRegistry</b>Reused, not rewritten</span>
-    <span><b>AuthStore itself</b>Bridge it without changing it</span>
-    <span><b>Frontend WS protocol</b>The webui switch is transparent to the frontend</span>
-  </div>
-  <div class="note">Text source:<a href="framework-evolution.html">framework-evolution.md</a> · Event-layer design:<a href="event-layer.html">event-layer.html</a> · Current wiring:<code>openprogram/runtime/events/{registry,bus,bridges}.py</code>  and actual emit sites</div>
-</section>
-
-<footer>
-  <span>OpenProgram · docs/reference/design/proactive/framework-evolution</span>
-  <span><a href="#asis">Current state</a> · <a href="#tobe">Target</a> · <a href="event-layer.html">Event layer →</a></span>
-</footer>
-
-</div></main>
-
-<script>
-requestAnimationFrame(()=>{ const h=document.querySelector('header.hero'); h.style.transition='opacity .8s ease, transform .8s ease'; h.style.opacity=1; h.style.transform='none'; });
-</script>
-</body>
-</html>
+<p class="next"><a href="event-layer.html">Event layer</a></p>

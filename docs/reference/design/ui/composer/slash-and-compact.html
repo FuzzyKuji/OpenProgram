@@ -1,174 +1,75 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>Slash Commands and Context Compaction</title>
-<style>
-  :root {
-    --bg: #f4efe6;
-    --paper: #fbf7ef;
-    --ink: #1c1916;
-    --muted: #6b645b;
-    --line: #e4ddd2;
-    --ok: #2f7d4a;
-    --ok-bg: #e4f3e8;
-    --warn: #9a6b12;
-    --warn-bg: #f8ecd0;
-    --idle: #5c6570;
-    --idle-bg: #eceff2;
-    --accent: #c45c26;
-  }
-  * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--ink);
-    font: 16px/1.6 "Iowan Old Style", "Palatino Linotype", Palatino, "Songti SC", serif; }
-  .wrap { max-width: 820px; margin: 0 auto; padding: 48px 28px 80px; }
-  header { margin-bottom: 40px; }
-  .kicker { color: var(--muted); font-size: 13px; letter-spacing: 0.04em; }
-  h1 { font-size: 32px; line-height: 1.25; margin: 8px 0 12px; font-weight: 650; }
-  .lead { color: var(--muted); font-size: 17px; max-width: 40em; }
-  h2 { font-size: 20px; margin: 44px 0 14px; }
-  h3 { font-size: 16px; margin: 28px 0 8px; }
-  p { margin: 0 0 12px; }
-  ul, ol { margin: 0 0 14px; padding-left: 1.2em; }
-  li { margin: 4px 0; }
-  code { font-family: "SF Mono", ui-monospace, Menlo, monospace;
-    font-size: 0.86em; background: #efe8dc; padding: 0.1em 0.35em; border-radius: 4px; }
-  .row { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0 8px; }
-  .pill { display: inline-flex; align-items: center; gap: 6px;
-    padding: 4px 10px; border-radius: 999px; font-size: 13px; font-family: "SF Mono", ui-monospace, Menlo, monospace; }
-  .pill.ok { background: var(--ok-bg); color: var(--ok); }
-  .pill.warn { background: var(--warn-bg); color: var(--warn); }
-  .pill.idle { background: var(--idle-bg); color: var(--idle); }
-  .card { background: var(--paper); border: 1px solid var(--line); border-radius: 14px;
-    padding: 18px 20px; margin: 12px 0 16px; }
-  .flow { display: grid; gap: 8px; margin: 14px 0 18px; }
-  .step { display: grid; grid-template-columns: 92px 1fr; gap: 12px; align-items: start;
-    padding: 10px 12px; background: var(--paper); border: 1px solid var(--line); border-radius: 10px; }
-  .step .who { font-size: 12px; color: var(--muted); font-family: "SF Mono", ui-monospace, Menlo, monospace; padding-top: 2px; }
-  table { width: 100%; border-collapse: collapse; font-size: 14.5px; margin: 10px 0 18px; }
-  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-  th { color: var(--muted); font-weight: 600; font-size: 12px; letter-spacing: 0.03em; }
-  .note { color: var(--muted); font-size: 14px; }
-  footer { margin-top: 48px; color: var(--muted); font-size: 13px; }
-</style>
-</head>
-<body>
-<div class="wrap">
-<header>
-  <div class="kicker">Slash commands and compaction · Current design</div>
-  <h1>Slash commands dispatch; compaction produces system messages</h1>
-  <p class="lead">The entry for context compaction is <code>/compact</code>. The composer executes optional-argument commands immediately; compaction start, success and failure each produce a system message. Measurement, nothing-to-compact behavior and ring lifecycle belong in the occupancy design.</p>
-  <div class="row">
-    <span class="pill ok">Backend compaction pipeline available</span>
-    <span class="pill ok">Optional-argument commands execute on selection or Enter</span>
-    <span class="pill ok">System messages for started / finished / failed</span>
-    <span class="pill warn">See occupancy design for ring suggestions and panel actions</span>
-  </div>
-</header>
-
-<h2>Summary</h2>
-<div class="card">
-  <p><code>/compact</code> asks the model to summarize old conversation turns, records the summary in the DAG, and supplies “summary + recent turns” afterward.</p>
-  <p style="margin:0">Optional arguments (<code>[…]</code>) execute immediately on selection or Enter. Menu closing animations no longer intercept Enter. Without a session, the UI asks the user to send a message first instead of claiming success.</p>
-</div>
-
-<h2>What compaction does</h2>
-<p>Models have finite context windows. As conversation grows, older turns must be reduced. OpenProgram uses a rolling summary: only one summary is active at a time. Further compaction combines the old summary and additional turns into a new summary instead of stacking summaries.</p>
-<p>The next model request actually contains:</p>
-<div class="card"><code>[System prompt] [Current summary] [Recent uncompacted turns] [New user message]</code></div>
-
-<h3>Three trigger paths</h3>
-<table>
-  <thead><tr><th>Trigger</th><th>Condition</th><th>Status</th></tr></thead>
-  <tbody>
-    <tr>
-      <td>Manual <code>/compact</code></td>
-      <td>Execute in the composer; optionally keep the latest N tokens</td>
-      <td>Emits <code>action: compact</code>. Without a session, show an alert instead of running an empty operation.</td>
-    </tr>
-    <tr>
-      <td>Automatic pre-turn compaction</td>
-      <td>Turn budget ≥ 80% of the window. Compact first, then fall back to snip</td>
-      <td>Dispatcher handles this in <code>loop_runner.py</code>. System messages use the same wording.</td>
-    </tr>
-    <tr>
-      <td>Context-window overflow recovery</td>
-      <td>Model returns 413 / prompt_too_long; at most once per turn</td>
-      <td><code>reactive.py</code>; uses the same compaction events.</td>
-    </tr>
-  </tbody>
-</table>
-
-<p>The ring color reflects occupancy, and the panel offers one-click compaction; see <a href="../../context/occupancy-status.html">Occupancy and compaction</a>.</p>
-
-<h3>Compaction steps</h3>
-<div class="flow">
-  <div class="step"><div class="who">Read</div><div>Read rendered history from SessionDB: the existing summary and turns remaining on the branch. Recompaction does not reread original text already covered by a summary.</div></div>
-  <div class="step"><div class="who">Threshold</div><div>Stop if fewer than four messages remain; the manual path emits a system explanation. If rendered history is already summary plus tail with no valid cut, emit nothing-to-compact without invoking the summarization LLM.</div></div>
-  <div class="step"><div class="who">Summarize</div><div>Make a separate LLM call. By default, retain a recent tail of 10% of the window, clamped to 8k–40k tokens and at least five nonempty messages. This can be overridden by <code>/compact 2000</code>.</div></div>
-  <div class="step"><div class="who">Persist</div><div>Write a <code>summary_*</code> node (role=llm, name=context/summary); <code>covers_ids</code> marks the replaced range. Session metadata records the summary for subsequent compaction. Old turns are not deleted and HEAD does not move.</div></div>
-  <div class="step"><div class="who">Graph</div><div>The DAG displays a capsule. The old summary becomes superseded and stops participating in rendering. Covered original conversation text remains in storage.</div></div>
-</div>
-
-<h3>Ring and /context panel</h3>
-<p>The lower-right ring shows current occupancy divided by window size; opening it reveals token categories. Occupancy uses the compacted rendered view, matching the compaction report. Colors: green below 50%, yellow at 50–80%, red at ≥80%.</p>
-<p class="note">The occupancy design defines running-compaction state and the Compact now panel interaction; this page does not create separate behavior.</p>
+<title>Slash commands and context compaction</title>
+<meta name="description" content="How the composer dispatches slash commands and how /compact and automatic compaction work.">
+<h1>Slash commands and context compaction</h1>
 
 <h2>Slash commands</h2>
-<p>When input starts with <code>/</code> and contains no space, the menu expands upward from the composer. After a space appears, it closes over 380ms. Enter checks whether the first word is a registered command: execute if registered, otherwise send ordinary chat.</p>
-<p>The built-in registry is in <code>slash-commands.ts</code>. It also fetches <code>/api/commands</code> to include skills, plugins and user commands. Built-ins have dispatch precedence.</p>
-<table>
-  <thead><tr><th>Command</th><th>Selection / Enter</th></tr></thead>
-  <tbody>
-    <tr><td><code>/compact</code></td><td>Compact immediately. The <code>[keep_recent_tokens]</code> argument is optional; execution does not require it.</td></tr>
-    <tr><td><code>/rewind</code>, <code>/branch</code></td><td>Run immediately (arguments optional).</td></tr>
-    <tr><td><code>/context</code></td><td>Open the ring panel.</td></tr>
-    <tr><td><code>/clear</code>, <code>/new</code></td><td>New session.</td></tr>
-    <tr><td><code>/task</code>, <code>/skill</code>, <code>/merge</code></td><td>Fill the prefix and wait for required arguments.</td></tr>
-    <tr><td><code>/help</code></td><td>Set input to <code>/</code>, making the menu appear again.</td></tr>
-    <tr><td><code>/sandbox</code>, <code>/doctor</code>, <code>/memory</code></td><td>Run their respective actions; with a session, doctor sends its report as a user message.</td></tr>
-  </tbody>
+<p>When input starts with <code translate="no">/</code> and has no space, the menu expands upward; a space closes it over 380ms. Enter runs a registered first word, otherwise sends chat. A menu that is closing does not intercept Enter. Skills, plugins and user commands come from <code translate="no">/api/commands</code>; built-ins win dispatch.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Command</th><th scope="col">Selection or Enter</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">/compact [keep_recent_tokens]</code></th><td>Compacts at once</td></tr>
+<tr><th scope="row"><code translate="no">/rewind</code></th><td>Web: opens a picker of earlier messages and takes no arguments. The default TUI has no such command. Rich fallback only: lists points; <code translate="no">/rewind N</code> previews one; <code translate="no">/rewind N confirm &lt;plan_hash&gt; &lt;idempotency_key&gt;</code>, as printed by the preview, rewinds</td></tr>
+<tr><th scope="row"><code translate="no">/branch [name]</code></th><td>Runs at once</td></tr>
+<tr><th scope="row"><code translate="no">/context</code></th><td>Opens the ring panel</td></tr>
+<tr><th scope="row"><code translate="no">/clear</code>, <code translate="no">/new</code></th><td>New conversation</td></tr>
+<tr><th scope="row"><code translate="no">/task</code>, <code translate="no">/skill</code>, <code translate="no">/merge</code></th><td>Fill the prefix and wait for required arguments</td></tr>
+<tr><th scope="row"><code translate="no">/help</code></th><td>Sets input to <code translate="no">/</code>, showing the menu again; no separate page</td></tr>
+<tr><th scope="row"><code translate="no">/sandbox</code></th><td>Toggles the system sandbox</td></tr>
+<tr><th scope="row"><code translate="no">/memory</code></th><td>Opens the memory page</td></tr>
+<tr><th scope="row"><code translate="no">/doctor</code></th><td>Runs health checks and shows the report locally, never to the model</td></tr>
+</tbody>
 </table>
-
-<h2>Implemented slash-command fixes</h2>
+<p class="note">Optional arguments (only <code translate="no">[…]</code>) run at once. Without a session, session commands keep the input and warn "Start a conversation first".</p>
+<details>
+<summary>Known small issues</summary>
 <ul>
-  <li>Optional arguments (only <code>[…]</code>) execute immediately on selection / Enter.<code>/task</code> and similar required-argument commands still fill a prefix first.</li>
-  <li>When the menu is <code>closing</code>, it does not intercept Enter; execution proceeds to <code>runCommand</code>.</li>
-  <li>Without a session, retain input and alert “Start a conversation first” rather than clearing it as if successful.</li>
-  <li><code>compaction_started</code> / <code>finished</code> / <code>failed</code> each have a system message. Nothing-to-compact is a fourth state defined in the occupancy design.</li>
+<li>A registry item also named compact shows twice in the menu; dispatch still picks the built-in.</li>
+<li>Jump to latest may overlap the menu position.</li>
 </ul>
+</details>
 
-<h2>Minor unfinished items</h2>
-<ul>
-  <li>If the unified registry also names an item compact, the menu shows duplicate names. Dispatch still selects the built-in.</li>
-  <li>Jump to latest has z-index 7 while the composer has 5; the button may overlap the menu position.</li>
-  <li><code>/help</code> is not a separate page.</li>
-  <li><code>/doctor</code> sends its diagnostic report as chat when a session exists.</li>
-</ul>
+<h2>What compaction sends</h2>
+<p>One rolling summary. Further compaction combines the old summary and more turns into a new one.</p>
+<pre translate="no" tabindex="0">[System prompt] [Current summary] [Recent uncompacted turns] [New user message]</pre>
 
-<h2>Key files</h2>
-<table>
-  <thead><tr><th>Responsibility</th><th>Path</th></tr></thead>
-  <tbody>
-    <tr><td>Command registry</td><td><code>apps/web/components/chat/composer/slash/slash-commands.ts</code></td></tr>
-    <tr><td>Menu / dispatch</td><td><code>apps/web/components/chat/composer/slash/use-slash-menu.ts</code></td></tr>
-    <tr><td>Selection</td><td><code>apps/web/components/chat/composer/index.tsx</code> (<code>selectSlashCommand</code>)</td></tr>
-    <tr><td>Keyboard</td><td><code>apps/web/components/chat/composer/input/use-composer-keydown.ts</code></td></tr>
-    <tr><td>Enter submission</td><td><code>apps/web/components/chat/composer/submit/use-chat-submit.ts</code></td></tr>
-    <tr><td>Manual compaction over WS</td><td><code>openprogram/interfaces/server/ws_actions/chat/commands.py</code> → <code>handle_compact</code></td></tr>
-    <tr><td>Compaction pipeline</td><td><code>openprogram/runtime/context/engine.py</code>, <code>summarize.py</code></td></tr>
-    <tr><td>Automatic compaction</td><td><code>openprogram/runtime/conversation/turn_runtime/loop_runner.py</code></td></tr>
-    <tr><td>Context-window overflow recovery</td><td><code>openprogram/runtime/context/reactive.py</code></td></tr>
-    <tr><td>Frontend event handling</td><td><code>apps/web/lib/runtime-bridge/session/chat-handlers.ts</code></td></tr>
-    <tr><td>Ring / panel</td><td><code>context-badge.tsx</code>, <code>context-breakdown-panel.tsx</code></td></tr>
-    <tr><td>Occupancy measurement</td><td><a href="../../context/occupancy-status.html">occupancy-status.html</a></td></tr>
-  </tbody>
+<h2>Triggers</h2>
+<table class="stack">
+<thead><tr><th scope="col">Trigger</th><th scope="col">Condition</th><th scope="col">Path</th></tr></thead>
+<tbody>
+<tr><th scope="row">Manual <code translate="no">/compact</code></th><td>From the composer, optionally keeping the latest N tokens</td><td><code translate="no">action: compact</code>, <code translate="no">handle_compact</code></td></tr>
+<tr><th scope="row">Automatic, before a turn</th><td>Budget at or above <code translate="no">context.auto_compact_percent</code> (default 80). Compact.</td><td><code translate="no">loop_runner.py</code></td></tr>
+<tr><th scope="row">Overflow recovery</th><td>Model returns 413 or <code translate="no">prompt_too_long</code>; at most once per turn</td><td><code translate="no">reactive.py</code></td></tr>
+</tbody>
 </table>
+<p class="note">All three use <code translate="no">compaction_started</code>, <code translate="no">compaction_finished</code> and <code translate="no">compaction_failed</code>, each with a system message.</p>
 
-<footer>
-  Slash dispatch and the three compaction system messages are implemented. The occupancy design defines measurement, nothing-to-compact behavior and the ring’s three states.
-</footer>
-</div>
-</body>
-</html>
+<h2>Steps</h2>
+<ol>
+<li><strong>Read</strong> rendered history from SessionDB: the summary and remaining turns. Text already covered is not reread.</li>
+<li><strong>Threshold.</strong> Fewer than four messages: stop; the manual path explains. Already summary plus tail with no valid cut: nothing to compact, no model call.</li>
+<li><strong>Summarize</strong> with a separate model call. Default tail: 10% of the window, clamped to 8k–40k tokens, at least four non-empty messages. <code translate="no">/compact 2000</code> overrides.</li>
+<li><strong>Persist</strong> a <code translate="no">summary_*</code> node (<code translate="no">role=llm</code>, <code translate="no">name=context/summary</code>); <code translate="no">covers_ids</code> marks the range. Session metadata records it. Old turns stay and HEAD does not move.</li>
+<li><strong>Graph.</strong> The DAG shows a capsule. The old summary is superseded and stops rendering.</li>
+</ol>
+
+<h2>Ring</h2>
+<p>Lower right: occupancy over window size, from the compacted view. Green below 50%, yellow 50–80%, red at 80% and above. Measurement, running state, nothing-to-compact and Compact now: <a href="../../context/occupancy-status.html">occupancy and compaction</a>.</p>
+
+<details>
+<summary>Key files</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Responsibility</th><th scope="col">Path</th></tr></thead>
+<tbody>
+<tr><th scope="row">Registry, menu</th><td><code translate="no">apps/web/components/chat/composer/slash/slash-commands.ts</code>, <code translate="no">use-slash-menu.ts</code></td></tr>
+<tr><th scope="row">Selection</th><td><code translate="no">apps/web/components/chat/composer/index.tsx</code> (<code translate="no">selectSlashCommand</code>)</td></tr>
+<tr><th scope="row">Keyboard</th><td><code translate="no">composer/input/use-composer-keydown.ts</code></td></tr>
+<tr><th scope="row">Enter</th><td><code translate="no">composer/submit/use-chat-submit.ts</code></td></tr>
+<tr><th scope="row">Manual over WS</th><td><code translate="no">openprogram/interfaces/server/ws_actions/chat/commands.py</code></td></tr>
+<tr><th scope="row">Pipeline</th><td><code translate="no">openprogram/runtime/context/engine.py</code>, <code translate="no">compaction/summarize.py</code></td></tr>
+<tr><th scope="row">Automatic</th><td><code translate="no">openprogram/runtime/conversation/turn_runtime/loop_runner.py</code></td></tr>
+<tr><th scope="row">Overflow</th><td><code translate="no">openprogram/runtime/context/compaction/reactive.py</code></td></tr>
+<tr><th scope="row">Frontend events</th><td><code translate="no">apps/web/lib/runtime-bridge/session/chat-handlers.ts</code></td></tr>
+<tr><th scope="row">Ring, panel</th><td><code translate="no">apps/web/components/chat/badges/context-badge.tsx</code>, <code translate="no">context-breakdown-panel.tsx</code></td></tr>
+</tbody>
+</table>
+</details>

@@ -41,16 +41,12 @@ from . import audio
 from . import keys as keymap
 from . import ocr
 from .base import (HOVER_SECONDS, INCLUDE, MAX_COPY_CHARS, MAX_TEXT_CHARS, OCR_SPARSE_NODES, AudioClip,
-                   ComputerUseError, Observation, Report, check_cancelled, click_args, click_words, find_text,
+                   ComputerUseError, Observation, RefusedApps, Report, refuse_password_field, check_cancelled, click_args, click_words, find_text,
                    menu_key, menu_path, save_recording, scroll_args, seconds_arg, window_node_count)
-from .tree import Node, Snapshot, diff, number, role_name, snapshot
+from .tree import Node, Snapshot, diff, number, rebind, role_name, snapshot
 
-# Executables the tool never reads or drives: credential and elevation
-# prompts, the lock and logon screens, and OpenProgram itself.
-REFUSED_APPS = frozenset({
-    "credentialuibroker", "consent", "logonui", "lockapp", "credwiz", "keymgr",
-    "openprogram", "ai.openprogram.desktop",
-})
+# OpenProgram's own windows, refused where they could show an approval card.
+OWN_APPS = frozenset({"openprogram", "ai.openprogram.desktop"})
 
 MAX_NODES = 1500
 MAX_DEPTH = 60
@@ -228,6 +224,7 @@ _SIGNATURES = [
     ("user32", "SendMessageW", "L", "HUWL"), ("user32", "GetWindowThreadProcessId", "u", "HP"),
     ("user32", "GetForegroundWindow", "H", ""), ("user32", "SetForegroundWindow", "b", "H"),
     ("user32", "BringWindowToTop", "b", "H"), ("user32", "GetWindow", "H", "Hu"),
+    ("user32", "SetWindowPos", "b", "HHiiiiu"), ("user32", "IsWindow", "b", "H"),
     ("user32", "GetWindowLongW", "i", "Hi"), ("user32", "IsWindowVisible", "b", "H"),
     ("user32", "IsIconic", "b", "H"), ("user32", "ShowWindow", "b", "Hi"),
     ("user32", "GetWindowRect", "b", "HP"), ("user32", "ScreenToClient", "b", "HP"),
@@ -559,12 +556,14 @@ class WindowsComputer:
         return sorted(apps, key=lambda a: a.name.lower())
 
     @staticmethod
-    def _refused(app: App | dict) -> bool:
+    def _keys(app: App | dict) -> tuple[str, ...]:
         if isinstance(app, App):
-            keys = {PureWindowsPath(app.exe).stem.lower(), app.name.lower(), app.app_id.lower()}
-        else:
-            keys = {str(app.get("name", "")).lower(), str(app.get("app_id", "")).lower()}
-        return bool(keys & REFUSED_APPS)
+            return (PureWindowsPath(app.exe).stem, app.name, app.app_id)
+        return (str(app.get("name", "")), str(app.get("app_id", "")))
+
+    @classmethod
+    def _refused(cls, app: App | dict) -> bool:
+        return RefusedApps(OWN_APPS).hits(*cls._keys(app))
 
     def _running_match(self, query: str) -> App | None:
         wanted = str(query or "").strip().lower()
@@ -587,21 +586,25 @@ class WindowsComputer:
 
     def resolve_app(self, query: str, *, launch: bool = True) -> App:
         app = self._running_match(query)
+        from openprogram.host._platform import front
+
         if app is None and launch:
-            app = self._launch(query)
+            # An application that starts may take the front; the guard is told which process is the new one.
+            with front.starting():
+                app = self._launch(query)
+                if app is not None:
+                    front.note(app.pid)
         if app is None:
             raise ComputerUseError(f"{query!r} is not running; list_apps shows the running and installed apps")
-        if self._refused(app):
-            raise ComputerUseError(f"{app.name} is not controllable: computer_use does not operate credential "
-                                   "or elevation prompts, the lock screen or OpenProgram itself")
+        RefusedApps(OWN_APPS).refuse(app.name, *self._keys(app))
+        front.note(app.pid)
         return app
 
     def _launch(self, query: str) -> App | None:
         row = self._installed_match(query)
         if row is None:
             return None
-        if self._refused(row):
-            raise ComputerUseError(f"{row['name']} is not controllable")
+        RefusedApps(OWN_APPS).refuse(row["name"], *self._keys(row))
         before = set(self._apps_by_pid())
         # Starting through the shell's AppsFolder works for Store and desktop apps alike.
         subprocess.Popen(["explorer.exe", f"shell:AppsFolder\\{row['app_id']}"])
@@ -908,8 +911,25 @@ class WindowsComputer:
         if el is None:
             raise ComputerUseError(f"element {index} is not in the last state; call get_app_state")
         if self._safe(lambda: el.CurrentControlType) is None:
-            raise ComputerUseError(f"element {index} no longer exists; call get_app_state for a fresh tree")
+            el = self._rebind(state, index)
+            if el is None:
+                raise ComputerUseError(f"element {index} no longer exists; call get_app_state for a fresh tree")
         return el
+
+    def _rebind(self, state: WindowState, index: int):
+        """The element now behind ``index`` when the app replaced the one read earlier (see :func:`tree.rebind`)."""
+        try:
+            if not state.window_id:
+                return None
+            automation, _ = _uia()
+            root = self._safe(lambda: automation.ElementFromHandle(state.window_id))
+            if root is None:
+                return None
+            nodes, elements, _ = self._read_tree(root)
+            return rebind(state, index, nodes, elements)
+        except Exception:
+            # The step then fails as it did before: the model reads the window again.
+            return None
 
     def _node_at(self, state: WindowState, index) -> Node:
         return state.by_index[int(index)]
@@ -943,8 +963,7 @@ class WindowsComputer:
 
     def _refuse_secure(self, el) -> None:
         if el is not None and self._safe(lambda: el.CurrentIsPassword, False):
-            raise ComputerUseError("This is a password field; computer_use does not type into it. Ask the user to "
-                                   "enter it.")
+            refuse_password_field("typing into this password field")
 
     # ------------------------------------------------------------------ input delivery
     def _foreground_only(self, state: WindowState) -> bool:
@@ -1654,17 +1673,25 @@ class WindowsComputer:
 
 # ---------------------------------------------------------------------- SendInput and focus
 class _Forward:
-    """Bring a window to the front for real input, then give focus and the cursor back."""
+    """Bring a window to the front for real input, then give focus, the cursor and the window's place back."""
 
     def __init__(self, hwnd: int) -> None:
         self.hwnd = hwnd
         self.previous = 0
         self.cursor = None
+        self.above = 0
+        self.guard = None
 
     def __enter__(self):
         from ctypes import wintypes
+        from openprogram.host._platform import front
         user32 = _user32()
+        # The front guard would give the foreground back in the middle of the input.
+        self.guard = front.forward()
+        self.guard.__enter__()
         self.previous = int(user32.GetForegroundWindow() or 0)
+        # The window standing directly over this one: where it goes back to afterwards.
+        self.above = int(user32.GetWindow(self.hwnd, 3) or 0)  # GW_HWNDPREV
         cursor = wintypes.POINT()
         user32.GetCursorPos(ctypes.byref(cursor))
         self.cursor = (cursor.x, cursor.y)
@@ -1678,8 +1705,16 @@ class _Forward:
         time.sleep(0.05)
         if self.cursor:
             user32.SetCursorPos(*self.cursor)
-        if self.previous and self.previous != self.hwnd:
-            self.restore(self.previous)
+        try:
+            if self.previous and self.previous != self.hwnd:
+                self.restore(self.previous)
+                if self.above and self.above != self.hwnd and user32.IsWindow(self.above):
+                    # Under the window it stood under, without activating: SWP_NOSIZE | SWP_NOMOVE | SWP_NOACTIVATE.
+                    user32.SetWindowPos(self.hwnd, self.above, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+        finally:
+            if self.guard is not None:
+                self.guard.__exit__(None, None, None)
+                self.guard = None
 
     @staticmethod
     def restore(hwnd: int) -> None:
@@ -1832,5 +1867,5 @@ def backend() -> WindowsComputer:
         return _BACKEND
 
 
-__all__ = ["REFUSED_APPS", "WindowsComputer", "backend", "cf_html", "key_chord", "parse_start_apps", "png_encode",
+__all__ = ["OWN_APPS", "WindowsComputer", "backend", "cf_html", "key_chord", "parse_start_apps", "png_encode",
            "support"]

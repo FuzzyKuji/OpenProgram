@@ -33,6 +33,7 @@ Public surface (re-exported here for convenience):
 - **`ports.py`** — Unified port probing + ownership diagnostics
 - **`runner.py`** — Foreground run-loop for the persistent worker
 - **`startup_log.py`** — Worker status lines stamped with the seconds since the process started
+- **`subsystems.py`** — What this worker started, as reported to ``/api/diagnostics``
 - **`web.py`** — Manage the Next.js frontend subprocess
 
 ## Sub-packages

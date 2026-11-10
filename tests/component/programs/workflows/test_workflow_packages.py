@@ -72,6 +72,11 @@ def _git(directory, *args):
                         "GIT_COMMITTER_EMAIL": "t@t", "PATH": "/usr/bin:/bin:/usr/local/bin:/opt/homebrew/bin"})
 
 
+def _mark_checked(directory):
+    """What a passing ``openprogram programs check`` records."""
+    _git(directory, "update-ref", "refs/openprogram/checked", "HEAD")
+
+
 @pytest.fixture
 def workflow_module(tmp_path):
     from openprogram.runtime.agent.workflow_site import add_workflow_root
@@ -130,7 +135,7 @@ def test_context_rejects_unknown_history_values():
     assert Context().history == "chat"
 
 
-def test_only_a_clean_committed_package_loads(tmp_path):
+def test_only_a_checked_commit_loads(tmp_path):
     from openprogram.programs._host import packages
 
     name = f"wf_load_{uuid.uuid4().hex[:8]}"
@@ -146,6 +151,10 @@ def test_only_a_clean_committed_package_loads(tmp_path):
         _git(package, "add", "-A")
         _git(package, "commit", "-qm", "first")
         status = packages.load_user_packages(tmp_path)[name]
+        assert status.state == "pending" and "openprogram programs check" in status.note
+
+        _mark_checked(package)
+        status = packages.load_user_packages(tmp_path)[name]
         assert status.state == "loaded", status.error
         assert status.entries == [f"{name}_report"]
 
@@ -153,7 +162,7 @@ def test_only_a_clean_committed_package_loads(tmp_path):
             handle.write("\nBROKEN = (\n")
         status = packages.load_user_packages(tmp_path)[name]
         assert status.state == "loaded"
-        assert "Uncommitted" in status.note
+        assert status.note == "Uncommitted changes. The last checked version is still loaded."
     finally:
         packages._unregister(name)
         packages._evict(name)
@@ -183,6 +192,7 @@ def test_reload_and_removal_dispose_the_workflow_context(tmp_path):
         init = (package / "__init__.py").read_text(encoding="utf-8")
         (package / "__init__.py").write_text(init.replace(f"{name}_a", f"{name}_b"), encoding="utf-8")
         _git(package, "commit", "-qam", "rename")
+        _mark_checked(package)
         packages.load_user_packages(tmp_path)
         assert _registry.program_tools(name) == [f"{name}_b"]
         assert _runtime.get(f"{name}_a") is None and _runtime.get(f"{name}_b") is not None
@@ -201,7 +211,7 @@ def test_reload_and_removal_dispose_the_workflow_context(tmp_path):
 
 
 def test_a_same_second_same_size_edit_reloads_from_source(tmp_path, monkeypatch):
-    """Python trusts a .pyc whose source mtime (seconds) and size match; a reload must not."""
+    """Python trusts a .pyc whose source mtime (seconds) and size match; each commit has its own copy."""
     import os
 
     from openprogram.programs._host import registry as _registry
@@ -219,12 +229,13 @@ def test_a_same_second_same_size_edit_reloads_from_source(tmp_path, monkeypatch)
     try:
         packages.load_user_packages(tmp_path)
         assert _registry.program_tools(name) == [f"{name}_a"]
-        assert list(package.glob("__pycache__/*.pyc")), "the load compiled bytecode"
+        assert not list(package.glob("__pycache__/*.pyc")), "the working copy is not what runs"
 
         stat = init.stat()
         init.write_text(init.read_text(encoding="utf-8").replace(f"{name}_a", f"{name}_b"), encoding="utf-8")
         os.utime(init, ns=(stat.st_atime_ns, stat.st_mtime_ns))
         _git(package, "commit", "-qam", "rename")
+        _mark_checked(package)
         packages.load_user_packages(tmp_path)
         assert _registry.program_tools(name) == [f"{name}_b"]
     finally:
@@ -278,6 +289,9 @@ def test_check_commits_only_when_tests_pass(tmp_path):
     log = subprocess.run(["git", "-C", str(package), "log", "--format=%s"],
                          capture_output=True, text=True).stdout
     assert log.strip() == "First version"
+    checked = subprocess.run(["git", "-C", str(package), "rev-parse", "refs/openprogram/checked"],
+                             capture_output=True, text=True).stdout.strip()
+    assert checked == report["revision"]
 
 
 def test_resumable_entries_are_synchronous_subprocess_tools():

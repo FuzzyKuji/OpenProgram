@@ -29,6 +29,10 @@ if os.environ.get("PAGE_PROBE_RECEIPT"):
     runtime_factory.create_runtime = lambda **_kw: Runtime(call=lambda *_a, **_k: "unused")
 
 
+def _decided(decision):
+    return decision.outcome, decision.code
+
+
 def source_identity():
     import hashlib
     import importlib
@@ -120,7 +124,7 @@ class PageScopeProbeAgent(Agent):
                     "observed_error": None,
                 }
             data = (
-                json.loads("".join(c.text for c in listed.content))
+                json.loads("".join(c.text for c in listed.content if not c.text.startswith("[notice]")))
                 if not listed.is_error
                 else None
             )
@@ -140,7 +144,7 @@ class PageScopeProbeAgent(Agent):
                 "listed_error": listed.is_error,
                 "listed": data,
                 "listed_text": "".join(c.text for c in listed.content),
-                "observed": json.loads("".join(c.text for c in observed.content))
+                "observed": json.loads("".join(c.text for c in observed.content if not c.text.startswith("[notice]")))
                 if observed and not observed.is_error
                 else None,
                 "observed_error": observed.is_error if observed else None,
@@ -153,7 +157,7 @@ class PageScopeProbeAgent(Agent):
             async def unexpected_action(*_args):
                 raise AssertionError("policy inspection must not execute a browser action")
             action = AgentTool(name="browser_page", label="Page", description="", parameters={}, execute=unexpected_action)
-            result["action_policy"] = permission_decision(action, inner, {"action": "click"})[:2]
+            result["action_policy"] = _decided(permission_decision(action, inner, {"action": "click"}))
         result.update(
             pid=os.getpid(),
             interaction=req.interaction,
@@ -279,20 +283,7 @@ def main():
             ask=["web_use"] if scenario == "ask" else [],
         )
     if scenario == "active_plan":
-        from openprogram.runtime.conversation import plan_mode
-
-        req.permission_mode = "ask"
-        token = plan_mode.current_session_id.set(req.session_id)
-        try:
-            entered = asyncio.run(
-                get_agent_tool("enter_plan_mode").execute(
-                    "enter-owned-plan", {}, None, None
-                )
-            )
-            assert not entered.is_error
-        finally:
-            plan_mode.current_session_id.reset(token)
-        assert plan_mode.is_plan_mode(req.session_id)
+        req.permission_mode = "plan"
     if scenario in {"live_plan", "live_deny", "live_ask"}:
         req.source = "web"
         from openprogram.runtime.permissions.state import update_permission
@@ -328,7 +319,7 @@ def main():
     if execution_token is not None:
         from openprogram.runtime.execution.run_control import reset_current_execution_id
         reset_current_execution_id(execution_token)
-    text = "".join(c.text for c in result.content)
+    text = "".join(c.text for c in result.content if not c.text.startswith("[notice]"))
     data = json.loads(text) if not result.is_error else {"outer_error": text}
     if owned_context is not None:
         surface_context.release_bindings(owned_context)
@@ -336,7 +327,7 @@ def main():
         parent_request_mode=req.permission_mode,
         parent_effective_mode=parent_effective.permission_mode,
         parent_active_plan=plan_mode.is_plan_mode(req.session_id),
-        parent_decision=parent_decision[:3],
+        parent_decision=_decided(parent_decision),
         parent_identity=source_identity(),
         parent_pid=os.getpid(),
         renderer_calls=calls,

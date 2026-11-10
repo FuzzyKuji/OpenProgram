@@ -1,18 +1,11 @@
-"""ContextCommit 持久化 — git-backed, 走 SessionStore.
+"""ContextCommit 持久化 — 走 SessionStore.
 
-每个 context commit 一份 JSON, 落在 session repo 的 ``context/commits/<commit_id>.json``。
+每个 context commit 一份 JSON, 落在会话目录的 ``context/commits/<commit_id>.json``。
 没有单独的 "latest mirror" 文件; 读路径走 ``load_commit_for_head`` / ``load_commit`` 按
 id 或 DAG 祖先查找, 不依赖 "当前指针" 类的可变共享文件。
 
-跟旧 SQLite 版的差别:
-  * 不再有 blob dedup 表 (``blob_store.py`` 已删).
-  * git 本身就是 content-addressed (loose object 自动 dedup), 重复的
-    rendered 字符串在 .git/objects/ 里只占一份, 不需要应用层做 hash 表.
-  * context commit 历史靠 git log 看 (每个 turn 一个 commit, 包含 context/commit.json
-    的更新), 不需要单独表存 parent chain.
-
-API 形状保持不变 (init_schema 现在 no-op, save_commit / load_commit /
-load_latest_commit / list_commits 接受 SessionStore 替代 db_path).
+API: init_schema 是 no-op, save_commit / load_commit / load_latest_commit /
+list_commits 接受 SessionStore.
 """
 from __future__ import annotations
 
@@ -27,21 +20,19 @@ if TYPE_CHECKING:
 
 
 def init_schema(store_or_path: Any) -> None:
-    """No-op in the git era. Kept for back-compat callers that used to
-    bootstrap SQLite tables. SessionStore lazily inits repos as needed."""
+    """No-op: SessionStore creates session directories as needed."""
     return None
 
 
-def _get_git(store: "SessionStore", session_id: str):
-    """Return the GitSession for ``session_id`` or None if the session
-    doesn't exist yet. Creates the repo on demand (this is called from
-    write paths)."""
+def _get_session_log(store: "SessionStore", session_id: str):
+    """Return the SessionLog for ``session_id``, creating the session on
+    demand (this is called from write paths)."""
     pair = store._open(session_id, create_if_missing=True)
     return pair[0] if pair else None
 
 
-def _commit_dir(git) -> Path:
-    d = git.path / "context" / "commits"
+def _commit_dir(session_log) -> Path:
+    d = session_log.path / "context" / "commits"
     d.mkdir(parents=True, exist_ok=True)
     return d
 
@@ -56,11 +47,11 @@ def save_commit(store: "SessionStore", commit: ContextCommit) -> None:
     concurrent writes safe: append-only, content-addressed, no
     single mutable target to race on.
     """
-    git = _get_git(store, commit.session_id)
-    if git is None:
+    session_log = _get_session_log(store, commit.session_id)
+    if session_log is None:
         return
     payload = commit.to_dict()
-    commit_path = _commit_dir(git) / f"{commit.id}.json"
+    commit_path = _commit_dir(session_log) / f"{commit.id}.json"
     commit_path.write_text(json.dumps(payload, ensure_ascii=False, default=str), encoding="utf-8")
 
 
@@ -84,8 +75,8 @@ def _load_commit_in_session(store: "SessionStore", session_id: str, commit_id: s
     pair = store._open(session_id)
     if not pair:
         return None
-    git, _idx = pair
-    p = _commit_dir(git) / f"{commit_id}.json"
+    session_log, _idx = pair
+    p = _commit_dir(session_log) / f"{commit_id}.json"
     if not p.exists():
         return None
     try:
@@ -108,8 +99,8 @@ def load_latest_commit(store: "SessionStore", session_id: str) -> Optional[Conte
     pair = store._open(session_id)
     if not pair:
         return None
-    git, _idx = pair
-    payload = git.read_context_file("commit.json")
+    session_log, _idx = pair
+    payload = session_log.read_context_file("commit.json")
     if not payload:
         return None
     return _payload_to_commit(payload)
@@ -138,7 +129,7 @@ def load_commit_for_head(
     pair = store._open(session_id)
     if not pair:
         return None
-    git, idx = pair
+    session_log, idx = pair
     # Build the ancestor id set by walking the conv-predecessor chain
     # from head_node_id up through the DAG.
     ancestors: set[str] = set()
@@ -156,7 +147,7 @@ def load_commit_for_head(
         cur = parent
     # Scan commits/ and keep the newest commit whose head_node_id lies
     # in the ancestor set.
-    sdir = git.path / "context" / "commits"
+    sdir = session_log.path / "context" / "commits"
     if not sdir.exists():
         return None
     best: Optional[ContextCommit] = None
@@ -184,8 +175,8 @@ def list_commits(store: "SessionStore", session_id: str, *, limit: int = 50) -> 
     pair = store._open(session_id)
     if not pair:
         return []
-    git, _idx = pair
-    sdir = git.path / "context" / "commits"
+    session_log, _idx = pair
+    sdir = session_log.path / "context" / "commits"
     if not sdir.exists():
         return []
     snaps: list[ContextCommit] = []

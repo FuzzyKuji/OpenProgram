@@ -150,25 +150,3 @@ def test_control_command_appends_accepted_and_terminal_audit_records(tmp_path):
     assert events[0].command_id == command.command_id
     assert events[0].redacted_payload["prompt"]["redacted"] is True
 
-
-def test_snapshot_only_recovery_binds_record_and_cursor_before_interleaved_write(tmp_path, monkeypatch):
-    store = _store(tmp_path)
-    record = _admit(store, "atomic-snapshot", "session")
-    read_record = store._get_execution
-    interleaved = False
-
-    def read_then_write(connection, execution_id):
-        nonlocal interleaved
-        value = read_record(connection, execution_id)
-        if not interleaved:
-            interleaved = True
-            store.transition_execution(execution_id, expected_version=value.status_version, target=ExecutionStatus.RUNNING)
-        return value
-
-    monkeypatch.setattr(store, "_get_execution", read_then_write)
-    replay = store.read_event_replay(record.execution_id, after_sequence=0, include_events=False)
-    assert replay.execution.status_version == record.status_version
-    assert replay.cursor.snapshot_status_version == record.status_version
-    assert replay.cursor.next_sequence == 2
-    assert replay.events == ()
-    assert store.get_execution(record.execution_id).status is ExecutionStatus.RUNNING

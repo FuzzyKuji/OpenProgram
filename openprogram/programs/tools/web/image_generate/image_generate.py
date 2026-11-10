@@ -25,9 +25,11 @@ import httpx
 
 from openprogram.host.security.safe_http import safe_client
 from openprogram.host.security.url_policy import normalize_origin
+from openprogram.programs.tools.web._owner_fetch import owner_open
 
 from openprogram.programs._authoring.helpers import read_int_param, read_string_param
 from openprogram.programs._host.runtime import ToolReturn, function
+from openprogram.runtime.permissions import refusal
 from ..image_analyze._encode import detect_raster_mime
 from . import providers as _  # registers builtins  # noqa: F401
 from .registry import GeneratedImage, registry
@@ -84,7 +86,7 @@ def _resolve_output_dir(override: str | None) -> Path:
     from openprogram.host.sandbox import validate_write_path
     violation = validate_write_path(p)
     if violation:
-        raise PermissionError(f"sandbox policy: {violation}")
+        raise refusal.sandbox("image_generate", violation)
     p.mkdir(parents=True, exist_ok=True)
     return p
 
@@ -111,7 +113,7 @@ def _save(img: GeneratedImage, out_dir: Path, stem: str, idx: int) -> Path:
         target = out_dir / f"{stem}_{idx}{_ext_for_mime(mime)}"
         violation = validate_write_path(target)
         if violation:
-            raise PermissionError(f"sandbox policy: {violation}")
+            raise refusal.sandbox("image_generate", violation)
         target.write_bytes(img.data)
     elif img.url:
         safe_error: RuntimeError | None = None
@@ -120,7 +122,9 @@ def _save(img: GeneratedImage, out_dir: Path, stem: str, idx: int) -> Path:
         ) as temporary_dir:
             staging = Path(temporary_dir) / "download"
             try:
-                with safe_client("tool.image_result.download") as client:
+                client_context = (safe_client("tool.image_result.download.owner") if owner_open()
+                                  else safe_client("tool.image_result.download"))
+                with client_context as client:
                     client.download(img.url, staging)
             except httpx.HTTPStatusError as e:
                 safe_error = RuntimeError(
@@ -146,7 +150,7 @@ def _save(img: GeneratedImage, out_dir: Path, stem: str, idx: int) -> Path:
             target = out_dir / f"{stem}_{idx}{_ext_for_mime(mime)}"
             violation = validate_write_path(target)
             if violation:
-                raise PermissionError(f"sandbox policy: {violation}")
+                raise refusal.sandbox("image_generate", violation)
             os.replace(staging, target)
     else:
         raise RuntimeError("GeneratedImage had neither bytes nor URL")
@@ -198,6 +202,8 @@ def _execute_result(
     for i, img in enumerate(images, 1):
         try:
             saved.append(_save(img, out_dir, stem, i))
+        except refusal.Refused:
+            raise
         except Exception as e:
             return ToolReturn(text=f"Error: {backend.name} save failed at image {i}: {e}", is_error=True)
 

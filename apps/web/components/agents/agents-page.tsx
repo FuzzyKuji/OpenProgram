@@ -1,12 +1,12 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useRef, useState } from "react";
 import { motion, useReducedMotion } from "framer-motion";
 import { useQueryClient } from "@tanstack/react-query";
 import { AGENTS_KEY } from "@/lib/agents/agents-query";
 import { BotIcon, CheckIcon, MessageCircleIcon, PlusIcon, SearchIcon, SettingsIcon } from "@/components/animated-icons";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { ManageEmptyState, ManagePageHeader, managePageStyles, ManageSummary, ManageLoadingState } from "@/components/ui/manage-page";
+import { ManageEmptyState, ManagePageHeader, managePageStyles, ManageLoadingState } from "@/components/ui/manage-page";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { MenuRow } from "@/components/ui/menu/menu-parts";
@@ -20,13 +20,14 @@ import { startAgentConversation } from "@/lib/agents/start-conversation";
 import settingsStyles from "../settings/settings-page.module.css";
 import { AgentAvatar } from "./agent-avatar";
 import { AgentButton } from "./agent-controls";
-import { RailBadge, RailItem, RailSearch, RailSplit, RailToggle, SecondaryRail } from "@/components/ui/secondary-rail";
+import { RailBadge, RailGroupLabel, RailItem, RailSearch, RailSplit, RailToggle, SecondaryRail } from "@/components/ui/secondary-rail";
 import { Input } from "@/components/ui/input";
+import { SearchInput } from "@/components/ui/search-input";
 import { AGENT_SETTINGS_FRAME, AgentChips, AgentGrid, agentFrame, MORPH_CONTENT, SETTINGS_FRAME_MOTION, SettingsWidthHandle } from "./agent-overview";
 import { AdvancedPanel, ContextPanel, MemoryPanel, OverviewPanel } from "./agent-panels";
 import { CapabilityPanel } from "./agent-capabilities";
 import { AlwaysOnPanel } from "./always-on-panel";
-import { scheduleValid, wakeMinutesValid } from "@/lib/agents/always-on";
+import { dailyBudgetValid, scheduleValid, wakeMinutesValid } from "@/lib/agents/always-on";
 import { ModelPicker, selectedModel, useAgentModels, type ModelSelection } from "./model-picker";
 import { clone, configuration, normalizeAgent, trialConfiguration, TABS, type Agent, type TabId } from "./agent-types";
 import styles from "./agents-page.module.css";
@@ -78,7 +79,8 @@ export function AgentsPage() {
   const formError = draft && !draft.name.trim() ? text("Enter an Agent name.", "请输入 Agent 名称。")
     : effortInvalid && dirty ? text("Choose a supported thinking effort in General.", "请在常规分区选择支持的思考强度。")
     : draft && !wakeMinutesValid(draft.always_on.wake_minutes) ? text("Enter a wake interval from 5 to 10080 minutes in Always-on.", "请在常驻分区填写 5 到 10080 分钟的唤醒间隔。")
-    : draft && !scheduleValid(draft.always_on) ? text("Give quiet hours in Always-on a different start and end time.", "请为常驻分区的安静时段填写不同的开始和结束时间。") : "";
+    : draft && !scheduleValid(draft.always_on) ? text("Give quiet hours in Always-on a different start and end time.", "请为常驻分区的安静时段填写不同的开始和结束时间。")
+    : draft && !dailyBudgetValid(draft.always_on.daily_budget_usd) ? text("Enter a daily check-in budget above $0 in Always-on, or leave it empty.", "请在常驻分区填写大于 0 美元的每日巡检预算，或留空。") : "";
 
   useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
   useEffect(() => {
@@ -268,23 +270,32 @@ export function AgentsPage() {
   // The quick panel and the editor share one frame: opening full settings
   // grows the panel into the editor, collapsing shrinks it back.
   const settingsFrame = reduceMotion ? undefined : AGENT_SETTINGS_FRAME;
-  const agentCount = text(`${agents.length} ${agents.length === 1 ? "Agent" : "Agents"}`, `${agents.length} 个 Agent`);
+  // The header holds the search while the cards show, as every other
+  // management page does; the editor's list has a search of its own.
+  const gridView = view === "grid" || !draft;
   return <div className={`main ${styles.agentsMain}`}><div className={`${managePageStyles.view} ${styles.agentView}`}>
-    <ManagePageHeader title="Agents" railToggle={view === "editor" ? <RailToggle railKey={AGENTS_RAIL} controls="agents-rail" label={{ collapse: text("Collapse Agent list", "收起 Agent 列表"), expand: text("Expand Agent list", "展开 Agent 列表") }} /> : undefined} toolbar={loading || loadError ? undefined : <ManageSummary>{agentCount}</ManageSummary>} actions={[{ label: text("New Agent", "新建 Agent"), onClick: () => openDialog("create"), icon: PlusIcon, disabled: busy || loading || Boolean(loadError), primary: true }]} />
+    <ManagePageHeader title="Agents" railToggle={view === "editor" ? <RailToggle railKey={AGENTS_RAIL} controls="agents-rail" label={{ collapse: text("Collapse Agent list", "收起 Agent 列表"), expand: text("Expand Agent list", "展开 Agent 列表") }} /> : undefined}
+      toolbar={gridView && !loading && !loadError && agents.length ? <SearchInput className="min-w-[96px] flex-1 min-[761px]:flex-none min-[761px]:min-w-[140px] min-[761px]:w-[clamp(150px,24vw,280px)]" aria-label={text("Search Agents", "搜索 Agents")} value={search} onChange={setSearch} placeholder={text("Find an Agent…", "查找 Agent…")} /> : undefined}
+      actions={[{ label: text("New Agent", "新建 Agent"), onClick: () => openDialog("create"), icon: PlusIcon, disabled: busy || loading || Boolean(loadError), primary: true }]} />
     {notice ? <div className={notice.tone === "error" ? styles.errorBanner : styles.successBanner} role={notice.tone === "error" ? "alert" : "status"}><span>{notice.message}</span></div> : null}
-    {loading ? <ManageLoadingState>{text("Loading Agents…", "正在加载 Agents…")}</ManageLoadingState> : loadError ? <div className={styles.centerState} role="alert"><ManageEmptyState icon={<BotIcon size={20} />} title={text("Unable to load Agents", "无法加载 Agents")} description={loadError} action={<AgentButton variant="elevated" onClick={() => { setLoading(true); void loadAgents().catch((error) => setLoadError(errorMessage(error))).finally(() => setLoading(false)); }}>{text("Retry", "重试")}</AgentButton>} /></div> : !agents.length ? <div className={styles.centerState}><ManageEmptyState compact icon={<BotIcon size={20} />} title={text("Create your first Agent", "创建第一个 Agent")} description={text("Configure a model, capabilities, and optional memory.", "配置模型、能力和可选的长期记忆。")} action={<AgentButton icon={PlusIcon} onClick={() => openDialog("create")}>{text("New Agent", "新建 Agent")}</AgentButton>} /></div> : view === "grid" || !draft ? <div key="grid" className={styles.viewFill}>
-      <AgentGrid agents={agents} search={search} setSearch={setSearch} quickOpen={quickOpen} onOpen={openAgent} onCreate={() => openDialog("create")}
+    {loading ? <ManageLoadingState>{text("Loading Agents…", "正在加载 Agents…")}</ManageLoadingState> : loadError ? <div className={styles.centerState} role="alert"><ManageEmptyState icon={<BotIcon size={20} />} title={text("Unable to load Agents", "无法加载 Agents")} description={loadError} action={<AgentButton variant="elevated" onClick={() => { setLoading(true); void loadAgents().catch((error) => setLoadError(errorMessage(error))).finally(() => setLoading(false)); }}>{text("Retry", "重试")}</AgentButton>} /></div> : !agents.length ? <div className={styles.centerState}><ManageEmptyState compact icon={<BotIcon size={20} />} title={text("Create your first Agent", "创建第一个 Agent")} description={text("Configure a model, capabilities, and optional memory.", "配置模型、能力和可选的长期记忆。")} action={<AgentButton icon={PlusIcon} onClick={() => openDialog("create")}>{text("New Agent", "新建 Agent")}</AgentButton>} /></div> : gridView ? <div key="grid" className={styles.viewFill}>
+      <AgentGrid agents={agents} search={search} quickOpen={quickOpen} onOpen={openAgent}
         draft={draft} catalog={models} text={text} dirty={dirty} busy={busy} formError={formError} canStart={canStart}
         update={updateDraft} save={() => void save()} discard={discard} close={() => setQuickOpen(false)}
         start={(trial) => trial ? void start(true) : guard((saved) => start(false, saved))} openFull={openFull} />
     </div> : <div key="editor" className={styles.viewFill}><RailSplit railKey={AGENTS_RAIL}>
-      <SecondaryRail railKey={AGENTS_RAIL} as="aside" id="agents-rail" label={text("Agent list", "Agent 列表")}>
+      {/* The list's scrollbar passes under the width handle on the divider. */}
+      <SecondaryRail railKey={AGENTS_RAIL} as="aside" id="agents-rail" label={text("Agent list", "Agent 列表")} data-scrollbar-layer="content">
         <RailSearch aria-label={text("Search Agents", "搜索 Agents")} value={search} onChange={setSearch} placeholder={text("Find an Agent…", "查找 Agent…")} />
-        {visible.map((agent) => <div key={agent.id} className={`${styles.morphSlot} relative flex min-w-0`}>
-          {/* The card's frame lands here, then fades into the plain row. */}
-          {settingsFrame ? <motion.span aria-hidden className={styles.rowFrame} layoutId={agentFrame(agent.id)} transition={SETTINGS_FRAME_MOTION} style={{ borderRadius: 8 }} initial={{ opacity: 1 }} animate={{ opacity: 0, transition: { duration: 0.2, delay: 0.3 } }} /> : null}
-          <motion.div {...(settingsFrame ? MORPH_CONTENT : {})}><RailItem icon={<AgentAvatar agent={agent} size={16} />} label={agent.name || agent.id} description={agent.description || text("General conversations and tasks", "通用对话与任务")} badge={agent.default ? <RailBadge>{text("Default", "默认")}</RailBadge> : undefined} active={agent.id === draft.id} onClick={() => { if (agent.id !== draft.id) guard(() => applyAgent(agent, true)); }} /></motion.div>
-        </div>)}
+        {/* The same two groups as the cards, Chat then Always-on; a group the search empties is not shown. */}
+        {([[text("Chat", "对话"), visible.filter((agent) => !agent.always_on.enabled)], [text("Always-on", "常驻"), visible.filter((agent) => agent.always_on.enabled)]] as [string, Agent[]][]).map(([title, rows]) => rows.length ? <Fragment key={title}>
+          <RailGroupLabel>{title}</RailGroupLabel>
+          {rows.map((agent) => <div key={agent.id} className={`${styles.morphSlot} relative flex min-w-0`}>
+            {/* The card's frame lands here, then fades into the plain row. */}
+            {settingsFrame ? <motion.span aria-hidden className={styles.rowFrame} layoutId={agentFrame(agent.id)} transition={SETTINGS_FRAME_MOTION} style={{ borderRadius: 8 }} initial={{ opacity: 1 }} animate={{ opacity: 0, transition: { duration: 0.2, delay: 0.3 } }} /> : null}
+            <motion.div {...(settingsFrame ? MORPH_CONTENT : {})}><RailItem icon={<AgentAvatar agent={agent} size={16} />} label={agent.name || agent.id} description={agent.description || text("General conversations and tasks", "通用对话与任务")} badge={agent.default ? <RailBadge>{text("Default", "默认")}</RailBadge> : undefined} active={agent.id === draft.id} onClick={() => { if (agent.id !== draft.id) guard(() => applyAgent(agent, true)); }} /></motion.div>
+          </div>)}
+        </Fragment> : null)}
         {!visible.length ? <ManageEmptyState compact icon={<SearchIcon size={20} />} title={text("No matching Agents", "没有匹配的 Agent")} /> : null}
       </SecondaryRail>
       <SettingsWidthHandle expanded text={text} onToggle={showGrid} className={styles.editorHandle} />

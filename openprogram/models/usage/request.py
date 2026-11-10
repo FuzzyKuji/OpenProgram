@@ -137,11 +137,10 @@ class RequestReceipt:
                         if budget._governor.ledger._path().resolve() != ledger.default_ledger._path().resolve():
                             raise QuotaExceeded("quota.accounting_unavailable", "Goal and Job accounting authorities differ")
                         metadata["job_reservation_id"] = budget.reservation.reservation_id
-                        row = conn.execute("SELECT job_id, budget_scope_id FROM usage_reservations WHERE reservation_id = ?",
-                                           (budget.reservation.reservation_id + ":token",)).fetchone()
+                        row = ledger.default_ledger.run_tables().handle.get("usage_reservations", budget.reservation.reservation_id + ":token")
                         if row is None:
                             raise QuotaExceeded("quota.accounting_unavailable", "Job reservation is unavailable")
-                        metadata["job_id"], metadata["budget_scope_id"] = row[0], row[1]
+                        metadata["job_id"], metadata["budget_scope_id"] = row["job_id"], row["budget_scope_id"]
                     conn.execute("""INSERT INTO usage_requests
                         (request_id, goal_session_id, goal_id, goal_revision, state, metadata_json, created_at)
                         VALUES (?, ?, ?, ?, 'prepared', ?, ?)""",

@@ -596,6 +596,9 @@ case "$url" in
   */releases/latest)
     printf 'https://github.com/FuzzyKuji/OpenProgram/releases/tag/v0.6.1'
     ;;
+  */release-manifest.json)
+    exit 22
+    ;;
   */v*/scripts/install-release.sh)
     cp "$FAKE_INSTALLER" "$output"
     ;;
@@ -624,6 +627,7 @@ esac
     assert result.read_text(encoding="utf-8") == "0.6.1|FuzzyKuji/OpenProgram\n"
     assert curl_log.read_text(encoding="utf-8").splitlines() == [
         "https://github.com/FuzzyKuji/OpenProgram/releases/latest",
+        "https://github.com/FuzzyKuji/OpenProgram/releases/download/v0.6.1/release-manifest.json",
         "https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/v0.6.1/scripts/install-release.sh",
     ]
 
@@ -636,7 +640,8 @@ esac
     )
     assert result.read_text(encoding="utf-8") == "1.2.3|FuzzyKuji/OpenProgram\n"
     assert curl_log.read_text(encoding="utf-8").splitlines() == [
-        "https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/v1.2.3/scripts/install-release.sh"
+        "https://github.com/FuzzyKuji/OpenProgram/releases/download/v1.2.3/release-manifest.json",
+        "https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/v1.2.3/scripts/install-release.sh",
     ]
 
 

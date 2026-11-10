@@ -64,7 +64,9 @@ def _replay_runtime(provider: str, model: str, entry: dict, kwargs: dict):
     namespace = entry["model_namespace"]
     source = get_model(provider, model) or get_model(namespace, model)
     if source is None:
-        raise ValueError(f"Unknown model {provider!r}:{model!r}")
+        from openprogram.models.providers.catalog.suggestions import unknown_model_message
+
+        raise ValueError(unknown_model_message(provider, model))
 
     runtime_kwargs = {
         key: kwargs[key]
@@ -125,7 +127,9 @@ def create_runtime(provider: str = None, model: str = None, **kwargs):
 
             source = get_model(provider, model) if model else None
             if source is None:
-                raise ValueError(f"Unknown model {provider!r}:{model!r}")
+                from openprogram.models.providers.catalog.suggestions import unknown_model_message
+
+                raise ValueError(unknown_model_message(provider, model or ""))
             return _replay_runtime(
                 provider, model, {"model_namespace": source.provider}, kwargs
             )

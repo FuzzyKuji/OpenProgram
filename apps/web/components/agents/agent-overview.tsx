@@ -5,14 +5,14 @@
 // three read the same draft as the full editor, so an edit made in one is
 // still there in the other.
 
+import { useEffect, useRef, type ReactNode } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "framer-motion";
-import { BoxIcon, BrainIcon, ChevronRightIcon, ClockIcon, FlameIcon, MessageCircleIcon, PlugZapIcon, PlusIcon, SearchIcon, SparklesIcon, XIcon } from "@/components/animated-icons";
+import { BoxIcon, BrainIcon, ChevronRightIcon, ClockIcon, FlameIcon, MessageCircleIcon, PlugZapIcon, SearchIcon, SparklesIcon, XIcon } from "@/components/animated-icons";
 import { Button } from "@/components/ui/button";
 import { ManageEmptyState } from "@/components/ui/manage-page";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
-import { SearchInput } from "@/components/ui/search-input";
 import { HoverTip } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { AgentAvatar } from "./agent-avatar";
@@ -87,25 +87,61 @@ export function AgentChips({ draft, catalog, text, onTab }: { draft: Agent; cata
   </div>;
 }
 
-function AgentCard({ agent, catalog, text, active, morph, onOpen }: { agent: Agent; catalog: ModelCatalog; text: Text; active: boolean; morph: boolean; onOpen: () => void }) {
+const GRID = "grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-[12px]";
+
+/** The always-on cards' grid: one field of light the cards are windows
+ *  onto (the sheen layers in agents-page.module.css). Each card's frame
+ *  learns its place in the grid, measured again whenever the grid
+ *  resizes, and every card's drift is set to run from the document's
+ *  start, so a card that appears later joins the others in step. */
+function SheenField({ children }: { children: ReactNode }) {
+  const ref = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const grid = ref.current;
+    if (!grid) return;
+    const place = () => {
+      for (const slot of grid.children) {
+        if (!(slot instanceof HTMLElement)) continue;
+        const frame = slot.querySelector<HTMLElement>(`.${styles.cardFrameLive}`);
+        if (!frame) continue;
+        frame.style.setProperty("--agent-sheen-x", `${slot.offsetLeft}px`);
+        frame.style.setProperty("--agent-sheen-y", `${slot.offsetTop}px`);
+        for (const layer of frame.querySelectorAll<HTMLElement>(`.${styles.sheen}`)) {
+          for (const animation of layer.getAnimations()) animation.startTime = 0;
+        }
+      }
+    };
+    place();
+    const observer = typeof ResizeObserver !== "undefined" ? new ResizeObserver(place) : null;
+    observer?.observe(grid);
+    return () => observer?.disconnect();
+  });
+  return <div ref={ref} className={`${GRID} relative`}>{children}</div>;
+}
+
+function AgentCard({ agent, text, active, morph, onOpen }: { agent: Agent; text: Text; active: boolean; morph: boolean; onOpen: () => void }) {
   // The frame is drawn apart from the contents so it can shrink into the
-  // editor's list row (and grow back) without squashing the text.
+  // editor's list row (and grow back) without squashing the text. A card
+  // says what the user picks an Agent by: who it is, what it does, and
+  // whether it is the default; an always-on card's frame is alive (the
+  // surf in agents-page.module.css, two layers the card is a window
+  // onto), which is how the group tells its kind without a word
+  // on every card. The model, effort and programs are settings, and stay
+  // in the quick settings panel and the editor.
+  const live = agent.always_on.enabled;
   return <div className={`${styles.morphSlot} relative flex min-w-0`}>
-    <motion.span aria-hidden className={cn(styles.cardFrame, active && styles.cardFrameActive)} layoutId={morph ? agentFrame(agent.id) : undefined} transition={SETTINGS_FRAME_MOTION} style={{ borderRadius: 12 }} />
+    <motion.span aria-hidden className={cn(styles.cardFrame, live && styles.cardFrameLive, active && styles.cardFrameActive)} layoutId={morph ? agentFrame(agent.id) : undefined} transition={SETTINGS_FRAME_MOTION} style={{ borderRadius: 12 }}>
+      {live ? <><i className={`${styles.sheen} ${styles.sheen0}`} /><i className={`${styles.sheen} ${styles.sheen1}`} /></> : null}
+    </motion.span>
     {/* layout="position" moves the contents with their frame when the
         grid reflows, instead of jumping ahead of it. */}
     <motion.button type="button" className={styles.agentCard} aria-pressed={active} onClick={onOpen} layout={morph ? "position" : undefined} transition={SETTINGS_FRAME_MOTION} {...(morph ? MORPH_CONTENT : {})}>
     <span className="flex items-center gap-[10px] min-w-0">
-      <span className="grid size-[32px] flex-none place-items-center"><AgentAvatar agent={agent} size={32} /></span>
-      <span className={`${styles.cardName} min-w-0 flex-1 flex flex-col`}><strong>{agent.name || agent.id}</strong><small>{agent.id}</small></span>
-      {agent.default ? <span className={styles.cardTag}>{text("Default", "默认")}</span> : agent.always_on.enabled ? <span className={styles.cardLive}>{text("Always-on", "常驻")}</span> : null}
+      <span className="grid size-[40px] flex-none place-items-center"><AgentAvatar agent={agent} size={40} /></span>
+      <span className={`${styles.cardName} min-w-0 flex-1 flex flex-col`}><strong>{agent.name || agent.id}</strong></span>
+      {agent.default ? <span className={styles.cardTag}>{text("Default", "默认")}</span> : null}
     </span>
     <span className={styles.cardDescription}>{agent.description || text("General conversations and tasks", "通用对话与任务")}</span>
-    <span className="flex flex-wrap gap-[4px] mt-[auto]">
-      <span className={styles.pill}><BrainIcon size={14} aria-hidden />{modelLabel(agent, catalog, text)}</span>
-      <span className={styles.pill}><FlameIcon size={14} aria-hidden />{effortLabel(agent, text)}</span>
-      <span className={styles.pill}><BoxIcon size={14} aria-hidden />{capabilityLabel("programs", agent, text)}</span>
-    </span>
   </motion.button></div>;
 }
 
@@ -149,22 +185,34 @@ function QuickSettings({ draft, catalog, text, dirty, busy, formError, canStart,
 }
 
 /** The page's opening state: every Agent as a card, quick settings beside. */
-export function AgentGrid({ agents, search, setSearch, quickOpen, onOpen, onCreate, busy, ...quick }: Omit<QuickProps, "draft"> & {
-  draft: Agent | null; agents: Agent[]; search: string; setSearch: (value: string) => void;
-  quickOpen: boolean; onOpen: (agent: Agent) => void; onCreate: () => void;
+export function AgentGrid({ agents, search, quickOpen, onOpen, busy, ...quick }: Omit<QuickProps, "draft"> & {
+  draft: Agent | null; agents: Agent[]; search: string;
+  quickOpen: boolean; onOpen: (agent: Agent) => void;
 }) {
   const reduce = useReducedMotion();
-  const { draft, catalog, text } = quick;
+  const { draft, text } = quick;
   const visible = agents.filter((agent) => `${agent.name} ${agent.id} ${agent.description}`.toLowerCase().includes(search.trim().toLowerCase()));
+  // The always-on switch tells the two kinds apart: the Agents you talk
+  // to, and the ones whose conversations wake on their own. An Agent moves
+  // between the groups with its switch; a new one (the header's New Agent)
+  // starts among the chat ones.
+  const chat = visible.filter((agent) => !agent.always_on.enabled);
+  const alwaysOn = visible.filter((agent) => agent.always_on.enabled);
   const open = quickOpen && draft !== null;
+  const card = (agent: Agent) => <AgentCard key={agent.id} agent={agent} text={text} active={open && agent.id === draft?.id} morph={!reduce} onOpen={() => onOpen(agent)} />;
+  // A group heads with its name and one line on what it is, then fills
+  // the width with its cards; a group with nothing to show is left out.
+  const group = (title: string, about: string, rows: Agent[], live = false) => rows.length ? <section className={styles.gridGroup}>
+    <h2>{title}<span>{about}</span></h2>
+    {live ? <SheenField>{rows.map(card)}</SheenField> : <div className={GRID}>{rows.map(card)}</div>}
+  </section> : null;
   return <div className={`${styles.gridView} relative flex min-h-0 min-w-0`}>
-    <div className="flex-1 min-w-0 overflow-auto">
-      <div className={`${styles.gridInner} max-w-[1120px] m-[0_auto] p-[20px_24px_32px] flex flex-col gap-[16px]`}>
-        <SearchInput className={styles.gridSearch} aria-label={text("Search Agents", "搜索 Agents")} value={search} onChange={setSearch} placeholder={text("Find an Agent…", "查找 Agent…")} />
-        {visible.length ? <div className="grid grid-cols-[repeat(auto-fill,minmax(260px,1fr))] gap-[12px]">
-          {visible.map((agent) => <AgentCard key={agent.id} agent={agent} catalog={catalog} text={text} active={open && agent.id === draft?.id} morph={!reduce} onOpen={() => onOpen(agent)} />)}
-          {!search.trim() ? <motion.button type="button" className={styles.newCard} disabled={busy} onClick={onCreate} layout={reduce ? undefined : "position"} transition={SETTINGS_FRAME_MOTION}><PlusIcon size={16} aria-hidden />{text("New Agent", "新建 Agent")}</motion.button> : null}
-        </div> : <ManageEmptyState compact icon={<SearchIcon size={20} />} title={text("No matching Agents", "没有匹配的 Agent")} />}
+    {/* The grid's scrollbar passes under the width handle beside the quick panel. */}
+    <div className="flex-1 min-w-0 overflow-auto" data-scrollbar-layer="content">
+      <div className={`${styles.gridInner} p-[24px_24px_32px] flex flex-col gap-[28px]`}>
+        {!visible.length ? <ManageEmptyState compact icon={<SearchIcon size={20} />} title={text("No matching Agents", "没有匹配的 Agent")} /> : null}
+        {group(text("Chat", "对话"), text("The Agents you talk to", "你和它对话的 Agent"), chat)}
+        {group(text("Always-on", "常驻"), text("Wake on their own while you are away", "你不在时自己醒来干活"), alwaysOn, true)}
       </div>
     </div>
     <AnimatePresence initial={false}>

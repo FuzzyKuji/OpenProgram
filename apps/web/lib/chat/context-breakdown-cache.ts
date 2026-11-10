@@ -132,19 +132,28 @@ export async function refreshContextBreakdown(
   }
 }
 
+// Opening a conversation reaches this from several places within a moment;
+// one read serves them all.
+const FOCUS_READ_WINDOW_MS = 1500;
+const lastRead = new Map<string, number>();
+
 /** Background read/update for the panel snapshot.
  *
- *  Call on session focus and again when a turn finishes. Skips only when
- *  the same branch is already in flight — a cache hit is not a skip,
- *  because the graph may have moved.
+ *  Call on session focus and again when a turn finishes. Skips when the
+ *  same branch is already in flight, and for `focus` reads when it was just
+ *  read. A cache hit alone is not a skip, because the graph may have moved.
  */
 export function warmContextBreakdown(
   sessionId: string | null,
   headId?: string | null,
+  { focus = false }: { focus?: boolean } = {},
 ): void {
   if (!sessionId) return;
   const key = JSON.stringify([sessionId, headId ?? null]);
   if (latestRequest.has(key)) return;
+  const now = Date.now();
+  if (focus && now - (lastRead.get(key) ?? -Infinity) < FOCUS_READ_WINDOW_MS) return;
+  lastRead.set(key, now);
   void refreshContextBreakdown(sessionId, headId, new AbortController().signal);
 }
 

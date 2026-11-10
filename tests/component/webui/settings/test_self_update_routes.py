@@ -131,7 +131,7 @@ def test_rollback_projection_requires_private_proof_without_chmod(api, mode):
     store.create(request)
     previous = dict(schema=1, candidate_sha="1" * 40, attempt=1, worker_pid=123,
                     verified_at=time.time(), checks={name: True for name in SYSTEM_CHECKS})
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(request.update_id, phase, detail={"previous_system_gate": previous})
     begin_rollback(store, request.update_id, "system probe failed: health")
     restored = dict(previous, verified_at=time.time())

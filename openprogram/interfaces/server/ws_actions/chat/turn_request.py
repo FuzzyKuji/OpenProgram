@@ -116,7 +116,8 @@ async def _parse_chat_command(ws, cmd: dict) -> _ChatRequest | None:
     ):
         permission_mode = None
     else:
-        permission_mode = _normalize_permission(_raw_perm) or "ask"
+        # An illegal value is treated like no value: the turn inherits.
+        permission_mode = _normalize_permission(_raw_perm)
     sandbox_flag = cmd.get("sandbox_enabled") if "sandbox_enabled" in cmd else None
     surface_ref = cmd.get("surface") if isinstance(cmd.get("surface"), dict) else None
     # Per-turn speed / priority tier from the composer's speed pill

@@ -64,7 +64,7 @@ def _line_path(line: str) -> str:
 def _drop_denied_lines(out: str) -> str:
     """Remove result lines naming a deny-read path. rg runs in-process
     here (no OS sandbox wraps it), so the policy has no other seam."""
-    from openprogram.host.sandbox import read_denier
+    from .file_safety import read_denier
     denied = read_denier()
     if denied is None or not out:
         return out
@@ -87,7 +87,7 @@ def _run_python_fallback(pattern: str, path: str, glob: str | None,
     content_lines: list[str] = []
     counts: dict[str, int] = {}
 
-    from openprogram.host.sandbox import read_denier
+    from .file_safety import read_denier
     denied = read_denier()
 
     if os.path.isfile(path):
@@ -172,7 +172,8 @@ def grep(pattern: str,
     from openprogram.host.sandbox import validate_read_path
     violation = validate_read_path(root)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("grep", violation)
     if shutil.which("rg"):
         return _run_rg(pattern, root, glob, output_mode, case_insensitive)
     return _run_python_fallback(pattern, root, glob, output_mode, case_insensitive)

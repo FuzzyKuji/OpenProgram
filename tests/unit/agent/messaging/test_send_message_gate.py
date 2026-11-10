@@ -6,7 +6,7 @@ cross-branch delivery and require confirmation. This locks that guarantee:
 a gate that denies send_message is honoured, and doesn't touch other
 tools.
 
-See docs/reference/design/runtime/collaboration/agent-collaboration.md (C7).
+See docs/reference/design/runtime/collaboration/agent-collaboration.html (C7).
 """
 from __future__ import annotations
 

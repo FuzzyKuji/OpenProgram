@@ -20,8 +20,7 @@ it is not a lifecycle authority and cannot replace durable execution state.
 
 This package imports no engine. The persisted schemas it decodes live here:
 the Agent checkpoint payload (`agent_checkpoint.py`), a Job's admission input
-(`job_input.py`) and the durable-function suspension evidence
-(`function_suspension.py`). So does execution binding and cancellation inside
+(`job_input.py`). So does execution binding and cancellation inside
 one process (`run_control/`). Where the control plane must start or ask an
 engine, it calls a hook from `hooks.py` that the engine registers when its
 package is imported: `openprogram.runtime.conversation` registers
@@ -40,11 +39,9 @@ takes the session's Goal owner lock and pauses an interrupted Workflow Goal
 recovery, so the conversation engine registers these hooks and imports
 `openprogram.programs.tools.planning.goal` when one is first called.
 
-Admission stores an immutable input snapshot with the queued execution. Every
-canonical event creates one durable delivery item for each fixed projection
-(`dag`, `job`, `workflow`, and `ui`) in the same SQLite transaction. Projection
-workers claim, acknowledge, retry, and reclaim those items independently; a
-projection failure never changes canonical execution state.
+Admission stores an immutable input snapshot with the queued execution. Run
+state is folded from each session's log into tables in the Worker's memory, and
+every committed change is appended to that log.
 
 `RuntimeControlService` commits pause and cancel intent before notifying a live
 driver. Missing or failing local delivery leaves the durable command applying

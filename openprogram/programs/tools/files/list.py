@@ -49,7 +49,8 @@ def list_dir(path: str, show_hidden: bool = False) -> str:
     from openprogram.host.sandbox import validate_read_path, read_denier
     violation = validate_read_path(path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("list", violation)
     if not os.path.isdir(path):
         return f"Error: not a directory: {path}"
 

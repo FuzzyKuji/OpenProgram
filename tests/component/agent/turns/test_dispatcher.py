@@ -177,6 +177,81 @@ def test_history_is_passed_to_loop(tmp_db) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Context overflow
+# ---------------------------------------------------------------------------
+
+def _overflow_loop(engine):
+    """A loop whose first provider call overflows; records each attempt's prompt size."""
+    from openprogram.models.providers.utils.errors import ErrorReason, LLMError
+    from openprogram.runtime.context.tokens import estimate_history_tokens
+    sizes: list[int] = []
+
+    def _loop(*, req, history, **_extra):
+        sizes.append(estimate_history_tokens(engine._build_messages_from_dag(
+            session_id=req.session_id, history=history, model=None)))
+        if len(sizes) == 1:
+            raise LLMError(message="prompt is too long: 250000 tokens > 200000 maximum",
+                           reason=ErrorReason.CONTEXT_LENGTH)
+        return "answer after compaction", {"input_tokens": 10, "output_tokens": 4}, []
+    return _loop, sizes
+
+
+def _overflow_engine(monkeypatch):
+    from openprogram.runtime.context.engine import DefaultContextEngine
+    engine = DefaultContextEngine()
+
+    async def _summary(**_kwargs):
+        return "recap of the older turns"
+
+    monkeypatch.setattr(engine.summarizer, "_llm_summary", _summary)
+    monkeypatch.setattr("openprogram.runtime.context.resolve_engine_for", lambda _agent: engine)
+    monkeypatch.setattr(D, "_resolve_model", lambda *_args, **_kwargs: None)
+    return engine
+
+
+def _event_kinds(captured: list[dict]) -> list[str]:
+    return [event["data"].get("type") for event in captured if event["type"] == "chat_response"]
+
+
+def test_context_overflow_installs_a_summary_and_retries_smaller(tmp_db, captured, collector, monkeypatch) -> None:
+    engine = _overflow_engine(monkeypatch)
+    tmp_db.create_session("c1", "main")
+    previous = None
+    # Past the size at which recovery used to drop turns and retry unchanged.
+    for turn in range(40):
+        tmp_db.append_message("c1", {"id": f"u{turn}", "role": "user", "content": f"request {turn}",
+                                     "predecessor": previous})
+        tmp_db.append_message("c1", {"id": f"a{turn}", "role": "assistant", "content": "answer " * 6000,
+                                     "predecessor": f"u{turn}", "status": "done"})
+        previous = f"a{turn}"
+    loop, sizes = _overflow_loop(engine)
+    with patch.object(D, "_run_loop_blocking", loop):
+        result = D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="next", agent_id="main", source="tui"),
+            on_event=collector,
+        )
+
+    assert result.failed is False and result.final_text == "answer after compaction"
+    assert len(sizes) == 2 and sizes[1] < sizes[0]
+    assert "reactive_compact_done" in _event_kinds(captured)
+    assert any(message.get("covers_ids") for message in tmp_db.get_messages("c1"))
+
+
+def test_context_overflow_with_nothing_to_compact_fails_the_turn(tmp_db, captured, collector, monkeypatch) -> None:
+    engine = _overflow_engine(monkeypatch)
+    loop, sizes = _overflow_loop(engine)
+    with patch.object(D, "_run_loop_blocking", loop):
+        result = D.process_user_turn(
+            agent_turn_request.TurnRequest(session_id="c1", user_text="hi", agent_id="main", source="tui"),
+            on_event=collector,
+        )
+
+    assert result.failed is True and len(sizes) == 1
+    assert "reactive_compact_failed" in _event_kinds(captured)
+    assert not any(message.get("covers_ids") for message in tmp_db.get_messages("c1"))
+
+
+# ---------------------------------------------------------------------------
 # Error handling
 # ---------------------------------------------------------------------------
 
@@ -258,7 +333,7 @@ def _durable_approval_wait(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="dispatcher-test", ttl_seconds=30,
+        owner_id="dispatcher-test",
     )
     attempt, execution = attempts.activate(
         leased.attempt_id, generation=leased.generation,

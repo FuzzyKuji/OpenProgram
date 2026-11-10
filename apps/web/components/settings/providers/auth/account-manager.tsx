@@ -12,6 +12,8 @@ import { useTranslation } from "@/lib/i18n";
 import { normalizeSecretReplacement } from "@/lib/net/auth/secret-replacement";
 
 import { ProviderLogin } from "./provider-login";
+import { settingsSend } from "@/lib/settings/settings-request";
+import { confirmAction } from "@/components/ui/confirm-dialog";
 import { SimpleSelect } from "@/components/ui/select";
 import styles from "../provider-pane.module.css";
 import type { Provider, ProviderAccountView } from "../types";
@@ -38,6 +40,16 @@ interface State {
 }
 
 const JSON_HEADERS = { "Content-Type": "application/json" };
+
+/** Send one account change; a refused or lost request tells the user. */
+async function postAccounts(
+  url: string,
+  body: unknown,
+  text: (en: string, zh: string) => string,
+): Promise<boolean> {
+  const failure = text("Could not change this account. Try again.", "无法更改这个账号，请重试。");
+  return (await settingsSend(url, { body, failure })) !== null;
+}
 
 function statusTone(status: string): string {
   if (status === "valid") return styles.valid;
@@ -168,21 +180,29 @@ function AccountRow({
   function startEdit() { setReplacement(""); setEditingKey(true); }
   function cancelEdit() { setReplacement(""); setEditingKey(false); }
   async function activate() {
-    await fetch(`${base}/use`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ id: account.id }) });
+    await postAccounts(`${base}/use`, { id: account.id }, text);
     refresh();
   }
   async function deactivate() {
-    await fetch(`${base}/use`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ id: "" }) });
+    await postAccounts(`${base}/use`, { id: "" }, text);
     refresh();
   }
   // Rotation ON: independent per-account on/off (several can be on at once).
   async function setEnabled(enabled: boolean) {
-    await fetch(`${base}/enabled`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ id: account.id, enabled }) });
+    await postAccounts(`${base}/enabled`, { id: account.id, enabled }, text);
     refresh();
   }
   async function remove() {
-    await fetch(`${base}/remove`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ id: account.id }) });
-    refresh(); onChanged?.();
+    if (!(await confirmAction({
+      title: text(`Remove "${account.label || account.name}"?`, `删除“${account.label || account.name}”？`),
+      description: text("Its saved key or sign-in is deleted from this computer.", "这台电脑上保存的密钥或登录信息会被删除。"),
+      confirmLabel: text("Remove", "删除"),
+      destructive: true,
+    }))) return;
+    if (await postAccounts(`${base}/remove`, { id: account.id }, text)) {
+      refresh();
+      onChanged?.();
+    }
   }
 
   const status = vres?.status ?? "checking";
@@ -218,17 +238,18 @@ function AccountRow({
           </span>
         )}
 
+        <HoverTip label={vres?.detail || text("Validate account", "验证账号")}>
         <button
           type="button"
           className={`${styles.acctStatusButton} ${statusTone(status)}`}
           onClick={() => { void validate({ ping: true }); }}
           aria-label={validateLabel}
           aria-busy={status === "checking"}
-          title={vres?.detail || text("Validate account", "验证账号")}
         >
           <RefreshCw size={14} />
           <span>{statusText}</span>
         </button>
+        </HoverTip>
 
         <HoverTip label={text("Remove account", "删除账号")}><Button type="button" variant="ghost" size="icon-xs" className="text-destructive" aria-label={text("Remove account", "删除账号")}
           onClick={remove}>
@@ -283,6 +304,7 @@ export function AccountManager({ provider, onChanged }: { provider: Provider; on
   const [addingKey, setAddingKey] = useState(false);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
+  const [loadFailed, setLoadFailed] = useState(false);
   // Local drag order (account ids). Driven by framer Reorder for instant,
   // FLIP-animated reordering; persisted to /reorder on drag end. orderRef
   // mirrors it so the drag-end commit reads the freshest order (state may
@@ -292,9 +314,13 @@ export function AccountManager({ provider, onChanged }: { provider: Provider; on
 
   const load = useCallback(async () => {
     try {
-      const d = (await fetch(base).then((r) => r.json())) as State;
-      setState(d);
-    } catch { /* ignore */ }
+      const r = await fetch(base);
+      if (!r.ok) throw new Error(String(r.status));
+      setState((await r.json()) as State);
+      setLoadFailed(false);
+    } catch {
+      setLoadFailed(true);
+    }
   }, [base]);
 
   useEffect(() => { load(); }, [load]);
@@ -321,7 +347,7 @@ export function AccountManager({ provider, onChanged }: { provider: Provider; on
   async function commitOrder() {
     const ids = orderRef.current;
     if (ids.length < 2) return;
-    await fetch(`${base}/reorder`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ order: ids }) });
+    await postAccounts(`${base}/reorder`, { order: ids }, text);
   }
 
   async function addKey() {
@@ -344,15 +370,23 @@ export function AccountManager({ provider, onChanged }: { provider: Provider; on
     setMsg("");
   }
   async function toggleRotation(enabled: boolean) {
-    await fetch(`${base}/rotation`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ enabled, strategy: state?.strategy }) });
+    await postAccounts(`${base}/rotation`, { enabled, strategy: state?.strategy }, text);
     await load();
   }
   async function setStrategy(strategy: string) {
-    await fetch(`${base}/rotation`, { method: "POST", headers: JSON_HEADERS, body: JSON.stringify({ enabled: true, strategy }) });
+    await postAccounts(`${base}/rotation`, { enabled: true, strategy }, text);
     await load();
   }
 
-  if (!state) return null;
+  if (!state) {
+    if (!loadFailed) return null;
+    return (
+      <div className="flex items-center justify-between gap-[10px]">
+        <span className={styles.modelCountSummary}>{text("Could not load the accounts.", "无法加载账号。")}</span>
+        <Button variant="elevated" onClick={() => { void load(); }}>{text("Retry", "重试")}</Button>
+      </div>
+    );
+  }
   const accounts = state.accounts || [];
   const multi = accounts.length > 1;
   // Render in local drag order; fall back to server order until the order

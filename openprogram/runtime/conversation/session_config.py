@@ -1,6 +1,6 @@
 """Per-session run configuration shared by TUI, web, and channels.
 
-工具集设计原则（见 docs/reference/design/runtime/agent-configuration/tool-toggle-management.md）：
+工具集设计原则（见 docs/reference/design/runtime/agent-configuration/tool-toggle-management.html）：
 工具范围由会话的 Agent 配置决定，会话自己不开关工具、不选 Access preset。
 会话只存两种叠加意图，绝不存"展开后的工具名列表快照"：
 - ``web_search``（bool）：在 Agent 工具集之上加 / 去掉 web_search，
@@ -19,10 +19,10 @@ VALID_THINKING = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 # Permission modes and rule sets belong to the permission package
 # (``openprogram.runtime.permissions.modes``); session settings store them.
 from openprogram.runtime.permissions.modes import (
-    DEFAULT_PERMISSION,
     PermissionRules,
     as_permission_rules as _as_permission_rules,
     normalize_permission as _normalize_permission,
+    resolve_mode,
 )
 
 # 工具意图的统一类型：dict（意图）/ list[str]（用户显式精选）/ None
@@ -37,7 +37,7 @@ class SessionRunConfig:
     web_search: Optional[bool] = None
     thinking_effort: Optional[str] = None
     permission_mode: Optional[str] = None
-    # ── 权限规则（见 permission-model.md §2.2）──
+    # ── 权限规则（见 docs/reference/design/runtime/security/permission-decision.html）──
     permission_rules: Optional[PermissionRules] = None
     # 路径安全的额外工作目录集（§3.5）。
     additional_working_dirs: list[str] = field(default_factory=list)
@@ -153,21 +153,23 @@ def reasoning_from_config(cfg: SessionRunConfig) -> Optional[str]:
 
 
 def permission_from_config(cfg: SessionRunConfig, *, default: str | None = None) -> str:
-    """session override → caller default (usually project) → ``DEFAULT_PERMISSION``.
+    """The conversation's mode, else ``default`` (usually its project's), else ``DEFAULT_PERMISSION``."""
+    return resolve_mode(cfg.permission_mode, default)
 
-    Invalid values are dropped, so a missing or illegal mode cannot become
-    ``bypass``.
-    """
-    return (
-        _normalize_permission(cfg.permission_mode)
-        or _normalize_permission(default)
-        or DEFAULT_PERMISSION
-    )
+
+def conversation_permission(session_id: str) -> dict[str, Any]:
+    """The ``permission_mode`` and ``permission_rules`` of a turn the runtime starts in this conversation."""
+    from openprogram.runtime.permissions.rule import load_merged_rules
+    return {
+        "permission_mode": permission_from_config(
+            load_session_run_config(session_id), default=project_defaults(session_id).get("permission_mode")),
+        "permission_rules": load_merged_rules(session_id),
+    }
 
 
 def project_defaults(session_id: str) -> dict:
     """会话所属项目的默认设置（permission_mode / toolset / thinking_effort）。
-    新会话没自己设这些时的回落值。规则见 permission-model.md §2.3；这里是
+    新会话没自己设这些时的回落值。规则见 docs/reference/design/runtime/security/permission-decision.html；这里是
     档位默认（非规则）。项目没设 → {}。"""
     try:
         from openprogram.state.store.project import project_store as _projects

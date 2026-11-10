@@ -12,68 +12,6 @@ from tests.component.agent import async_job_support as _async_job_support
 store_fixture = _async_job_support.store_fixture
 
 
-def test_store_migrates_legacy_tasks_file_and_deletes_it(store_fixture):
-    from openprogram.runtime.jobs.store import load_job
-
-    session_dir = store_fixture._session_dir("p1")
-    legacy_path = session_dir / "tasks.json"
-    legacy_path.write_text(json.dumps({
-        "version": 1,
-        "tasks": {
-            "t_child": {
-                "id": "t_child",
-                "parent_session_id": "p1",
-                "prompt": "legacy",
-                "agent_id": "main",
-                "parent_task_id": "t_parent",
-                "status": "pending",
-            },
-        },
-    }), encoding="utf-8")
-
-    job = load_job("p1", "t_child")
-
-    assert job is not None
-    assert job.parent_job_id == "t_parent"
-    assert not legacy_path.exists()
-    migrated = json.loads((session_dir / "jobs.json").read_text(encoding="utf-8"))
-    assert "tasks" not in migrated
-    assert migrated["jobs"]["t_child"]["parent_job_id"] == "t_parent"
-    assert "parent_task_id" not in migrated["jobs"]["t_child"]
-
-def test_store_removes_legacy_file_after_prior_migration(store_fixture):
-    from openprogram.runtime.jobs.store import load_job
-
-    session_dir = store_fixture._session_dir("p1")
-    (session_dir / "jobs.json").write_text(json.dumps({
-        "version": 1,
-        "jobs": {
-            "j_child": {
-                "id": "j_child",
-                "parent_session_id": "p1",
-                "prompt": "migrated",
-                "agent_id": "main",
-                "status": "pending",
-            },
-        },
-    }), encoding="utf-8")
-    legacy_path = session_dir / "tasks.json"
-    legacy_path.write_text('{"version": 1, "tasks": {}}', encoding="utf-8")
-
-    assert load_job("p1", "j_child") is not None
-    assert not legacy_path.exists()
-
-def test_store_keeps_legacy_file_when_canonical_file_is_invalid(store_fixture):
-    from openprogram.runtime.jobs.store import load_job
-
-    session_dir = store_fixture._session_dir("p1")
-    (session_dir / "jobs.json").write_text("not json", encoding="utf-8")
-    legacy_path = session_dir / "tasks.json"
-    legacy_path.write_text('{"version": 1, "tasks": {}}', encoding="utf-8")
-
-    assert load_job("p1", "missing") is None
-    assert legacy_path.exists()
-
 def test_state_machine_legal_edges():
     from openprogram.runtime.jobs.types import JobStatus, can_transition
     assert can_transition(JobStatus.PENDING, JobStatus.QUEUED)

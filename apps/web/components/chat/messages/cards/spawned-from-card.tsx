@@ -17,7 +17,7 @@ import { useRef } from "react";
 
 import type { ChatMsg } from "@/lib/session-store";
 
-import { useSessionStore } from "@/lib/session-store";
+import { selectRow, useSessionStore } from "@/lib/session-store";
 import { useTranslation } from "@/lib/i18n";
 import { runtimeState } from "@/lib/runtime-bridge/state";
 import { sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
@@ -25,6 +25,7 @@ import {
   type AnimatedNavIconHandle,
   ArrowUpRightIcon,
 } from "@/components/animated-icons";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 /** Commands go out as they are; a `load_session` goes through the managed
  *  session read, since the transcript applies only the reply to a read it
@@ -34,7 +35,7 @@ function wsSend(payload: unknown): void {
 }
 
 export function SpawnedFromCard({ msg }: { msg: ChatMsg }) {
-  const sessionId = useSessionStore((s) => s.currentSessionId);
+  const sessionId = useRowSessionId();
   const { text } = useTranslation();
   const switchIconRef = useRef<AnimatedNavIconHandle>(null);
   const sf = msg.spawnedFrom;
@@ -50,7 +51,7 @@ export function SpawnedFromCard({ msg }: { msg: ChatMsg }) {
     if (!sessionId || !sf || !sf.callerId) return;
     const state = useSessionStore.getState();
     const firstReply = (state.messageOrder[sessionId] || [])
-      .map((id) => state.messagesById[id])
+      .map((id) => selectRow(sessionId, id)(state))
       .find((row) => row?.role === "assistant" && row.calledBy === msg.id)?.id;
     if (firstReply) {
       runtimeState._pendingExpandAttach = {

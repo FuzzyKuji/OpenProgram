@@ -1,6 +1,113 @@
-<!doctype html><html lang="zh"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>结构化生成恢复</title><style>body{font:16px/1.65 system-ui;background:#111820;color:#dce5ec;max-width:1080px;margin:auto;padding:32px}h1,h2{color:#fff}a{color:#8ccaff}section{margin:36px 0}table{border-collapse:collapse;width:100%}td,th{border:1px solid #456;padding:12px;text-align:left}code{overflow-wrap:anywhere}nav{display:flex;gap:20px;flex-wrap:wrap}details{padding:12px;border:1px solid #456}a:focus-visible,summary:focus-visible{outline:3px solid #8ccaff}</style><header><h1>结构化生成恢复</h1><p>共享 Agent 与 Runtime 调用的实现契约。产品行为与证据分别记录。</p></header><nav><a href="#parameters">输出参数</a><a href="#recovery">恢复</a><a href="#execution">执行安全</a><a href="#plan">实施计划</a><a href="#status">实现状态</a></nav><main>
-<section id="parameters"><h2>输出参数</h2><p>Workflow 执行默认不设累计 token 配额。用户显式限制仍具约束力。上下文预留是规划估计，不是 provider 输出上限。默认请求使用受可用上下文约束的模型输出容量；显式限制经过验证，不静默缩减。未知模型限制仍由适配器处理。正常模型推理不能仅因耗时较长而判定超时。</p></section>
-<section id="recovery"><h2>失败处理</h2><table><tr><th>失败</th><th>处理</th></tr><tr><td>结构化输出长度截断</td><td>从最后一个完整工具边界进行有界重新生成；不得执行不完整工具参数或拼接部分 JSON。</td></tr><tr><td>无效 JSON 或 schema 值</td><td>在同一恢复额度内进行有界修复。</td></tr><tr><td>暂时传输故障</td><td>遵循 provider 分类和 Retry-After；不叠乘重试额度。</td></tr><tr><td>取消、拒绝、无效配置</td><td>不自动重试。</td></tr><tr><td>外部操作结果未知</td><td>重复产生副作用前先核对实际状态。</td></tr></table><p>默认恢复允许额外尝试两次。显式设为零禁用修复。每次重试通过现有结构化输出与执行流事件报告原因和尝试标识。重新生成指令请求完整值，并排除无效的部分候选。已完成工具结果保留在上下文中。达到模型容量时，由 Workflow 显式进行特定任务分解，不由通用运行时猜测。</p></section>
-<section id="execution"><h2>持久化与可观察行为</h2><p>必须区分实际请求、生效参数、停止原因、可用用量数据和重试。未知用量保持未知。错误路径保留元数据，不要求保留推理或敏感的部分文本。暂停与正在重试是不同状态。重启和副作用核对由现有持久执行与副作用记录负责，不引入并行调度器。</p><p>报告 Workflow 各阶段保留已确定范围、提供材料、检索证据和已验证草稿。纯文本 resume_task 是重启请求，不是持久续执行。验收仅观察页面并准备本地草稿，不发送报告。</p></section>
-<section id="plan"><h2>实施顺序与验收</h2><ol><li>通过 agent_loop 和 Runtime 公开调用复现截断。</li><li>分离请求输出限制与压缩预留。</li><li>恢复结构化截断而不重放已完成工具；验证同步与异步调用。</li><li>整合实际请求诊断与共享恢复计数。</li><li>按现有执行生命周期验证持久报告阶段及 UI。</li><li>先进行独立规格和质量审查，再运行最终受影响检查。</li></ol><details open><summary>限定任务说明与检查清单</summary><p>主要文件：context/request_compaction.py、agent/loop/、providers/structured_output.py、agent/runtime/providers.py 和 execution.py、provider 重试工具及现有流持久化。排除无关 provider 重写、权限修改和远程发布。</p><p>测试顺序：先针对性回归，再运行 tests/unit/agent/execution、tests/component/programs/tools、tests/component/context、tests/component/providers、tests/contracts、文档链接检查和 git diff --check。修改其他生产边界时扩大受影响测试范围。必要场景包括首次截断后成功、恢复耗尽、混合失败计数、取消、不重放已完成工具、显式输出上限、默认模型容量、上下文合法性、缺失终止事件、重启及未知外部副作用核对。真实报告验收与模拟 provider 测试保持独立。</p></details></section>
-<section><h2>EOF 恢复与终态</h2><p>结构化流结束但没有终止事件时，消耗与长度截断相同的恢复额度。不得提交或执行部分内容。结构化恢复耗尽后，在错误进入 Runtime 持久化之前标记为暂停；取消标记为 cancelled。正常返回本身不能证明生成成功，以规范执行状态为准。公开入口验收覆盖空 EOF、部分 EOF、混合验证失败、禁用恢复、取消和不重放已完成工具。</p><p>修复检查：结构化流测试、受影响 Agent 执行、provider 工具、Runtime 工具与上下文组件、仓库契约、文档链接及 diff 检查；在当前 main 快照本地集成，随后验证已安装 App 源码。</p></section><section id="browser-recovery"><h2>浏览器 Workflow 可靠性</h2><p>浏览器阶段仅暴露真实 web_use 工具，并采用基于 command 的 schema。检查必须基于真实浏览器观察；文本 JSON 示例不是工具回执。提示词依据当前工具契约描述 list_pages、observe 和 act。缺少工具、登录或权限失败保持为显式失败，不授权其他传输方式或写入。</p><p>Workflow 启动时有来源窗口但未绑定 Page，调用 <code>web_use(command="list_pages")</code> 时保留来源上下文。在子进程中，Page 清单通过父进程 webtab 桥接获取，仅接受来源窗口及该次执行获准的绑定。子进程维护自己的 Page token 注册表，并在同一进程中使用 token；token 不在父子注册表间转移。没有授权来源上下文时，不回退为列举所有桌面窗口。</p><p>通过 <code>web_use</code> 自动打开 URL（包括直接 MCP 入口和页面恢复）时，显式通过 Resources 创建后台 Page。不依赖前台聊天路由、已挂载 Browser 面板或已有页面。窗口注册和原生 Page 目标可用性属于不同失败阶段。直接 MCP 入口将显式浏览器失败结果保留为 <code>ToolReturn(is_error=True)</code>；HTTP 派发成功不意味着浏览器操作成功。验收从空页面清单开始，无需手动创建 Browser 即可打开并观察 URL。</p><p>Desktop 桥接在启动和重连时立即注册确切窗口标识，然后才等待保留视图或资源恢复。恢复完成后可以重复幂等注册。等待恢复不得阻止 Workflow 打开首个页面。注册不得选择其他窗口或扩大归属范围。</p><p><code>desktop_unavailable</code> 表示 worker 当前无法使用已注册 Desktop WebTab。它不同于模型模仿工具调用的响应，也不同于浏览器页面网络或文档内容问题。已安装默认服务只有在公开 <code>/api/web-use</code> 边界列出并观察页面、返回标题和观察标识，且未提交或保存外部记录后，才算通过验收。</p><table><tr><th>观察到的失败</th><th>要求行为</th><th>验收</th></tr><tr><td>模仿工具调用的文本</td><td>拒绝将其作为检查证据；通过经过验证的公开工具边界取得真实观察。</td><td>未观察验证的声明不得触发表单操作。</td></tr><tr><td>重复模型输出</td><td>在不设总 token 或总时长配额的情况下检测病态重复输出；仅停止失败响应，保留已完成工具轮次。恢复使用共享失败额度并公开原因。</td><td>重复流可恢复；正常长输出可完成；取消和恢复耗尽仍为失败。</td></tr><tr><td>固定浏览器阶段截止时间</td><td>移除任意设置的 Workflow 总体限制。保留单次浏览器操作边界、调用方取消、用户显式限制和失败重试计数。</td><td>检查和写入不使用硬编码 300/600 秒累计截止时间。</td></tr><tr><td>异常转成成功文本</td><td>让类型化错误通过 Workflow 和 dispatcher 传播。即使 Python 正常返回，Function DAG 持久化及子进程 IPC 也保留失败的 ToolReturn 和 AgentToolResult。未知写入结果属于不可重试失败，再次写入前必须观察，不得视为成功返回或重复操作许可。</td><td>公开函数节点以 error 结束；失败诊断保留已完成的同级结果。</td></tr></table><p>修复使用现有 Agent 恢复和执行生命周期原语。不引入第二调度器，不从字符串推断持久检查点，不绕过浏览器权限，也不在验收时自动提交报告。新建持久报告状态机不属于此次修复；在存在显式持久步骤前，失败必须如实保留。</p><details open><summary>修复说明与验证清单</summary><p>文件：共享 Agent 流式/恢复边界及测试；独立 personal_weekly_report 和 weekly_report 包及其浏览器提示词、异常路径和公开入口测试。先建立失败回归，再运行受影响 Agent/provider/runtime/report 测试、仓库契约、完整 Python 套件、文档链接及 diff 检查。最终验证前进行独立规格审查和新的质量审查。使用 refresh-local-app.sh 安装经审查的 main 修订，确认默认 18100 浏览器能列出、打开和观察页面，不提交或保存任何外部记录。浏览器/provider 实机验证与确定性测试分开。</p></details><p>实现包含浏览器来源转发、Desktop 窗口立即注册、重复响应恢复、工具回执保留和真实错误传播。公开回归覆盖这些边界。报告写入要求真实观察到的保存/提交操作，以及对应操作后观察中的明确成功证据；显式失败或缺少确认仍属于结果未知、不可重试的状态。独立报告包维护各自修订。审查结果、完整验证和已安装修订记录在任务交接中；仅通过确定性检查不能证明线上外部写入成功。</p></section><section id="model-routing-and-group-recovery"><h2>模型路由与组报告恢复</h2><p>订阅 provider 必须在请求正文与路由头中保留显式选择的模型标识。Grok 代理通过 <code>x-grok-model-override</code> 路由；具名模型不得静默替换为 <code>grok-build</code>。显式选择的别名仍保持别名。原生函数调用仅从 provider function-call 事件执行，不解析模仿工具的普通文本。</p><p>read 工具将显式 null offset 或 limit 视为省略分页参数。严格工具 schema 将可选字段表示为必填但可空字段，因此此边界仅在选择文本或 PDF 处理前规范化这两个读取参数。文本默认仍为第 1 行、2000 行；PDF 默认仍为第 1 页、20 页。显式数值分页不变。不引入全局 null 移除或权限修改。公开适配工具回归对文本和 PDF 输入验证严格 schema 参数。该兼容缺陷已独立复现，但尚未证明是历史组报告失败原因。</p><p>目标恢复契约将 provider 派发次数作为诊断信息，而非第二套失败额度。结构化验证和重复输出消耗现有调用内恢复额度；暂时传输恢复消耗同一状态中独立的传输额度，连接中断不会占用修复额度。成功工具轮次不消耗失败恢复。provider 请求经暂时传输重试后成功，会把这些重试归还给恢复状态：传输恢复按单次请求计限，结构化与重复输出修复仍在整个调用内累计，长 Agent 循环不会因为前面请求已经恢复过的网络抖动而提前结束。结构化输出的模型调用上限（Runtime <code>max_retries</code> 次请求）会把每次传输重试补回来，重连不会耗掉生成有效答案的尝试次数。取消、调用方显式截止时间和不可重试外部副作用仍有约束力。恢复耗尽时保留原始原因和终止恢复阶段。</p><p>当 provider 无法精确表达所需 schema 时，组报告解析可以使用基于提示词的 schema 验证。实机验收使用只读工具验证该实际模式，不仅验证更简单的原生 schema 请求。Runtime 错误作为执行错误传播，不转为成功的 BLOCKED 字符串。成员归属确实缺失时仍应请求澄清，不得编造作者。生成本地草稿不授权发送消息或外部提交。</p><p>验证覆盖真实 provider 路由对比、原生只读工具调用、原始提供材料解析，以及使用明确归属测试数据生成完整本地草稿。确定性公开 Runtime 测试覆盖组合传输与格式修复、恢复耗尽和已完成工具保留。最终完整验证及安装前进行独立规格与质量审查。权限策略修改和无关 UI 重设计不属于此次修复。</p></section><section id="status"><h2>实现状态</h2><p>AgentSession 在每次自动重试前预留现有调用内恢复状态。因此，传输和格式恢复共享一个失败恢复计数。有此状态时，它是会话唯一重试计数依据：较大的调用方恢复额度不会遭遇隐藏本地重试上限，也不会重启已完成工具。仍遵循显式禁用重试。恢复耗尽后保留原始 provider 失败，并标记 transport-exhausted，使 Runtime 无法重启整个调用。已完成工具结果保留在同一个 AgentSession 上下文中。没有外层恢复状态的独立 AgentSession 调用方保留现有重试设置。公开 Runtime 回归覆盖内部错误与无效 JSON 组合、超出独立调用限制的恢复、耗尽及已完成工具只执行一次。兼容请求计数器仍存在，本页不声称已移除。独立规格与质量审查、完整自动验证及真实 provider 只读验收记录在任务交接中。</p><p>本地实现包括共享恢复计数、输出上限分离、结构化长度截断与 EOF 重新生成，以及 paused/cancelled 失败状态。公开入口回归覆盖空和部分 EOF、耗尽、取消、保留已完成工具、拒绝部分工具参数及返回的 provider 错误。周报配额移除和解析检查点由独立 Workflow 包维护。真实端到端周报提交仍不属于只读验收；单元/组件检查不能证明外部写入结果。本地 main 集成、默认 App 浏览器验收和已安装运行时验证分别记录在任务交接中。</p></section></main></html>
+<title>结构化生成恢复</title>
+<meta name="description" content="共享的 Agent 和 Runtime 调用如何从被截断、无效或中断的结构化模型输出中恢复。">
+<h1>结构化生成恢复</h1>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">故障</th><th scope="col">处理</th></tr></thead>
+<tbody>
+<tr><th scope="row">结构化输出因长度截断</th><td>从最后一个完整工具边界重新生成。绝不执行不完整的工具参数，绝不拼接不完整的 JSON。</td></tr>
+<tr><th scope="row">流结束但没有终止事件（空或部分内容）</th><td>与长度截断相同。部分内容绝不提交或执行。</td></tr>
+<tr><th scope="row">无效 JSON 或 schema 值</th><td>在同一额度内修复</td></tr>
+<tr><th scope="row">重复输出（<code translate="no">repetitive_output</code>）</th><td>检测时不设 token 或时长配额。只停止这次响应，保留已完成的工具轮次，消耗同一额度并给出原因。</td></tr>
+<tr><th scope="row">瞬时传输错误</th><td>由 provider 分类和 <code translate="no">Retry-After</code> 决定；使用单独的传输额度</td></tr>
+<tr><th scope="row">取消、拒答、配置无效</th><td>不自动重试</td></tr>
+<tr><th scope="row">外部操作结果未知</th><td>重复任何副作用前先对账</td></tr>
+</tbody>
+</table>
+
+<h2 id="recovery-accounting">恢复记账</h2>
+<p>每次调用一个 <code translate="no">RecoveryState</code>（<code translate="no">openprogram/models/providers/utils/recovery.py</code>）。</p>
+<table class="stack">
+<thead><tr><th scope="col">额度</th><th scope="col">默认</th><th scope="col">消耗来源</th><th scope="col">范围</th></tr></thead>
+<tbody>
+<tr><th scope="row">失败</th><td>额外 2 次；<code translate="no">max_retries</code> 为 0 或 1 时禁用</td><td>长度、EOF、schema、重复</td><td>整次调用累计</td></tr>
+<tr><th scope="row">传输</th><td><code translate="no">OPENPROGRAM_PROVIDER_STREAM_RETRIES</code>（5）减 1</td><td>连接中断，绝不占用修复次数</td><td>按请求：请求成功后归还其重试</td></tr>
+</tbody>
+</table>
+<ul>
+<li>成功的工具轮次不消耗额度。provider 调用次数只用于诊断，不是第二份额度。结构化输出调用预算（Runtime 的 <code translate="no">max_retries</code> 次请求）会把每次传输重试退回。</li>
+<li>该状态存在时，它是 <code translate="no">AgentSession</code> 唯一的重试依据：没有隐藏的本地上限，也不会重启已完成的工具。显式禁用重试始终有效。独立的 <code translate="no">AgentSession</code> 调用方保留自己的重试设置。</li>
+<li>每次重试通过现有结构化输出和执行流事件报告原因和尝试标识。重新生成指令要求完整值，并排除无效候选。已完成的工具结果留在上下文中。</li>
+<li>取消、调用方显式截止时间和不可重试的外部副作用始终优先。</li>
+</ul>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">终态</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">耗尽</th><td>错误到达 Runtime 持久化之前先暂停。保留原始原因和终止恢复阶段；标记为传输耗尽，Runtime 不能重启整次调用。</td></tr>
+<tr><th scope="row">取消</th><td>取消</td></tr>
+<tr><th scope="row">正常返回</th><td>不是成功的证据，以规范执行状态为准</td></tr>
+<tr><th scope="row">达到模型容量</th><td>是否拆分由工作流显式决定，通用运行时不猜测</td></tr>
+</tbody>
+</table>
+
+<h2 id="output-parameters">输出参数</h2>
+<dl class="pairs">
+<dt>工作流 token 配额</dt><dd>默认没有；用户显式限制有效</dd>
+<dt>上下文预留</dt><dd>规划估算，不是 provider 输出上限</dd>
+<dt>默认输出上限</dt><dd>模型容量，受可用上下文约束</dd>
+<dt>显式限制</dt><dd>校验，绝不静默下调</dd>
+<dt>未知模型限制</dt><dd>交给适配器</dd>
+<dt>长时间推理</dt><dd>本身不算超时</dd>
+</dl>
+
+<h2 id="persistence">持久化</h2>
+<ul>
+<li>实际请求、生效参数、停止原因、可得用量和重试都可区分。未知用量保持未知。</li>
+<li>错误路径保留元数据，不要求保留推理或敏感的部分文本。暂停不同于正在重试。</li>
+<li>重启和副作用对账由持久执行和副作用记录负责，没有并行调度器。</li>
+<li>报告阶段保留已解析范围、提供的材料、检索到的证据和已校验草稿。纯文本 <code translate="no">resume_task</code> 是重启请求，不是持久续跑。</li>
+</ul>
+
+<h2 id="browser-workflow">浏览器工作流</h2>
+<table class="stack">
+<thead><tr><th scope="col">故障</th><th scope="col">行为</th><th scope="col">验收</th></tr></thead>
+<tbody>
+<tr><th scope="row">模仿工具调用的文本</th><td>不作为证据；真实观察经公开工具边界取得</td><td>未观察的声明之后不发生表单操作</td></tr>
+<tr><th scope="row">重复模型输出</th><td>见上表</td><td>重复流可恢复，健康的长输出能完成，取消和耗尽仍是失败</td></tr>
+<tr><th scope="row">固定阶段截止时间</th><td>没有工作流级限制。单个浏览器操作仍有界；调用方取消、显式限制和重试记账有效。</td><td>没有硬编码的 300/600 秒总截止时间</td></tr>
+<tr><th scope="row">异常被转成成功文本</th><td>类型化错误向上传播。即使 Python 正常返回，Function DAG 持久化和子进程 IPC 也保留失败的 <code translate="no">ToolReturn</code> 和 <code translate="no">AgentToolResult</code>。未知写入结果是不可重试的失败，再次写入前必须先观察。</td><td>公开函数节点以错误结束；已完成的同级结果保留在诊断中</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>浏览器工具约定与 Desktop 注册</summary>
+<ul>
+<li>各阶段只暴露 <code translate="no">web_use</code> 及其命令 schema；提示词描述 <code translate="no">list_pages</code>、<code translate="no">observe</code> 和 <code translate="no">act</code>。工具缺失、登录和权限失败都明确报告，绝不因此改用其他通道或写入。</li>
+<li>有来源窗口但未绑定 Page 时，<code translate="no">web_use(command="list_pages")</code> 保留该来源。没有已授权来源时，清单不回退到所有桌面窗口。</li>
+<li>在子进程中，Page 清单经父进程 webtab 桥获取，只接受来源窗口和该执行获授权的绑定。子进程用自己的注册表生成并消费 Page 令牌，令牌不跨注册表传递。</li>
+<li>通过 <code translate="no">web_use</code>、直接 MCP 入口和页面恢复打开 URL 时，都经 Resources 创建后台 Page，不依赖前台聊天路由、已挂载的 Browser 面板或已有页面。窗口注册和原生 Page 目标可用性是两个失败阶段。</li>
+<li>直接 MCP 入口把失败的浏览器结果保留为 <code translate="no">ToolReturn(is_error=True)</code>；HTTP 分发成功不等于浏览器操作成功。</li>
+<li>Desktop 桥在启动和重连时立即注册确切的窗口标识，早于等待保留视图或资源恢复，之后可幂等重复。恢复未完成不阻塞打开第一个页面。注册绝不选择其他窗口或扩大归属。</li>
+<li><code translate="no">desktop_unavailable</code>：worker 此刻无法使用已注册的 Desktop WebTab。它不同于模型模仿工具调用，也不同于页面的网络或内容错误。</li>
+<li>报告写入需要真实观察到的保存或提交，以及匹配的操作后观察和明确成功证据。明确失败或缺少确认都是未知且不可重试的结果。</li>
+<li>不在范围内：第二个调度器、从字符串推断持久检查点、绕过浏览器权限、新的持久报告状态机。</li>
+</ul>
+</details>
+
+<h2 id="model-routing">模型路由与组报告</h2>
+<ul>
+<li>订阅 provider 在请求体和路由头中都保留显式模型 id。Grok 代理按 <code translate="no">x-grok-model-override</code> 路由；<code translate="no">grok-build</code> 只是空 id 的回退，别名保持别名。</li>
+<li>原生函数调用只来自 provider 的函数调用事件，绝不从文本解析。</li>
+<li><code translate="no">read</code> 工具把值为 null 的 <code translate="no">offset</code> 或 <code translate="no">limit</code> 视为未传，因为严格 schema 把可选字段变成必填可空字段。文本默认第 1 行、2000 行；PDF 默认第 1 页、20 页。没有全局去除 null。</li>
+<li>provider 无法表达 schema 时，组报告解析可用基于提示词的 schema 校验。运行时错误是执行错误，不是成功的 <code translate="no">BLOCKED</code> 字符串。成员归属缺失时请求澄清，绝不编造作者。本地草稿不授权发消息或提交。</li>
+</ul>
+
+<details>
+<summary>验收</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">覆盖</th></tr></thead>
+<tbody>
+<tr><th scope="row">复现</th><td>经 <code translate="no">agent_loop</code> 和 Runtime 公开调用的截断，同步和异步</td></tr>
+<tr><th scope="row">场景</th><td>先截断后成功、耗尽、混合失败计数、空和部分 EOF、禁用恢复、取消、已完成工具不重放、拒绝部分工具调用、返回的 provider 错误、显式输出上限、默认容量、上下文合法性、重启、未知副作用对账、传输与格式联合修复</td></tr>
+<tr><th scope="row">文件</th><td><code translate="no">runtime/context/compaction/request.py</code>、<code translate="no">runtime/agent/loop/</code>、<code translate="no">models/providers/structured_output.py</code>、<code translate="no">runtime/agent/runtime/providers.py</code> 和 <code translate="no">execution.py</code>、provider 重试工具、流持久化</td></tr>
+<tr><th scope="row">测试路径</th><td><code translate="no">tests/unit/agent/execution</code>、<code translate="no">tests/component/programs/tools</code>、<code translate="no">tests/component/context</code>、<code translate="no">tests/component/providers</code>、<code translate="no">tests/contracts</code>；改动其他生产边界时相应扩大</td></tr>
+<tr><th scope="row">浏览器实测</th><td>从空清单开始打开并观察 URL，无需手动创建 Browser。已安装服务只有在公开 <code translate="no">/api/web-use</code> 列出页面、观察页面并返回标题和观察标识，且没有提交或保存任何内容时才通过。</td></tr>
+<tr><th scope="row">组报告实测</th><td>真实 provider 路由对比、原生只读工具调用、以实际提示词校验模式解析原始材料、用明确归属的测试数据生成本地草稿</td></tr>
+</tbody>
+</table>
+<p class="note">假 provider 测试不能证明真实报告；确定性检查通过不能证明真实外部写入。</p>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<p>已实现：共享记账、输出上限分离、长度和 EOF 重新生成、暂停和取消状态、浏览器来源转发、Desktop 立即注册、重复响应恢复、回执保留、如实传播错误。配额移除和解析检查点在独立版本的 <code translate="no">weekly_report</code> 和 <code translate="no">personal_weekly_report</code> 包中。未完成：移除兼容用的请求计数器；真实的端到端报告提交。</p>

@@ -49,6 +49,7 @@ def agent_loop(
                 messages=list(context.messages) + list(prompts),
                 tools=context.tools,
                 memory_prefetch=context.memory_prefetch,
+                run_note=context.run_note,
                 runtime_contract=context.runtime_contract,
             )
 
@@ -97,6 +98,7 @@ def agent_loop_continue(
                 messages=list(context.messages),
                 tools=context.tools,
                 memory_prefetch=context.memory_prefetch,
+                run_note=context.run_note,
                 runtime_contract=context.runtime_contract,
             )
 
@@ -139,6 +141,7 @@ def agent_loop_resume(
                 messages=list(context.messages),
                 tools=context.tools,
                 memory_prefetch=context.memory_prefetch,
+                run_note=context.run_note,
                 runtime_contract=context.runtime_contract,
             )
             assistant = continuation.assistant_message
@@ -156,6 +159,7 @@ def agent_loop_resume(
             # after_provider point that still carries the earlier calls'
             # results; dropping them showed the model those calls as lost.
             current_context.messages.extend(continuation.tool_results)
+            current_context.messages.extend(continuation.steer_messages())
 
             # A provider decision may contain several calls.  An after-tool
             # checkpoint has committed only the prefix through

@@ -5,6 +5,8 @@
  * docs/reference/design/ui/chat/tool-group-summary.html.
  */
 import type { AssistantBlock, TurnFileSummary } from "../../../../lib/session-store/types.ts";
+import { SPAWNING_TOOL_NAMES } from "../../../../lib/chat/transcript/owned-children.ts";
+import { isAgentLive } from "../../../../lib/chat/transcript/row-status.ts";
 import { parseToolArgs, presentTool } from "./tool-presentation.ts";
 import { GUI_TOOL_NAMES, isGuiToolCall } from "./gui-tool-view.ts";
 import { appStepArgs, computerUseAgentTarget, isFreshCall, userBrowser } from "../../../../lib/computer-use/computer-use-agent-call.ts";
@@ -16,7 +18,7 @@ type Args = Record<string, unknown>;
  * `agent` 生新分支；`send_message` 虽不再 spawn，但它仍触发目标分支跑
  * 一轮、仍在 caller 轮上落 attach 指针卡（runner 的 attach 路径），所以
  * 摘要里同样按"子代理活动"计。 */
-export const SPAWNING_TOOL_NAMES = new Set(["agent", "task", "send_message"]);
+export { SPAWNING_TOOL_NAMES };
 
 export interface ToolGroupSummary {
   /** Full sentence; the row truncates it and the hover tip shows it whole. */
@@ -460,13 +462,12 @@ function targetOf(kind: Kind, tool: string, args: Args): string {
   }
 }
 
-const LIVE_SPAWN = new Set(["running", "pending", "queued", "cancelling"]);
 
 /** Where the spawned agents stand: "done" for one, counts for several.
  *  A lone running agent says so in the phrase itself. */
 function spawnStatusNote(states: string[], text: Text): string {
   if (states.length === 0) return "";
-  const live = states.filter((s) => LIVE_SPAWN.has(s)).length;
+  const live = states.filter((s) => isAgentLive(s)).length;
   const failed = states.filter((s) => s === "errored" || s === "failed").length;
   const cancelled = states.filter((s) => s === "cancelled").length;
   const done = states.length - live - failed - cancelled;
@@ -559,7 +560,7 @@ export function summarizeToolGroup(blocks: AssistantBlock[], options: ToolGroupO
     spawnNames.forEach((name) => agents.targets.add(name));
     agents.anonymous = Math.max(0, Math.max(spawnBlocks, spawnNames.length) - agents.targets.size) + others;
     // A lone agent still at work reads as the group's live phrase.
-    if (spawnStates.length === 1 && LIVE_SPAWN.has(spawnStates[0]) && agents.running === undefined) {
+    if (spawnStates.length === 1 && isAgentLive(spawnStates[0]) && agents.running === undefined) {
       agents.running = spawnNames[0] ?? "";
     }
   }

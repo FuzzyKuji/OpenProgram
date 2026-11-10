@@ -94,9 +94,22 @@ Sink Input #13
     assert linux.LinuxComputer._streams({5}) == []
 
 
-def test_refused_apps_cover_password_stores_prompts_and_openprogram():
+def test_refused_apps_are_the_owners_list_and_openprogram(monkeypatch):
     refused = linux.LinuxComputer._refused
+    monkeypatch.setattr("openprogram.state.config.read_config", lambda: {})
+    assert not refused({"desktop_id": "org.gnome.seahorse.Application", "executable": "seahorse"})
+    monkeypatch.setattr("openprogram.state.config.read_config",
+                        lambda: {"computer_use": {"refused_apps": ["seahorse"]}})
     assert refused({"desktop_id": "org.gnome.seahorse.Application", "executable": "seahorse"})
-    assert refused({"desktop_id": "", "executable": "gcr-prompter"})
     assert refused({"desktop_id": "ai.openprogram.desktop", "executable": "openprogram"})
     assert not refused({"desktop_id": "org.gnome.Calculator", "executable": "gnome-calculator"})
+
+
+def test_windows_that_stood_over_the_operated_one_are_raised_again_lowest_first(monkeypatch):
+    ran: list[tuple] = []
+    monkeypatch.setattr(linux, "_x", lambda *args, **kwargs: ran.append(args) or "")
+    linux._put_under(30, ["10", "30", "40", "50"])
+    assert ran == [("windowraise", "40"), ("windowraise", "50")]
+    ran.clear()
+    linux._put_under(99, ["10", "30"])
+    assert not ran

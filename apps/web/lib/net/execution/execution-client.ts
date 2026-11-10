@@ -232,6 +232,22 @@ const REVISION_ROUTES: Partial<Record<RevisionAction, { path: string; method: "P
   "revision.publish": { path: "publish", method: "POST" },
 };
 
+/** The inspector's lists for one execution, with a checkpoint's optional fields filled. */
+export function inspectionFromDebuggerState(state: DebuggerStateResponse) {
+  return {
+    checkpoints: (state.checkpoints || []).map((checkpoint) => ({
+      ...checkpoint,
+      status_version: checkpoint.status_version ?? checkpoint.source_execution_version ?? 0,
+      safe_point: checkpoint.safe_point || null,
+      frontier: checkpoint.frontier || [],
+      effect_receipts: checkpoint.effect_receipts || [],
+    })),
+    unresolvedEffects: state.unresolved_effects || [],
+    waits: state.waits || [],
+    drafts: (state.drafts || []).map(parseRevisionState),
+  };
+}
+
 export function parseRevisionState(body: RevisionStateResponse): RevisionDraft {
   const state = body.draft ? body : body.data?.draft ? body.data : body;
   const draft = state.draft;

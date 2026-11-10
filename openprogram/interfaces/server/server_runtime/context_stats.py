@@ -426,6 +426,10 @@ def _broadcast_chat_response(session_id: str, msg_id: str, response: dict):
     flag is cleared by the cleanup path so subsequent turns can
     broadcast normally.
     """
+    if response.get("type") == "tree_update" and isinstance(response.get("tree"), dict):
+        from openprogram.interfaces.server.transcript import publisher
+
+        publisher.notice_tree(session_id, msg_id, response["tree"], response.get("function"))
     if state._is_cancelled(session_id):
         # Always let the explicit ``stopped`` status frame through —
         # that's how the UI flips its own state to stopped. Anything
@@ -437,7 +441,6 @@ def _broadcast_chat_response(session_id: str, msg_id: str, response: dict):
     response["session_id"] = session_id
     response["msg_id"] = msg_id
     response["timestamp"] = state.time.time()
-
     # No need to store in messages list — the DAG in SessionDB IS the storage
     msg = state.json.dumps({"type": "chat_response", "data": response}, default=str)
     state._broadcast(msg)

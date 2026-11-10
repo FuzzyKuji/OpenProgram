@@ -1,0 +1,186 @@
+<title>压缩</title>
+<meta name="description" content="压缩如何存储滚动摘要、改变模型读到的内容、与分支组合并保护 HEAD。">
+<h1 id="context-compaction">压缩</h1>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 196" role="img" aria-label="存储的链不变：根，被覆盖的轮次 A、B、C，保留的轮次 K1、K2。摘要节点 S 的前驱是根，covers_ids 列出 A、B、C。发给模型的请求是：系统提示、S、原样保留的尾部、新用户消息。">
+  <defs><marker id="cp-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-soft" x="0" y="34">存储</text>
+  <text class="t-big" x="84" y="34">ROOT</text>
+  <line class="ln" x1="132" y1="28" x2="166" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="176" y="34">A</text>
+  <line class="ln" x1="196" y1="28" x2="238" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="248" y="34">B</text>
+  <line class="ln" x1="268" y1="28" x2="310" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="320" y="34">C</text>
+  <line class="ln" x1="340" y1="28" x2="392" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="402" y="34">K1</text>
+  <line class="ln" x1="430" y1="28" x2="472" y2="28" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="482" y="34">K2</text>
+  <text class="t-soft" x="524" y="34">HEAD 留在这里</text>
+  <path class="ln-faint" d="M172 46V54H332V46"/>
+  <text class="t-cmd notranslate" translate="no" x="184" y="74">covers_ids</text>
+  <path class="ln" d="M104 42V104H238" marker-end="url(#cp-a)"/>
+  <text class="t-big" x="248" y="110">S</text>
+  <text class="t-soft" x="272" y="110">一个摘要节点；前驱就是拼接点</text>
+  <text class="t-soft" x="0" y="168">发送</text>
+  <text x="84" y="168">系统提示</text>
+  <text class="t-big" x="196" y="168">S</text>
+  <text x="222" y="168">保留的尾部，原样</text>
+  <text x="372" y="168">新用户消息</text>
+</svg>
+<dl class="pairs fig-narrow">
+<dt>存储</dt><dd>ROOT、A、B、C、K1、K2；HEAD 留在 K2</dd>
+<dt>摘要</dt><dd>S：前驱 ROOT，<code translate="no">covers_ids</code> 为 A、B、C</dd>
+<dt>发送</dt><dd>系统提示、S、原样保留的尾部、新用户消息</dd>
+</dl>
+</figure>
+
+<p>一个会话最多一份现役摘要。再次压缩时把上一份摘要交给摘要器并替换它。<code translate="no">extra_meta._last_summary_id</code> 指向现役摘要，<code translate="no">_last_summary_text</code> 保存文本供链式使用；旧节点作为无效遗迹留在磁盘。摘要的胶囊画法：<a href="../runtime/dag/rendering.zh.html">DAG 渲染第九节</a>。</p>
+
+<h2 id="data-model">摘要节点</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">字段</th><th scope="col">值</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">id</code></th><td><code translate="no">summary_&lt;hex&gt;</code></td></tr>
+<tr><th scope="row"><code translate="no">role</code></th><td><code translate="no">llm</code>，<code translate="no">name = "context/summary"</code></td></tr>
+<tr><th scope="row"><code translate="no">output</code></th><td><code translate="no">[Previous conversation summary]\n&lt;text&gt;</code></td></tr>
+<tr><th scope="row"><code translate="no">predecessor</code></th><td>第一个被覆盖节点的前驱</td></tr>
+<tr><th scope="row"><code translate="no">metadata.covers_ids</code></th><td>被替换链节点的有序 id</td></tr>
+<tr><th scope="row"><code translate="no">metadata.compaction</code></th><td><code translate="no">true</code></td></tr>
+</tbody>
+</table>
+<ul>
+<li><strong>只追加。</strong>写一个节点，不改任何东西：不克隆尾部，不改边，不动 HEAD。忽略摘要即可重建原视图。</li>
+<li><strong>用 id，不用 seq 区间。</strong>兄弟分支的 seq 交错，区间会卷入死分叉，还会随 HEAD 变化。</li>
+<li><strong><code translate="no">covers_ids</code> 是真实轮次的连续段。</strong>绝不包含摘要：再次压缩时在旧段上延伸新轮次。</li>
+</ul>
+
+<h2 id="rendering-rule">渲染规则</h2>
+<p><code translate="no">context/nodes.py</code> 的 <code translate="no">render_context</code> 决定模型读什么，聊天和 <code translate="no">runtime.exec</code> 都一样。设 S 为现役摘要，L 为其 <code translate="no">covers_ids</code>。从 head H 渲染：<strong>若 L 的每个节点都在 H 的前驱主干上，去掉 L，在其位置放入 S；否则原样渲染主干。</strong></p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">情况</th><th scope="col">结果</th></tr></thead>
+<tbody>
+<tr><th scope="row">已压缩的分支</th><td><code translate="no">[ROOT, S, 保留尾部…]</code></td></tr>
+<tr><th scope="row">不含完整段的分叉（段内重试、死兄弟）</th><td>原样；不继承它没有过的轮次的摘要</td></tr>
+<tr><th scope="row">任何时候检出任何分支</th><td>由数据确定；不取决于 HEAD 当时在哪</td></tr>
+<tr><th scope="row">被取代的摘要</th><td>不省略任何内容</td></tr>
+</tbody>
+</table>
+<p class="note">DAG 胶囊按同一规则、同一 <code translate="no">covers_ids</code> 折叠。</p>
+
+<h2 id="pipeline">流水线</h2>
+<p><code translate="no">/compact</code>（<code translate="no">trigger_compaction</code>）、自动压缩（轮次前预算达到 <code translate="no">context.auto_compact_percent</code>，默认 80%）和响应式压缩（provider 溢出）都运行 <code translate="no">engine.compact</code>：</p>
+<ol>
+<li><strong>冻结渲染输入。</strong><code translate="no">compaction.view.load_compaction_view</code> 使用 <code translate="no">render_context</code> 和 <code translate="no">render_dag_messages</code>，含工具结果、expose、spill 引用和老化边界。顶层轮次决定覆盖；可见子调用计入输入和预算。</li>
+<li><strong>选择整轮。</strong>保留窗口的 10%，限制在 8,000–40,000 token（显式覆盖优先）。优先在用户边界保留至少四条对话消息；已发布的汇报也是边界。低于目标：不操作。最后两轮超过目标时，切点可前进到最新用户边界。最新一轮保持完整，除非其后只有汇报。</li>
+<li><strong>摘要整个被覆盖前缀</strong>：每个被替换轮次、最初的请求、适用的上一份摘要、渲染出的子调用。不注入其他分支的缓存。非文本媒体用引用说明代替。用户取消或替换的请求要标明；助手或工具说的话保留出处，不写成事实。</li>
+<li><strong>写入前校验。</strong>拒绝空、失败、取消、超大或不减小的摘要；候选在内存中按相同老化边界渲染，必须严格变小。模型调用后复查 head 和渲染出的节点；有变化则为可重试的空操作，其他分支不算。provider 失败保留历史，不用有损的结构化兜底。</li>
+<li><strong>持久化并报告。</strong>一个节点；<code translate="no">covers_ids</code> 把上一份摘要展开成真实轮次 id。覆盖数和前后估算用上下文面板的渲染器。空操作不写入、不计数。</li>
+</ol>
+<p class="note">上下文显示使用 provider 的输入用量。每个请求还记录同一批消息的本地估算，之后图编辑时按实测比例缩放估算，下次上报前都标为估算。没有匹配估算的旧用量不用于校准。</p>
+
+<details id="repeated-failures">
+<summary>自动压缩反复失败</summary>
+<p>每次失败仍要为整个对话付费。同一对话在同一模型上连续失败 <code translate="no">FAILS_MOST</code>（3）次，且每次距上次不超过 <code translate="no">HELD_FOR_S</code>（5 分钟）后，自动压缩从最后一次失败起等待五分钟，再试一次（<code translate="no">runtime/context/compaction/hold.py</code>，由 <code translate="no">DefaultContextEngine.compact</code> 查询）。</p>
+<ul>
+<li>算失败：摘要器错误（如 429）、带错误的空摘要、超渲染预算、没有减小。</li>
+<li>不算失败：取消、源变化。</li>
+<li>摘要成功安装后清零。<code translate="no">/compact</code> 总是执行。</li>
+<li>沿用 magpie 的压缩保护（yetone/magpie，MIT）。</li>
+</ul>
+</details>
+
+<h2 id="head-integrity">HEAD 完整性</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">写入者</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">SessionStore.set_head</code></th><td>用于显式移动：发送轮次前进、重试或编辑分叉、检出、回退、删除分支。压缩、加载会话、worker 重启、切换模型和保存元数据都不调用</td></tr>
+<tr><th scope="row"><code translate="no">append_message</code></th><td>只有节点前驱等于当前 HEAD 时才移动。摘要拼接、侧分支写入和遗迹都不动 HEAD</td></tr>
+<tr><th scope="row">派生轮次</th><td>同会话子 agent 轮次以 <code translate="no">TurnRequest.advance_head=False</code> 运行；内部写入都不动 head，用户窗口不会中途被切走。跨会话发送仍推进目标会话的 head</td></tr>
+<tr><th scope="row">不算移动的写入</th><td>attach 卡片、inbox 和子 agent 路径通过 store 追加后恢复 <code translate="no">head_before</code></td></tr>
+<tr><th scope="row"><code translate="no">TurnWriter</code>（<code translate="no">turn_runtime/turn_writer.py</code>）</th><td>执行一轮的链写入，只有它应用 <code translate="no">advance_head</code>。该包内只有这个文件移动 HEAD，另有 <code translate="no">forced_tool.py</code> 中用户发起的函数运行路径和 <code translate="no">slash_actions.py</code> 的恢复</td></tr>
+<tr><th scope="row">镜像</th><td>webui 的 <code translate="no">conv</code> 镜像和一次性 <code translate="no">load_session</code> 快照只读。React 会话 store 是唯一的实时转录。<code translate="no">save_meta</code> 去掉 <code translate="no">head_id</code>；镜像行不会变成存储</td></tr>
+<tr><th scope="row">存储的 HEAD 落在调用上</th><td>旧会话可能有；调用没有前驱，下一请求将没有历史。<code translate="no">store/session/memory_index.py</code> 的 <code translate="no">_conversation_head</code> 把它读成产生该调用的回复</td></tr>
+</tbody>
+</table>
+
+<h2 id="graph-contract">图契约</h2>
+<ul>
+<li>现役摘要行带 <code translate="no">covers_ids</code>：<code translate="no">metadata.covers_ids</code>，扩展被覆盖轮次的 caller 子树，去掉已不存在的 id。</li>
+<li>被取代的行带 <code translate="no">superseded_summary: true</code>，没有 <code translate="no">covers_ids</code>。</li>
+<li>builder 不做 seq 运算和依赖 head 的过滤。</li>
+</ul>
+
+<details id="inside-one-message">
+<summary>一条用户消息内的压缩</summary>
+<p>每次 AgentLoop provider 请求之前，包括工具续跑和函数内的 <code translate="no">llm()</code>、<code translate="no">agent()</code>，运行时都对转换后的消息、实际工具、系统提示、输出上限和安全余量做预算。这个视图只属于该请求：执行消息和 DAG 不变，也不创建摘要节点。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">步骤</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">输出上限</th><td>未指定时取模型能力、16,384 和窗口四分之一的最小值，预算和发送用同一个值。显式上限绝不降低</td></tr>
+<tr><th scope="row">工具结果</th><td>完整工具组的纯文本结果直接摘要，不等下一条用户消息。用户消息、工具参数、结果 id、错误标志和多模态内容不变</td></tr>
+<tr><th scope="row">检查点</th><td>仍超：较早的完整纯文本历史变成任务摘要。所有用户消息和最新助手段原样保留。不完整的工具组、多模态输入和签名推理不适用</td></tr>
+<tr><th scope="row">复用</th><td>在同一次调用内，原文和模型设置匹配；检查点还要求源前缀不变</td></tr>
+<tr><th scope="row">摘要调用</th><td>分块，溢出时用更小的块重试；最多 32 次请求、60 秒；绕过 AgentLoop。失败时历史不变</td></tr>
+<tr><th scope="row">超预算</th><td>只是本地估算。放不下的受保护内容明确失败；估算超预算的请求不发送</td></tr>
+</tbody>
+</table>
+</details>
+
+<details id="tuning">
+<summary>按用户自己的调用选择比例</summary>
+<p>压缩得早，每次调用读得少，但要为更多摘要和返工付费。<code translate="no">context.auto_compact_percent</code>（设置 → 系统 → 模型 → 长对话在多满时总结，50–95，每次决策时读取）由 <code translate="no">GET /api/usage/tuning?days=30</code>（<code translate="no">runtime/context/tuning.py</code>）给出建议：按模型在该时段的 chat、exec、subagent 调用上回放 50% 到 95% 的每个比例。沿用 magpie 的 tune（yetone/magpie，MIT）。</p>
+<ul>
+<li>按顺序回放，每个 prompt 按实际增长，去掉记录到的压缩（降到至少 20K prompt 的 60% 以下）。</li>
+<li>超过阈值（窗口比例减回复预留）时，压缩读完整 prompt，写一份和所见摘要一样长的摘要（没有时比对话开头多 10K）。下一次调用把它写入缓存，之后读回记录的压缩后的内容（见到五次前至少 10K）。</li>
+<li>token 按目录价格或厂商常见比例换算成普通输入。</li>
+<li>余量不足半份摘要或二十次调用增长的比例不尝试。与最便宜相差 1% 内的取最大，且比当前至少省 3% 才建议。少于 50 次调用：不建议。</li>
+<li>同一端点为 Anthropic API 和 Bedrock 调用建议 <code translate="no">models.prompt_cache_ttl</code>（<code translate="no">5m</code> 或 <code translate="no">1h</code>）：一小时写入价格是输入的两倍，过期后的调用重写整个 prompt。该设置只延长普通缓存（<code translate="no">providers/settings/cache_spec.py</code> 的 <code translate="no">with_lifetime_setting</code>）。</li>
+</ul>
+</details>
+
+<details id="extension-points">
+<summary>其他压缩方案</summary>
+<p>单一滚动摘要和 Claude Code、Codex CLI、Gemini CLI 一致，也让缓存前缀稳定。这是策略，不是存储：各方案只在哪些摘要现役、渲染器如何替换上不同，切换不用迁移数据。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方案</th><th scope="col">改动</th></tr></thead>
+<tbody>
+<tr><th scope="row">分段（多份现役）</th><td>N 个节点覆盖不相交的段；规则按摘要应用；用现役集合取代 <code translate="no">_last_summary_id</code></td></tr>
+<tr><th scope="row">嵌套</th><td><code translate="no">covers_ids</code> 允许摘要 id；替换递归</td></tr>
+<tr><th scope="row">外部记忆</th><td>节点相同；渲染器不再内联</td></tr>
+</tbody>
+</table>
+<p>任何未来的上下文都保留两条契约。DAG 是账本，不是上下文：上下文是只追加节点上的确定性视图，现有偏离（<code translate="no">render_range</code>、<code translate="no">expose</code>、attach 与 merge、记忆预取）都是数据，不是隐藏状态。来源必须记录：进入 prompt 的 id 以 <code translate="no">reads</code> 记在调用上，用于回放、审计和按节点标记。</p>
+<p>摘要是第一种视图节点：替代其他内容的节点。检索的记忆、注入的文档和跨会话引用是它的推广，胶囊是通用呈现。在出现第二种方案前，不提前建通用的视图组合框架。</p>
+</details>
+
+<h2 id="invariants">不变量</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">不变量</th><th scope="col">测试位置</th></tr></thead>
+<tbody>
+<tr><th scope="row">压缩后现役分支渲染为 <code translate="no">[ROOT, S, 保留尾部…]</code></th><td><code translate="no">tests/unit/context/test_compaction_covers.py</code>；场景套件</td></tr>
+<tr><th scope="row">压缩绝不移动 HEAD</th><td>场景套件</td></tr>
+<tr><th scope="row">不含完整段的分支原样渲染</th><td><code translate="no">render_context</code> 分支隔离测试</td></tr>
+<tr><th scope="row">再压缩的输入不含已覆盖的原始轮次；新 <code translate="no">covers_ids</code> 延伸旧段</th><td>压缩流水线测试</td></tr>
+<tr><th scope="row">每个会话最多一行带 <code translate="no">covers_ids</code>；旧的为 <code translate="no">superseded_summary</code></th><td><code translate="no">tests/unit/dag/test_graph_builder_covers.py</code></td></tr>
+<tr><th scope="row"><code translate="no">covers_ids</code> 不指向摘要链之外的节点</th><td><code translate="no">tests/unit/dag/test_graph_builder_covers.py</code></td></tr>
+<tr><th scope="row">HEAD 经受重启、加载、切模型、保存元数据</th><td><code translate="no">tests/integration/dag/test_dag_mutation_scenarios.py</code></td></tr>
+<tr><th scope="row">镜像行或镜像 head 不回写 store</th><td>Web UI 持久化测试</td></tr>
+</tbody>
+</table>
+<p class="note">场景套件在真实 <code translate="no">SessionStore</code> 上运行聊天、分叉、检出、压缩、聊天、压缩、聊天、重启加载，每步后检查 head 和渲染。</p>
+
+<h2 id="implementation-status">实现状态</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">部分</th><th scope="col">代码</th></tr></thead>
+<tbody>
+<tr><th scope="row">节点形状和流水线</th><td><code translate="no">runtime/context/persistence.py</code>（<code translate="no">insert_summary_node</code>、<code translate="no">covered_chain_ids</code>、<code translate="no">rendered_history</code>）、<code translate="no">runtime/context/engine.py</code></td></tr>
+<tr><th scope="row">段替换</th><td><code translate="no">runtime/context/nodes.py</code>（<code translate="no">render_context</code>、<code translate="no">active_summary</code>、<code translate="no">summary_covers_ids</code>）</td></tr>
+<tr><th scope="row">HEAD 完整性</th><td><code translate="no">state/store/session/session_store/messages.py</code>；<code translate="no">interfaces/server/persistence.py</code> 去掉 <code translate="no">head_id</code></td></tr>
+<tr><th scope="row">图契约</th><td><code translate="no">state/store/session/graph/builder.py</code></td></tr>
+<tr><th scope="row">请求内压缩</th><td><code translate="no">runtime/context/compaction/request.py</code>、<code translate="no">bounded_summary.py</code></td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="compaction-diagram.zh.html">压缩层级</a></p>

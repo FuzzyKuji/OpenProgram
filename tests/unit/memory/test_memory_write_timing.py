@@ -1,7 +1,7 @@
 """Memory sync runs AFTER the turn it is meant to count.
 
 ``write`` is the "a turn finished" trigger in
-docs/reference/design/memory/overview.md. The provider deliberately
+docs/reference/design/memory/overview.html. The provider deliberately
 reads the turn back out of the session store rather than trusting the
 arguments — the store is durable and ordered, which is what the write
 cursor needs. That makes *when* the hook fires load-bearing: called

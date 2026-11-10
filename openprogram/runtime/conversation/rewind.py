@@ -1,4 +1,4 @@
-"""Plan and apply transactional multi-turn rewind operations."""
+"""Plan and apply rewinds in three modes: code and conversation, conversation, code."""
 from __future__ import annotations
 
 import logging
@@ -11,8 +11,27 @@ from openprogram.state.store.session.rewind_recovery import (
     head as _head,
     recover_session_rewinds,
 )
+from openprogram.state.store.snapshot.checkpoint.gc import (
+    MAX_TURNS,
+    evicted_turns,
+    turn_directories,
+)
+from openprogram.state.store.snapshot.checkpoint.paths import session_backup_root
+from openprogram.state.store.snapshot.checkpoint.prompt_checkpoints import PromptCheckpoints
+from openprogram.state.store.snapshot.checkpoint.restore_plan import build_restore_plan
+
+from .rewind_marks import forget_read_baselines, rewind_meta_updates
 
 _log = logging.getLogger(__name__)
+
+CODE_AND_CONVERSATION = "code_and_conversation"
+CONVERSATION = "conversation"
+CODE = "code"
+MODES = (CODE_AND_CONVERSATION, CONVERSATION, CODE)
+JOB_RUNNING_MESSAGE = "A background task started in this conversation is still running."
+NO_CODE_RESTORE_MESSAGE = "Code can no longer be restored to this message."
+ARCHIVED_MESSAGE = "An archived conversation can't be rewound."
+_WRITE_TOOLS = {"write", "edit", "apply_patch", "notebook_edit"}
 
 
 def _active_chain(index) -> list:
@@ -34,7 +53,59 @@ def _branch_id(session_id: str, head_id: str | None) -> str:
     return f"branch_{digest[:16]}"
 
 
-def list_rewind_points(session_id: str, limit: int = 10) -> list[dict[str, Any]]:
+def _visible_prompt(node) -> bool:
+    return node.role == "user" and (node.metadata or {}).get("display") not in {"root", "runtime"}
+
+
+def _pickable_positions(chain: list) -> set[int]:
+    """Prompts the picker lists, as positions in a newest-first chain.
+
+    Before the first reply only the first prompt counts: anything sent while
+    that turn ran belongs to it. A prompt with no text has nothing to show.
+    """
+    prompts = [
+        position for position, node in enumerate(chain)
+        if _visible_prompt(node) and _node_text(node).strip()
+    ]
+    if not prompts:
+        return set()
+    replies = [position for position, node in enumerate(chain) if node.role in {"llm", "assistant"}]
+    first_reply = max(replies, default=-1)
+    return {position for position in prompts if position < first_reply or position == prompts[-1]}
+
+
+def _node_text(node) -> str:
+    output = node.output or ""
+    return str(output) if isinstance(output, dict) else output
+
+
+def _write_tool_turns(index, turn_ids: list[str]) -> set[str]:
+    """Turns with a file-writing tool call, read from the conversation itself."""
+    wanted = set(turn_ids)
+    return {
+        node.caller for node in index.all_nodes()
+        if node.caller in wanted and node.name in _WRITE_TOOLS
+    }
+
+
+def _legacy_gap(journal, index, session_dir, turn_ids: list[str], branched: bool) -> str | None:
+    """Why a prompt with no checkpoint cannot have its code restored, if so."""
+    if branched:
+        return "no_checkpoint"
+    evicted = evicted_turns(session_dir)
+    if any(turn_id in evicted for turn_id in turn_ids):
+        return "evicted"
+    root = session_backup_root(session_dir)
+    if root.exists() and len(turn_directories(root)) >= MAX_TURNS - 2:
+        writers = _write_tool_turns(index, turn_ids)
+        if any(not journal.list_backed_paths(turn_id) for turn_id in writers):
+            return "evicted"
+    return None
+
+
+def list_rewind_points(
+    session_id: str, limit: int | None = 10, *, recover: bool = True,
+) -> list[dict[str, Any]]:
     """Return user turns on the active predecessor chain, newest first."""
     try:
         from openprogram.state.store.session.session_store import default_store
@@ -43,22 +114,25 @@ def list_rewind_points(session_id: str, limit: int = 10) -> list[dict[str, Any]]
         return []
 
     store = default_store()
-    recover_session_rewinds(session_id, store=store)
+    if recover:
+        recover_session_rewinds(session_id, store=store)
     pair = store._open(session_id)
     if pair is None:
         return []
-    _git, index = pair
-    journal = CheckpointStore(store._session_dir(session_id))
+    _session_log, index = pair
+    session_dir = store._session_dir(session_id)
+    journal = CheckpointStore(session_dir)
+    checkpoints = PromptCheckpoints(session_dir).ids()
+    branched = bool((store.get_session(session_id) or {}).get("branched_from"))
     chain = _active_chain(index)
+    pickable = _pickable_positions(chain)
     points: list[dict[str, Any]] = []
     for position, node in enumerate(chain):
-        if node.role != "user" or (node.metadata or {}).get("display") == "root":
+        if position not in pickable:
             continue
-        if len(points) >= limit:
+        if limit is not None and len(points) >= limit:
             break
-        output = node.output or ""
-        if isinstance(output, dict):
-            output = str(output)
+        output = _node_text(node)
         summary = output[:80].replace("\n", " ").strip()
         if len(output) > 80:
             summary += "..."
@@ -69,6 +143,12 @@ def list_rewind_points(session_id: str, limit: int = 10) -> list[dict[str, Any]]
             if candidate.role == "llm":
                 files = journal.list_backed_paths(candidate.id)
                 break
+        has_checkpoint = node.id in checkpoints
+        gap = None if has_checkpoint else _legacy_gap(
+            journal, index, session_dir,
+            [item.id for item in chain[:position + 1] if item.role == "llm"],
+            branched,
+        )
         points.append({
             "msg_id": node.id,
             "seq": node.seq,
@@ -76,6 +156,10 @@ def list_rewind_points(session_id: str, limit: int = 10) -> list[dict[str, Any]]
             "user_text": output,
             "created_at": getattr(node, "created_at", 0) or 0,
             "files_affected": files,
+            "attachments": (node.metadata or {}).get("attachments") or [],
+            "code_available": gap is None,
+            "code_unavailable_reason": gap,
+            "checkpoint": "prompt" if has_checkpoint else "legacy",
         })
     return points
 
@@ -84,10 +168,24 @@ def plan_rewind(
     session_id: str,
     target_msg_id: str,
     *,
-    mode: str = "code_and_conversation",
+    mode: str = CODE_AND_CONVERSATION,
+    recover: bool = True,
 ) -> dict[str, Any]:
     """Return a read-only rewind plan. This function never changes HEAD/files."""
-    if mode != "code_and_conversation":
+    plan = _build_plan(session_id, target_msg_id, mode, recover=recover, capture_current=False)
+    plan.pop("_actions", None)
+    return plan
+
+
+def _build_plan(
+    session_id: str,
+    target_msg_id: str,
+    mode: str,
+    *,
+    recover: bool,
+    capture_current: bool,
+) -> dict[str, Any]:
+    if mode not in MODES:
         return _err(session_id, target_msg_id, f"unsupported rewind mode {mode!r}")
     try:
         from openprogram.state.store.session.session_store import (
@@ -99,11 +197,12 @@ def plan_rewind(
         return _err(session_id, target_msg_id, f"import failed: {exc}")
 
     store = default_store()
-    recover_session_rewinds(session_id, store=store)
+    if recover:
+        recover_session_rewinds(session_id, store=store)
     pair = store._open(session_id)
     if pair is None:
         return _err(session_id, target_msg_id, f"unknown session {session_id!r}")
-    _git, index = pair
+    _session_log, index = pair
     target = index.nodes_by_id.get(target_msg_id)
     if target is None:
         return _err(session_id, target_msg_id, f"node {target_msg_id!r} not found")
@@ -126,8 +225,9 @@ def plan_rewind(
     ownership = owned_change_set_closure(session_id, turn_ids)
     if ownership["status"] != "ready":
         return {
-            **_err(session_id, target_msg_id, "owned actor is still running"),
+            **_err(session_id, target_msg_id, JOB_RUNNING_MESSAGE),
             "status": "blocked",
+            "error_code": "job_running",
             "blockers": ownership["blockers"],
             "linked_impacts": ownership["linked"],
         }
@@ -139,6 +239,12 @@ def plan_rewind(
         ),
         reverse=True,
     )
+    if (store.get_session(session_id) or {}).get("archived"):
+        return {
+            **_err(session_id, target_msg_id, ARCHIVED_MESSAGE),
+            "status": "blocked",
+            "error_code": "archived",
+        }
     source_head = index.head_id
     target_head = _node_conv_predecessor(target)
     if target_head is None:
@@ -146,56 +252,116 @@ def plan_rewind(
             session_id, target_msg_id,
             "rewind target has no persistent predecessor",
         )
-    journal = CheckpointStore(store._session_dir(session_id))
-    file_plan = journal.plan_rewind_operation(turn_ids)
-    plan_hash = journal.rewind_plan_hash(
-        turn_ids, source_head, target_head, file_plan.get("actions", []),
+    session_dir = store._session_dir(session_id)
+    journal = CheckpointStore(session_dir)
+    session = store.get_session(session_id) or {}
+    targets, by_path, gap, kind = _restore_targets(
+        journal, index, session_dir, suffix, turn_ids, bool(session.get("branched_from")),
     )
+    if targets is None:
+        actions: list[dict] = []
+        rows: list[dict] = []
+    else:
+        actions, rows = build_restore_plan(
+            journal, targets,
+            capture_current=capture_current,
+            with_stats=not capture_current,
+            turn_ids_by_path=by_path,
+        )
+    hashes = {
+        CODE_AND_CONVERSATION: journal.rewind_plan_hash(turn_ids, source_head, target_head, actions),
+        CONVERSATION: journal.rewind_plan_hash(turn_ids, source_head, target_head, []),
+        CODE: journal.rewind_plan_hash(turn_ids, source_head, source_head, actions),
+    }
     refs = index.meta.get("branch_refs") or {}
     source_branch_id = index.meta.get("active_branch_id")
     if not source_branch_id or (refs.get(source_branch_id) or {}).get(
         "head_id"
     ) != source_head:
         source_branch_id = _branch_id(session_id, source_head)
-    user_text = target.output or ""
-    if isinstance(user_text, dict):
-        user_text = str(user_text)
-    error = file_plan.get("error")
+    unavailable = gap is not None and mode != CONVERSATION
+    changing = [row for row in rows if row["action"] != "skip"]
+    skipped = [row for row in rows if row["action"] == "skip"]
+    error = NO_CODE_RESTORE_MESSAGE if unavailable else None
     return {
-        "status": file_plan.get("status", "error"),
+        "status": "unavailable" if unavailable else "ready",
         "phase": "plan",
         "mode": mode,
         "session_id": session_id,
         "target_msg_id": target_msg_id,
         "source_head_id": source_head,
-        "target_head_id": target_head,
+        "target_head_id": source_head if mode == CODE else target_head,
         "source_branch_id": source_branch_id,
         "turn_ids": turn_ids,
         "owned_turn_ids": ownership["owned_turn_ids"],
         "linked_impacts": ownership["linked"],
         "turns_reverted": len(turn_ids),
         "nodes_rewound": len(suffix),
-        "user_text": user_text,
-        "plan_hash": plan_hash,
+        "user_text": _node_text(target),
+        "attachments": (target.metadata or {}).get("attachments") or [],
+        "plan_hash": hashes[mode],
+        "plan_hashes": hashes,
         "idempotency_key": uuid.uuid4().hex,
-        "files": [
-            {
-                "path": action["path"],
-                "turn_ids": action.get("turn_ids", []),
-                "current": action["expected_current"].get("digest")
-                    or action["expected_current"].get("kind"),
-                "target": action["target"].get("digest")
-                    or action["target"].get("kind"),
-            }
-            for action in file_plan.get("actions", [])
-        ],
-        "conflicts": file_plan.get("conflicts", []),
-        "unavailable": file_plan.get("unavailable", []),
+        "files": rows,
+        "summary": {
+            "files": len(changing),
+            "additions": sum(row["additions"] for row in changing),
+            "deletions": sum(row["deletions"] for row in changing),
+            "skipped": len(skipped),
+        },
+        "has_changes": bool(changing),
+        "skipped": skipped,
+        "code_available": gap is None,
+        "code_unavailable_reason": gap,
+        "checkpoint": kind,
+        "conflicts": [],
+        "unavailable": [row["path"] for row in skipped if row["reason"] == "no_backup"],
         "error": error,
         "errors": [error] if error else [],
         "new_head_id": None,
         "head_changed": False,
+        "_actions": actions,
     }
+
+
+def _restore_targets(journal, index, session_dir, suffix, turn_ids, branched):
+    """Target states for a suffix: ``(states, turn ids by path, gap, kind)``."""
+    user_ids = [node.id for node in reversed(suffix) if node.role == "user"]
+    states = PromptCheckpoints(session_dir).targets(user_ids)
+    if states is not None:
+        return states, {}, None, "prompt"
+    gap = _legacy_gap(journal, index, session_dir, turn_ids, branched)
+    if gap:
+        return None, {}, gap, "legacy"
+    folded = journal.plan_rewind_operation(turn_ids)
+    if folded.get("status") == "unavailable":
+        return None, {}, "journal_gap", "legacy"
+    changed = set(folded.get("conflicts") or [])
+    return (
+        {
+            action["path"]: {
+                **action["target"],
+                "captured_sequence": _before_first_write(journal, action),
+                "changed_since_edit": action["path"] in changed,
+            }
+            for action in folded.get("actions", [])
+        },
+        {action["path"]: action.get("turn_ids", []) for action in folded.get("actions", [])},
+        None,
+        "legacy",
+    )
+
+
+def _before_first_write(journal, action: dict) -> int:
+    """The workspace sequence just before a folded action's first edit."""
+    sequences = [
+        mutation["mutation_sequence"]
+        for turn_id in action.get("turn_ids", [])
+        for mutation in journal.list_mutations(turn_id)
+        if mutation.get("path") == action["path"]
+        and isinstance(mutation.get("mutation_sequence"), int)
+    ]
+    return min(sequences, default=1) - 1
 
 
 def _operation_response(
@@ -227,7 +393,7 @@ def rewind_to(
     *,
     idempotency_key: str | None = None,
     expected_plan_hash: str | None = None,
-    mode: str = "code_and_conversation",
+    mode: str = CODE_AND_CONVERSATION,
 ) -> dict[str, Any]:
     """Apply a confirmed plan; files commit before the target branch activates."""
     try:
@@ -249,8 +415,8 @@ def rewind_to(
                     expected_head_id=existing.get("expected_head_id"),
                     target_head_id=existing.get("target_head_id"),
                     get_head=lambda: _head(store, session_id),
-                    compare_and_set_head=lambda expected, target: _cas_for_intent(
-                        store, session_id, existing, expected, target,
+                    compare_and_set_head=lambda expected, target, rollback=False: _cas_for_intent(
+                        store, session_id, existing, expected, target, rollback=rollback,
                     ),
                     idempotency_key=idempotency_key,
                     target_msg_id=target_msg_id,
@@ -264,10 +430,12 @@ def rewind_to(
                 nodes_rewound=len(existing.get("turn_ids") or []) * 2,
             )
 
-    plan = plan_rewind(session_id, target_msg_id, mode=mode)
+    plan = _build_plan(session_id, target_msg_id, mode, recover=True, capture_current=True)
     if plan.get("status") != "ready":
+        plan.pop("_actions", None)
         return plan
     if expected_plan_hash and expected_plan_hash != plan.get("plan_hash"):
+        plan.pop("_actions", None)
         return {
             **plan,
             "status": "aborted",
@@ -275,39 +443,65 @@ def rewind_to(
             "error": "stale_plan",
             "errors": ["stale_plan"],
         }
+
+    def current_actions() -> list[dict]:
+        if mode == CONVERSATION:
+            return []
+        fresh = _build_plan(session_id, target_msg_id, mode, recover=False, capture_current=True)
+        return fresh.get("_actions") or []
+
     key = idempotency_key or uuid.uuid4().hex
-    target_branch_id = f"branch_restore_{uuid.uuid4().hex[:16]}"
+    moves_head = mode != CODE
+    target_branch_id = f"branch_restore_{uuid.uuid4().hex[:16]}" if moves_head else None
+    source_branch_id = plan["source_branch_id"] if moves_head else None
+    forward, rollback = rewind_meta_updates(
+        store.get_session(session_id) or {},
+        plan,
+        mode=mode,
+        target_branch_id=target_branch_id,
+    )
     intent_context = {
         "expected_head_id": plan["source_head_id"],
         "target_head_id": plan["target_head_id"],
-        "source_branch_id": plan["source_branch_id"],
+        "source_branch_id": source_branch_id,
         "target_branch_id": target_branch_id,
+        "forward_meta_update": forward,
+        "rollback_meta_update": rollback,
     }
+    skipped = plan["skipped"] if mode != CONVERSATION else []
     with store._rewind_recovery_scope(session_id):
         result = journal.apply_rewind_operation(
             plan["turn_ids"],
             expected_head_id=plan["source_head_id"],
             target_head_id=plan["target_head_id"],
             get_head=lambda: _head(store, session_id),
-            compare_and_set_head=lambda expected, target: _cas_for_intent(
-                store, session_id, intent_context, expected, target,
+            compare_and_set_head=lambda expected, target, rollback=False: _cas_for_intent(
+                store, session_id, intent_context, expected, target, rollback=rollback,
             ),
             idempotency_key=key,
             target_msg_id=target_msg_id,
             user_text=plan["user_text"],
-            source_branch_id=plan["source_branch_id"],
+            source_branch_id=source_branch_id,
             target_branch_id=target_branch_id,
             expected_plan_hash=plan["plan_hash"],
+            forward_meta_update=forward,
+            rollback_meta_update=rollback,
+            action_planner=current_actions,
+            intent_extra={"mode": mode, "skipped": skipped},
         )
+    if result.get("status") == "blocked" and result.get("conflicts"):
+        result = {**result, "status": "aborted", "error": "stale_plan"}
     if result.get("status") == "committed" and not result.get("replayed"):
-        try:
-            store.commit_turn(session_id, "rewind")
-        except Exception:
-            # The rewind already moved the head; only the commit marker is missing.
-            _log.warning("rewind not committed for session %s", session_id, exc_info=True)
+        forget_read_baselines(session_id)
+        if result.get("head_changed"):
+            try:
+                store.commit_turn(session_id, "rewind")
+            except Exception:
+                # The rewind already moved the head; only the commit marker is missing.
+                _log.warning("rewind not committed for session %s", session_id, exc_info=True)
     return _operation_response(
         session_id, target_msg_id, result,
-        nodes_rewound=plan["nodes_rewound"],
+        nodes_rewound=plan["nodes_rewound"] if moves_head else 0,
     )
 
 

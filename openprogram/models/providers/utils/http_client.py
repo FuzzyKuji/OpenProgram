@@ -7,6 +7,7 @@ import logging
 import os
 import socket
 import threading
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from openprogram.host.security.safe_http import (
@@ -112,6 +113,17 @@ async def _close_client(client: SafeAsyncClient) -> None:
         _log.debug("http client close failed", exc_info=True)
 
 
+# Other per-loop connections a provider keeps (the Codex WebSocket pool)
+# close with the loop's shared clients; each closer runs on the owner loop.
+_loop_closers: list[Callable[[], Awaitable[None]]] = []
+
+
+def register_loop_closer(closer: Callable[[], Awaitable[None]]) -> None:
+    """Have ``closer()`` run on a loop whenever its shared clients are closed."""
+    if closer not in _loop_closers:
+        _loop_closers.append(closer)
+
+
 async def _close_loop_clients(loop: asyncio.AbstractEventLoop) -> None:
     if asyncio.get_running_loop() is not loop:
         raise RuntimeError("shared provider clients must close on their owner loop")
@@ -120,6 +132,11 @@ async def _close_loop_clients(loop: asyncio.AbstractEventLoop) -> None:
         clients = [_shared.pop(cache_key) for cache_key in cache_keys]
     for client in clients:
         await _close_client(client)
+    for closer in list(_loop_closers):
+        try:
+            await closer()
+        except Exception:
+            _log.debug("provider connection close failed", exc_info=True)
 
 
 def _evict_dead_loops_locked() -> None:
@@ -333,6 +350,7 @@ async def aclose_current_loop_clients() -> None:
 
 
 __all__ = [
+    "register_loop_closer",
     "aclose_current_loop_clients",
     "aclose_shared_clients",
     "shutdown_loop_clients",

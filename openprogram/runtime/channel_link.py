@@ -1,8 +1,9 @@
 """The link between the core and the chat channels (Telegram, Discord, Slack, WeChat).
 
 Core code sends messages to a channel conversation, reads which channel
-conversations an Agent is bound to, and posts into the chat of the channel
-turn that is running, without importing the channels interface. The channels
+conversations an Agent is bound to, posts into the chat of the channel
+turn that is running, and sends a bound chat's replies to its channel
+conversation, without importing the channels interface. The channels
 package (``openprogram.interfaces.channels``) registers its implementation
 with :func:`register` when it is imported; the worker, the Server and the
 CLI's in-process turns import it at start.
@@ -15,7 +16,7 @@ outcome it reports.
 """
 from __future__ import annotations
 
-from typing import Any, Protocol
+from typing import Any, Protocol, Sequence
 
 
 class ChannelsUnavailable(RuntimeError):
@@ -28,6 +29,7 @@ class SendOutcome(Protocol):
     ok: bool
     error_kind: str
     error_detail: str
+    connect_failed: bool
 
 
 class ChannelTurn(Protocol):
@@ -36,6 +38,27 @@ class ChannelTurn(Protocol):
     channel: str
     account_id: str
     peer_id: str
+    #: The Slack thread or Telegram forum topic the turn is in; empty when none.
+    thread_id: str
+
+
+class ReplyDelivery(Protocol):
+    """One assistant reply streaming out to a bound chat's channel conversation."""
+
+    def feed(self, delta: str) -> None:
+        """A piece of reply text; whole paragraphs go out as they complete."""
+
+    def flush(self) -> None:
+        """A tool call starts: send the text written before it."""
+
+    def close(self) -> list[SendOutcome]:
+        """Send what is queued and stop; the failed sends."""
+
+    def finish(self, reply_text: str, *, attached_files: Sequence[str] = (),
+               streamed_only: bool = False) -> list[SendOutcome]:
+        """Send the rest of ``reply_text`` (``streamed_only``: only the text
+        streamed here, plus the files ``reply_text`` attaches); the failed sends.
+        Only the files in ``attached_files`` are uploaded."""
 
 
 class ChannelLink(Protocol):
@@ -44,8 +67,10 @@ class ChannelLink(Protocol):
     def send_message(self, channel: str, account_id: str, peer_id: str, text: str) -> SendOutcome:
         """Send ``text`` to one channel conversation through the outbound path."""
 
-    def post_message(self, channel: str, account_id: str, peer_id: str, text: str) -> SendOutcome:
-        """Post ``text`` into a chat directly through the platform transport."""
+    def post_message(self, channel: str, account_id: str, peer_id: str, text: str,
+                     *, thread_id: str = "") -> SendOutcome:
+        """Post ``text`` into a chat, or one thread of it, directly through the
+        platform transport."""
 
     def account_ids(self, channel: str) -> list[str]:
         """The account ids configured for ``channel``."""
@@ -61,6 +86,20 @@ class ChannelLink(Protocol):
 
     def sends_per_turn(self) -> int:
         """How many messages one channel turn may post on its own."""
+
+    def owner_peer(self, channel: str, account_id: str) -> str:
+        """The direct-chat peer id of the account's owner, or "" (only WeChat has one)."""
+
+    def upload_marked_files(self, channel: str, account_id: str, peer_id: str, text: str,
+                            attached_files: Sequence[str]) -> str:
+        """Upload the files ``text``'s markers name, if a tool recorded them; the text without markers."""
+
+    def open_reply(self, channel: str, account_id: str, peer_id: str, *, flatten: bool = False) -> "ReplyDelivery":
+        """Start sending one assistant reply of a bound chat to ``peer_id``;
+        ``flatten`` writes its tables one line per row."""
+
+    def flatten_tables(self, text: str) -> str:
+        """``text`` with each Markdown table written one line per row."""
 
 
 _link: ChannelLink | Any | None = None
@@ -97,8 +136,9 @@ def send_message(channel: str, account_id: str, peer_id: str, text: str) -> Send
     return require().send_message(channel, account_id, peer_id, text)
 
 
-def post_message(channel: str, account_id: str, peer_id: str, text: str) -> SendOutcome:
-    return require().post_message(channel, account_id, peer_id, text)
+def post_message(channel: str, account_id: str, peer_id: str, text: str,
+                 *, thread_id: str = "") -> SendOutcome:
+    return require().post_message(channel, account_id, peer_id, text, thread_id=thread_id)
 
 
 def account_ids(channel: str) -> list[str]:
@@ -121,9 +161,26 @@ def sends_per_turn() -> int:
     return int(require().sends_per_turn())
 
 
+def owner_peer(channel: str, account_id: str) -> str:
+    return str(require().owner_peer(channel, account_id) or "")
+
+
+def upload_marked_files(channel: str, account_id: str, peer_id: str, text: str,
+                        attached_files: Sequence[str]) -> str:
+    return require().upload_marked_files(channel, account_id, peer_id, text, attached_files)
+
+
+def open_reply(channel: str, account_id: str, peer_id: str, *, flatten: bool = False) -> ReplyDelivery:
+    return require().open_reply(channel, account_id, peer_id, flatten=flatten)
+
+
+def flatten_tables(text: str) -> str:
+    return str(require().flatten_tables(text))
+
+
 __all__ = [
-    "ChannelLink", "ChannelTurn", "ChannelsUnavailable", "SendOutcome",
+    "ChannelLink", "ChannelTurn", "ChannelsUnavailable", "ReplyDelivery", "SendOutcome",
     "register", "unregister", "current", "require",
     "send_message", "post_message", "account_ids", "peer_bindings",
-    "active_turn", "take_send", "sends_per_turn",
+    "active_turn", "take_send", "sends_per_turn", "owner_peer", "open_reply", "flatten_tables",
 ]

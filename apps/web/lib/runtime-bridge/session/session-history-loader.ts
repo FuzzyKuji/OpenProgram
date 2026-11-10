@@ -1,18 +1,22 @@
+import { applyReadToView } from "@/lib/chat/transcript/apply-read";
 import { flushSync } from 'react-dom';
-import { convToChatMsgs } from '@/lib/chat/transcript/conv-mapper';
-import { useSessionHistory, updateSessionHistory, type HistoryPage } from '@/lib/chat/history/session-history';
-import { HistoryWindow, type HistoryDirection, type HistoryRow } from '@/lib/chat/history/history-window';
+import { rowsOfTurns } from '@/lib/chat/transcript/turn-rows';
+import { useSessionHistory, updateSessionHistory } from '@/lib/chat/history/session-history';
+import { HistoryWindow, type HistoryDirection, type TurnWindow, type WireTurn } from '@/lib/chat/history/history-window';
 import { captureHistoryAnchor, captureAreaRestoreState, historyAreaStillOwned, isFollowLocked, restoreAreaWindow } from '@/lib/chat/history/history-viewport';
 import { noteTakeLatest } from '@/lib/chat/history/chat-scroll';
 import { clearHeights, retainRowHeights } from '@/lib/chat/history/message-window';
-import { useSessionStore } from '@/lib/session-store';
+import { useSessionStore, type ChatMsg } from '@/lib/session-store';
+import { flushTextFrames } from '@/lib/net/ws/text-frames';
+import { exclusiveSessionRead, requestSessionLoad } from './session-load';
 import { wsRequest } from '@/lib/net/ws/ws-request';
 import { getSocket, runtimeState } from '../state';
+import { isLive } from "../../chat/transcript/row-status.ts";
 
 const windows = new Map<string, HistoryWindow>();
 const viewports = new Map<string, Map<HTMLElement, string>>();
-// The server keeps MAX_SNAPSHOTS_PER_CONNECTION (session_history.py) snapshots,
-// more than this, so every retained window can keep paging its own snapshot.
+// Fewer than the views the server keeps (MAX_VIEWS, transcript/turn_index.py),
+// so every retained window can keep paging.
 const MAX_CACHED_SESSIONS = 4;
 
 export function registerHistoryViewport(id: string, area: HTMLElement, chatKey: string): () => void {
@@ -35,11 +39,10 @@ function trimHistoryWindows(protectedId?: string): void {
     if (id===protectedId || viewports.has(id) || id===useSessionStore.getState().currentSessionId
         || useSessionHistory.getState().pages[id]?.loading) continue;
     windows.delete(id);
-    const conv=runtimeState.conversations[id];
-    if(conv){delete conv.messages;delete conv.graph;}
-    const state=useSessionStore.getState();
-    const live=(state.messageOrder[id]??[]).map(mid=>state.messagesById[mid]).filter(m=>m && ['running','streaming','pending','cancelling'].includes(m.status??''));
-    state.setMessages(id,live);
+    sendCloseView(id);
+    // No window means the next open of this chat reads it again.
+    useSessionHistory.setState(s=>{const pages={...s.pages};delete pages[id];return {pages};});
+    applyReadToView(id,storeRows(id).filter(m=>isLive(m.status)),false);
     clearHeights(id);clearHeights(`peer:${id}`);
   }
 }
@@ -53,11 +56,32 @@ useSessionStore.subscribe((state,previous)=>{
     }
   }
 });
-export function seedHistoryWindow(id: string, messages: HistoryRow[], history?: HistoryPage): void {
+function sendCloseView(id: string): void {
+  const socket = getSocket();
+  if (socket?.readyState === WebSocket.OPEN) {
+    socket.send(JSON.stringify({ action: 'close_view', session_id: id, view: id }));
+  }
+}
+
+export function historyWindowOf(id: string): HistoryWindow | undefined {
+  return windows.get(id);
+}
+
+/** Whether a viewport is showing this session, so losing its window needs a read. */
+export function isViewShown(id: string): boolean {
+  return viewports.has(id) || useSessionStore.getState().currentSessionId === id;
+}
+
+/** The server stopped keeping this view: forget the window, keep the rows. */
+export function dropHistoryWindow(id: string): void {
   windows.delete(id);
-  if (!history?.snapshot) return;
+  useSessionHistory.setState(s=>{const pages={...s.pages};delete pages[id];return {pages};});
+}
+
+export function seedTurnWindow(id: string, turns: WireTurn[], window: TurnWindow): void {
+  windows.delete(id);
   const historyWindow = new HistoryWindow();
-  historyWindow.add(messages, history, 'latest');
+  historyWindow.addTurns(turns, window, 'latest');
   windows.set(id, historyWindow);
   trimHistoryWindows(id);
 }
@@ -99,12 +123,6 @@ export async function loadSessionHistoryWindow(id: string, direction: HistoryDir
     });
     return loadSessionHistoryWindow(id, direction, around, options);
   }
-  if (expected?.renewalRequired && !expected.loading && (direction === 'older' || direction === 'newer')) {
-    // An expired cursor cannot page; renew around the reading anchor, or at
-    // the newest page when this chat is not on screen, so paging resumes.
-    const anchor = readingAnchor(id);
-    return loadSessionHistoryWindow(id, anchor ? 'around' : 'latest', anchor, options);
-  }
   if (!expected || expected.loading || (direction === 'older' && !expected.before)
       || (direction === 'newer' && !expected.after)) return false;
   const socket = getSocket();
@@ -112,92 +130,10 @@ export async function loadSessionHistoryWindow(id: string, direction: HistoryDir
     updateSessionHistory(id, expected.generation, {error: true});
     return false;
   }
-  updateSessionHistory(id, expected.generation, { loading: true, error: false });
-  const field = direction === 'older' ? {history_before: expected.before}
-    : direction === 'newer' ? {history_after: expected.after}
-    : direction === 'around' ? {history_around: around} : {history_latest: true};
-  type PageReply = {id: string; messages: HistoryRow[]; history: HistoryPage; error_code?: string};
-  let page = await wsRequest<PageReply>(
-    'load_session', {session_id:id, history_head:expected.head_id, ...(!expected.renewalRequired ? {history_snapshot:expected.snapshot} : {}), ...field},
-    'session_history_page', {requestId:true}, 15000,
-  );
-  if (useSessionHistory.getState().pages[id]?.generation !== expected.generation) return false;
-  const previous = windows.get(id);
-  let renewedAround = false;
-  if (page?.history?.snapshot && previous?.history?.snapshot && page.history.snapshot !== previous.history.snapshot
-      && page.history.head_id === expected.head_id && (direction === 'older' || direction === 'newer')
-      && !expected.renewalRequired && getSocket() === socket && (!options || options.isCurrent())) {
-    // The server dropped this chat's snapshot and built a new one at the same
-    // head. Its positions are not comparable with the retained pages, so read
-    // the new snapshot around what the user is reading instead of replacing
-    // the window with one edge page.
-    const anchor = readingAnchor(id);
-    const renewal = anchor ? await wsRequest<PageReply>('load_session', {
-      session_id: id, history_head: expected.head_id, history_snapshot: page.history.snapshot, history_around: anchor,
-    }, 'session_history_page', {requestId:true}, 15000) : null;
-    if (useSessionHistory.getState().pages[id]?.generation !== expected.generation) return false;
-    if (renewal?.id === id && renewal.history?.snapshot && Array.isArray(renewal.messages)) { page = renewal; renewedAround = true; }
-  }
-  let renewed = !!expected.renewalRequired || renewedAround;
-  if (page?.error_code === 'invalid_request' && !(renewed && direction === 'latest')
-      && getSocket() === socket && (!options || options.isCurrent())) {
-    updateSessionHistory(id, expected.generation, { renewalRequired: true });
-    // Retry once without the expired cursor. A new snapshot can have a new head.
-    // A renewal that already failed around its anchor, or a chat with no rows
-    // on screen, falls back to the newest page instead of stopping.
-    const anchor = renewed ? undefined : around ?? readingAnchor(id);
-    page = await wsRequest<PageReply>('load_session', {
-      session_id: id, history_head: expected.head_id, ...(anchor ? {history_around: anchor} : {history_latest: true}),
-    }, 'session_history_page', {requestId:true}, 15000);
-    renewed = true;
-    if (useSessionHistory.getState().pages[id]?.generation !== expected.generation) return false;
-  }
-  if (getSocket() !== socket || !page || page.id !== id || !page.history || !Array.isArray(page.messages)
-      || (!renewed && direction !== 'latest' && page.history.head_id !== expected.head_id)) {
-    updateSessionHistory(id, expected.generation, {loading:false,error:true});
-    return false;
-  }
-  if (options && !options.isCurrent()) {
-    updateSessionHistory(id, expected.generation, { loading: false });
-    return false;
-  }
-  const conv = runtimeState.conversations[id] as {messages?: HistoryRow[]} | undefined;
-  if (!conv) { updateSessionHistory(id, expected.generation, {loading:false}); return false; }
-  const registered=viewports.get(id);
-  const captures = registered
-    ? [...registered.entries()].map(([area, chatKey]) => captureAreaRestoreState(area, chatKey, true))
-    : [];
-  if (!captures.length && runtimeState.currentSessionId === id) {
-    const area = document.getElementById('chatArea');
-    if (area) captures.push(captureAreaRestoreState(area, useSessionStore.getState().activeChatKey ?? id, false));
-  }
-  const store = useSessionStore.getState();
-  const current = (store.messageOrder[id] ?? []).map(mid=>store.messagesById[mid]).filter(Boolean);
-  const known = new Set(previous?.messages.map(m=>m.id) ?? (conv.messages ?? []).map(m=>m.id));
-  let messages: HistoryRow[], history: HistoryPage;
-  if (page.history.snapshot) {
-    const historyWindow = previous ?? new HistoryWindow();
-    historyWindow.add(page.messages,page.history,renewed ? 'around' : direction, direction === 'around' ? around : captures[0]?.anchor?.id);
-    windows.delete(id); windows.set(id,historyWindow);
-    messages=historyWindow.messages; history=historyWindow.history!;
-  } else {
-    // Compatibility with an older server: its before-only protocol has no eviction cursors.
-    const incomingIds=new Set(page.messages.map(m=>m.id));
-    messages=[...page.messages,...(conv.messages ?? []).filter(m=>!incomingIds.has(m.id))];
-    history=page.history;
-  }
-  const mapped=convToChatMsgs(messages as never[]);
-  const selected=new Set(mapped.map(m=>m.id));
-  const live = current.filter(m=>!selected.has(m.id) && (!known.has(m.id)
-    || ['running','streaming','pending','cancelling'].includes(m.status ?? ''))).slice(-50);
-  const currentById=new Map(current.map(m=>[m.id,m]));
-  const merged=[...mapped.map(m=>currentById.get(m.id) ?? m),...live];
-  conv.messages=messages as typeof conv.messages;
-  flushSync(()=>{
-    store.setMessages(id,merged);
-    updateSessionHistory(id,expected.generation,{...history,loading:false,error:false,renewalRequired:false});
-  });
-  const liveIds = new Set(merged.map(m=>m.id));
+  return exclusiveSessionRead(id, () => loadTurnPage(id, direction, around, options, expected, socket), false);
+}
+
+function restoreViewports(id: string, direction: HistoryDirection, around: string | undefined, captures: ReturnType<typeof captureAreaRestoreState>[], liveIds: Set<string>): void {
   const liveRegistered = viewports.get(id);
   for (const cap of captures) {
     retainRowHeights(cap.chatKey, liveIds);
@@ -218,6 +154,81 @@ export async function loadSessionHistoryWindow(id: string, direction: HistoryDir
       restoreAreaWindow(cap, direction, around);
     }
   }
+}
+
+function storeRows(id: string): ChatMsg[] {
+  const store = useSessionStore.getState();
+  const rows = store.rowsByView[id] ?? {};
+  return (store.messageOrder[id] ?? []).map(mid => rows[mid]).filter(Boolean);
+}
+
+function restoreCaptures(id: string) {
+  const registered = viewports.get(id);
+  const captures = registered
+    ? [...registered.entries()].map(([area, chatKey]) => captureAreaRestoreState(area, chatKey, true))
+    : [];
+  if (!captures.length && runtimeState.currentSessionId === id) {
+    const area = document.getElementById('chatArea');
+    if (area) captures.push(captureAreaRestoreState(area, useSessionStore.getState().activeChatKey ?? id, false));
+  }
+  return captures;
+}
+
+/** One page of turns on protocol 3. The server parks a session's updates while
+ *  the reply is sent, so the page's rows are current; rows outside it stay. */
+async function loadTurnPage(
+  id: string, direction: HistoryDirection, around: string | undefined, options: { isCurrent: () => boolean } | undefined,
+  expected: ReturnType<typeof useSessionHistory.getState>['pages'][string], socket: WebSocket,
+): Promise<boolean> {
+  updateSessionHistory(id, expected.generation, { loading: true, error: false });
+  const field = direction === 'older' ? {history_before: expected.before}
+    : direction === 'newer' ? {history_after: expected.after}
+    : direction === 'around' ? {history_around: around} : {history_latest: true};
+  type TurnReply = {id: string; turns?: WireTurn[]; window?: TurnWindow; error_code?: string};
+  const page = await wsRequest<TurnReply>('load_session', {session_id:id, ...field}, 'session_history_page', {requestId:true}, 15000);
+  if (useSessionHistory.getState().pages[id]?.generation !== expected.generation) return false;
+  if (page?.error_code === 'cursor_not_on_branch' && getSocket() === socket) {
+    // The branch moved away from this cursor: read the chat again, once.
+    updateSessionHistory(id, expected.generation, {loading:false});
+    requestSessionLoad({action:'load_session', session_id:id}, true);
+    return false;
+  }
+  if (getSocket() !== socket || !page || page.id !== id || !page.window || !Array.isArray(page.turns)) {
+    updateSessionHistory(id, expected.generation, {loading:false,error:true});
+    return false;
+  }
+  if (options && !options.isCurrent()) {
+    updateSessionHistory(id, expected.generation, {loading:false});
+    return false;
+  }
+  const captures = restoreCaptures(id);
+  const previous = windows.get(id);
+  const known = new Set(previous?.rowIds ?? []);
+  const historyWindow = previous ?? new HistoryWindow();
+  if (!historyWindow.addTurns(page.turns, page.window, direction, direction === 'around' ? around : captures[0]?.anchor?.id)) {
+    updateSessionHistory(id, expected.generation, {loading:false});
+    return false;
+  }
+  windows.delete(id); windows.set(id, historyWindow);
+  flushTextFrames();
+  const current = storeRows(id);
+  const incoming = new Map(rowsOfTurns(page.turns).map(row => [row.id, row]));
+  const currentById = new Map(current.map(row => [row.id, row]));
+  const selected = new Set(historyWindow.rowIds);
+  const shown = historyWindow.rowIds.flatMap(rowId => {
+    const row = incoming.get(rowId) ?? currentById.get(rowId);
+    return row ? [row] : [];
+  });
+  const live = current.filter(row => !selected.has(row.id) && (!known.has(row.id) || isLive(row.status))).slice(-50);
+  const merged = [...shown, ...live];
+  const { revision: pageRevision, ...history } = historyWindow.history!;
+  // Only a full window replacement moves the view's cursor.
+  const cursor = direction === 'around' || direction === 'latest' ? { revision: pageRevision } : {};
+  flushSync(() => {
+    applyReadToView(id, merged, direction === 'around' || direction === 'latest');
+    updateSessionHistory(id, expected.generation, {...history, ...cursor, loading:false, error:false});
+  });
+  restoreViewports(id, direction, around, captures, new Set(merged.map(row => row.id)));
   trimHistoryWindows(id);
   return true;
 }

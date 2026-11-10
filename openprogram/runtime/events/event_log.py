@@ -54,15 +54,16 @@ def _event_log_path(ev) -> Path:
         # was created under another profile, without constructing another
         # SessionStore; then look in every project's chats folder.
         try:
-            from openprogram.state.store.session.placement import LOCATIONS_FILE, iter_session_dirs
+            from openprogram.state.store.session.placement import LOCATIONS_FILE, iter_session_dirs, rooted_location
             locations_path = sessions_root / LOCATIONS_FILE
             try:
                 locations = json.loads(locations_path.read_text(encoding="utf-8"))
             except (OSError, json.JSONDecodeError):
                 locations = {}
             recorded = locations.get(sid) if isinstance(locations, dict) else None
-            if recorded and Path(recorded).is_dir():
-                return Path(recorded) / "events.jsonl"
+            recorded = rooted_location(sessions_root, recorded) if isinstance(recorded, str) and recorded else None
+            if recorded is not None and recorded.is_dir():
+                return recorded / "events.jsonl"
             for found, sess_dir in iter_session_dirs(sessions_root):
                 if found == sid:
                     return sess_dir / "events.jsonl"

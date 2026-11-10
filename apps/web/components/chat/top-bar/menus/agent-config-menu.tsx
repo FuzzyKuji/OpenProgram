@@ -43,7 +43,6 @@ import {
   MENU_NOTE_ERROR,
   MENU_PANEL,
   MENU_SEPARATOR,
-  SHORTCUT,
   itemCls,
 } from "@/components/ui/menu/menu-styles";
 
@@ -109,6 +108,23 @@ export function AgentConfigBadge({ id }: { id: string }) {
     }
   }
 
+  const chatAgents = (agents ?? []).filter((agent) => !agent.always_on?.enabled);
+  const liveAgents = (agents ?? []).filter((agent) => agent.always_on?.enabled);
+  const row = (agent: Agent) => (
+    <DropdownMenuItem
+      key={agent.id}
+      onSelect={(e) => {
+        e.preventDefault();
+        void pick(agent);
+      }}
+      className={cn(itemCls(false), MENU_ITEM_STATES)}
+    >
+      <AgentAvatar agent={agent} size={16} fit="mark" className="shrink-0" />
+      <span className="min-w-0 flex-1 truncate">{agent.name || agent.id}</span>
+      {agent.id === currentId ? <MenuCheck /> : <span className={CHECK_SLOT_PAD} />}
+    </DropdownMenuItem>
+  );
+
   const tip = (
     <TipBody
       title={text(`Agent: ${label}`, `Agent：${label}`)}
@@ -130,7 +146,7 @@ export function AgentConfigBadge({ id }: { id: string }) {
             className={cn(buttonVariants({ variant: "elevated", size: "sm" })) + " runtime-badge agent-badge"}
           >
             {/* The slot keeps its width until the list names the Agent. */}
-            {currentId ? <AgentAvatar agent={current ?? { id: currentId }} size={16} className="shrink-0" /> : <span className="size-[16px] shrink-0" aria-hidden="true" />}
+            {currentId ? <AgentAvatar agent={current ?? { id: currentId }} size={16} fit="mark" className="shrink-0" /> : <span className="size-[16px] shrink-0" aria-hidden="true" />}
             {label ? <span className="badge-details">{label}</span> : null}
           </button>
         </DropdownMenuTrigger>
@@ -142,24 +158,16 @@ export function AgentConfigBadge({ id }: { id: string }) {
         onCloseAutoFocus={(e) => e.preventDefault()}
         className={cn(MENU_PANEL, "text-text-primary")}
       >
-        <div className={GROUP_LABEL}>{text("Agent", "Agent")}</div>
-        {(agents ?? []).map((agent) => (
-          <DropdownMenuItem
-            key={agent.id}
-            onSelect={(e) => {
-              e.preventDefault();
-              void pick(agent);
-            }}
-            className={cn(itemCls(false), MENU_ITEM_STATES)}
-          >
-            <AgentAvatar agent={agent} size={16} className="shrink-0" />
-            <span className="min-w-0 flex-1 truncate">{agent.name || agent.id}</span>
-            {agent.always_on?.enabled ? (
-              <span className={cn(SHORTCUT, "tracking-normal")}>{text("Always-on", "常驻")}</span>
-            ) : null}
-            {agent.id === currentId ? <MenuCheck /> : <span className={CHECK_SLOT_PAD} />}
-          </DropdownMenuItem>
-        ))}
+        {/* Grouped by the always-on switch, as the Agents page is. */}
+        <div className={GROUP_LABEL}>{liveAgents.length ? text("Chat", "对话") : text("Agent", "Agent")}</div>
+        {chatAgents.map(row)}
+        {liveAgents.length ? (
+          <>
+            <DropdownMenuSeparator className={MENU_SEPARATOR} />
+            <div className={GROUP_LABEL}>{text("Always-on", "常驻")}</div>
+            {liveAgents.map(row)}
+          </>
+        ) : null}
         {error ? <div className={cn(MENU_NOTE, MENU_NOTE_ERROR)}>{error}</div> : null}
         <DropdownMenuSeparator className={MENU_SEPARATOR} />
         <DropdownMenuItem

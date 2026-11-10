@@ -1,6 +1,6 @@
 """ContextGit — context as a git repo.
 
-See ``docs/reference/design/context/overview.md`` for the current design. TL;DR:
+See ``docs/reference/design/context/overview.html`` for the current design. TL;DR:
 
 - Every conversation is a DAG of "commits" (user messages, assistant
   replies, function runs). Each commit has a ``predecessor``; siblings

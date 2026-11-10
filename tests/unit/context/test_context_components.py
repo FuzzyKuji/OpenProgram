@@ -44,8 +44,8 @@ def test_the_system_prompt_runs_in_this_order():
     ordered = [c.name for layer in ("L0", "L1")
                for c in sorted(comp._REGISTRY[layer], key=lambda c: c.order)]
     assert ordered == [
-        "base", "output_style", "inline_prompt",
-        "environment", "agents_md", "memory", "open_work", "capabilities",
+        "base", "output_style", "messaging", "inline_prompt",
+        "environment", "chat_surface", "agents_md", "memory", "open_work", "capabilities",
         "current_date", "plan_mode",
     ]
 
@@ -90,12 +90,13 @@ def test_channel_rules_join_the_environment():
         assert marker in env, channel
 
 
-def test_web_channel_points_at_the_a2ui_guide_instead_of_inlining_it():
+def test_web_channel_teaches_visuals_in_the_prompt():
     out = build_system_prompt({"id": "main", "name": "bot"}, channel="web")
-    assert "```a2ui" not in out
-    guide = comp._GUIDES / "a2ui.md"
-    assert str(guide) in out
-    assert '"id": "root"' in guide.read_text(encoding="utf-8")
+    env = out[out.index("<environment>"):out.index("</environment>")]
+    assert "```visual" in env and "sendPrompt(" in env
+    assert "a2ui" not in out
+    other = build_system_prompt({"id": "main", "name": "bot"}, channel="wechat")
+    assert "```visual" not in other
 
 
 def test_unknown_channel_adds_no_rules():
@@ -234,3 +235,17 @@ def test_text_appended_after_the_recorded_sections_is_other():
     pairs = split_sections("AAA\n\nBB\n\nextra goal",
                            [{"name": "base", "chars": 3}, {"name": "environment", "chars": 2}])
     assert pairs == [("base", "AAA"), ("environment", "BB"), ("other", "extra goal")]
+
+
+def test_a_chat_bound_to_a_channel_is_not_taught_to_draw(monkeypatch):
+    from types import SimpleNamespace
+    from openprogram.runtime.context import session_db
+    from openprogram.runtime.conversation.turn_runtime.loop_runner import _prompt_channel
+
+    sessions = {"bound": {"channel": "wechat"}, "plain": {"channel": None}}
+    monkeypatch.setattr(session_db, "default_db",
+                        lambda: SimpleNamespace(get_session=lambda sid: sessions.get(sid)))
+    assert _prompt_channel(SimpleNamespace(source="web", session_id="bound")) == ""
+    assert _prompt_channel(SimpleNamespace(source="web", session_id="plain")) == "web"
+    assert _prompt_channel(SimpleNamespace(source="web", session_id="new")) == "web"
+    assert _prompt_channel(SimpleNamespace(source="wechat", session_id="bound")) == "wechat"

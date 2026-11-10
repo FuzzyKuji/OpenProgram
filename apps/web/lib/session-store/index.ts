@@ -43,6 +43,7 @@ export type {
   MessageStatus,
   NoticeItem,
   PendingDecision,
+  RetryStatus,
   RunningTask,
   StatusBadgeInfo,
   StatusTone,
@@ -60,14 +61,24 @@ import type {
   StatusBadgeInfo,
   TreeNode,
 } from "./types";
-import { messagePatchUnchanged } from "./messages/message-patch";
 import {
   withMessageTimestamp,
 } from "./messages/message-timestamp";
 
-import { reconcileMessageSnapshot } from './messages/message-snapshot';
 import { settlePendingSends } from './messages/pending-sends';
 import { ownsSubAgentChatKey } from '@/lib/chat/transcript/sub-agent-keys';
+import {
+  applyLocalChange as applyLocalChangeToView,
+  applyReadRows,
+  withFrameOnlyFields,
+  standingOverlays,
+  withOverlays,
+  type LocalChange,
+  type OverlayEvent,
+  type RowOverlay,
+  type TextFrame,
+  type ViewRows,
+} from '@/lib/chat/transcript/apply-transcript-update';
 import { getPendingUserMessageId } from '@/lib/chat/send/pending-user-text';
 
 /** Every transcript row gets its time at first materialization. Persisted
@@ -114,8 +125,15 @@ interface ConvState {
   setChannelHealth: (h: "ok" | "warn" | "err" | "unknown") => void;
   /** Summary for sidebar Recents list. */
   conversations: Record<string, ConvSummary>;
-  /** Every message ever loaded, keyed by id. */
-  messagesById: Record<string, ChatMsg>;
+  /** The row storage: each view's rows by id. A view is a conversation, or
+   *  one sub-agent's transcript under its own key, so the same id can sit in
+   *  two views as two rows. Read it through `selectRow`. */
+  rowsByView: Record<string, Record<string, ChatMsg>>;
+  /** Fields each view shows ahead of the server, by row. `selectRow` merges
+   *  them; the row itself keeps what the server said. */
+  overlaysByView: Record<string, Readonly<Record<string, readonly RowOverlay[]>>>;
+  /** Text frames that came ahead of the block before them, per view. */
+  heldFramesByView: Record<string, Readonly<Record<string, readonly TextFrame[]>>>;
   /** Canonical execution sequence and terminal fence, released only when
    * the corresponding transcript state is removed. */
   executionUpdateOrders: Record<string, ExecutionUpdateOrder>;
@@ -211,7 +229,14 @@ interface ConvState {
    *  broadcast frame, and optimistic UI updates from the project menu. */
   additionalWorkingDirsBySession: Record<string, string[]>;
   setAdditionalWorkingDirs: (sessionKey: string, dirs: string[]) => void;
-  setMessages: (sessionId: string, msgs: ChatMsg[]) => void;
+  /** Apply a read to a view: local rows survive it, and one a read answers by
+   *  request id goes. `whole` says it replaced the window. Returns the request
+   *  ids the read's rows carry. */
+  applyRead: (view: string, rows: ChatMsg[], whole?: boolean) => string[];
+  /** Apply one typed change only this browser knows about. */
+  applyLocalChange: (view: string, change: LocalChange) => void;
+  /** Store what the transcript reducer returned for a view. */
+  writeView: (view: string, next: ViewRows) => void;
   acceptExecutionUpdate: (
     executionId: string,
     eventSequence: unknown,
@@ -219,13 +244,6 @@ interface ConvState {
     sessionId?: unknown,
     messageIds?: Iterable<unknown>,
   ) => boolean;
-  appendMessage: (sessionId: string, msg: ChatMsg) => void;
-  rekeyMessage: (sessionId: string, oldId: string, newId: string) => void;
-  removeMessage: (sessionId: string, msgId: string) => void;
-  updateMessage: (sessionId: string, msgId: string, patch: Partial<ChatMsg>) => void;
-  /** Truncate messages at and after msgId. Used by retry to drop the
-   *  stale reply before the new one streams in. */
-  truncateFrom: (sessionId: string, msgId: string) => void;
   /** Set / clear the running task for a specific session. Pass null
    *  to clear. `always` drains the send queue even if the session
    *  already looked idle (stop at 0ms, or a server clear after stop).
@@ -323,7 +341,7 @@ interface ConvState {
    *  a question/approval mode; answering it pops the head and the next one
    *  surfaces. Each item is the question.asked envelope's `data`. Driven by
    *  use-ws (enqueue on question.asked, dequeue on question.replied/rejected).
-   *  Design: docs/reference/design/ui/composer/composer-interaction-modes.md. */
+   *  Design: docs/reference/design/ui/composer/composer-interaction-modes.html. */
   pendingDecisions: PendingDecision[];
   enqueueDecision: (d: PendingDecision) => void;
   /** Remove a resolved/closed decision by id (answered elsewhere / stop). */
@@ -357,6 +375,9 @@ interface ConvState {
   nodeSelected: boolean;
   setNodeSelected: (selected: boolean) => void;
   /** Expanded nested-LLM blocks, keyed by node_id + block/attempt id. */
+  /** The reader's open or closed choice for each step, per view. */
+  stepExpansion: Record<string, Record<string, boolean>>;
+  setStepExpansion: (view: string, key: string, open: boolean) => void;
   llmContentOpen: Record<string, boolean>;
   setLlmContentOpen: (key: string, open: boolean) => void;
 }
@@ -534,6 +555,154 @@ function switchChat(
   };
 }
 
+const NO_ROWS: Readonly<Record<string, ChatMsg>> = Object.freeze({});
+type RowsByView = ConvState["rowsByView"];
+
+/** A view's rows by id, for readers that walk the whole view. */
+export function selectViewRows(viewKey: string | null | undefined) {
+  return (state: RowState): Readonly<Record<string, ChatMsg>> => {
+    if (!viewKey) return NO_ROWS;
+    const rows = state.rowsByView[viewKey];
+    const overlays = state.overlaysByView?.[viewKey];
+    return rows && overlays ? drawnViewRows(rows, overlays) : rows ?? NO_ROWS;
+  };
+}
+
+/** A view's rows as the server last said, under any overlay. */
+export function selectServerRows(viewKey: string | null | undefined) {
+  return (state: Pick<ConvState, "rowsByView">): Readonly<Record<string, ChatMsg>> =>
+    (viewKey ? state.rowsByView[viewKey] : undefined) ?? NO_ROWS;
+}
+
+/** One row as one view holds it. */
+export function selectRow(viewKey: string | null | undefined, id: string | null | undefined) {
+  return (state: RowState): ChatMsg | undefined => {
+    if (!viewKey || !id) return undefined;
+    const row = state.rowsByView[viewKey]?.[id];
+    const overlays = state.overlaysByView?.[viewKey]?.[id];
+    return row && overlays ? drawnWith(row, overlays) : row;
+  };
+}
+
+type RowState = Pick<ConvState, "rowsByView"> & Partial<Pick<ConvState, "overlaysByView">>;
+type ViewOverlays = Readonly<Record<string, readonly RowOverlay[]>>;
+
+// The same row under the same overlays draws as one object, so subscribers re-render only on a change.
+const drawnRows = new WeakMap<ChatMsg, WeakMap<readonly RowOverlay[], ChatMsg>>();
+const drawnViews = new WeakMap<object, WeakMap<ViewOverlays, Readonly<Record<string, ChatMsg>>>>();
+
+function drawnWith(row: ChatMsg, overlays: readonly RowOverlay[]): ChatMsg {
+  let byOverlays = drawnRows.get(row);
+  if (!byOverlays) drawnRows.set(row, byOverlays = new WeakMap());
+  let drawn = byOverlays.get(overlays);
+  if (!drawn) byOverlays.set(overlays, drawn = withOverlays(row, overlays));
+  return drawn;
+}
+
+function drawnViewRows(rows: Readonly<Record<string, ChatMsg>>, overlays: ViewOverlays): Readonly<Record<string, ChatMsg>> {
+  let byOverlays = drawnViews.get(rows);
+  if (!byOverlays) drawnViews.set(rows, byOverlays = new WeakMap());
+  let drawn = byOverlays.get(overlays);
+  if (!drawn) {
+    const merged = { ...rows };
+    for (const id in overlays) if (merged[id]) merged[id] = drawnWith(merged[id], overlays[id]);
+    byOverlays.set(overlays, drawn = merged);
+  }
+  return drawn;
+}
+
+type OverlaysByView = ConvState["overlaysByView"];
+
+/** The view's overlays after a change to its rows, and the rows they touched. */
+function settledOverlays(
+  overlaysByView: OverlaysByView, view: string, rows: Readonly<Record<string, ChatMsg>>, event?: OverlayEvent,
+): { overlaysByView: OverlaysByView; touched: string[] } {
+  const before = overlaysByView[view];
+  if (!before) return { overlaysByView, touched: [] };
+  const after = standingOverlays(before, rows, event);
+  return { overlaysByView: withViewOverlays(overlaysByView, view, after), touched: Object.keys(before) };
+}
+
+function withViewOverlays(overlaysByView: OverlaysByView, view: string, overlays: ViewRows["overlays"]): OverlaysByView {
+  if (overlays === overlaysByView[view]) return overlaysByView;
+  const next = { ...overlaysByView };
+  if (overlays && Object.keys(overlays).length) next[view] = overlays;
+  else delete next[view];
+  return next;
+}
+
+/** The view a writer's row is in: the one it named, or, because callers could
+ *  pass anything until rows were kept per view, the only one holding the row.
+ *  With several holders and none named nothing can be chosen safely. */
+function writableView(rowsByView: RowsByView, named: string, id: string): string | null {
+  if (rowsByView[named]?.[id]) return named;
+  const holders: string[] = [];
+  for (const view in rowsByView) {
+    if (rowsByView[view][id]) holders.push(view);
+  }
+  if (holders.length === 1) return holders[0];
+  if (holders.length > 1) {
+    console.error(`[session-store] write to row ${id} named view ${named}, which does not hold it; held by ${holders.join(", ")}`);
+  }
+  return null;
+}
+
+/** A view replaced by these rows: overlays are checked against them. */
+function replacedView(s: ConvState, sessionId: string, rows: ChatMsg[], event?: OverlayEvent): Partial<ConvState> {
+  // A transcript write settles optimistic sends against what it holds.
+  const msgs = settlePendingSends(rows, getPendingUserMessageId(sessionId));
+  // This view's rows are replaced; every other view keeps its own. A row
+  // with no time of its own keeps the one it was shown with.
+  const held = s.rowsByView[sessionId] ?? NO_ROWS;
+  const timedMessages = msgs.map((msg) => withMessageTimestamp(msg, held[msg.id]?.timestamp));
+  const viewRows: Record<string, ChatMsg> = {};
+  for (const m of timedMessages) viewRows[m.id] = withFrameOnlyFields(m, held[m.id]);
+  const removedIds = (s.messageOrder[sessionId] ?? []).filter((oldId) => !viewRows[oldId]);
+  const rowsByView = { ...s.rowsByView, [sessionId]: viewRows };
+  const { overlaysByView } = settledOverlays(s.overlaysByView, sessionId, viewRows, event);
+  return {
+    rowsByView,
+    overlaysByView,
+    messageOrder: {
+      ...s.messageOrder,
+      [sessionId]: timedMessages.map((m) => m.id),
+    },
+    executionUpdateOrders: removeExecutionUpdateOrders(
+      s.executionUpdateOrders,
+      removedIds,
+    ),
+  };
+}
+
+/** What the reducer returned, stored; rows it did not change keep their objects. */
+function writtenView(s: ConvState, view: string, next: ViewRows): Partial<ConvState> {
+  const held = s.rowsByView[view] ?? NO_ROWS;
+  const viewRows: Record<string, ChatMsg> = {};
+  for (const id of next.order) {
+    const row = next.rows[id];
+    if (!row) continue;
+    viewRows[id] = row === held[id] ? row : withMessageTimestamp(row, held[id]?.timestamp);
+  }
+  const removedIds = (s.messageOrder[view] ?? []).filter((id) => !viewRows[id]);
+  const rowsByView = { ...s.rowsByView, [view]: viewRows };
+  const overlaysByView = withViewOverlays(s.overlaysByView, view, next.overlays);
+  const heldFramesByView = { ...s.heldFramesByView };
+  if (next.heldFrames && Object.keys(next.heldFrames).length) heldFramesByView[view] = next.heldFrames;
+  else delete heldFramesByView[view];
+  return {
+    rowsByView,
+    overlaysByView,
+    heldFramesByView,
+    messageOrder: { ...s.messageOrder, [view]: next.order.filter((id) => viewRows[id]) },
+    executionUpdateOrders: removeExecutionUpdateOrders(s.executionUpdateOrders, removedIds),
+  };
+}
+
+/** Forget the step choices of a removed session and its sub-agent views. */
+function withoutSessionViews<T>(views: Record<string, T>, session: string): Record<string, T> {
+  return Object.fromEntries(Object.entries(views).filter(([view]) => view !== session && !ownsSubAgentChatKey(session, view)));
+}
+
 export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
   wsStatus: "connecting",
   agentSettings: {},
@@ -565,7 +734,9 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
   channelHealth: "unknown",
   setChannelHealth: (h) => set({ channelHealth: h }),
   conversations: {},
-  messagesById: {},
+  rowsByView: {},
+  overlaysByView: {},
+  heldFramesByView: {},
   executionUpdateOrders: {},
   messageOrder: {},
   currentSessionId: null,
@@ -652,8 +823,7 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
           .map(([executionId]) => executionId),
       ];
       delete order[id];
-      const byId = { ...s.messagesById };
-      for (const mid of doomed) delete byId[mid];
+      const rowsByView = withoutSessionViews(s.rowsByView, id);
       // Prune the deleted session's composer draft so the draft blob
       // doesn't grow unboundedly over the lifetime of the tab. Paste
       // entries referenced only by this draft are GC'd by the composer
@@ -672,7 +842,10 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
       return {
         conversations: rest,
         messageOrder: order,
-        messagesById: byId,
+        rowsByView,
+        overlaysByView: withoutSessionViews(s.overlaysByView, id),
+        heldFramesByView: withoutSessionViews(s.heldFramesByView, id),
+        stepExpansion: withoutSessionViews(s.stepExpansion, id),
         executionUpdateOrders: removeExecutionUpdateOrders(
           s.executionUpdateOrders,
           doomedExecutionIds,
@@ -705,8 +878,10 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
       }));
       return {
         conversations: {},
-        messagesById: {},
-        executionUpdateOrders: {},
+        rowsByView: {},
+        overlaysByView: {},
+        heldFramesByView: {},
+              executionUpdateOrders: {},
         messageOrder: {},
         currentSessionId: null,
         activeChatKey:
@@ -742,6 +917,7 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
       }));
       return {
         composerDrafts: drafts,
+        stepExpansion: withoutSessionViews(s.stepExpansion, key),
         composerSettingsBySession: settings,
         pendingProjectsByChat: pendingProjects,
         ...(s.activeChatKey === key
@@ -788,35 +964,35 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
     return projectId;
   },
 
-  setMessages: (sessionId, rows) =>
+  applyRead: (view, rows, whole = true) => {
+    let steers: string[] = [];
     set((s) => {
-      // A transcript write settles optimistic sends against what it holds.
-      const msgs = settlePendingSends(rows, getPendingUserMessageId(sessionId));
-      const timedMessages = msgs.map((msg) => withMessageTimestamp(msg));
-      // Drop any old ids for this conv so stale entries don't leak.
-      const byId = { ...s.messagesById };
-      const incomingIds = new Set(timedMessages.map((message) => message.id));
-      const ownedIds = new Set(s.messageOrder[sessionId] ?? []);
-      const removedIds = (s.messageOrder[sessionId] ?? []).filter(
-        (oldId) => !incomingIds.has(oldId),
-      );
-      for (const oldId of s.messageOrder[sessionId] ?? []) delete byId[oldId];
-      for (const [index, m] of timedMessages.entries()) {
-        const current = ownedIds.has(m.id) ? s.messagesById[m.id] : undefined;
-        byId[m.id] = withMessageTimestamp(reconcileMessageSnapshot(current, msgs[index]), m.timestamp);
-      }
-      return {
-        messagesById: byId,
-        messageOrder: {
-          ...s.messageOrder,
-          [sessionId]: timedMessages.map((m) => m.id),
-        },
-        executionUpdateOrders: removeExecutionUpdateOrders(
-          s.executionUpdateOrders,
-          removedIds,
-        ),
-      };
+      const read = applyReadRows({
+        order: s.messageOrder[view] ?? [],
+        rows: s.rowsByView[view] ?? NO_ROWS,
+      }, rows);
+      steers = read.steers;
+      return replacedView(s, view, read.rows, whole ? { read: true } : undefined);
+    });
+    return steers;
+  },
+
+  applyLocalChange: (view, change) =>
+    set((s) => {
+      const named = "rowId" in change ? writableView(s.rowsByView, view, change.rowId) ?? view : view;
+      // A change naming a row or view this store does not hold creates nothing.
+      if ("rowId" in change ? !s.rowsByView[named]?.[change.rowId] : change.kind !== "local_append" && !s.rowsByView[named]) return {};
+      if (change.kind === "local_append") noteMessageArrival(change.row.id);
+      if (change.kind === "local_replace") rekeyMessageArrival(change.rowId, change.row.id);
+      return writtenView(s, named, applyLocalChangeToView({
+        order: s.messageOrder[named] ?? [],
+        rows: s.rowsByView[named] ?? NO_ROWS,
+        overlays: s.overlaysByView[named],
+        heldFrames: s.heldFramesByView[named],
+      }, change));
     }),
+
+  writeView: (view, next) => set((s) => writtenView(s, view, next)),
 
   acceptExecutionUpdate: (executionId, eventSequence, status, sessionId, messageIds) => {
     let accepted = false;
@@ -841,92 +1017,6 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
     return accepted;
   },
 
-  appendMessage: (sessionId, msg) =>
-    set((s) => {
-      noteMessageArrival(msg.id);
-      const timedMessage = withMessageTimestamp(msg);
-      return {
-        messagesById: { ...s.messagesById, [msg.id]: timedMessage },
-        messageOrder: {
-          ...s.messageOrder,
-          [sessionId]: [...(s.messageOrder[sessionId] ?? []), msg.id],
-        },
-      };
-    }),
-
-  rekeyMessage: (sessionId, oldId, newId) =>
-    set((s) => {
-      const current = s.messagesById[oldId];
-      if (!current || oldId === newId) return {};
-      rekeyMessageArrival(oldId, newId);
-      const byId = { ...s.messagesById };
-      delete byId[oldId];
-      if (!byId[newId]) byId[newId] = { ...current, id: newId };
-      const order = s.messageOrder[sessionId] ?? [];
-      const nextOrder: string[] = [];
-      const seen = new Set<string>();
-      for (const id of order) {
-        const nextId = id === oldId ? newId : id;
-        if (!seen.has(nextId)) {
-          seen.add(nextId);
-          nextOrder.push(nextId);
-        }
-      }
-      return {
-        messagesById: byId,
-        messageOrder: {
-          ...s.messageOrder,
-          [sessionId]: nextOrder,
-        },
-      };
-    }),
-
-  removeMessage: (sessionId, msgId) =>
-    set((s) => {
-      if (!s.messagesById[msgId]) return {};
-      const byId = { ...s.messagesById };
-      delete byId[msgId];
-      return {
-        messagesById: byId,
-        messageOrder: {
-          ...s.messageOrder,
-          [sessionId]: (s.messageOrder[sessionId] ?? []).filter((id) => id !== msgId),
-        },
-      };
-    }),
-
-  updateMessage: (_sessionId, msgId, patch) =>
-    set((s) => {
-      const cur = s.messagesById[msgId];
-      if (!cur) return {};
-      if (messagePatchUnchanged(cur, patch)) return {};
-      return {
-        messagesById: {
-          ...s.messagesById,
-          [msgId]: withMessageTimestamp({ ...cur, ...patch }),
-        },
-      };
-    }),
-
-  truncateFrom: (sessionId, msgId) =>
-    set((s) => {
-      const order = s.messageOrder[sessionId];
-      if (!order) return {};
-      const idx = order.indexOf(msgId);
-      if (idx < 0) return {};
-      const dropped = order.slice(idx);
-      const nextOrder = order.slice(0, idx);
-      const byId = { ...s.messagesById };
-      for (const d of dropped) delete byId[d];
-      return {
-        messagesById: byId,
-        messageOrder: { ...s.messageOrder, [sessionId]: nextOrder },
-        executionUpdateOrders: removeExecutionUpdateOrders(
-          s.executionUpdateOrders,
-          dropped,
-        ),
-      };
-    }),
 
   setRunningTaskFor: (sessionId, t, drain = "transition") =>
     set((s) => {
@@ -1041,8 +1131,8 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
     set((state) => {
       const previous = state.pendingDecisions.find((p) => p.id === d.id);
       const task = state.runningTasks[d.sessionId];
-      if (!d.anchorId && !previous?.anchorId && task?.msg_id && task.execution_id === d.executionId) {
-        d = { ...d, anchorId: `${task.msg_id}_reply` };
+      if (!d.anchorId && !previous?.anchorId && task?.reply_id && task.execution_id === d.executionId) {
+        d = { ...d, anchorId: task.reply_id };
       }
       if (!previous) return { pendingDecisions: [...state.pendingDecisions, d] };
       if (previous.executionId !== d.executionId || previous.expectedVersion > d.expectedVersion
@@ -1088,6 +1178,11 @@ export const useSessionStore = createWithEqualityFn<ConvState>((set) => ({
     set({ detailNode: null, nodeSelected: false }),
   nodeSelected: false,
   setNodeSelected: (selected) => set({ nodeSelected: selected }),
+  stepExpansion: {},
+  setStepExpansion: (view, key, open) =>
+    set((state) => (state.stepExpansion[view]?.[key] === open ? {} : {
+      stepExpansion: { ...state.stepExpansion, [view]: { ...state.stepExpansion[view], [key]: open } },
+    })),
   llmContentOpen: readLlmContentOpen(),
   setLlmContentOpen: (key, open) =>
     set((state) => {
@@ -1194,15 +1289,6 @@ export function useMessageIds(sessionId: string | null): string[] {
       sessionId ? s.messageOrder[sessionId] ?? EMPTY_IDS : EMPTY_IDS
     )
   );
-}
-
-/**
- * Subscribe to one message. Re-renders only when that specific
- * message's entry changes — other messages streaming, ids being
- * added/removed etc. don't affect this hook's consumer.
- */
-export function useMessageById(msgId: string): ChatMsg | undefined {
-  return useSessionStore((s) => s.messagesById[msgId]);
 }
 
 const EMPTY_IDS: string[] = [];

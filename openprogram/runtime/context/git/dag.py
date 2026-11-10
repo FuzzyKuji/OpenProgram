@@ -18,7 +18,7 @@ Contract:
 """
 from __future__ import annotations
 
-from typing import Any, Iterable, Optional, Protocol
+from typing import Any, Iterable, Optional, Protocol, Sequence
 
 
 class MessageLike(Protocol):
@@ -63,30 +63,55 @@ def _sibling_key(m: MessageLike) -> tuple:
 
     * parent falls back to ``caller`` (a spawned branch's root
       expresses its fork point via caller, not predecessor);
-    * a spawned root (``source == "agent_spawn"`` with no
-      predecessor) never mixes with organic turns — it's a branch
-      the AGENT opened, not an alternative the user can page to.
+    * a spawned branch (``source == "agent_spawn"``) never mixes with
+      organic turns, whether it starts at a new root or forks off a
+      turn — it's a branch an agent or /task opened, not an
+      alternative the user can page to.
     """
     parent = m.get("predecessor") or m.get("caller") or None
     if parent == "ROOT":
         parent = None
-    spawned = bool(
-        m.get("source") == "agent_spawn" and not m.get("predecessor")
-    )
-    return (parent, spawned)
+    return (parent, m.get("source") == "agent_spawn")
 
 
 def _is_chat_lane(m: MessageLike) -> bool:
     """Nodes eligible for chat sibling nav: conversation turns only —
     no sub-call tool/code rows, no ROOT marker, no runtime cards
-    (fn-run / attach pointers get fn-run-scoped nav from the caller)."""
+    (fn-run / attach pointers get fn-run-scoped nav from the caller),
+    no compaction summaries (one shares the predecessor of the first row
+    it covers, and HEAD can never stand on it)."""
     if m.get("role") in ("tool", "code"):
         return False
     if m.get("id") == "ROOT" or m.get("display") == "root":
         return False
     if m.get("display") == "runtime":
         return False
+    if m.get("covers_ids") is not None:
+        return False
     return True
+
+
+def _is_side_row(m: MessageLike) -> bool:
+    """Rows hung off a turn without continuing it: attach pointers,
+    runtime placeholders and compaction summaries."""
+    if m.get("function") == "attach":
+        return True
+    if m.get("type") == "status" and m.get("display") == "runtime":
+        return True
+    return m.get("covers_ids") is not None
+
+
+def _dead_end_side_rows(msgs: Iterable[MessageLike]) -> set[str]:
+    """Side rows no ordinary row continues from, where a walk to a branch
+    tip must not stop. Older rows can hang off a side row, because a version
+    arrow could once leave HEAD on an attach pointer, so a side row with an
+    ordinary child stays on the path to that child."""
+    rows = list(msgs)
+    continued = {_parent_of(m) for m in rows if not _is_side_row(m)}
+    return {
+        m["id"] for m in rows
+        if m.get("id") and _is_side_row(m) and m["id"] not in continued
+    }
 
 
 def siblings(msgs: list[MessageLike], msg_id: str) -> list[MessageLike]:
@@ -189,9 +214,10 @@ def sibling_navigation_index(
 
     latest_child: dict[str, tuple[tuple[object, int], Optional[str]]] = {}
     if needs_deepest_leaf:
+        dead_ends = _dead_end_side_rows(msgs)
         for position, message in enumerate(msgs):
             parent = _parent_of(message)
-            if parent is None:
+            if parent is None or message.get("id") in dead_ends:
                 continue
             score = (message.get("created_at") or 0, position)
             current = latest_child.get(parent)
@@ -272,28 +298,26 @@ def linear_history(msgs: list[MessageLike], head_id: str) -> list[MessageLike]:
 
 def active_branch_chain(
     all_msgs: list[MessageLike],
-    branch_ids: set[str],
+    branch_ids: Sequence[str],
     head: Optional[str],
 ) -> list[MessageLike]:
     """The chat display list for ONE branch: only the active branch's
-    nodes, oldest-first, with tool_calls already folded onto parents.
+    nodes, root-first, with tool_calls already folded onto parents.
 
     ``all_msgs`` is the full, tool-aggregated node set (every branch).
-    ``branch_ids`` is the id set of the active branch as computed by
-    ``SessionDB.get_branch(head)`` — the authoritative "which nodes are
-    on this branch" answer (it walks predecessor + caller + ROOT-seq
-    edges, so it handles fn-call gaps that a pure ``predecessor`` walk
-    misses).
+    ``branch_ids`` is the active branch's ids in the order of
+    ``SessionDB.get_branch(head)`` — the authoritative answer to which
+    nodes are on this branch and in what order. Storage order is not that
+    order: a reply placeholder is written before a steer that then
+    becomes its predecessor.
 
-    Why filter ``all_msgs`` by ``branch_ids`` rather than return
-    ``get_branch`` directly: ``get_branch`` walks parent-ward from the
-    head (an assistant/user node) and never descends into tool nodes
-    (which hang off ``caller``, not the conv path), so its rows carry no
-    folded ``tool_calls``. ``all_msgs`` has already folded each tool row
-    into its parent assistant, and that assistant is on the branch — so
-    keeping ``all_msgs`` rows whose id is in ``branch_ids`` yields the
-    branch path WITH its tool calls intact, in seq order (``all_msgs``
-    is seq-sorted).
+    Why look rows up in ``all_msgs`` rather than return ``get_branch``
+    directly: ``get_branch`` walks parent-ward from the head (an
+    assistant/user node) and never descends into tool nodes (which hang
+    off ``caller``, not the conv path), so its rows carry no folded
+    ``tool_calls``. ``all_msgs`` has already folded each tool row into its
+    parent assistant, and that assistant is on the branch, so its row
+    keeps its tool calls.
 
     Fallbacks (never blank the page):
     - ``branch_ids`` empty (stale/None head after a mid-turn crash) →
@@ -301,9 +325,10 @@ def active_branch_chain(
     - no ``head`` at all → return ``all_msgs`` unchanged.
     """
     if branch_ids:
-        filtered = [m for m in all_msgs if m.get("id") in branch_ids]
-        if filtered:
-            return filtered
+        by_id = _index_by_id(all_msgs)
+        ordered = [by_id[node_id] for node_id in branch_ids if node_id in by_id]
+        if ordered:
+            return ordered
     if head:
         return linear_history(all_msgs, head)
     return list(all_msgs)
@@ -363,14 +388,17 @@ def deepest_leaf(msgs: list[MessageLike], msg_id: str) -> str:
     """Walk down children from ``msg_id`` to the deepest leaf.
 
     When there are multiple children, pick the most recent one
-    (highest ``created_at``, insertion-order tiebreaker).
+    (highest ``created_at``, insertion-order tiebreaker). The walk never
+    ends on an attach pointer, runtime placeholder or compaction summary,
+    which HEAD must not stand on.
     """
     by_id = _index_by_id(msgs)
+    dead_ends = _dead_end_side_rows(msgs)
     cur_id: Optional[str] = msg_id
     seen: set[str] = set()
     while cur_id and cur_id in by_id and cur_id not in seen:
         seen.add(cur_id)
-        kids = children(msgs, cur_id)
+        kids = [k for k in children(msgs, cur_id) if k.get("id") not in dead_ends]
         if not kids:
             return cur_id
         cur_id = kids[-1].get("id")

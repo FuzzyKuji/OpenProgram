@@ -173,24 +173,15 @@ def _provider_tool_decision(hook, snapshot, index, *, result_text=None):
 
 
 def _committed_tool_ids(store, execution_id):
-    from openprogram.runtime.execution.effects import EffectStatus
+    from openprogram.runtime.context.session_db import default_db
+    from openprogram.runtime.execution.agent_journal import TOOL_RESULT
 
-    with sqlite3.connect(store.path) as connection:
-        connection.row_factory = sqlite3.Row
-        rows = connection.execute(
-            "SELECT action_id, status, metadata_json FROM effects "
-            "WHERE execution_id = ? ORDER BY created_at, effect_id",
-            (execution_id,),
-        ).fetchall()
-    ids = []
-    for row in rows:
-        metadata = json.loads(row["metadata_json"])
-        if metadata.get("kind") != "tool.before":
-            continue
-        if row["status"] != EffectStatus.COMMITTED.value:
-            continue
-        ids.append(row["action_id"])
-    return ids
+    session_id = store.get_execution(execution_id).session_id
+    return [
+        record["data"]["tool_call_id"]
+        for record in default_db().read_turn_records(session_id, execution_id)
+        if record["type"] == TOOL_RESULT
+    ]
 
 
 def _prepare_long_turn(tmp_path, execution_id):
@@ -205,7 +196,6 @@ def _prepare_long_turn(tmp_path, execution_id):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id=f"owner-{execution_id}",
-        ttl_seconds=30,
     )
     active, running = attempts.activate(
         leased.attempt_id,
@@ -225,85 +215,3 @@ def _prepare_long_turn(tmp_path, execution_id):
     hook = driver._safe_point_hook(active, request, threading.Event())
     snapshot = _long_turn_snapshot(request)
     return store, attempts, control, driver, request, snapshot, execution, active, hook
-
-
-NATIVE_DISPLAY_ROUNDS = 50
-
-
-def _public_display_checkpoint(
-    tmp_path,
-    *,
-    turn_display,
-    receipt_count=1,
-    pending_messages=None,
-    execution_id="exec-display-cap",
-):
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    from openprogram.runtime.agent.turn_request import TurnRequest
-    from openprogram.models.providers.types import AssistantMessage, TextContent
-
-    store, execution = _admitted(tmp_path, execution_id=execution_id)
-    request = TurnRequest(
-        session_id=execution.session_id,
-        user_text="durable agent turn",
-        agent_id="default",
-        source="component",
-        user_msg_id="user-anchor",
-    )
-    request._execution_revision_id = execution.revision_id
-    snapshot = _long_turn_snapshot(request)
-    decision = AssistantMessage(
-        content=[TextContent(text="saved")],
-        api="fake", provider="fake", model="fake", timestamp=1, stop_reason="stop",
-    )
-    assistant_dump = decision.model_dump(mode="json")
-    completed_actions = [{"action_id": "provider-action", "input_hash": "context-hash"}]
-    receipts = [{
-        "effect_id": "effect-provider", "frontier_step_id": "provider:p",
-        "action_id": "provider-action", "outcome": "committed",
-        "receipt": {"provider_request_id": "saved-request"},
-    }]
-    while len(receipts) < receipt_count:
-        index = len(receipts)
-        action_id = f"history-action-{index}"
-        completed_actions.append({
-            "action_id": action_id,
-            "input_hash": f"history-hash-{index}",
-            "result": assistant_dump,
-        })
-        receipts.append({
-            "effect_id": f"effect-history-{index}",
-            "frontier_step_id": f"after:{index}",
-            "action_id": action_id,
-            "outcome": "committed",
-            "receipt": {"n": index},
-        })
-    state = AgentCheckpointV1.build(
-        safe_point={
-            "kind": "agent.provider.decision.after",
-            "step_id": "after_provider:p",
-            "phase": "after_provider",
-            "sentinel": "resume-from-checkpoint",
-        },
-        frontier=[{"step_id": "after_provider:p", "phase": "after_provider", "branch_id": "main"}],
-        turn={
-            "user_message_id": "user-anchor",
-            "assistant_message_id": "user-anchor_reply",
-            "base_history_head_id": "user-anchor",
-        },
-        assistant_message=assistant_dump,
-        tool_results=[],
-        resolved_snapshot=snapshot,
-        provider_action_id="provider-action",
-        tool_call_ids=[],
-        next_tool_index=0,
-        repeat_failures={},
-        completed_actions=completed_actions,
-        terminal_effect_receipts=receipts,
-        pending_messages=pending_messages,
-        turn_display=turn_display,
-    )
-    for raw in state.blob_payloads.values():
-        store.put_state_blob(execution.execution_id, raw)
-    return store, execution, state
-

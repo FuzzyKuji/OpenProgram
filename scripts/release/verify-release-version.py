@@ -66,7 +66,7 @@ def _installed_app_version(app_path: Path) -> str:
             check=True,
             capture_output=True,
             text=True,
-            timeout=10,
+            timeout=60,  # A cold interpreter on a busy machine can take many seconds.
             encoding="utf-8",
             creationflags=no_window_creation_flags(),
             env={"PATH": os.defpath, "HOME": os.devnull,

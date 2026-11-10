@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   applicationNoteLabel,
   applicationNoteText,
+  keptVersionFailure,
   programInvocationName,
 } from "../../components/programs/programs-catalog.ts";
 
@@ -80,4 +81,21 @@ test("Show in Abilities resolves an application id or a built-in directory", asy
   assert.equal(resolveProgramSelection(entries, request), "applications/auto_research");
   assert.equal(resolveProgramSelection(entries, { name: "browser" }), "applications/browser");
   assert.equal(resolveProgramSelection(entries, { applicationId: "missing" }), null);
+});
+
+test("a kept version names both versions and the reason without its location", () => {
+  const entry = {
+    load_state: "error",
+    load_note: "Kept version abc1234; version def5678 failed.",
+    load_error: "ModuleNotFoundError: No module named 'pandas' (/programs/weekly/main.py:3)",
+  };
+  const failure = keptVersionFailure(entry, en);
+  assert.equal(failure.title, "Kept version abc1234; version def5678 failed.");
+  assert.equal(failure.message, "It could not load: No module named 'pandas'. This Program keeps working on version abc1234 until the error is fixed.");
+  assert.equal(failure.fullError, entry.load_error);
+});
+
+test("other load problems keep their ordinary line", () => {
+  assert.equal(keptVersionFailure({ load_state: "error", load_error: "SyntaxError: x" }, en), null);
+  assert.equal(keptVersionFailure({ load_state: "loaded", load_note: "Kept version a; version b failed." }, en), null);
 });

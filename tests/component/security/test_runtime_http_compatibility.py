@@ -37,6 +37,38 @@ COMPATIBILITY_FIXTURES = {
         False,
         None,
     ),
+    "tool.web_fetch.owner": (
+        "owner_tool",
+        "GET",
+        "https://cdn.example.test",
+        443,
+        ("http", "https"),
+        ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"),
+        None,
+        "public",
+        5,
+        5_242_881,
+        ("application/", "audio/", "image/", "text/", "video/"),
+        "none",
+        False,
+        None,
+    ),
+    "tool.image_result.download.owner": (
+        "owner_tool",
+        "GET",
+        "https://cdn.example.test",
+        443,
+        ("http", "https"),
+        ("DELETE", "GET", "HEAD", "OPTIONS", "PATCH", "POST", "PUT"),
+        None,
+        "public",
+        5,
+        33_554_432,
+        ("image/", "application/octet-stream"),
+        "none",
+        False,
+        None,
+    ),
     "tool.web_search.fixed_api": (
         "fixed_public_service",
         "POST",
@@ -856,6 +888,10 @@ FIXED_ORIGIN_FIXTURES = {
 }
 
 
+# Owner-tool consumers have no method, port or address limit to exercise on a socket.
+_LIMITED_FIXTURES = {k: v for k, v in COMPATIBILITY_FIXTURES.items() if v[0] != "owner_tool"}
+
+
 def test_every_registry_consumer_has_a_literal_compatibility_fixture() -> None:
     assert set(COMPATIBILITY_FIXTURES) == set(CONSUMER_REGISTRY)
 
@@ -1036,7 +1072,7 @@ def test_every_literal_allowed_scheme_and_port_reaches_policy_boundary(
     assert len(resolver_calls) == calls_before_rejections
 
 
-@pytest.mark.parametrize("consumer, expected", COMPATIBILITY_FIXTURES.items())
+@pytest.mark.parametrize("consumer, expected", _LIMITED_FIXTURES.items())
 def test_each_literal_row_rejects_unapproved_method_scheme_and_origin_port(
     consumer, expected
 ) -> None:
@@ -1174,7 +1210,7 @@ def _literal_accepted_mime(prefixes: tuple[str, ...]) -> str:
     raise AssertionError(f"no accepted MIME fixture for {prefixes!r}")
 
 
-@pytest.mark.parametrize("consumer, expected", COMPATIBILITY_FIXTURES.items())
+@pytest.mark.parametrize("consumer, expected", _LIMITED_FIXTURES.items())
 def test_every_literal_row_enforces_its_socket_contract(
     monkeypatch, compatibility_server, consumer, expected
 ) -> None:

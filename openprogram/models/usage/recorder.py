@@ -15,7 +15,7 @@ import time
 from typing import Callable, Optional
 
 from .context import current_usage_context
-from .event import UsageEvent
+from .event import CALL_KIND_DIRECT, UsageEvent
 from .ledger import default_ledger
 import logging
 
@@ -130,7 +130,7 @@ def build_message_event(
         session_id=eff_session,
         parent_session_id=ctx.parent_session_id,
         agent_id=ctx.agent_id,
-        call_kind=ctx.call_kind,
+        call_kind=ctx.call_kind or CALL_KIND_DIRECT,
         call_label=ctx.call_label,
         provider=getattr(model, "provider", "") or "",
         api=getattr(model, "api", None),
@@ -142,6 +142,8 @@ def build_message_event(
         total_tokens=(reported_total or inp + out + cr + cw) if request_id else inp + out,
         token_source=token_source,
         cost_source=cost_source,
+        first_token_ms=getattr(usage, "first_token_ms", None),
+        first_text_ms=getattr(usage, "first_text_ms", None),
         **cost,
     )
 

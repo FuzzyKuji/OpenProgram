@@ -48,11 +48,23 @@ EXTRA_VALUE_PATTERNS: tuple[re.Pattern[str], ...] = (
 
 # ``some_token: <opaque blob>`` in otherwise unstructured text, where
 # there is no dict key to inspect because the line is a log message.
+# The match starts at the sensitive word and its tail is bounded: an open
+# run of name characters on either side makes a long token cost quadratic
+# time, and whatever precedes the word is kept anyway.
 _KEYED_VALUE_PATTERN = re.compile(
-    r"(?i)([A-Za-z0-9_.-]*(?:%s)[A-Za-z0-9_.-]*[\"']?\s*[:=]\s*[\"']?)"
+    r"(?i)((?:%s)[A-Za-z0-9_.-]{0,64}[\"']?\s*[:=]\s*[\"']?)"
     r"([A-Za-z0-9._~+/-]{8,}=*)"
     % "|".join(re.escape(part) for part in SENSITIVE_KEY_PARTS)
 )
+# Credentials in a URL of any scheme; the recorder's pattern covers http(s).
+_URL_CREDENTIAL_PATTERN = re.compile(r"(?i)\b([a-z][a-z0-9+.-]{0,31}://)[^/@\s:]*:[^/@\s]+@")
+# A password is secret at any length, so this one has no minimum.
+_PASSWORD_PATTERN = re.compile(
+    r"(?i)((?:password|passwd|passphrase|pwd)[\"']?\s*[:=]\s*)"
+    r"(?:\"[^\"\n]*\"|'[^'\n]*'|[^\s\"',;&]+)"
+)
+# Everything after a cookie header's name is secret, including ``name=value`` pairs.
+_COOKIE_PATTERN = re.compile(r"(?i)(cookie[\"']?\s*[:=]\s*)[^\r\n]+")
 
 
 def is_sensitive_key(key: str) -> bool:
@@ -65,7 +77,10 @@ def redact_text(text: str) -> str:
     text = remove_secret_values(text)
     for pattern in EXTRA_VALUE_PATTERNS:
         text = pattern.sub(PLACEHOLDER, text)
-    return _KEYED_VALUE_PATTERN.sub(lambda m: m.group(1) + PLACEHOLDER, text)
+    text = _URL_CREDENTIAL_PATTERN.sub(lambda m: m.group(1) + PLACEHOLDER + "@", text)
+    for pattern in (_COOKIE_PATTERN, _PASSWORD_PATTERN, _KEYED_VALUE_PATTERN):
+        text = pattern.sub(lambda m: m.group(1) + PLACEHOLDER, text)
+    return text
 
 
 def redact_value(value: Any) -> Any:

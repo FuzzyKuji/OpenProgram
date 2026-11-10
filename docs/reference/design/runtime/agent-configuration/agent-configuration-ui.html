@@ -1,261 +1,132 @@
-<!doctype html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agent configuration contract — OpenProgram</title>
-<style>
-.ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
-</style>
-</head>
-<body>
-<main class="ad">
-<header>
-<div class="eyebrow">OpenProgram · Agents</div>
+<title>Configurable Agents</title>
+<meta name="description" content="The Agent configuration contract: objects, schema, resolution, memory, capabilities, API and lifecycle.">
 <h1>Configurable Agents</h1>
-<p class="lead">An Agent in OpenProgram is a saved, reusable execution configuration: a model and effort, instructions, the Programs, skills and MCP servers it may use, context settings, an optional always-on schedule and an optional long-term memory policy. Users edit Agents on the Agents page in eight sections (General, Programs, Skills, MCP, Memory, Context, Always-on, Advanced); saves are atomic and revision-checked, so two editors cannot silently overwrite each other. Conversations, trials and delegated <code>agent</code> tool calls run with a chosen Agent, and new Agents keep memory off until the user turns it on. This page is the configuration contract; the pages linked below cover the editor, capabilities, the Programs selector and the staged plan.</p>
-<a href="agent-configuration-ui.zh.html">中文</a>
-<div class="status">Partly implemented · The Agents page, saved configurations with revisions and the memory policy are in place; the closing Implementation status lists what is still target design. The linked prototype uses illustrative data and never changes live configuration.</div>
-<p><a href="agent-core-configuration-ui.html" style="display:inline-block;padding:10px 16px;border:1px solid currentColor;border-radius:7px;text-decoration:none;font-weight:600">Open the Agents Web UI prototype</a></p><p class="muted">Edit configuration, select models and memory, save or restore drafts, and preview trial or new conversations. Uses existing animated icons and themes; all data is illustrative.</p>
-<nav aria-label="Design documents">
-<a href="agent-configuration-ui.html">Configuration contract</a>
-<a href="agent-core-configuration-ui.html">Editor and core fields</a>
-<a href="agent-capability-configuration-ui.html">Capabilities</a>
-<a href="agent-tool-configuration-ui.html">Programs selector</a>
-<a href="agent-configuration-plan.html">Implementation plan</a>
-</nav>
-<nav class="toc" aria-label="On this page">
-<a href="#scope">Scope and object model</a>
-<a href="#baseline">Current implementation and remaining gaps</a>
-<a href="#fields">Configuration schema and defaults</a>
-<a href="#wire">Wire shape and typed boundaries</a>
-<a href="#resolution">One resolver; explicit merge rules</a>
-<a href="#execution">Public calls and execution boundaries</a>
-<a href="#memory">Optional memory: access, retention and ingestion</a>
-<a href="#context">Context, instructions and environment</a>
-<a href="#capabilities">Capability scope and authority</a>
-<a href="#collaboration">Multi-agent composition and selection</a>
-<a href="#api">Management API and atomic persistence</a>
-<a href="#lifecycle">Lifecycle, export and failure behavior</a>
-<a href="#references">Reference corpus and design choices</a>
-<a href="#acceptance">Observable acceptance contract</a>
-<a href="#status">Implementation status</a>
-</nav>
-</header>
-<section id="scope">
-<h2>Scope and object model</h2>
-<p>An Agent is reusable execution configuration with optional persistent state. A task-specific role, persona, dedicated model, workspace, long-term memory, or background schedule is not required. The saved Agents page and an inline Python configuration express the same execution contract.</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Object</th>
-<th>Identity and lifetime</th>
-<th>Boundary</th>
-</tr>
-</thead>
+
+<p>An Agent is a saved, reusable execution configuration. It is edited in eight sections (General, Programs, Skills, MCP, Memory, Context, Always-on, Advanced); saves are atomic and revision-checked. New Agents keep memory off.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Page</th><th scope="col">Covers</th></tr></thead>
 <tbody>
-<tr>
-<td>AgentConfig</td>
-<td>An immutable value for one resolution; may be inline and unnamed</td>
-<td>No implicit persistence, session or memory allocation</td>
-</tr>
-<tr>
-<td>AgentSpec</td>
-<td>Saved ID, display name, revision and AgentConfig fields</td>
-<td>Metadata and configuration, not a running worker</td>
-</tr>
-<tr>
-<td>Execution</td>
-<td>Existing run/job ID and immutable effective configuration</td>
-<td>One invocation; multiple executions may reference the same Agent</td>
-</tr>
-<tr>
-<td>Session / DAG</td>
-<td>Existing conversation and execution history</td>
-<td>History reuse is chosen separately from Agent selection</td>
-</tr>
-<tr>
-<td>Memory space</td>
-<td>Stable store reference with access policy</td>
-<td>Optional; never inferred solely from a matching display name</td>
-</tr>
+<tr><th scope="row"><a href="agent-core-configuration-ui.html">Editor and core fields</a></th><td>Prototype with illustrative data; it never changes live configuration</td></tr>
+<tr><th scope="row"><a href="agent-capability-configuration-ui.html">Capabilities</a></th><td>Programs, Skills and MCP policies</td></tr>
+<tr><th scope="row"><a href="agent-tool-configuration-ui.html">Programs selector</a></th><td>List, tree, inspector</td></tr>
+<tr><th scope="row"><a href="agent-configuration-plan.html">Implementation plan</a></th><td>Stages, migration, scenario detail</td></tr>
 </tbody>
 </table>
-</div>
-<p>Keep AgentSpec as the persisted envelope. AgentConfig is its typed executable projection, not a second on-disk registry. Resource governance, the context engine, memory backends and task control remain their existing subsystems.</p>
-</section>
-<section id="baseline">
-<h2>Current implementation and remaining gaps</h2>
-<div class="table-wrap">
-<table>
-<thead><tr><th>Area</th><th>Implementation today</th><th>Remaining gap</th></tr></thead>
+
+<h2 id="scope">Objects</h2>
+<table class="stack">
+<thead><tr><th scope="col">Object</th><th scope="col">Identity and lifetime</th><th scope="col">Boundary</th></tr></thead>
 <tbody>
-<tr><td>Saved configuration</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent_registry/manager.py">AgentSpec / manager</a> stores model, effort, instructions, Programs, skills, MCP, identity, session policy, description, revision and memory policy</td><td>Schema 2 migration and transactional multi-file lifecycle writes</td></tr>
-<tr><td>Agents UI</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/apps/web/components/agents/agents-page.tsx">AgentsPage</a> has eight sections, one shared draft, a catalog model picker and save-conflict comparison</td><td>Effective-value preview with provenance; embedded trial panel</td></tr>
-<tr><td>Function execution</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/agent_function.py">agent()</a> and <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent/llm.py">llm()</a> take model, effort, tools and instructions directly</td><td>No saved-Agent or inline <code>AgentConfig</code> selection argument yet</td></tr>
-<tr><td>Delegation</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/programs/tools/agents/agent/agent/agent.py">agent tool</a> accepts agent_id, clean/inherit, background and to</td><td>One shared resolver for direct calls and durable dispatch</td></tr>
-<tr><td>Management writes</td><td>Agent routes save the whole configuration with an atomic conditional write against <code>expected_revision</code> (or legacy <code>updated_at</code>) under the writer lock</td><td>Multi-file lifecycle operations are not yet one transaction</td></tr>
-<tr><td>Memory</td><td>Per-execution memory policy (<code>self</code> or <code>legacy_global</code>) applies to execution, background extraction, derived results and recovery, with policy-epoch revalidation before commits</td><td>Catalog of arbitrary shared memory spaces</td></tr>
-<tr><td>Workspace</td><td><a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/openprogram/runtime/agent_registry/workspace.py">workspace helpers</a> seed instruction files</td><td>An Agent directory is not an isolation guarantee</td></tr>
+<tr><th scope="row">AgentConfig</th><td>Immutable value for one resolution; may be inline and unnamed</td><td>No implicit persistence, session or memory allocation</td></tr>
+<tr><th scope="row">AgentSpec</th><td>Saved ID, display name, revision and AgentConfig fields</td><td>Metadata and configuration, not a running worker</td></tr>
+<tr><th scope="row">Execution</th><td>Run or job ID and immutable effective configuration</td><td>One invocation; many may reference one Agent</td></tr>
+<tr><th scope="row">Session / DAG</th><td>Conversation and execution history</td><td>History reuse is chosen apart from Agent selection</td></tr>
+<tr><th scope="row">Memory space</th><td>Stable store reference with access policy</td><td>Optional; never inferred from a matching display name</td></tr>
 </tbody>
 </table>
-</div>
-</section>
-<section id="fields">
-<h2>Configuration schema and defaults</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Field</th>
-<th>Target semantics</th>
-<th>Default / validation</th>
-</tr>
-</thead>
+<p class="note">AgentSpec is the persisted envelope; AgentConfig is its typed projection, not a second registry. Role, persona, dedicated model, workspace, memory and schedule are all optional.</p>
+
+<h2 id="baseline">Current implementation</h2>
+<table class="stack">
+<thead><tr><th scope="col">Area</th><th scope="col">Today</th><th scope="col">Gap</th></tr></thead>
 <tbody>
-<tr>
-<td>schema_version / revision</td>
-<td>Persisted schema format / monotonic saved-config revision</td>
-<td>New format 2; revision is assigned by the manager</td>
-</tr>
-<tr>
-<td>name / description / identity</td>
-<td>Saved display name, optional description and channel identity</td>
-<td>Role and description optional; immutable ID for saved records only</td>
-</tr>
-<tr>
-<td>model / thinking_effort</td>
-<td>Provider-qualified reference and supported reasoning level</td>
-<td>Unset inherits; explicit unsupported values block execution</td>
-</tr>
-<tr>
-<td>system_prompt / instruction_files</td>
-<td>Inline instructions and allowlisted Agent workspace file references</td>
-<td>Omission inherits; empty prompt clears this layer only</td>
-</tr>
-<tr>
-<td>tools / skills / mcp</td>
-<td>Independent capability policies with stable references</td>
-<td>Modes inherit, all, selected, none; selected empty means none</td>
-</tr>
-<tr>
-<td>memory</td>
-<td>Mode, read_spaces, write_space, required</td>
-<td>New Agents and anonymous configs explicitly off; existing Agents migrate to legacy behavior</td>
-</tr>
-<tr>
-<td>context</td>
-<td>history: inherit, clean, selected; selected node references</td>
-<td>Legacy inline calls retain inherited view; named/inline config switches default clean</td>
-</tr>
-<tr>
-<td>environment</td>
-<td>cwd reference and existing sandbox profile reference</td>
-<td>Inherited environment; missing explicit path fails before tools run</td>
-</tr>
-<tr>
-<td>limits</td>
-<td>References/overrides for supported resource-governance limits</td>
-<td>Unset inherits; effective child cap never exceeds parent cap</td>
-</tr>
-<tr>
-<td>session policy</td>
-<td>Existing channel scope/reset fields plus explicit timezone reference</td>
-<td>Does not decide function history or memory access</td>
-</tr>
+<tr><th scope="row">Saved configuration</th><td><code translate="no">runtime/agent_registry/manager.py</code> stores model, effort, instructions, Programs, skills, MCP, identity, session policy, description, revision, memory policy</td><td>Schema 2 migration; transactional multi-file lifecycle</td></tr>
+<tr><th scope="row">Agents UI</th><td><code translate="no">agents-page.tsx</code>: eight sections, one draft, catalog model picker, save-conflict comparison</td><td>Effective-value preview with provenance; embedded trial</td></tr>
+<tr><th scope="row">Function execution</th><td><code translate="no">agent()</code> and <code translate="no">llm()</code> take model, effort, tools and instructions directly</td><td>Saved-Agent or inline <code translate="no">AgentConfig</code> selection</td></tr>
+<tr><th scope="row">Delegation</th><td><code translate="no">agent</code> tool accepts <code translate="no">agent_id</code>, clean/inherit, background, <code translate="no">to</code></td><td>One resolver for direct calls and durable dispatch</td></tr>
+<tr><th scope="row">Management writes</th><td>Whole-config atomic conditional write against <code translate="no">expected_revision</code> or legacy <code translate="no">updated_at</code>, under the writer lock</td><td>Multi-file lifecycle as one transaction</td></tr>
+<tr><th scope="row">Memory</th><td><code translate="no">self</code> or <code translate="no">legacy_global</code>, applied to execution, background extraction, derived results and recovery, with policy-epoch revalidation</td><td>Catalog of arbitrary shared spaces</td></tr>
+<tr><th scope="row">Workspace</th><td><code translate="no">workspace.py</code> seeds instruction files</td><td>An Agent directory is not isolation</td></tr>
 </tbody>
 </table>
-</div>
-<p>Do not add arbitrary provider parameters, inheritance between named Agents, custom execution engines, or arbitrary memory plugins to the first implementation. Inline configs use system defaults, not hidden fields from the caller’s saved Agent. Empty description is valid. A saved Agent only needs a name; choosing a model is optional if a usable default exists.</p>
-</section>
-<section id="wire">
-<h2>Wire shape and typed boundaries</h2>
-<p>Proposed wire shape; identifiers are placeholders. Keep the current flat AgentSpec envelope, adding typed fields without nesting a second config registry. POST accepts name plus optional executable fields; id/revision/timestamps are server-assigned unless a valid explicit legacy ID is provided. AgentConfig contains executable fields only. Export/import excludes server metadata and assigns a fresh saved identity. The Python package exports AgentConfig alongside agent and llm; it accepts a provider-qualified model string as shorthand and normalizes it to the persisted provider/id object.</p>
-<pre>
-<code>{
-  &quot;schema_version&quot;: 2,
-  &quot;id&quot;: &quot;general&quot;,
-  &quot;name&quot;: &quot;General&quot;,
-  &quot;revision&quot;: 1,
-  &quot;model&quot;: {&quot;provider&quot;: &quot;provider-id&quot;, &quot;id&quot;: &quot;model-id&quot;},
-  &quot;system_prompt&quot;: &quot;&quot;,
-  &quot;tools&quot;: {&quot;mode&quot;: &quot;selected&quot;, &quot;allowed&quot;: [&quot;tool_a&quot;], &quot;disabled&quot;: []},
-  &quot;skills&quot;: {&quot;mode&quot;: &quot;none&quot;},
-  &quot;mcp&quot;: {&quot;mode&quot;: &quot;none&quot;},
-  &quot;memory&quot;: {&quot;mode&quot;: &quot;off&quot;},
-  &quot;context&quot;: {&quot;history&quot;: &quot;clean&quot;}
+
+<h2 id="fields">Schema and defaults</h2>
+<table class="stack">
+<thead><tr><th scope="col">Field</th><th scope="col">Meaning</th><th scope="col">Default, validation</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">schema_version</code>, <code translate="no">revision</code></th><td>Format; monotonic saved revision</td><td>New format 2; manager assigns revision</td></tr>
+<tr><th scope="row"><code translate="no">name</code>, <code translate="no">description</code>, <code translate="no">identity</code></th><td>Display name, optional description, channel identity</td><td>Immutable ID for saved records only; only a name is required, and a model only if no default exists</td></tr>
+<tr><th scope="row"><code translate="no">model</code>, <code translate="no">thinking_effort</code></th><td>Provider-qualified reference, supported level</td><td>Unset inherits; unsupported blocks execution</td></tr>
+<tr><th scope="row"><code translate="no">system_prompt</code>, <code translate="no">instruction_files</code></th><td>Inline instructions; allowlisted workspace files (<code translate="no">path</code>, <code translate="no">required</code> default true)</td><td>Omission inherits; empty clears this layer only</td></tr>
+<tr><th scope="row"><code translate="no">tools</code>, <code translate="no">skills</code>, <code translate="no">mcp</code></th><td>Independent capability policies</td><td><code translate="no">inherit</code>, <code translate="no">all</code>, <code translate="no">selected</code>, <code translate="no">none</code>; selected empty means none</td></tr>
+<tr><th scope="row"><code translate="no">memory</code></th><td><code translate="no">mode</code>, <code translate="no">read_spaces</code>, <code translate="no">write_space</code>, <code translate="no">required</code> (default false)</td><td>New and anonymous configs off; existing Agents migrate to legacy behaviour</td></tr>
+<tr><th scope="row"><code translate="no">context</code></th><td><code translate="no">history</code>: inherit, clean, selected; node references</td><td>Legacy inline calls inherit; named or inline config switches default clean</td></tr>
+<tr><th scope="row"><code translate="no">environment</code></th><td>cwd reference, sandbox profile reference</td><td>Inherited; missing explicit path fails before tools run</td></tr>
+<tr><th scope="row"><code translate="no">limits</code></th><td>Resource-governance references and overrides</td><td>Unset inherits; child cap never exceeds parent</td></tr>
+<tr><th scope="row">Session policy</th><td>Channel scope and reset, explicit timezone reference</td><td>Does not decide function history or memory access</td></tr>
+</tbody>
+</table>
+<p class="note">Not in the first implementation: arbitrary provider parameters, inheritance between named Agents, custom execution engines, arbitrary memory plugins. Inline configs use system defaults, not hidden fields from the caller's saved Agent.</p>
+
+<details id="wire">
+<summary>Proposed wire shape</summary>
+<pre translate="no" tabindex="0">{
+  "schema_version": 2,
+  "id": "general",
+  "name": "General",
+  "revision": 1,
+  "model": {"provider": "provider-id", "id": "model-id"},
+  "system_prompt": "",
+  "tools": {"mode": "selected", "allowed": ["tool_a"], "disabled": []},
+  "skills": {"mode": "none"},
+  "mcp": {"mode": "none"},
+  "memory": {"mode": "off"},
+  "context": {"history": "clean"}
 }
 
 PATCH /api/agents/general
 {
-  &quot;expected_revision&quot;: 1,
-  &quot;system_prompt&quot;: &quot;Use concise answers.&quot;,
-  &quot;memory&quot;: {&quot;mode&quot;: &quot;off&quot;},
-  &quot;reset_fields&quot;: [&quot;model&quot;, &quot;thinking_effort&quot;]
-}</code>
-</pre>
-<p>The memory policy contains mode, optional read_spaces: string[], write_space: string and required: boolean (default false). Active read modes require at least one authorized read space; read_write requires exactly one readable write target. Off makes bindings inactive without deleting stored data; the editor may retain dormant bindings in its draft, but the effective runtime receives no memory grants. An instruction_files item contains path: string and required: boolean (default true), restricted to the Agent workspace. Unknown fields, invalid types and a field present in both reset_fields and changes are rejected before writing. Readiness is returned separately from stored configuration.</p>
-</section>
-<section id="resolution">
-<h2>One resolver; explicit merge rules</h2>
-<p>Resolve the base from exactly one source: explicit agent_id, explicit config, ambient Agent, or system default, in that order. agent_id and config are mutually exclusive. Session overrides apply only while remaining on the same Agent identity. A named-Agent/config switch does not inherit the old Agent’s model, prompt, tools or memory bindings. Authorized invocation overrides then replace the relevant fields. Apply authority constraints last, and recheck revocations at every effectful boundary.</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Value / operation</th>
-<th>Meaning</th>
-</tr>
-</thead>
+  "expected_revision": 1,
+  "system_prompt": "Use concise answers.",
+  "memory": {"mode": "off"},
+  "reset_fields": ["model", "thinking_effort"]
+}</pre>
+<ul>
+<li>The flat AgentSpec envelope stays. POST takes a name plus optional executable fields; id, revision and timestamps are server-assigned unless a valid explicit legacy ID is given.</li>
+<li>AgentConfig has executable fields only. Export/import excludes server metadata and assigns a fresh identity. The package exports AgentConfig beside agent and llm; a provider-qualified model string normalizes to the provider/id object.</li>
+<li>Active read modes need at least one authorized read space; <code translate="no">read_write</code> needs exactly one readable write target. Off leaves bindings inactive; the editor may keep them in its draft.</li>
+<li>Unknown fields, invalid types and a field in both <code translate="no">reset_fields</code> and the changes are rejected before writing. Readiness is returned apart from stored configuration.</li>
+</ul>
+</details>
+
+<h2 id="resolution">One resolver</h2>
+<p>The base comes from exactly one source, in order: explicit <code translate="no">agent_id</code>, explicit <code translate="no">config</code> (mutually exclusive with it), ambient Agent, system default. Session overrides apply only while on the same Agent identity; a switch inherits no model, prompt, tools or memory bindings. Authorized invocation overrides replace fields next; authority constraints apply last and revocations are rechecked at every effectful boundary.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Value</th><th scope="col">Meaning</th></tr></thead>
 <tbody>
-<tr>
-<td>Omitted / UNSET</td>
-<td>Inherit; PATCH omission leaves storage unchanged</td>
-</tr>
-<tr>
-<td>Empty string</td>
-<td>Clear prompt/description; model clearing uses reset_fields instead of an empty invalid model ID</td>
-</tr>
-<tr>
-<td>Empty selected list</td>
-<td>Explicit empty scope; never interpreted as all</td>
-</tr>
-<tr>
-<td>mode=none / memory.mode=off</td>
-<td>Explicit disable; not inheritance</td>
-</tr>
-<tr>
-<td>reset_fields</td>
-<td>Delete local override and expose the base value; JSON null is rejected</td>
-</tr>
-<tr>
-<td>Lists / policy objects</td>
-<td>Replace complete list/policy atomically; no implicit union</td>
-</tr>
-<tr>
-<td>Scalar object fields</td>
-<td>Patch explicitly named leaves; normalize to a complete policy before committing</td>
-</tr>
-<tr>
-<td>Conflicting override arguments</td>
-<td>Reject duplicate fields specified through both legacy keywords and overrides</td>
-</tr>
-<tr>
-<td>Permission / quota</td>
-<td>Intersect allowed capabilities; deny wins; minimum finite cap. Never resolved by last-write preference</td>
-</tr>
+<tr><th scope="row">Omitted / UNSET</th><td>Inherit; PATCH omission leaves storage unchanged</td></tr>
+<tr><th scope="row">Empty string</th><td>Clear prompt or description; clearing model uses <code translate="no">reset_fields</code></td></tr>
+<tr><th scope="row">Empty selected list</th><td>Explicit empty scope, never all</td></tr>
+<tr><th scope="row"><code translate="no">mode=none</code>, <code translate="no">memory.mode=off</code></th><td>Explicit disable, not inheritance</td></tr>
+<tr><th scope="row"><code translate="no">reset_fields</code></th><td>Delete the local override and expose the base; JSON null is rejected</td></tr>
+<tr><th scope="row">Lists, policy objects</th><td>Replace atomically; no implicit union</td></tr>
+<tr><th scope="row">Scalar object fields</th><td>Patch named leaves; normalize to a complete policy before commit</td></tr>
+<tr><th scope="row">Conflicting overrides</th><td>Reject fields given through both legacy keywords and overrides</td></tr>
+<tr><th scope="row">Permission, quota</th><td>Intersect; deny wins; minimum finite cap; never last-write</td></tr>
 </tbody>
 </table>
-</div>
-<p>At dispatch acceptance pin the effective snapshot, Agent revision, policy version and relevant catalog/preset versions. Queued work retains this intent; execution rechecks current revocations and required resources. Retries and resume use the same snapshot, not a newly edited profile. New independent turns resolve again. Snapshot provenance contains references and hashes, never credentials.</p>
-</section>
-<section id="execution">
-<h2>Public calls and execution boundaries</h2>
-<p>Proposed API, not available yet. Extend the existing Python agent() and llm() with agent_id, config, overrides and history selection. Do not create a parallel executor. llm() has no Python/Program/MCP tool loop, including when the selected Agent allows those tools. Preserve explicit web_search=True for provider-native search, subject to the same native-action capability checks; selecting an Agent alone never enables search. Output validation and return types remain unchanged.</p>
-<pre>from openprogram import Agent
+<p class="note">Dispatch acceptance pins the effective snapshot, Agent revision, policy version and catalog/preset versions (references and hashes, never credentials). Queued work, retries and resume keep it and recheck revocations; new independent turns resolve again.</p>
 
-
+<h2 id="execution">Public calls</h2>
+<table class="stack">
+<thead><tr><th scope="col">Entry</th><th scope="col">Creates</th><th scope="col">History</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent()</code>, <code translate="no">llm()</code></th><td>Execution node with the selected config; no saved Agent</td><td>Same DAG storage, separately filtered model view</td></tr>
+<tr><th scope="row"><code translate="no">agent</code> tool without <code translate="no">to</code></th><td>Durable child task or branch</td><td><code translate="no">start_from=clean/inherit/exact-node</code></td></tr>
+<tr><th scope="row"><code translate="no">agent</code> tool with <code translate="no">to</code></th><td>Next turn on the addressed branch</td><td>Target Agent unchanged; conflicting <code translate="no">agent_id</code> rejected</td></tr>
+<tr><th scope="row">Chat, CLI, scheduler</th><td>Existing session and job types, same resolver</td><td>Scheduled jobs resolve Agent ID at each firing; resume keeps its snapshot</td></tr>
+</tbody>
+</table>
+<ul>
+<li><code translate="no">llm()</code> has no Python, Program or MCP tool loop, even when the Agent allows them. Explicit <code translate="no">web_search=True</code> stays, under native-action checks; selecting an Agent never enables search.</li>
+<li>A resolved view is bound through a context-local scope and reset in finally. <code translate="no">Runtime.model</code> and process-global Agent state are never mutated.</li>
+<li>A named selection error is explicit, never a fallback to main.</li>
+<li>Switching the chat Agent starts a new context by default; keeping history is explicit and marks retained data as disclosed.</li>
+</ul>
+<details>
+<summary>Proposed Python API (not available yet)</summary>
+<p>Extends <code translate="no">agent()</code> and <code translate="no">llm()</code> with <code translate="no">agent_id</code>, <code translate="no">config</code>, overrides and history selection; no parallel executor. Validation and return types stay.</p>
+<pre translate="no" tabindex="0">from openprogram import Agent
 
 # Explicit history sharing; records stay in the same execution DAG.
 agent(prompt, agent_id="reviewer", history="selected", context_nodes=[node_id])
@@ -278,369 +149,192 @@ class ExampleAgent(Agent):
 
 _example_agent = ExampleAgent()
 extract = _example_agent.extract
-classify = _example_agent.classify
-</pre>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Entry</th>
-<th>What it creates</th>
-<th>History / continuation</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>agent() / llm()</td>
-<td>An execution node with selected config; no saved Agent</td>
-<td>Same DAG storage, separately filtered model view</td>
-</tr>
-<tr>
-<td>agent tool without to</td>
-<td>Existing durable child task/branch</td>
-<td>Preserve start_from=clean/inherit/exact-node semantics</td>
-</tr>
-<tr>
-<td>agent tool with to</td>
-<td>Next turn on the addressed existing branch</td>
-<td>Do not change target Agent implicitly; conflicting agent_id is rejected</td>
-</tr>
-<tr>
-<td>Chat / CLI / scheduler</td>
-<td>Existing session/job types with the same resolver</td>
-<td>Scheduled jobs reference Agent ID and resolve at each new firing; resume keeps its snapshot</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Bind an immutable resolved view through a context-local scope; reset it in finally, including on exceptions and cancellation. Never mutate the shared Runtime.model or a process-global active Agent. Named selection errors are explicit, not fallback to main. Switching the chat Agent starts a new context by default; keeping history is an explicit choice and marks retained data as already disclosed.</p>
-</section>
-<section id="memory">
-<h2>Optional memory: access, retention and ingestion</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Mode</th>
-<th>Automatic recall / injection</th>
-<th>Memory tools</th>
-<th>Background write / pre-compaction extraction</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>off</td>
-<td>No reads</td>
-<td>No read/write/reorganize calls</td>
-<td>No ingestion from these execution nodes</td>
-</tr>
-<tr>
-<td>read_only</td>
-<td>Only authorized read_spaces</td>
-<td>Read/search only</td>
-<td>No ingestion from these execution nodes</td>
-</tr>
-<tr>
-<td>read_write</td>
-<td>Only authorized read_spaces</td>
-<td>Read/search plus one authorized write_space</td>
-<td>Writes subject to writer policy and execution provenance</td>
-</tr>
-<tr>
-<td>inherit</td>
-<td>Resolve to a concrete mode first</td>
-<td>Never passed unresolved to tools</td>
-<td>Migration only preserves historical effective behavior</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>read_spaces is a list of stable references: self, a selected project, or an explicitly selected shared space. write_space is one target and must also be readable. self for a saved Agent resolves to its own namespace; self for an anonymous config is invalid, because no persistent identity exists. An explicit project/shared binding makes anonymous memory use possible without saving an Agent. Enabling a new Agent’s memory defaults to self; no silent copy of the old global store.</p>
-<ul>
-<li>Off does not delete memory, disable session history, or remove user-provided instruction files. Already recalled text in existing messages cannot be “unseen”; start a clean context to exclude it from subsequent requests. Disabling reads also invalidates pending recall responses before they enter a model request.</li>
-<li>Every execution node carries a memory-write eligibility label, space reference and policy epoch. Session-end writers, compaction extraction, source export and scheduled reorganizers must filter out off/read_only nodes; they cannot later ingest them by scanning raw history. Disabling writes blocks unsettled queued writes from that scope and prevents retroactive ingestion on re-enable. Previously committed memory remains. Derived output nodes and summaries carry the most restrictive memory-write eligibility of the context actually included; splitting or switching Agents cannot relabel restricted data as writable. Off propagates a no-write restriction but does not by itself forbid an independently authorized read in a later execution. Manual user-provided text outside recorded provenance is not claimed to be automatically classifiable.</li>
-<li>A background write validates the original execution grant and the current space policy at commit. Policy revocation wins over the pinned configuration; document any external backend operation that cannot be cancelled. Never retry with a broader space.</li>
-<li>Off is a managed-memory policy, not a filesystem sandbox. If generic shell/file tools can read memory files, show that limitation; strict separation requires an enforced environment policy. User-authored instructions and uploaded documents remain inputs, even if they contain personal facts.</li>
-<li>Optional memory backend failure produces a visible degraded-memory state and continues without memory; required=true fails before model execution. Write failure preserves the task result and reports persistence failure separately.</li>
-<li>No write_only mode in the initial contract. Reuse MemoryBackend; backends without enforceable namespace/access support cannot enable scoped memory. Do not simulate isolation by prefixing prompts.</li>
-</ul>
-</section>
-<section id="context">
-<h2>Context, instructions and environment</h2>
-<p>Clean means no inherited conversation messages, not no system or project policy. Selected history references are validated against the caller’s visibility; DAG membership is not authorization. Keep stored history distinct from the rendered model view. Preserving execution history is the default; this design does not introduce an “incognito” retention guarantee.</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Source</th>
-<th>Treatment</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Runtime/owner policy</td>
-<td>Enforced outside the model; cannot be overwritten by Agent prompt</td>
-</tr>
-<tr>
-<td>User/project and scoped workspace instructions</td>
-<td>Use the existing authority and scope rules; show source provenance and conflict diagnostics</td>
-</tr>
-<tr>
-<td>Agent system_prompt and allowlisted instruction files</td>
-<td>Configurable instruction sources; empty prompt clears only its own layer</td>
-</tr>
-<tr>
-<td>Skills</td>
-<td>Load on demand within the allowed set, without copying content into AgentSpec</td>
-</tr>
-<tr>
-<td>Memory and tool/web results</td>
-<td>Contextual data with provenance; never promoted to higher-priority instructions</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Persisted instruction files are explicit path references restricted to the Agent workspace allowlist; snapshot content/hash within existing protected execution storage. Workspace and project cwd remain separate fields. A cwd is not an access boundary. Environment profile availability is validated; incompatible host/sandbox requests fail visibly. Context length uses existing Context Engine limits; the configuration does not introduce a second summarizer or append raw tool results by hand.</p>
-</section>
-<section id="capabilities">
-<h2>Capability scope and authority</h2>
-<p>Programs, Skills, MCP and provider catalogs own definitions and credentials. Agent policies own references and defaults. Runtime computes requested scope from the selected config, then intersects owner authority, parent execution delegation ceilings, project/environment restrictions, global availability and explicit denies. Agent all means all currently available and authorized entries, not permission to use every installed integration.</p>
-<ul>
-<li>A selected empty list is empty in storage, discovery and invocation. Preserve unresolved references and show Missing. Required MCP services must be both allowed and available; contradictory rules fail validation.</li>
-<li>A session or invocation may replace a preference, but cannot expand an enforced ceiling. If a caller’s narrow scope is a delegation restriction it remains active after agent_id changes. Explain rejected overrides instead of silently claiming they applied.</li>
-<li>Discovery, explicit-name loading, skill loading and actual invocation share one resolved policy. Provider-native web search and other native actions are capability-gated too; tools=[] alone is not a universal network restriction.</li>
-<li>Resolve account/service references through existing credential services. Do not add raw keys to AgentSpec, snapshots, exports or demo examples. Anthropic connections use the official API and legitimately obtained API keys with API account billing.</li>
-<li>Direct Python code already authorized by the host is not sandboxed by an Agent allowlist; tools and nested agentic calls remain checked at their public boundaries.</li>
-</ul>
-<p>Detailed capability and picker behavior lives in the linked capability and Programs documents. The resource-governance document remains authoritative for admission, usage, cancellation and quotas; this page only selects existing profiles and exposes effective limits.</p>
-</section>
-<section id="collaboration">
-<h2>Multi-agent composition and selection</h2>
-<p>Runtime branches, Jobs, messages and attach references are specified in the <a href="../collaboration/agent-collaboration.md">collaboration contract</a> and <a href="../collaboration/agent-collab-architecture.html">architecture diagrams</a>; counts and execution budgets follow <a href="../reliability/agent-resource-governance.html">resource governance</a>. Saved configurations and runtime branches are separate objects. The collaboration implementation-status section records current execution IDs, query/control entries and completion-follow-up gaps.</p>
-<p>Select a saved configuration without assigning a mandatory role. A model-only preset, a style-only preset, a no-memory Agent and a project-memory Agent are equally valid. A config reused in parallel creates distinct runs, not new saved Agents.</p>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Operation</th>
-<th>Contract</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Independent invocation</td>
-<td>No automatic previous-task history; same Agent ID may serve many sessions</td>
-</tr>
-<tr>
-<td>Delegation</td>
-<td>Pass explicit goal/input and filtered context; parent cancellation and budget semantics stay in existing task control</td>
-</tr>
-<tr>
-<td>Continue existing task</td>
-<td>Address an existing run/branch; target Agent remains stable</td>
-</tr>
-<tr>
-<td>Shared memory</td>
-<td>Explicit bindings; concurrent writes use backend version checks and idempotent execution IDs</td>
-</tr>
-<tr>
-<td>Shared files/browser</td>
-<td>Resource ownership and serialization are required for conflicting mutations; Agent names do not isolate resources</td>
-</tr>
-<tr>
-<td>Automatic choice</td>
-<td>Deferred extension: rank existing eligible configs using optional metadata; do not create Agents or widen scopes automatically</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Do not automatically persist config changes, new skills or learned preferences merely because one run succeeded. Durable updates use the existing explicit configuration/skill/memory write mechanisms and preserve provenance. Role orchestration, automatic topology generation and marketplace publishing are outside this scope. Optional Agent/model selection is fully bounded in P6 of the implementation plan, after explicit selection works across all entries.</p>
-</section>
-<section id="api">
-<h2>Management API and atomic persistence</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Operation</th>
-<th>Target contract</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>GET /api/agents[/{id}]</td>
-<td>Summary/detail DTOs include schema_version and revision; no memory contents or secrets</td>
-</tr>
-<tr>
-<td>POST /api/agents</td>
-<td>Name-only creation; safe explicit new defaults; optional idempotency key; no provider call</td>
-</tr>
-<tr>
-<td>PATCH /api/agents/{id}</td>
-<td>Require expected_revision for new clients; top-level changed fields plus reset_fields; validate whole candidate then compare/write once under a cross-process lock</td>
-</tr>
-<tr>
-<td>POST /api/agents/resolve</td>
-<td>Proposed read-only preview for saved or draft config plus invocation context; no session creation, memory search or credentials in response</td>
-</tr>
-<tr>
-<td>POST /api/agents/{id}/duplicate</td>
-<td>Configuration-only by default; new ID/revision, self maps to new empty namespace; shared bindings shown explicitly</td>
-</tr>
-<tr>
-<td>POST /api/agents/{id}/default</td>
-<td>Single authoritative default pointer, atomically updated; profile.default is a derived presentation value</td>
-</tr>
-<tr>
-<td>DELETE /api/agents/{id}</td>
-<td>Reject default or active references with 409; show exact affected resources before user confirmation; use recoverable deletion intent before destructive cleanup</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Keep updated_at for display and the temporary legacy-client adapter only; compare legacy timestamps under the same writer lock and then use the derived revision. New clients use expected_revision. Missing both preconditions returns 428; stale revision 409; invalid schema 400; forbidden scope 403; unknown ID 404. Unavailable execution dependency is a typed preflight error, not a profile fallback. Save an unavailable reference as a draft with readiness warnings; starting it is blocked when that reference is required. Unknown schema versions fail closed without rewriting the file.</p>
-<p>Filesystem-backed configuration keeps one canonical agent.json and atomic replacement. A small recovery journal covers create/default/delete operations that touch the index and multiple resources; do not describe multiple os.replace calls as a transaction. On startup reconcile unfinished intents before serving writes. Never delete shared memory, global credentials or arbitrary external workspace paths when deleting an Agent. Existing sessions/DAG references must be enumerated via their actual store, not assumed to live entirely below the Agent directory.</p>
-</section>
-<section id="lifecycle">
-<h2>Lifecycle, export and failure behavior</h2>
-<ul>
-<li>Creating an anonymous AgentConfig causes no new sidebar entry, workspace or memory folder. Persisting it is an explicit separate action. Saved creation initializes config only; optional instruction files are created on explicit request or legacy compatibility bootstrap.</li>
-<li>Duplicate creates a new config identity with no sessions, learned memory, schedules or credentials. Shared-space references remain references and must be visible in the duplicate preview. Copying instruction-file contents is optional and separate from copying references.</li>
-<li>Export contains portable configuration and optional user-selected instruction text. Exclude memory, history, machine paths, credentials and automatic schedules. Import validates schema, resolves capability references, previews permissions and starts no execution.</li>
-<li>Deleting a non-default idle Agent requires enumerating owned versus referenced resources. Private memory can be retained or explicitly deleted; shared memory is never deleted by this action. Tombstoned IDs cannot accept new runs; unfinished cleanup is visible and retryable.</li>
-<li>A failed preflight produces no provider request or tool side effect. A failed save preserves the complete draft. Provider failure follows existing bounded retries without silently changing model or policy. Cancelled execution restores scoped runtime state and does not convert to success.</li>
-<li>Policy edits affect new executions; immediate deny/revocation takes effect at the next access boundary for active executions. A memory write disable also invalidates unsettled writes. Show the distinction in the UI; do not imply all active inference can be recalled.</li>
-</ul>
-</section>
-<section id="references">
-<h2>Reference corpus and design choices</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>Reference</th>
-<th>Adopt / adapt</th>
-<th>Boundary</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>Meta Muse — <a href="https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse">official system description</a>
-</td>
-<td>Persistent work and policy enforcement outside the acting model</td>
-<td>No claim that OpenProgram has Muse VM isolation; persistent memory/persona remain optional</td>
-</tr>
-<tr>
-<td>Grok Bot — <a href="https://docs.x.ai/grok-bot/bots">Bot management</a> / <a href="https://docs.x.ai/grok-bot/overview">overview</a>
-</td>
-<td>Saved configurations, separate conversations, explicit shared resources</td>
-<td>Do not require a specialized job; do not duplicate schedules or learned memory</td>
-</tr>
-<tr>
-<td>OpenClaw — <a href="https://docs.openclaw.ai/gateway/config-agents">configuration</a> / <a href="https://docs.openclaw.ai/cli/agents">CLI</a> / <a href="https://docs.openclaw.ai/agent-workspace">workspace</a> / <a href="https://docs.openclaw.ai/agent">runtime</a>
-</td>
-<td>Preserve per-Agent workspace and policy references</td>
-<td>Workspace is not a sandbox; no new profile inheritance graph</td>
-</tr>
-<tr>
-<td>Claude Code — <a href="https://docs.anthropic.com/en/docs/claude-code/cli-usage">CLI reference</a>
-</td>
-<td>Separate model/instruction/tool/session choices</td>
-<td>Reference only; Anthropic integration remains official API-key based</td>
-</tr>
-<tr>
-<td>Codex — <a href="https://developers.openai.com/codex/config-reference">configuration reference</a>
-</td>
-<td>Separate config, provider and MCP responsibilities</td>
-<td>No claim of identical profile or approval semantics</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>References describe product or configuration concepts, not proof of internal implementation. Official unversioned pages may change; the capability statements above are the comparison boundary. Research novelty, benchmark wins and autonomous routing are not claimed.</p>
-</section>
-<section id="acceptance">
-<h2>Observable acceptance contract</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>ID</th>
-<th>Public entry</th>
-<th>Expected observation</th>
-</tr>
-</thead>
-<tbody>
-<tr>
-<td>A01</td>
-<td>Agent API / UI</td>
-<td>Name-only Agent can run a general task without role or memory; no mandatory specialist fields</td>
-</tr>
-<tr>
-<td>A02</td>
-<td>PATCH from two clients</td>
-<td>Exactly one same-revision update wins; no mixed model/tools config or partial save</td>
-</tr>
-<tr>
-<td>A03</td>
-<td>agent(), llm(), chat, dispatch</td>
-<td>Same base and authorized overrides yield equivalent effective config; llm has no Program/MCP tool loop; native search remains explicit and authorized</td>
-</tr>
-<tr>
-<td>A04</td>
-<td>Parallel nested functions</td>
-<td>Different models/memory policies do not leak across calls; scope resets after failure/cancel</td>
-</tr>
-<tr>
-<td>A05</td>
-<td>All memory ingress + egress</td>
-<td>Off/read-only executions never become learned memory through later ingestion or compaction</td>
-</tr>
-<tr>
-<td>A06</td>
-<td>Switch Agent / selected history</td>
-<td>No implicit prior-task history; inaccessible DAG nodes rejected</td>
-</tr>
-<tr>
-<td>A07</td>
-<td>Capability discovery and invoke</td>
-<td>Empty stays empty; missing references stay visible; denied action never executes</td>
-</tr>
-<tr>
-<td>A08</td>
-<td>Queue / retry / resume</td>
-<td>Pinned revision retained; newly revoked capability cannot execute</td>
-</tr>
-<tr>
-<td>A09</td>
-<td>Duplicate / export / delete</td>
-<td>No accidental memory, credential, schedule or shared-resource copy/deletion</td>
-</tr>
-<tr>
-<td>A10</td>
-<td>Agents page, narrow view, keyboard</td>
-<td>All sections reachable; no page overflow; dirty/error/conflict/degraded states visible</td>
-</tr>
-<tr>
-<td>A11</td>
-<td>Legacy profile migration</td>
-<td>Existing effective model, capability scope, memory behavior and stored history preserved</td>
-</tr>
-<tr>
-<td>A12</td>
-<td>Default App / CLI / scheduler</td>
-<td>Shared resolver evidence; default App only, no extra development profile</td>
-</tr>
-</tbody>
-</table>
-</div>
-<p>Detailed scenario inputs, files, stage gates and implementation order are owned by the implementation-plan document. A passing static documentation check does not satisfy these runtime acceptance criteria.</p>
-</section>
-<section id="templates"><h2>Built-in Agents</h2><p>Decision, Lightweight helper and Coordinator are ordinary saved Agents, and so are the job Agents that ship with them (see the always-on design, “Built-in Agents”). The installation operation creates the built-ins this instance has never installed through the existing manager under its configuration lock, records their ids in the registry index, and preserves existing IDs, edits and the default Agent. The server runs it at startup once a default Agent exists. Reading the registry does not create records; deleting an Agent does not trigger recreation. There is no template catalog or picker: the Agents list is the list of templates, and the New Agent dialog creates a blank record.</p><p>All three are fixed parameter configurations of the existing Agent class, resolved through AgentSpec and Agent.from_spec. They do not add role system prompts. Tasks and scoped instructions come from the call site and Context; an empty saved prompt does not erase ambient instructions. Decision selects exactly one supplied option with Agent.choose: a single tool-free llm request using the existing choice resolver, without a role prompt, advisory response or automatic re-pick. It returns the selected option ID and rejects an invalid answer. The entry retains the current Context and DAG scope. Decision and small-task Agents disable tools; Coordinator can inspect evidence and delegate authorized tasks. Models remain editable; local installation assigns available configured models explicitly. Roles do not guarantee cost or output quality.</p><h3>Page layout</h3><p>The page has two areas: a saved-Agent list and a full-width editor. The secondary navigation uses the shared ManagePage split layout and sidebar width token, without Agents-specific desktop width overrides. The detail header contains the name, ID and conversation actions. Seven horizontal tabs remain horizontal at every width, with scrolling when needed. General contains only name, purpose, model and reasoning parameters. Optional manually supplied instructions remain editable in Advanced, preserving their existing draft and invocation behavior. There is no inner navigation column, duplicate introduction or settings summary. Inputs use normal weight; field labels use medium weight. The existing application font, neutral surfaces, control dimensions and blue selection color provide a consistent visual system. All configuration panels fill the available editor width inside the standard page padding; there is no fixed maximum content width. The editor scrolls independently and the save footer remains visible. Narrow screens replace the Agent list with a select and stack identity fields. Saved invalid reasoning choices remain visible without announcing an untouched baseline as a new error.</p><h3>Acceptance</h3><p>Three saved records are visible and editable, the New Agent dialog starts blank, repeated installation preserves user edits, and Agent.from_spec executes a saved record. Existing draft, conflict, duplication and conversation flows remain functional. The compact save footer reports draft state; inherited incompatible settings do not produce a pre-edit form error. Verify desktop and narrow layouts through the real React page and the installed default App.</p></section>
+classify = _example_agent.classify</pre>
+</details>
 
-<section id="status">
-<h2>Implementation status</h2><p>Implemented: the eight-section Agents page with a shared draft, catalog-based model selection, save-conflict comparison and existing animated icons; specialist saved Agents and <code>Agent.from_spec</code> execution; description, revision and atomic conditional saves; and a memory policy that defaults new configurations to off while keeping legacy shared read/write access. Web conversations use saved Agents; independent trials persist a read-only-or-off session snapshot. Missing required MCP servers fail before a model request. Memory policy applies to execution, background extraction, derived results and recovery entries, with policy-epoch revalidation before commits; the available spaces are <code>self</code> and <code>legacy_global</code>. See <a href="../../../../capabilities/agents.md">Configure an Agent</a> for product instructions.</p><p>Target design, not yet implemented: full schema 2 migration, transactional multi-file lifecycle writes, the unified Python <code>AgentConfig</code> API, resolver parity across every entry, arbitrary shared-space catalogs, effective-config preview, an embedded trial panel, portable import/export and automatic Agent/model selection.</p>
-</section>
-</main>
-</body>
-</html>
+<h2 id="memory">Optional memory</h2>
+<table class="stack">
+<thead><tr><th scope="col">Mode</th><th scope="col">Recall</th><th scope="col">Memory tools</th><th scope="col">Background write</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">off</code></th><td>None</td><td>None</td><td>No ingestion from these nodes</td></tr>
+<tr><th scope="row"><code translate="no">read_only</code></th><td>Authorized <code translate="no">read_spaces</code></td><td>Read and search</td><td>No ingestion from these nodes</td></tr>
+<tr><th scope="row"><code translate="no">read_write</code></th><td>Authorized <code translate="no">read_spaces</code></td><td>Plus one authorized <code translate="no">write_space</code></td><td>Under writer policy and execution provenance</td></tr>
+<tr><th scope="row"><code translate="no">inherit</code></th><td>Resolved to a concrete mode first</td><td>Never passed unresolved</td><td>Migration only</td></tr>
+</tbody>
+</table>
+<dl class="pairs">
+<dt>Spaces</dt><dd><code translate="no">self</code> for a saved Agent is its own namespace and invalid for anonymous configs. Implemented: <code translate="no">self</code>, <code translate="no">legacy_global</code>. Target: a selected project or shared space, which allows anonymous memory use. <code translate="no">write_space</code> must be readable. Enabling a new Agent's memory defaults to <code translate="no">self</code>, with no copy of the old global store.</dd>
+<dt>Off does not</dt><dd>Delete memory, disable session history or remove user-provided instruction files. Text already in messages cannot be unseen; start a clean context. Pending recalls are invalidated before entering a request. It is not a filesystem sandbox: if shell or file tools can read memory files, the UI shows that.</dd>
+<dt>Failure</dt><dd>An optional backend failure shows degraded memory and continues; <code translate="no">required=true</code> fails before model execution. A write failure keeps the task result and reports separately.</dd>
+<dt>Not offered</dt><dd><code translate="no">write_only</code>. A backend without enforceable namespaces cannot enable scoped memory; prompts never simulate isolation.</dd>
+</dl>
+<details>
+<summary>Write eligibility</summary>
+<ul>
+<li>Every execution node carries a write-eligibility label, space reference and policy epoch. Session-end writers, compaction extraction, source export and scheduled reorganizers filter out off and read-only nodes.</li>
+<li>Disabling writes blocks unsettled queued writes and prevents retroactive ingestion on re-enable. Committed memory stays.</li>
+<li>Derived outputs and summaries carry the most restrictive eligibility of the context included. Splitting or switching Agents cannot relabel restricted data. Off propagates a no-write restriction but does not forbid an independently authorized read later.</li>
+<li>A background write validates the original grant and current space policy at commit; revocation wins over the pin. Never retry with a broader space. External backends that cannot cancel are documented.</li>
+<li>User-authored instructions and uploads stay inputs, even with personal facts; text outside recorded provenance is not claimed classifiable.</li>
+</ul>
+</details>
+
+<h2 id="context">Context, instructions and environment</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">Source</th><th scope="col">Treatment</th></tr></thead>
+<tbody>
+<tr><th scope="row">Runtime and owner policy</th><td>Enforced outside the model; no Agent prompt overrides it</td></tr>
+<tr><th scope="row">User, project and scoped workspace instructions</th><td>Existing authority and scope rules; show provenance and conflicts</td></tr>
+<tr><th scope="row">Agent <code translate="no">system_prompt</code>, allowlisted files</th><td>Configurable; files are workspace path references, snapshot by content or hash in protected execution storage</td></tr>
+<tr><th scope="row">Skills</th><td>Load on demand within the allowed set</td></tr>
+<tr><th scope="row">Memory, tool and web results</th><td>Data with provenance, never promoted to instructions</td></tr>
+</tbody>
+</table>
+<ul>
+<li>Clean means no inherited conversation messages, not no system or project policy.</li>
+<li>Selected history is validated against the caller's visibility; DAG membership is not authorization. Execution history is kept by default; there is no incognito guarantee.</li>
+<li>Workspace and project cwd are separate. A cwd is not an access boundary. Incompatible host or sandbox requests fail visibly.</li>
+<li>Context length uses existing Context Engine limits; no second summarizer.</li>
+</ul>
+
+<h2 id="capabilities">Capability scope and authority</h2>
+<p>Catalogs own definitions and credentials; Agent policies own references. Detail: <a href="agent-capability-configuration-ui.html">Agent capability policies</a>. Admission, usage, cancellation and quotas: <a href="../reliability/agent-resource-governance.html">resource governance</a>.</p>
+<ul>
+<li>A session or invocation may replace a preference but never expand an enforced ceiling. A delegation restriction survives an <code translate="no">agent_id</code> change. Rejected overrides are explained.</li>
+<li>Provider-native search and other native actions are capability-gated; <code translate="no">tools=[]</code> alone is not a network restriction.</li>
+<li>Accounts resolve through credential services; no raw keys in AgentSpec, snapshots, exports or examples. Anthropic connections use the official API and legitimately obtained API keys with API account billing.</li>
+<li>Python already authorized by the host is not sandboxed by an allowlist; tools and nested agentic calls are checked at their public boundaries.</li>
+</ul>
+
+<h2 id="collaboration">Multi-agent composition</h2>
+<p>Branches, Jobs, messages and attach references: <a href="../collaboration/agent-collaboration.html">collaboration contract</a>, <a href="../collaboration/agent-collab-architecture.html">architecture</a>. A config reused in parallel creates distinct runs, not new saved Agents.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Operation</th><th scope="col">Contract</th></tr></thead>
+<tbody>
+<tr><th scope="row">Independent invocation</th><td>No automatic previous-task history; one Agent ID may serve many sessions</td></tr>
+<tr><th scope="row">Delegation</th><td>Explicit goal, input and filtered context; parent cancellation and budget stay in task control</td></tr>
+<tr><th scope="row">Continue a task</th><td>Address an existing run or branch; target Agent stays</td></tr>
+<tr><th scope="row">Shared memory</th><td>Explicit bindings; concurrent writes use backend version checks and idempotent execution IDs</td></tr>
+<tr><th scope="row">Shared files, browser</th><td>Ownership and serialization for conflicting mutations; Agent names do not isolate</td></tr>
+<tr><th scope="row">Automatic choice</th><td>Deferred to P6; ranks existing eligible configs, never creates Agents or widens scope</td></tr>
+</tbody>
+</table>
+<p class="note">One successful run never persists config changes, skills or preferences; durable updates use explicit write mechanisms. Role orchestration, automatic topology and marketplace publishing are out of scope.</p>
+
+<h2 id="api">Management API</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">Operation</th><th scope="col">Contract</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">GET /api/agents[/{id}]</code></th><td>Summary and detail DTOs with <code translate="no">schema_version</code> and revision; no memory contents or secrets</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents</code></th><td>Name-only creation; safe explicit defaults; optional idempotency key; no provider call</td></tr>
+<tr><th scope="row"><code translate="no">PATCH /api/agents/{id}</code></th><td><code translate="no">expected_revision</code>; top-level changes plus <code translate="no">reset_fields</code>; validate the whole candidate, compare and write once under a cross-process lock</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents/resolve</code></th><td>Proposed read-only preview for saved or draft config; no session, memory search or credentials</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents/{id}/duplicate</code></th><td>Configuration only; new ID and revision; <code translate="no">self</code> maps to a new empty namespace; shared bindings shown</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/agents/{id}/default</code></th><td>One authoritative pointer, updated atomically; <code translate="no">profile.default</code> is derived</td></tr>
+<tr><th scope="row"><code translate="no">DELETE /api/agents/{id}</code></th><td>409 for default or active references; show affected resources before confirmation; recoverable intent before destructive cleanup</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead><tr><th scope="col">Status</th><th scope="col">When</th></tr></thead>
+<tbody>
+<tr><th scope="row">428</th><td>Neither precondition (<code translate="no">updated_at</code> is kept for display and the temporary adapter)</td></tr>
+<tr><th scope="row">409</th><td>Stale revision</td></tr>
+<tr><th scope="row">400</th><td>Invalid schema</td></tr>
+<tr><th scope="row">403</th><td>Forbidden scope</td></tr>
+<tr><th scope="row">404</th><td>Unknown ID</td></tr>
+</tbody>
+</table>
+<p class="note">An unavailable reference saves as a draft with warnings; starting is blocked if it is required, as a typed preflight error. Unknown schemas fail closed without rewriting.</p>
+<details>
+<summary>Atomic persistence</summary>
+<p>One canonical <code translate="no">agent.json</code>, atomic replacement. A small recovery journal covers create, default and delete across the index and resources; several <code translate="no">os.replace</code> calls are not a transaction. Startup reconciles unfinished intents before serving writes. Deleting an Agent never deletes shared memory, global credentials or external workspaces. Session and DAG references are enumerated through their store.</p>
+</details>
+
+<h2 id="lifecycle">Lifecycle and failure</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Event</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Anonymous config</th><td>No sidebar entry, workspace or memory folder. Saved creation initializes config only; instruction files on explicit request or legacy bootstrap</td></tr>
+<tr><th scope="row">Duplicate</th><td>No sessions, learned memory, schedules or credentials. Shared references stay visible. Copying instruction contents is separate from copying references</td></tr>
+<tr><th scope="row">Export, import</th><td>Portable configuration and optional selected instruction text; no memory, history, machine paths, credentials or automatic schedules. Import validates, resolves references, previews permissions, starts nothing</td></tr>
+<tr><th scope="row">Delete</th><td>Enumerate owned versus referenced resources. Private memory is retained or explicitly deleted; shared memory never. Tombstoned IDs accept no runs; unfinished cleanup is visible and retryable</td></tr>
+<tr><th scope="row">Failure</th><td>Failed preflight: no provider request or side effect. Failed save: draft kept. Provider failure: bounded retries, no silent model or policy change. Cancel: scoped state restored, never success</td></tr>
+<tr><th scope="row">Policy edit</th><td>Affects new executions; deny or revocation applies at the next access boundary; disabling memory writes invalidates unsettled writes. The UI shows the difference</td></tr>
+</tbody>
+</table>
+
+<h2 id="templates">Built-in Agents</h2>
+<p>Ordinary saved Agents: the Assistant with Decision, Lightweight helper and Coordinator, plus the job Agents (see <a href="../always-on-agents.html">Always-on Agents</a>). No template catalog: the Agents list is it, and New Agent starts blank.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Installation</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">At startup</th><td>Once a default exists, the server installs built-ins this instance has never installed, through the manager under its lock</td></tr>
+<tr><th scope="row">Recorded</th><td>Their ids, in the registry index</td></tr>
+<tr><th scope="row">Kept</th><td>IDs, edits and the default</td></tr>
+<tr><th scope="row">Reading</th><td>Creates nothing</td></tr>
+<tr><th scope="row">Deleting</th><td>Does not trigger recreation</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Agent</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">All three specialists</th><td>Fixed parameters of the Agent class via AgentSpec and <code translate="no">Agent.from_spec</code>; no role prompts. Tasks and instructions come from the call site and Context; an empty saved prompt does not erase ambient instructions. Models stay editable; local installation assigns configured models. Roles guarantee neither cost nor quality.</td></tr>
+<tr><th scope="row">Decision</th><td><code translate="no">Agent.choose</code> picks one supplied option in a single tool-free <code translate="no">llm</code> request with the choice resolver: no advice, no re-pick; returns the option ID and rejects invalid answers. Keeps Context and DAG scope. Tools disabled.</td></tr>
+<tr><th scope="row">Lightweight helper</th><td>Tools disabled</td></tr>
+<tr><th scope="row">Coordinator</th><td>Inspects evidence and delegates authorized tasks</td></tr>
+</tbody>
+</table>
+<details>
+<summary>Page layout</summary>
+<ul>
+<li>Saved-Agent list and full-width editor. Secondary navigation uses the shared ManagePage split layout and sidebar width token.</li>
+<li>Header: name, ID, conversation actions. Eight tabs stay horizontal at every width and scroll when needed.</li>
+<li>General has name, purpose, model and reasoning. Manual instructions stay in Advanced. No inner navigation column, duplicate introduction or settings summary.</li>
+<li>Inputs normal weight, labels medium; application font, neutral surfaces, control dimensions, blue selection.</li>
+<li>Panels fill the editor inside standard padding, no fixed maximum width. The editor scrolls independently; the save footer stays visible and reports draft state.</li>
+<li>Narrow screens replace the list with a select and stack identity fields. Saved invalid reasoning choices stay visible; inherited incompatible settings raise no pre-edit error.</li>
+</ul>
+<p class="note">Acceptance: built-ins visible and editable; New Agent starts blank; repeat installation keeps edits; <code translate="no">Agent.from_spec</code> runs a saved record; draft, conflict, duplication and conversation flows work; desktop and narrow layouts checked on the real page and the App.</p>
+</details>
+
+<h2 id="acceptance">Acceptance contract</h2>
+<table class="stack">
+<thead><tr><th scope="col">ID</th><th scope="col">Entry</th><th scope="col">Expected</th></tr></thead>
+<tbody>
+<tr><th scope="row">A01</th><td>Agent API, UI</td><td>A name-only Agent runs a general task</td></tr>
+<tr><th scope="row">A02</th><td>PATCH from two clients</td><td>One same-revision update wins; no mixed config or partial save</td></tr>
+<tr><th scope="row">A03</th><td><code translate="no">agent()</code>, <code translate="no">llm()</code>, chat, dispatch</td><td>Same base and overrides give equivalent config; llm has no tool loop; native search explicit and authorized</td></tr>
+<tr><th scope="row">A04</th><td>Parallel nested functions</td><td>Models and memory policies do not leak; scope resets after failure or cancel</td></tr>
+<tr><th scope="row">A05</th><td>All memory ingress and egress</td><td>Off and read-only runs never become learned memory</td></tr>
+<tr><th scope="row">A06</th><td>Switch Agent, selected history</td><td>No implicit history; inaccessible nodes rejected</td></tr>
+<tr><th scope="row">A07</th><td>Discovery and invoke</td><td>Empty stays empty; missing visible; denied never executes</td></tr>
+<tr><th scope="row">A08</th><td>Queue, retry, resume</td><td>Pinned revision; revoked capability cannot execute</td></tr>
+<tr><th scope="row">A09</th><td>Duplicate, export, delete</td><td>No accidental copy or deletion of memory, credentials, schedules or shared resources</td></tr>
+<tr><th scope="row">A10</th><td>Agents page, narrow, keyboard</td><td>All sections reachable; no overflow; dirty, error, conflict and degraded states visible</td></tr>
+<tr><th scope="row">A11</th><td>Legacy migration</td><td>Effective model, scope, memory and history kept</td></tr>
+<tr><th scope="row">A12</th><td>App, CLI, scheduler</td><td>Shared resolver evidence</td></tr>
+</tbody>
+</table>
+<p class="note">Scenario inputs and stage gates are in the <a href="agent-configuration-plan.html#scenarios">implementation plan</a>. A static documentation check satisfies none of these.</p>
+
+<details id="references">
+<summary>References</summary>
+<table class="stack">
+<thead><tr><th scope="col">Reference</th><th scope="col">Adopted</th><th scope="col">Boundary</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://research.meta.ai/blog/security-and-safety-for-ai-agents-our-approach-with-muse">Meta Muse</a></th><td>Persistent work; policy enforced outside the acting model</td><td>No claim of Muse VM isolation; memory and persona stay optional</td></tr>
+<tr><th scope="row">Grok Bot: <a href="https://docs.x.ai/grok-bot/bots">bots</a>, <a href="https://docs.x.ai/grok-bot/overview">overview</a></th><td>Saved configurations, separate conversations, explicit shared resources</td><td>No specialized job required; schedules and learned memory not duplicated</td></tr>
+<tr><th scope="row">OpenClaw: <a href="https://docs.openclaw.ai/gateway/config-agents">configuration</a>, <a href="https://docs.openclaw.ai/cli/agents">CLI</a>, <a href="https://docs.openclaw.ai/agent-workspace">workspace</a>, <a href="https://docs.openclaw.ai/agent">runtime</a></th><td>Per-Agent workspace and policy references</td><td>Workspace is no sandbox; no profile inheritance graph</td></tr>
+<tr><th scope="row"><a href="https://docs.anthropic.com/en/docs/claude-code/cli-usage">Claude Code</a></th><td>Separate model, instruction, tool and session choices</td><td>Anthropic integration stays official API-key based</td></tr>
+<tr><th scope="row"><a href="https://developers.openai.com/codex/config-reference">Codex</a></th><td>Separate config, provider and MCP responsibilities</td><td>No claim of identical profile or approval semantics</td></tr>
+</tbody>
+</table>
+<p class="note">Product and configuration concepts, not proof of internals. No claim of research novelty, benchmark wins or autonomous routing.</p>
+</details>
+
+<h2 id="status">Implementation status</h2>
+<dl class="pairs">
+<dt>Implemented</dt><dd>Eight-section page with shared draft, catalog model selection, save-conflict comparison, animated icons; built-in saved Agents and <code translate="no">Agent.from_spec</code>; description, revision, atomic conditional saves; memory policy with spaces <code translate="no">self</code> and <code translate="no">legacy_global</code>, defaulting new configurations to off and keeping legacy shared read/write. Web conversations use saved Agents; independent trials persist a read-only-or-off session snapshot. Missing required MCP servers fail before a model request.</dd>
+<dt>Target</dt><dd>Schema 2 migration, transactional multi-file lifecycle, Python <code translate="no">AgentConfig</code>, resolver parity across entries, shared-space catalogs, effective preview, embedded trial, portable import/export, automatic Agent/model selection.</dd>
+</dl>
+<p class="next"><a href="../../../../capabilities/agents.html">Configure an Agent</a></p>

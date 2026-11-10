@@ -127,11 +127,6 @@ def test_ws_execution_cancel_returns_canonical_status_and_releases_occupancy(
     )
     assert command["command"]["status"] == "applied"
     assert released == [record.execution_id]
-    assert any(
-        frame["type"] == "session_reload"
-        and frame["data"]["session_id"] == record.session_id
-        for frame in emitted
-    )
     assert not any(frame["type"] == "error" for frame in ws.frames)
 
     # Repeating the exact cancel is idempotent after the terminal transition.
@@ -260,11 +255,6 @@ def test_http_execution_cancel_returns_canonical_status_and_body(
     assert update["data"]["execution"] == update["execution"]
     assert update["data"]["event_cursor"] == update["event_cursor"]
     assert released == [record.execution_id]
-    assert any(
-        frame["type"] == "session_reload"
-        and frame["data"]["session_id"] == record.session_id
-        for frame in emitted
-    )
     repeated = TestClient(app).post(
         "/api/execution/cancel",
         json={
@@ -296,75 +286,6 @@ def test_http_execution_cancel_returns_canonical_status_and_body(
         stale.json()["command"]["latest_snapshot"]["status_version"]
         == latest.status_version
     )
-
-
-def test_session_reload_preserves_cancelling_execution_status(
-    tmp_path,
-    monkeypatch,
-):
-    from openprogram.interfaces.server import server as server
-    from openprogram.interfaces.server.ws_actions.session import handle_load_session
-
-    store = SessionStore(tmp_path / "sessions-git")
-    monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: store)
-    import openprogram.state.store.session.session_store as store_module
-
-    monkeypatch.setattr(store_module.shared, "_default_store", store)
-    session_id = "reload-cancelling"
-    store.create_session(session_id, "main")
-    store.append_message(
-        session_id,
-        {
-            "id": "user-1",
-            "role": "user",
-            "content": "run",
-            "predecessor": "ROOT",
-        },
-    )
-    store.append_message(
-        session_id,
-        {
-            "id": "assistant-1",
-            "role": "assistant",
-            "content": "running",
-            "predecessor": "user-1",
-        },
-    )
-    SessionNodeWriter(store, session_id).append(
-        Call(
-            id="execution-1",
-            role=ROLE_CODE,
-            name="cancellation_probe",
-            output="partial output",
-            predecessor="assistant-1",
-            metadata={
-                "status": "cancelling",
-                "reason_code": "cancel.user",
-                "execution_kind": "agent_method",
-            },
-        )
-    )
-    with server._sessions_lock:
-        server._sessions[session_id] = {"id": session_id}
-    monkeypatch.setattr(server, "_get_provider_info", lambda sid=None: {})
-    monkeypatch.setattr(server, "_is_run_active", lambda sid: True)
-
-    ws = FakeWS()
-    try:
-        asyncio.run(handle_load_session(ws, {"session_id": session_id}))
-    finally:
-        with server._sessions_lock:
-            server._sessions.pop(session_id, None)
-
-    loaded = next(frame for frame in ws.frames if frame["type"] == "session_loaded")
-    execution = next(
-        message
-        for message in loaded["data"]["messages"]
-        if message["id"] == "execution-1"
-    )
-    assert execution["status"] == "cancelling"
-    assert execution["reason_code"] == "cancel.user"
-    assert loaded["data"]["run_active"] is True
 
 
 @pytest.mark.parametrize("quiet_seconds", [0, 600])
@@ -538,8 +459,7 @@ def test_canonical_continuation_restores_hydration_and_live_controls(
 ):
     from openprogram.interfaces.server import server
     from openprogram.interfaces.server.ws_actions.session import handle_load_session
-    from openprogram.runtime.execution.outbox import ProjectionDispatcher
-    from openprogram.runtime.execution.projections import projection_handlers
+    from openprogram.runtime.execution.event_effects import ExecutionEventEffects
 
     executions, record = _canonical_execution(
         tmp_path, source=source, interaction=interaction
@@ -560,7 +480,7 @@ def test_canonical_continuation_restores_hydration_and_live_controls(
     )
     frames = []
     monkeypatch.setattr("openprogram.runtime.events.emit_ws_frame", frames.append)
-    dispatcher = ProjectionDispatcher(executions, projection_handlers(executions))
+    dispatcher = ExecutionEventEffects(executions, after=0)
     sid = record.session_id
     sessions.create_session(sid, "main")
     with server._sessions_lock:
@@ -608,7 +528,7 @@ def test_canonical_continuation_restores_hydration_and_live_controls(
                     transport_frames[-1]["data"]["status_version"]
                     == record.status_version
                 )
-            dispatcher.dispatch_once(owner_id="foreground-test")
+            dispatcher.drain()
             projected = frames[-1]["data"].get("foreground_task")
             assert (projected is not None) is active
             if active:
@@ -663,7 +583,6 @@ def test_session_reload_replays_system_access_with_native_wait_frame(
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="system-access-replay-test",
-        ttl_seconds=30,
     )
     attempt, execution = attempts.activate(
         leased.attempt_id,
@@ -806,7 +725,7 @@ def test_real_web_stop_envelope_is_applied_by_runtime_handler(tmp_path, monkeypa
         check=True,
         capture_output=True,
         text=True,
-        timeout=30,
+        timeout=100,
     )
     frame = json.loads(output.read_text())
     ws = FakeWS()

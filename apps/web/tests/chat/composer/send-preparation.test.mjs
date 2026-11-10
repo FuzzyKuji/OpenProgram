@@ -36,7 +36,7 @@ const mocks = {
     state = init(set, get, store);
     return store;
   }`,
-    "@/lib/session-store": "export const useSessionStore = { getState: () => host.sessions };",
+    "@/lib/session-store": "export const useSessionStore = { getState: () => host.sessions }; export const selectViewRows = () => (state) => state.rowsById;",
     "@/lib/runtime-bridge/state": "export const runtimeState = host.runtime; export const getSocket = () => host.socket;",
     "@/lib/execution/function-invocation": "export const parseFunctionInvocation = () => ({kind:'none'});",
     "@/lib/abilities/functions-store": "export const useFunctions = {getState: () => ({functions:[]})};",
@@ -60,7 +60,7 @@ const mocks = {
     }
   };`,
     "@/lib/net/ws/chat-stream": `export const appendLocalUserTurn = (sid, id, text, display, timestamp, status) => {
-    host.sessions.messagesById[id] = {id, role:'user', content:text, status};
+    host.sessions.rowsById[id] = {id, role:'user', content:text, status};
     (host.sessions.messageOrder[sid] ??= []).push(id);
   };`,
     "@/lib/net/execution/execution-client": `export class ExecutionApiError extends Error {}
@@ -143,7 +143,7 @@ beforeEach(() => {
     });
     host.sessions = {
         activeChatKey: "A", currentSessionId: "A", welcomeVisible: true,
-        runningTasks: {}, messagesById: {}, messageOrder: {}, composerDrafts: {}, pendingDecisions: [],
+        runningTasks: {}, rowsByView: {}, rowsById: {}, messageOrder: {}, composerDrafts: {}, pendingDecisions: [],
         pendingProjectsByChat: {}, composerSettingsBySession: {}, additionalWorkingDirsBySession: {},
         setRunningTaskFor(sid, task) {
             host.runWrites.push([sid, task]);
@@ -152,7 +152,6 @@ beforeEach(() => {
             else
                 delete this.runningTasks[sid];
         },
-        updateMessage(sid, id, patch) { Object.assign(this.messagesById[id], patch); },
     };
     host.socket = { readyState: 1, send: wire => host.frames.push(JSON.parse(wire)) };
 });

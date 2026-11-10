@@ -29,3 +29,13 @@ test("the conversation's controls address its own endpoints", async () => {
     ["/api/sessions/s%201/open-work/3", "DELETE", null],
   ]);
 });
+
+test("report preferences are added and removed on the conversation's Agent", async () => {
+  requests.length = 0;
+  await work.addReportPreference("s 1", work.dontReportText("Docs build is slow"));
+  await work.removeReportPreference("s 1", "p/1");
+  assert.deepEqual(requests, [
+    ["/api/sessions/s%201/always-on/preferences", "POST", JSON.stringify({ text: "Don't report: Docs build is slow" })],
+    ["/api/sessions/s%201/always-on/preferences/p%2F1", "DELETE", null],
+  ]);
+});

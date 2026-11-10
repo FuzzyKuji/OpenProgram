@@ -22,6 +22,7 @@ import logging
 import abc
 import threading
 import time
+from collections import deque
 from dataclasses import dataclass
 from typing import Optional
 
@@ -29,6 +30,7 @@ from openprogram.host.security.identity_header import (
     IDENTITY_HEADER_PART_MAX_CHARS,
     normalize_identity_header_part,
 )
+from openprogram.interfaces.channels import _heartbeats
 
 _log = logging.getLogger(__name__)
 
@@ -63,10 +65,12 @@ class _TypingIndicator:
     影响回复本身.
     """
 
-    def __init__(self, platform: str, account_id: str, target: str) -> None:
+    def __init__(self, platform: str, account_id: str, target: str,
+                 thread_id: str = "") -> None:
         self.platform = platform
         self.account_id = account_id
         self.target = target
+        self.thread_id = thread_id
         self._stop = threading.Event()
         self._thread: Optional[threading.Thread] = None
         self._started = False
@@ -83,10 +87,11 @@ class _TypingIndicator:
 
     def _run(self, interval: float) -> None:
         from openprogram.interfaces.channels import _transport
+        where = {"thread_id": self.thread_id} if self.thread_id else {}
         while not self._stop.is_set():
             try:
                 result = _transport.send_typing(
-                    self.platform, self.account_id, self.target,
+                    self.platform, self.account_id, self.target, **where,
                 )
             except Exception:  # noqa: BLE001
                 return
@@ -108,6 +113,56 @@ class _TypingIndicator:
                 # The platform clears the typing indicator on its own timeout.
                 _log.debug("[%s:%s] stop_typing failed", self.platform,
                            self.account_id, exc_info=True)
+
+
+class _InboundOrder:
+    """同一 peer 的消息按到达顺序开启轮次.
+
+    每条消息一个线程, 带附件的那条下载慢, 后面的文字会抢先. 这里只管
+    "下载到拿到 session 锁" 这一段: 拿到锁后就放下一条进来; 不开启轮次的
+    消息 (门禁挡下 / 记成群历史) 随时退出, 不等前面的. 命令不排队.
+    """
+
+    def __init__(self) -> None:
+        self._changed = threading.Condition()
+        self._queues: dict[tuple[str, str, str], deque[object]] = {}
+
+    def enter(self, key: tuple[str, str, str]) -> "_InboundTicket":
+        ticket = _InboundTicket(self, key)
+        with self._changed:
+            self._queues.setdefault(key, deque()).append(ticket)
+        return ticket
+
+    def wait_for_turn(self, ticket: "_InboundTicket") -> None:
+        with self._changed:
+            self._changed.wait_for(
+                lambda: self._queues.get(ticket.key, (ticket,))[0] is ticket
+            )
+
+    def leave(self, ticket: "_InboundTicket") -> None:
+        with self._changed:
+            queue = self._queues.get(ticket.key)
+            if queue is None or ticket not in queue:
+                return
+            queue.remove(ticket)
+            if not queue:
+                del self._queues[ticket.key]
+            self._changed.notify_all()
+
+
+@dataclass(frozen=True, eq=False)
+class _InboundTicket:
+    order: _InboundOrder
+    key: tuple[str, str, str]
+
+    def wait_for_turn(self) -> None:
+        self.order.wait_for_turn(self)
+
+    def leave(self) -> None:
+        self.order.leave(self)
+
+
+_INBOUND_ORDER = _InboundOrder()
 
 
 @dataclass(frozen=True)
@@ -169,6 +224,8 @@ class Channel(abc.ABC):
     #: run_forever 的重连退避参数 — 初始等待秒数, 指数翻倍到上限.
     RESTART_BACKOFF = 5.0
     RESTART_BACKOFF_MAX = 300.0
+    #: 一次运行存活这么久 (秒) 视为连接曾经健康.
+    HEALTHY_RUN_SECONDS = 60.0
 
     def run_forever(self, stop: threading.Event) -> None:
         """带自动重连的入站循环 — worker 用这个入口跑 adapter.
@@ -197,9 +254,13 @@ class Channel(abc.ABC):
                 return
             if stop.is_set():
                 return
-            if time.time() - started >= 60.0:
+            if time.time() - started >= self.HEALTHY_RUN_SECONDS:
                 backoff = self.RESTART_BACKOFF
             _log.info("[%s] reconnecting in %.0fs", tag, backoff)
+            _heartbeats.record_retry(
+                self.platform_id, self.account_id,
+                backoff + self.HEALTHY_RUN_SECONDS,
+            )
             if stop.wait(backoff):
                 return
             backoff = min(backoff * 2, self.RESTART_BACKOFF_MAX)
@@ -227,12 +288,36 @@ class Channel(abc.ABC):
         经 :meth:`send_text` 回发 — 统一走 _transport, chunking / 格式
         渲染 / 限流重试都在那一层, adapter 不再持有 platform SDK 的直发
         副本.
-        """
-        threading.Thread(
-            target=self._dispatch_and_reply, args=(ch_msg,), daemon=True,
-        ).start()
 
-    def _dispatch_and_reply(self, ch_msg) -> None:
+        排队号在这里、adapter 的收消息顺序上领, 线程起来之后再领就晚了.
+        命令 (/answer 等) 不排队: 一轮停在提问上时前面的消息都在等它.
+        """
+        from openprogram.interfaces.channels import _room
+
+        ticket = None
+        if not _room.command_verb(ch_msg.text):
+            ticket = _INBOUND_ORDER.enter(
+                (self.platform_id, self.account_id, self.peer_id_for(ch_msg)),
+            )
+        worker = threading.Thread(
+            target=self._dispatch_in_order, args=(ch_msg, ticket), daemon=True,
+        )
+        try:
+            worker.start()
+        except BaseException:
+            # 线程没起来就没人还这个号, 这个 peer 后面的消息会一直等下去.
+            if ticket is not None:
+                ticket.leave()
+            raise
+
+    def _dispatch_in_order(self, ch_msg, ticket) -> None:
+        try:
+            self._dispatch_and_reply(ch_msg, ticket)
+        finally:
+            if ticket is not None:
+                ticket.leave()
+
+    def _dispatch_and_reply(self, ch_msg, ticket=None) -> None:
         from openprogram.interfaces.channels import _room
 
         peer_id = self.peer_id_for(ch_msg)
@@ -247,32 +332,52 @@ class Channel(abc.ABC):
         if not _room.first_delivery(self.platform_id, self.account_id,
                                     ch_msg.chat_id, ch_msg.message_id):
             return
-        _log.info("%s <%s> %s", tag, who, snippet)
 
         # ---- access 门禁: 未知发信人不进 agent --------------------------
         # 配对确认只能走本机 CLI/webui (_access 模块 docstring), 这里
-        # 只可能发配对码回执, 绝不放行.
+        # 只可能发配对码回执, 绝不放行. 群里不配对: 不在名单上的人什么
+        # 反应都没有 (id 记进日志, 主人要加人时能查到).
         from openprogram.interfaces.channels import _access
         stable_sender_id = ch_msg.user_id or (
             ch_msg.chat_id if ch_msg.is_dm else ""
         )
-        access_decision = _access.decide_inbound_sender(
-            self.platform_id, self.account_id,
-            stable_sender_id,
-            display=safe_display,
-        )
-        if not access_decision.allowed:
-            _log.info("%s <%s> blocked by access policy (%s)",
-                      tag, who, access_decision.reason_code)
-            if access_decision.reply:
-                self._reply(peer_id, access_decision.reply, ch_msg.thread_id)
-            return
+        in_room = _room.is_room(ch_msg.chat_type)
+        group_level = None
+        if in_room:
+            group_level = _access.group_sender_access(
+                self.platform_id, self.account_id, ch_msg.chat_id,
+                stable_sender_id, parent_chat_id=ch_msg.parent_chat_id,
+            )
+            if group_level is None:
+                _log.info("%s sender %s is on no list for group %s; ignored",
+                          tag, stable_sender_id or "(no id)", ch_msg.chat_id)
+                return
+        else:
+            access_decision = _access.decide_inbound_sender(
+                self.platform_id, self.account_id,
+                stable_sender_id,
+                display=safe_display,
+            )
+            if not access_decision.allowed:
+                _log.info("%s <%s> blocked by access policy (%s)",
+                          tag, who, access_decision.reason_code)
+                if access_decision.reply:
+                    self._reply(peer_id, access_decision.reply, ch_msg.thread_id)
+                return
+        _log.info("%s <%s> %s", tag, who, snippet)
 
         # ---- 房间层: 命令 / @提及门槛 / 限流 -----------------------------
         room_key = (self.platform_id, self.account_id, ch_msg.chat_id)
-        in_room = _room.is_room(ch_msg.chat_type)
         verb = _room.command_verb(ch_msg.text)
-        if verb in ("/new", "/reset", "/activation", "/memory"):
+        if verb in ("/new", "/reset", "/activation", "/memory", "/stop", "/help"):
+            # 只能聊天的人不能改全群的设置, 也不能替全群清空对话或停掉任务.
+            if in_room and group_level != "full":
+                self._reply(peer_id, {
+                    "/stop": "你在这个群里只能聊天，不能停止正在进行的任务。",
+                    "/help": "你在这个群里只能聊天，这些命令需要完全访问权限。",
+                }.get(verb, "你在这个群里只能聊天，不能改设置或开始新对话。"),
+                            ch_msg.thread_id)
+                return
             self._reply(peer_id, self._room_command(
                 verb, ch_msg, peer_id, room_key, in_room,
             ), ch_msg.thread_id)
@@ -294,25 +399,32 @@ class Channel(abc.ABC):
             if not _room.allow_turn(room_key):
                 _log.info("%s room %s over its turn limit; message kept as pending history",
                           tag, ch_msg.chat_id)
-                _room.record_pending(room_key, entry)
+                if ch_msg.text or ch_msg.attachments:
+                    _room.record_pending(room_key, entry)
                 return
+
+        if ticket is not None:
+            ticket.wait_for_turn()
 
         # ---- 附件下载 + quoted 块 → agent 可见的 user_text ---------------
         user_text = ch_msg.text
         turn_attachments: list[dict] = []
         if ch_msg.attachments:
             from openprogram.interfaces.channels import _attachments
+            failed: list[dict] = []
             saved = _attachments.download_inbound(
                 self.platform_id, self.account_id, ch_msg.attachments,
+                failed=failed,
             )
             turn_attachments = _attachments.to_turn_attachments(saved)
-            notes = _attachments.attachment_notes(saved)
-            if notes:
-                joined = "\n".join(notes)
-                user_text = f"{user_text}\n\n{joined}" if user_text else joined
-            elif not user_text:
-                # 只发了附件且全部下载失败: 别开一个空轮次.
-                user_text = "(attachment could not be downloaded)"
+            # 说文字的放前面, 文件标记放最后: 网页把标记渲染成 chip.
+            sections = [
+                user_text,
+                *_attachments.voice_notes(saved),
+                "\n".join(_attachments.failure_notes(failed)),
+                "\n".join(_attachments.attachment_notes(saved)),
+            ]
+            user_text = "\n\n".join(part for part in sections if part)
         # 命令 (/answer · /decline) 原样交给 dispatch 解析, 不拼上下文块.
         if ch_msg.quoted_text and not verb:
             user_text = _quoted_block(ch_msg.quoted_text) + "\n\n" + user_text
@@ -320,6 +432,11 @@ class Channel(abc.ABC):
             pending = _room.take_pending(room_key)
             if pending:
                 user_text = _room.render_pending(pending) + "\n\n" + user_text
+        # 只 @了机器人, 没引用、没新的群消息: 没有内容可回应, 不开空轮次.
+        if not user_text.strip():
+            if in_room:
+                _room.give_back_turn(room_key)
+            return
         if ambient:
             user_text = f"{_room.ROOM_EVENT_HEADER}\n{user_text}"
 
@@ -329,9 +446,18 @@ class Channel(abc.ABC):
         if not verb and not ambient:
             self._ack(ch_msg)
         from openprogram.interfaces.channels._conversation import dispatch_inbound
-        typing = _TypingIndicator(self.platform_id, self.account_id, peer_id)
+        typing = _TypingIndicator(self.platform_id, self.account_id, peer_id,
+                                  ch_msg.thread_id or "")
         if not verb and not ambient:
             typing.start()
+
+        def keep_room_history() -> None:
+            # 这一轮没跑: 取走的群消息放回去, 下一轮还能看到. 没点名的房间
+            # 事件没人会重发, 也留下; 点名的那条由发信人收到"忙"后重发.
+            kept = [*pending, entry] if ambient else pending
+            if kept:
+                _room.restore_pending(room_key, kept)
+
         try:
             reply_text = dispatch_inbound(
                 channel=self.platform_id,
@@ -346,10 +472,13 @@ class Channel(abc.ABC):
                 block_stream=not self.progress_stream,
                 attachments=turn_attachments or None,
                 ambient=ambient,
+                room_full_access=group_level == "full",
                 memory_mode=(_room.memory_mode(self.platform_id,
                                                self.account_id, ch_msg.chat_id)
                              if in_room else "on"),
                 thread_id=ch_msg.thread_id or None,
+                on_busy=keep_room_history if in_room and not verb else None,
+                on_session_locked=ticket.leave if ticket is not None else None,
             )
         finally:
             typing.stop()
@@ -362,15 +491,27 @@ class Channel(abc.ABC):
 
     def _room_command(self, verb: str, ch_msg, peer_id: str,
                       room_key: tuple[str, str, str], in_room: bool) -> str:
-        """/new · /reset · /activation · /memory — 回执文本."""
+        """/new · /reset · /activation · /memory · /stop · /help — 回执文本."""
         from openprogram.interfaces.channels import _room
-        if verb in ("/new", "/reset"):
-            from openprogram.interfaces.channels._conversation import start_new_conversation
-            _room.clear_pending(room_key)
-            return start_new_conversation(
+        if verb == "/help":
+            return _room.HELP_TEXT
+        if verb == "/stop":
+            from openprogram.interfaces.channels._conversation import stop_current_work
+            return stop_current_work(
                 channel=self.platform_id, account_id=self.account_id,
                 peer_kind=ch_msg.chat_type, peer_id=peer_id,
             )
+        if verb in ("/new", "/reset"):
+            from openprogram.interfaces.channels._conversation import (
+                BUSY_REPLY, start_new_conversation,
+            )
+            receipt = start_new_conversation(
+                channel=self.platform_id, account_id=self.account_id,
+                peer_kind=ch_msg.chat_type, peer_id=peer_id,
+            )
+            if receipt != BUSY_REPLY:
+                _room.clear_pending(room_key)
+            return receipt
         arg = _room.command_arg(ch_msg.text).lower()
         if verb == "/memory":
             if not in_room:

@@ -12,13 +12,13 @@
  * this only shapes what is drawn while the reply streams.
  */
 
-const JOINED_SOURCE = /^ {0,3}\[[^\]\n]*\]:|\[\^|^ {0,3}</m;
+export const JOINED_SOURCE = /^ {0,3}\[[^\]\n]*\]:|\[\^|^ {0,3}</m;
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const LIST_ITEM = /^(?:[-*+]|\d{1,9}[.)])(?:[ \t]|$)/;
 
 /** Whether a display formula (`$$…$$`, `\[…\]`, `\(…\)`) is still open at
  *  the end of `text`, pairing delimiters in order the way the renderer does. */
-function formulaOpen(text: string): boolean {
+export function formulaOpen(text: string): boolean {
   if ((text.match(/\$\$/g)?.length ?? 0) % 2) return true;
   for (const [open, close] of [["\\[", "\\]"], ["\\(", "\\)"]] as const) {
     let from = 0;

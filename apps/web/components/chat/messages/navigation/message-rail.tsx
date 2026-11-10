@@ -14,7 +14,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 
-import { useSessionStore } from "@/lib/session-store";
+import { selectViewRows, useSessionStore } from "@/lib/session-store";
 import { whenAreaScrollSettles } from "@/lib/chat/history/chat-scroll";
 import type { TurnFileSummary } from "@/lib/session-store/types";
 import { Markdown } from "@/lib/format-utils/markdown";
@@ -31,6 +31,7 @@ import {
   unpackRailRow,
   type RailMsg,
 } from "./message-rail-row";
+import { isLive } from "@/lib/chat/transcript/row-status";
 
 const EMPTY_ORDER: string[] = [];
 
@@ -45,7 +46,7 @@ const GAP = 10; // 刻度间距 px（固定，不随消息数压缩；超长时 
 
 function useUserMessages(): RailMsg[] {
   // Derived in the selector and shallow-compared as flat strings. The
-  // rail used to subscribe to the whole ``messagesById`` map, so every
+  // rail used to subscribe to the whole row map, so every
   // streaming token invalidated it: an O(n²) rebuild plus three effects
   // (one of them a ResizeObserver reconnect, one a per-message DOM
   // query) tearing down and re-running per delta. The rail only depends
@@ -56,10 +57,11 @@ function useUserMessages(): RailMsg[] {
       const sid = s.currentSessionId;
       const order = (sid ? s.messageOrder[sid] : undefined) || EMPTY_ORDER;
       const out: string[] = [];
+      const rows = selectViewRows(sid)(s);
       for (let i = 0; i < order.length; i++) {
-        const m = s.messagesById[order[i]];
+        const m = rows[order[i]];
         if (!m || m.role !== "user") continue;
-        if (m.display === "runtime") continue;
+        if (m.rowKind === "silent") continue;
         const content = maskSecrets(m.content || "");
         const preview = content.replace(/\s+/g, " ").trim();
         if (!preview) continue;
@@ -70,16 +72,12 @@ function useUserMessages(): RailMsg[] {
       let assistantFileWriteState: FileWriteState = "none";
         let assistantReverted = false;
         for (let j = i + 1; j < order.length; j++) {
-          const a = s.messagesById[order[j]];
+          const a = rows[order[j]];
           if (!a) continue;
           if (a.role === "user") break;
-          if (a.role !== "assistant" || a.display === "runtime") continue;
+          if (a.rowKind !== "assistant" && a.rowKind !== "silent") continue;
           assistantId = a.id;
-          const live =
-            a.status === "streaming" ||
-            a.status === "pending" ||
-            a.status === "running" ||
-            a.status === "cancelling";
+          const live = isLive(a.status);
           if (!live) {
             const t = a.blocks?.find((b) => b.type === "text")?.text ?? a.content ?? "";
             // 保留原始空白/换行，让预览卡按 markdown 渲染；只按长度截断。

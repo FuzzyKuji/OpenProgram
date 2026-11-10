@@ -28,7 +28,7 @@ def cross_session_store(tmp_path, monkeypatch):
     # that store with the sessions so another test's unfinished execution is
     # not recovered against this fixture's unrelated admission ledger.
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "executions.db",
     )
 
@@ -232,10 +232,17 @@ def test_cross_session_async_spawn_finalizes_both_session_provenance(
     assert final.head_id == "target_spawn_a"
     assert final.attach_pointer_id
 
-    source_pair = store._open("source")
-    assert source_pair is not None
-    source_attach = source_pair[1].nodes_by_id[final.attach_pointer_id]
-    attach = _attach_payload(source_attach)
+    # The card is patched just after the job turns terminal, which await_job
+    # can already have seen.
+    deadline = time.monotonic() + 30.0
+    while True:
+        source_pair = store._open("source")
+        assert source_pair is not None
+        source_attach = source_pair[1].nodes_by_id[final.attach_pointer_id]
+        attach = _attach_payload(source_attach)
+        if attach["status"] == "completed" or time.monotonic() >= deadline:
+            break
+        time.sleep(0.01)
     assert attach["status"] == "completed"
     assert attach["job_id"] == job_id
     assert attach["session_id"] == "target"
@@ -288,10 +295,6 @@ def test_cross_session_async_spawn_finalizes_both_session_provenance(
     # emitted as an in-session attach-return edge.
     assert "attach_returns" not in source_row
 
-    attach_message = next(
-        message for message in store.get_messages("source")
-        if message["id"] == final.attach_pointer_id
-    )
     monkeypatch.setattr(
         store,
         "list_sessions",
@@ -299,23 +302,11 @@ def test_cross_session_async_spawn_finalizes_both_session_provenance(
             AssertionError("cross-session attach must not scan all sessions")
         ),
     )
-    from openprogram.runtime.context.commit.generator import generate_commit
-    expanded = generate_commit(
-        store=store,
-        session_id="source",
-        parent_commit=None,
-        new_nodes=[attach_message],
-        head_node_id=source_head_before,
-        budget_total=200_000,
-        budget_summarize_threshold=160_000,
-    )
-    # A sub-agent's pointer carries its report and the address of the
-    # remote transcript, not the transcript itself.
-    (item,) = expanded.items
-    assert "remote result" in item.rendered
-    assert "remote context payload" not in item.rendered
-    assert 'read_conversation(session_id="target"' in item.rendered
-    assert item.attached_from == "target_context_commit"
+    from openprogram.runtime.context.persistence import rendered_history
+    seen = repr(rendered_history(store, "source", head_id=final.attach_pointer_id))
+    # A sub-agent's pointer carries its report, not the remote transcript.
+    assert "remote result" in seen
+    assert "remote context payload" not in seen
 
 
 def test_cross_session_missing_node_is_rejected_before_admission(
@@ -586,19 +577,10 @@ def test_running_cross_session_placeholder_is_not_expanded_into_context(
         message for message in cross_session_store.get_messages("source")
         if message["id"] == pointer_id
     )
-    from openprogram.runtime.context.commit.generator import generate_commit
-
-    commit = generate_commit(
-        store=cross_session_store,
-        session_id="source",
-        parent_commit=None,
-        new_nodes=[pointer],
-        head_node_id="source_a",
-        budget_total=200_000,
-        budget_summarize_threshold=160_000,
-    )
-
-    assert commit.items == []
+    from openprogram.runtime.context.persistence import rendered_history
+    seen = rendered_history(cross_session_store, "source", head_id=pointer_id)
+    # Until it is terminal the card reads only as running, with nothing of the remote run.
+    assert seen[-1]["id"] == pointer_id and seen[-1]["content"] == "(running)"
 
 
 def test_unpublished_accepted_job_recovery_closes_cross_session_source_card(
@@ -811,12 +793,6 @@ def test_governed_worker_loss_closes_cross_session_source_card(
     owner = f"worker_{os.getpid()}_lost"
     assert governor.try_start(job.id, owner_instance_id=owner)
     update_job_status("target", job.id, JobStatus.RUNNING)
-    ledger_connection = governor.ledger.connection()
-    ledger_connection.execute(
-        "UPDATE job_admissions SET lease_expires_at = 0 WHERE job_id = ?",
-        (job.id,),
-    )
-    ledger_connection.commit()
     monkeypatch.setattr(runner, "_owner_holds_worker_lock", lambda _owner: False)
 
     runner._reconcile_resources()
@@ -831,3 +807,98 @@ def test_governed_worker_loss_closes_cross_session_source_card(
     assert attach["status"] == "errored"
     assert attach["session_id"] == "target"
     assert "worker died" in pointer.output
+
+
+def _sync_spawn(store, monkeypatch, outcome):
+    """Run a real synchronous spawn; ``outcome`` plays the model turn."""
+    from openprogram.programs.tools.agents.agent.agent.agent import _agent_impl
+    from openprogram.runtime.conversation.production_driver import AgentProductionDriver
+    from openprogram.runtime.execution.run_control.binding import _current_session_id
+    from openprogram.state.store import _current_turn_id
+
+    seen: dict = {}
+
+    def run_turn(*, request, **_kwargs):
+        node = next(n for n in store.get_nodes("source") if (n.metadata or {}).get("function") == "attach")
+        seen.update(attach=_attach_payload(node), head=(store.get_session("source") or {})["head_id"])
+        return outcome(request)
+
+    monkeypatch.setattr(AgentProductionDriver, "_default_turn_runner", staticmethod(run_turn))
+    monkeypatch.setattr("openprogram.programs._host.runtime.current_tool_call_id", lambda: "call-1")
+    session_token = _current_session_id.set("source")
+    turn_token = _current_turn_id.set("source_a")
+    try:
+        seen["reply"] = _agent_impl(prompt="do work", description="worker")
+    finally:
+        _current_session_id.reset(session_token)
+        _current_turn_id.reset(turn_token)
+    attach_nodes = [n for n in store.get_nodes("source") if (n.metadata or {}).get("function") == "attach"]
+    assert len(attach_nodes) == 1
+    return seen, attach_nodes[0]
+
+
+def test_sync_spawn_card_runs_with_its_job_and_settles(cross_session_store, monkeypatch):
+    store = cross_session_store
+    head = (store.get_session("source") or {})["head_id"]
+
+    def outcome(request):
+        from openprogram.runtime.conversation.sub_agent_run import AgentTurnResult
+
+        store.append_message("source", {
+            "id": "spawned", "role": "assistant", "content": "done",
+            "timestamp": time.time(), "predecessor": "source_u",
+        }, advance_head=False)
+        return AgentTurnResult(head_id="spawned", final_text="done")
+
+    seen, node = _sync_spawn(store, monkeypatch, outcome)
+
+    assert seen["head"] == head
+    running = seen["attach"]
+    assert running["status"] == "running" and running["head_id"] is None
+    assert running["job_id"] and running["tool_call_id"] == "call-1"
+    assert running["delivery"] == "tool_result"
+    final = _attach_payload(node)
+    assert final["status"] == "completed" and final["head_id"] == "spawned"
+    assert final["job_id"] == running["job_id"] and final["tool_call_id"] == "call-1"
+    assert node.output == "done" and node.metadata["is_error"] is False
+    assert (store.get_session("source") or {})["head_id"] == head
+
+
+def test_sync_spawn_card_settles_when_the_run_fails(cross_session_store, monkeypatch):
+    from openprogram.runtime.conversation.sub_agent_run import AgentTurnResult
+
+    _seen, node = _sync_spawn(
+        cross_session_store, monkeypatch,
+        lambda request: AgentTurnResult(failed=True, error="provider exploded"),
+    )
+
+    final = _attach_payload(node)
+    assert final["status"] == "errored" and final["job_id"]
+    assert node.metadata["is_error"] is True
+    assert "provider exploded" in node.output
+
+
+def test_a_failed_placeholder_is_replaced_by_the_end_write(cross_session_store, monkeypatch):
+    from openprogram.runtime.conversation import sub_agent_run as module
+
+    monkeypatch.setattr(module, "write_attach_placeholder_for_spawn", lambda **_k: None)
+    module.write_attach_pointer_for_spawn(
+        session_id="source", caller_msg_id="source_a",
+        result=module.AgentTurnResult(head_id="source_a", final_text="ok"),
+        label="x", prompt="p", chosen_agent="main", node_id="card", tool_call_id="call-2",
+    )
+
+    node = next(n for n in cross_session_store.get_nodes("source") if n.id == "card")
+    attach = _attach_payload(node)
+    assert attach["status"] == "completed" and attach["tool_call_id"] == "call-2"
+
+
+def test_a_result_with_no_head_and_no_placeholder_writes_no_row(cross_session_store):
+    from openprogram.runtime.conversation import sub_agent_run as module
+
+    assert module.write_attach_pointer_for_spawn(
+        session_id="source", caller_msg_id="source_a",
+        result=module.AgentTurnResult(failed=True, error="no"),
+        label=None, prompt="p", chosen_agent="main", node_id="card",
+    ) is None
+    assert not cross_session_store.message_exists("source", "card")

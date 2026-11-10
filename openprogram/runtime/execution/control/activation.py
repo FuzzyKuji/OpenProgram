@@ -1,6 +1,7 @@
 """Execution control activation operations on the owning service."""
 from __future__ import annotations
 import inspect
+import logging
 from typing import Any, Mapping
 from ..attempts import AttemptConflict, AttemptRecord
 from ..checkpoints import CheckpointManifest
@@ -10,6 +11,9 @@ from ..model import CommandKind, CommandStatus, ControlCommand, ExecutionRecord,
 from .shared import (
     Activator,
 )
+
+
+_log = logging.getLogger(__name__)
 
 
 class ActivationOperations:
@@ -62,11 +66,7 @@ class ActivationOperations:
             pause = self._applying_command(
                 connection, execution.execution_id, CommandKind.PAUSE
             )
-            unresolved = connection.execute(
-                "SELECT 1 FROM effects WHERE execution_id = ? "
-                "AND status IN ('dispatched', 'uncertain') LIMIT 1",
-                (execution.execution_id,),
-            ).fetchone() is not None
+            unresolved = self.executions._first_unresolved_effect(connection, execution.execution_id) is not None
             if cancel is not None:
                 target = (
                     ExecutionStatus.RECONCILIATION_REQUIRED
@@ -230,6 +230,14 @@ class ActivationOperations:
             return True, None
         except Exception as exc:
             issue = getattr(exc, "code", None)
+            # The command and attempt only keep "activation_failed"; the
+            # cause lives here or nowhere.
+            _log.warning(
+                "activation of execution %s attempt %s failed: %s: %s",
+                attempt.execution_id, attempt.attempt_id,
+                issue or type(exc).__name__, exc,
+                exc_info=not isinstance(issue, str),
+            )
             return False, issue if issue == "continuation_contract_mismatch" else "activation_failed"
 
 

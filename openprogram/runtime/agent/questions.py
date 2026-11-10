@@ -52,6 +52,14 @@ class DurableWaitSafePointRequired(RuntimeError):
 
 _live_workflow_owner = ContextVar("live_workflow_question_owner", default=None)
 
+#: Set in a function subprocess: hands a live question to its parent.
+_send_live_question_to_parent = None
+
+
+def send_live_questions_to_parent(send) -> None:
+    global _send_live_question_to_parent
+    _send_live_question_to_parent = send
+
 
 @contextmanager
 def live_workflow_questions(*, execution_id, attempt_id, generation, producer_id):
@@ -105,6 +113,9 @@ class QuestionRegistry:
     def __init__(self) -> None:
         self._events: dict[str, threading.Event] = {}
         self._lock = threading.Lock()
+        # Questions whose wait the parent process holds; a subprocess only
+        # learns the outcome.
+        self._delivered: dict[str, _Resolution | None] = {}
 
     def register(self, q: PendingQuestion) -> threading.Event:
         """Register only a local wake notification for an existing wait.
@@ -130,6 +141,22 @@ class QuestionRegistry:
             previous.set()
         return ev
 
+    def expect_delivery(self, qid: str) -> threading.Event:
+        """A subprocess's question: the parent holds the wait and delivers the outcome."""
+        event = threading.Event()
+        with self._lock:
+            self._events[qid] = event
+            self._delivered[qid] = None
+        return event
+
+    def deliver(self, qid: str, outcome: str, value: object) -> None:
+        with self._lock:
+            if qid in self._delivered:
+                self._delivered[qid] = (outcome, value)
+            event = self._events.get(qid)
+        if event is not None:
+            event.set()
+
     def wake(self, qid: str) -> None:
         """Wake a local waiter after durable state was changed elsewhere.
 
@@ -143,6 +170,13 @@ class QuestionRegistry:
             event.set()
 
     def consume(self, qid: str) -> _Resolution | None:
+        with self._lock:
+            if qid in self._delivered:
+                resolution = self._delivered[qid]
+                if resolution is not None:
+                    del self._delivered[qid]
+                    self._events.pop(qid, None)
+                return resolution
         from openprogram.runtime.execution import default_store
         from openprogram.runtime.execution.waits import DurableWaitStore
 
@@ -181,10 +215,6 @@ def get_question_registry() -> QuestionRegistry:
             if _registry is None:
                 _registry = QuestionRegistry()
     return _registry
-
-
-def new_question_id() -> str:
-    return uuid.uuid4().hex[:12]
 
 
 def _pending_from_wait(wait) -> PendingQuestion:
@@ -274,11 +304,6 @@ class QueueTransport(QuestionTransport):
 _default_transport = EventLayerTransport()
 
 
-def default_question_transport() -> QuestionTransport:
-    """runtime 没被显式装别的 transport 时用的默认通道（事件层）。"""
-    return _default_transport
-
-
 def emit_question_asked(data: dict, transport: "QuestionTransport | None" = None) -> None:
     """发出一次提问，经给定 transport（不给则用默认事件层通道）送出去。"""
     (transport or _default_transport).publish(data)
@@ -324,6 +349,29 @@ def open_question(
                 "runtime.ask/form/confirm requires a declared pre-wait safe point or live Workflow owner"
             )
         execution_id, attempt_id, generation, producer_id = owner
+        if _send_live_question_to_parent is not None:
+            if kind not in {"ask", "ask_many", "confirm", "form"}:
+                raise DurableWaitSafePointRequired("live Workflow questions cannot grant tool permissions")
+            if type(timeout) not in {int, float} or timeout <= 0:
+                raise ValueError("question timeout must be positive")
+            now = time.time()
+            q = PendingQuestion(
+                id=f"wait_{uuid.uuid4().hex}", session_id=session_id, kind=kind, prompt=prompt,
+                execution_id=execution_id, options=list(options or []), multi=multi,
+                allow_custom=allow_custom, detail=detail, schema=dict(schema or {}),
+                questions=list(questions or []), created_at=now, expires_at=now + timeout,
+            )
+            event = get_question_registry().expect_delivery(q.id)
+            _send_live_question_to_parent({
+                "id": q.id, "kind": kind, "session_id": session_id, "producer_id": producer_id,
+                "attempt_id": attempt_id, "generation": generation, "expires_at": q.expires_at,
+                "request": {
+                    "prompt": prompt, "options": list(options or []), "multi": multi,
+                    "allow_custom": allow_custom, "detail": detail,
+                    "schema": dict(schema or {}), "questions": list(questions or []),
+                },
+            })
+            return q, event
         store = default_store()
         execution = store.get_execution(execution_id)
         if execution is None or execution.session_id != session_id:
@@ -424,6 +472,9 @@ def ask_blocking(
     outcome, value = "pending", None
     while outcome == "pending":
         remaining = deadline - time.monotonic()
+        if remaining <= 0 and _send_live_question_to_parent is not None:
+            outcome, value = consume_or_timeout(q.id)
+            break
         if remaining <= 0:
             from openprogram.runtime.execution import default_store
             from openprogram.runtime.execution.waits import DurableWaitStore

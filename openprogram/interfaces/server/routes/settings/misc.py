@@ -1,6 +1,7 @@
 """Misc endpoints — /healthz liveness probe and external module registration."""
 from __future__ import annotations
 
+import functools
 import logging
 import importlib
 import os
@@ -55,6 +56,28 @@ def _installed_revision() -> str:
     import openprogram
     root = Path(openprogram.__file__).resolve().parents[1]
     return _head_sha() if (root / ".git").exists() else _read_revision()
+
+
+@functools.cache
+def _product_version() -> str:
+    """The release this worker loaded; a running worker never changes it."""
+    from openprogram.operations.self_update.github_release.availability import current_version
+
+    return current_version()
+
+
+def _runtime_version() -> str | None:
+    """The sealed version this worker runs from, when it runs from one."""
+    from openprogram.operations.self_update.versions.layout import current_runtime
+
+    runtime = current_runtime()
+    return runtime.version if runtime is not None else None
+
+
+def _subsystems() -> dict:
+    from openprogram.operations.worker.subsystems import snapshot
+
+    return snapshot()
 
 
 def register(app):
@@ -176,8 +199,12 @@ def register(app):
 
     @app.get("/healthz")
     async def healthz():
-        """Non-identifying liveness probe available before authentication."""
-        return JSONResponse(content={"status": "ok"})
+        """Liveness and product version, available before authentication.
+
+        The desktop shell compares the version with its own after an update.
+        It names the product release only, nothing about this machine or user.
+        """
+        return JSONResponse(content={"status": "ok", "version": _product_version()})
 
     @app.get("/api/diagnostics")
     async def runtime_diagnostics(request: Request):
@@ -191,6 +218,8 @@ def register(app):
             "uptime_seconds": int(_time.time() - _s._SERVER_START_TIME),
             "revision": _head_sha(),
             "installed_revision": _installed_revision(),
+            "runtime_version": _runtime_version(),
+            "subsystems": _subsystems(),
             "worker_pid": os.getpid(),
             "principal_id": getattr(request.state, "authority", {}).get("principal_id"),
         }

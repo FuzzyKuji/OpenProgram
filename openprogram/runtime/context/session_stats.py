@@ -240,7 +240,7 @@ def compute_breakdown(
 
     message_rows: list[dict] = []
     try:
-        from openprogram.runtime.context.compaction_view import load_compaction_view
+        from openprogram.runtime.context.compaction.view import load_compaction_view
         view = load_compaction_view(db, session_id, head_id)
         msgs = view.messages
         message_rows = view.history

@@ -283,3 +283,18 @@ def test_resign_tar_gz_signs_packed_dylib_and_updates_manifest(monkeypatch, tmp_
     digest = hashlib.sha256(extracted).hexdigest()
     assert manifest['languages']['python']['sha256'] == digest
     assert digest != original
+
+
+def test_standalone_executables_get_the_app_entitlements(tmp_path):
+    # Hardened executables without allow-jit crash on start: the bundled node
+    # exited 133 after signing, failing the packaged-runtime smoke.
+    helper = runpy.run_path(str(ROOT / 'scripts/release/sign-macos-release.py'))
+    app = tmp_path / 'OpenProgram.app'
+    app.mkdir()
+    executable = tmp_path / 'node'
+    executable.write_bytes(bytes.fromhex('cffaedfe') + bytes(8) + (2).to_bytes(4, 'little') + bytes(16))
+    library = tmp_path / 'libthing.dylib'
+    library.write_bytes(bytes.fromhex('cffaedfe') + bytes(8) + (6).to_bytes(4, 'little') + bytes(16))
+    assert helper['uses_app_entitlements'](executable, app)
+    assert not helper['uses_app_entitlements'](library, app)
+    assert helper['uses_app_entitlements'](app, app)

@@ -1,15 +1,11 @@
 "use client";
 
+import { BrandMark, type BrandLogo } from "@/components/brand-mark";
+
 import icons from "./provider-icons.json";
 import styles from "../provider-pane.module.css";
 
-export interface ProviderLogo {
-  /** Where the SVG is served. */
-  url: string;
-  /** A one-colour mark drawn in the text colour (through a mask), rather
-   *  than a picture in the brand's own colours. */
-  mono: boolean;
-}
+export type ProviderLogo = BrandLogo;
 
 /** The brand logo shipped for a provider id, or null when there is none
  *  (custom, local and generic OpenAI-compatible providers). */
@@ -18,23 +14,20 @@ export function providerLogo(id: string | undefined): ProviderLogo | null {
   return icon ? { url: `/images/providers/${icon.file}`, mono: icon.mono } : null;
 }
 
-/** Brand assets ship with the App; unknown/custom providers keep an initial. */
+/** The plate's padding around the logo, in px (provider-pane.module.css). */
+const PLATE_PADDING = 2;
+
+/** A provider's logo on the tinted plate Settings lists it with, which
+ *  keeps mono marks visible on every theme: the whole logo fitted inside
+ *  the plate's padding, still on hover. Unknown and custom providers keep
+ *  an initial. */
 export function ProviderIcon({ id, size = 24 }: { id: string; size?: number }) {
   const icon = providerLogo(id);
   const dimensions = { width: size, height: size };
   if (icon) {
-    const url = icon.url;
     return (
       <span className={styles.providerIcon} style={dimensions} aria-hidden="true">
-        {icon.mono ? (
-          <span style={{
-            width: "100%", height: "100%", backgroundColor: "var(--text-primary)",
-            mask: `url("${url}") center / contain no-repeat`,
-            WebkitMask: `url("${url}") center / contain no-repeat`,
-          }} />
-        ) : (
-          <img src={url} alt="" width={size} height={size} loading="lazy" />
-        )}
+        <BrandMark logo={icon} size={size - 2 * PLATE_PADDING} color="var(--text-primary)" lazy />
       </span>
     );
   }

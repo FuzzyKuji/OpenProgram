@@ -12,7 +12,7 @@ files, and a read-only consumer (the Context tab, a token count) mutated
 the session directory just by looking. Recording is the one moment a
 node's text is genuinely new, so it is the one place the spill belongs.
 
-The spill file is plain multi-line text, not the node's history JSON:
+The spill file is plain multi-line text, not the node's JSON record:
 JSON is one minified line, so ``read``'s line-based offset/limit can't
 index into it. A real .txt lets the marker cite an exact line range and
 the ``read()`` call that fetches the elided middle.
@@ -40,11 +40,11 @@ HEAD_LINES = 60   # lines kept from the top of an over-cap node
 TAIL_LINES = 40   # lines kept from the bottom
 
 
-def large_dir_for(history_dir: Optional[str]) -> Optional[str]:
-    """Sibling ``large_nodes/`` dir next to a session's ``history/`` dir."""
-    if not history_dir:
+def large_dir_for(session_directory: Optional[str]) -> Optional[str]:
+    """The ``large_nodes/`` directory inside a session's directory."""
+    if not session_directory:
         return None
-    return os.path.join(os.path.dirname(history_dir.rstrip("/")), "large_nodes")
+    return os.path.join(session_directory, "large_nodes")
 
 
 def spill_if_large(text: Any, *, node_key: str,

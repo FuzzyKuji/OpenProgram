@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+from tests.support.agent_journal import journal_continuation
 from openprogram.runtime.conversation import turn_runtime as D
 from openprogram.runtime.agent import turn_request as agent_turn_request
 from openprogram.runtime.conversation.checkpoint import runtime_contract_snapshot
@@ -16,6 +17,7 @@ from openprogram.runtime.context.session_db import SessionDB
 from openprogram.state.store.session.nodes import ROLE_CODE, ROLE_LLM, ROLE_USER, Call
 from openprogram.models.providers.types import (
     AssistantMessage,
+    Model,
     TextContent,
     ToolCall,
     ToolResultMessage,
@@ -188,28 +190,16 @@ def _continuation():
         ),
     )
     snapshot = runtime_contract_snapshot(
-        model=SimpleNamespace(
-            id="fake", name="fake", api="fake", provider="fake",
+        model=Model(
+            id="fake", name="fake", api="openai-completions", provider="openai",
+            base_url="https://example.invalid/v1",
         ),
         system_prompt="",
         tools=[],
         request=request,
     )
-    state = SimpleNamespace(payload={
-        "turn": {
-            "user_message_id": USER_ID,
-            "assistant_message_id": ASSISTANT_ID,
-            "base_history_head_id": USER_ID,
-        },
-        "safe_point": {"phase": "after_provider"},
-    })
-    return SimpleNamespace(
-        request=request,
-        checkpoint=SimpleNamespace(),
-        state=state,
-        assistant_message=decision,
-        tool_results=tool_results,
-        resolved_snapshot=snapshot,
+    return journal_continuation(
+        request, decision=decision, snapshot=snapshot, tool_results=tool_results,
         assistant_message_id=ASSISTANT_ID,
     )
 
@@ -426,59 +416,21 @@ def test_continuation_reuses_turn_owner_and_preserves_live_cards(
     }
 
 
-def _display_trace():
-    return [
-        {"type": "text", "text": "Counter is 1"},
-        {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-1",
-            "input": '{"command": "observe"}', "result": "Counter: 1", "is_error": False,
-        },
-        {"type": "text", "text": "Counter is 2"},
-        {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-2",
-            "input": '{"command": "act"}', "result": "Counter: 2", "is_error": False,
-        },
-        {"type": "text", "text": "Counter is 3"},
-        {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-3",
-            "input": '{"command": "observe"}', "result": "Counter: 3", "is_error": False,
-        },
-    ]
-
-
-def _blob_checkpoint(state):
-    import hashlib
-    from openprogram.runtime.execution.agent_checkpoint import canonical_json_bytes
-
-    payload_raw = canonical_json_bytes(dict(state.payload))
-    digest = hashlib.sha256(payload_raw).hexdigest()
-    main = {
-        "ref": f"execstate://sha256/{digest}",
-        "sha256": digest,
-        "byte_length": len(payload_raw),
-        "media_type": "application/json",
-        "schema_version": 1,
-    }
-    blobs = dict(state.blob_payloads)
-    blobs[main["ref"]] = payload_raw
-
-    class _Store:
-        def get_state_blob(self, execution_id, ref):
-            raw = blobs.get(ref)
-            if raw is None:
-                return None
-            return {
-                "ref": ref,
-                "sha256": hashlib.sha256(raw).hexdigest(),
-                "byte_length": len(raw),
-                "media_type": "application/json",
-                "schema_version": 1,
-                "payload": raw,
-            }
-
-    return _Store(), SimpleNamespace(
-        execution_id="exec-display", state_refs={"agent_checkpoint": main},
+def _web_use_step(text, call_id, result):
+    """One earlier model decision and the result of the tool it called."""
+    decision = AssistantMessage(
+        content=[
+            TextContent(text=text),
+            ToolCall(id=call_id, name="web_use", arguments={"command": "observe"}),
+        ],
+        api="openai-completions", provider="openai", model="fake",
+        timestamp=1, stop_reason="toolUse",
     )
+    outcome = ToolResultMessage(
+        tool_call_id=call_id, tool_name="web_use",
+        content=[TextContent(text=result)], timestamp=1,
+    )
+    return decision, [outcome]
 
 
 def test_unpatched_continuation_persist_keeps_prior_display_cards(
@@ -486,8 +438,6 @@ def test_unpatched_continuation_persist_keeps_prior_display_cards(
 ) -> None:
     import time
 
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    from openprogram.runtime.conversation.checkpoint import AgentContinuation
     from openprogram.runtime.conversation.turn_runtime import loop_runner
     from openprogram.models.providers.types import AgentTool, AgentToolResult
     from openprogram.models.providers.types import (
@@ -496,7 +446,6 @@ def test_unpatched_continuation_persist_keeps_prior_display_cards(
         EventTextDelta,
         EventTextEnd,
         EventTextStart,
-        Model,
         Usage,
     )
 
@@ -554,46 +503,13 @@ def test_unpatched_continuation_persist_keeps_prior_display_cards(
         content=[TextContent(text="Counter: 3")], timestamp=1,
     )
 
-    def _state(display):
-        return AgentCheckpointV1.build(
-            safe_point={
-                "kind": "agent.tool.action.after", "step_id": "after_tool:p",
-                "phase": "after_tool", "sentinel": "resume-from-checkpoint",
-            },
-            frontier=[{"step_id": "after_tool:p", "phase": "after_tool", "branch_id": "main"}],
-            turn={
-                "user_message_id": USER_ID, "assistant_message_id": ASSISTANT_ID,
-                "base_history_head_id": USER_ID,
-            },
-            assistant_message=last.model_dump(mode="json"),
-            tool_results=[last_result.model_dump(mode="json")],
-            resolved_snapshot=snapshot,
-            provider_action_id="provider-action",
-            tool_call_ids=["call-3"],
-            next_tool_index=1,
-            repeat_failures={},
-            completed_actions=[
-                {"action_id": "provider-action", "input_hash": "context-hash"},
-                {"action_id": "tool-action-1", "input_hash": "tool-hash"},
-            ],
-            terminal_effect_receipts=[
-                {
-                    "effect_id": "effect-provider", "frontier_step_id": "provider:p",
-                    "action_id": "provider-action", "outcome": "committed",
-                    "receipt": {"provider_request_id": "saved-request"},
-                },
-                {
-                    "effect_id": "effect-tool", "frontier_step_id": "after_tool:p",
-                    "action_id": "tool-action-1", "outcome": "committed",
-                    "receipt": {"tool_call_id": "call-3"},
-                },
-            ],
-            turn_display=display,
-        )
-
-    store, checkpoint = _blob_checkpoint(_state(_display_trace()))
-    continuation = AgentContinuation.from_checkpoint(
-        store=store, checkpoint=checkpoint, request=request,
+    earlier = [
+        _web_use_step("Counter is 1", "call-1", "Counter: 1"),
+        _web_use_step("Counter is 2", "call-2", "Counter: 2"),
+    ]
+    continuation = journal_continuation(
+        request, decision=last, snapshot=snapshot, tool_results=[last_result],
+        earlier=earlier, assistant_message_id=ASSISTANT_ID,
     )
     assert [card.get("tool_call_id") for card in continuation.display if card.get("type") == "tool"] == [
         "call-1", "call-2", "call-3",
@@ -663,9 +579,10 @@ def test_unpatched_continuation_persist_keeps_prior_display_cards(
     ]
     assert len(pre_nodes) == 1
 
-    store2, checkpoint2 = _blob_checkpoint(_state(first_blocks))
-    second = AgentContinuation.from_checkpoint(
-        store=store2, checkpoint=checkpoint2, request=request,
+    resumed, resumed_results = _web_use_step("resume-1", "call-4", "Counter: 4")
+    second = journal_continuation(
+        request, decision=resumed, snapshot=snapshot, tool_results=resumed_results,
+        earlier=[*earlier, (last, [last_result])], assistant_message_id=ASSISTANT_ID,
     )
 
     def _wrap2(**kwargs):
@@ -712,11 +629,8 @@ def _text_done_stream(text: str):
 def test_continuation_appends_new_repeated_commentary(
     tmp_db: SessionDB, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-    from openprogram.runtime.conversation.checkpoint import AgentContinuation
     from openprogram.runtime.conversation.turn_runtime import loop_runner
     from openprogram.models.providers.types import AgentTool, AgentToolResult
-    from openprogram.models.providers.types import Model
 
     session_id = "local_continuation_repeated"
     tmp_db.create_session(session_id, "main", source="component")
@@ -762,56 +676,9 @@ def test_continuation_appends_new_repeated_commentary(
         tool_call_id="call-3", tool_name="web_use",
         content=[TextContent(text="ok")], timestamp=1,
     )
-    display = [
-        {"type": "text", "text": "repeated"},
-        {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-1",
-            "result": "ok", "is_error": False,
-        },
-        {"type": "text", "text": "saved-now"},
-        {
-            "type": "tool", "tool": "web_use", "tool_call_id": "call-3",
-            "result": "ok", "is_error": False,
-        },
-    ]
-    state = AgentCheckpointV1.build(
-        safe_point={
-            "kind": "agent.tool.action.after", "step_id": "after_tool:p",
-            "phase": "after_tool", "sentinel": "resume-from-checkpoint",
-        },
-        frontier=[{"step_id": "after_tool:p", "phase": "after_tool", "branch_id": "main"}],
-        turn={
-            "user_message_id": USER_ID, "assistant_message_id": ASSISTANT_ID,
-            "base_history_head_id": USER_ID,
-        },
-        assistant_message=last.model_dump(mode="json"),
-        tool_results=[last_result.model_dump(mode="json")],
-        resolved_snapshot=snapshot,
-        provider_action_id="provider-action",
-        tool_call_ids=["call-3"],
-        next_tool_index=1,
-        repeat_failures={},
-        completed_actions=[
-            {"action_id": "provider-action", "input_hash": "context-hash"},
-            {"action_id": "tool-action-1", "input_hash": "tool-hash"},
-        ],
-        terminal_effect_receipts=[
-            {
-                "effect_id": "effect-provider", "frontier_step_id": "provider:p",
-                "action_id": "provider-action", "outcome": "committed",
-                "receipt": {"n": 1},
-            },
-            {
-                "effect_id": "effect-tool", "frontier_step_id": "after_tool:p",
-                "action_id": "tool-action-1", "outcome": "committed",
-                "receipt": {"tool_call_id": "call-3"},
-            },
-        ],
-        turn_display=display,
-    )
-    store, checkpoint = _blob_checkpoint(state)
-    continuation = AgentContinuation.from_checkpoint(
-        store=store, checkpoint=checkpoint, request=request,
+    continuation = journal_continuation(
+        request, decision=last, snapshot=snapshot, tool_results=[last_result],
+        earlier=[_web_use_step("repeated", "call-1", "ok")], assistant_message_id=ASSISTANT_ID,
     )
     monkeypatch.setattr(
         loop_runner, "resolve_agent_runtime",

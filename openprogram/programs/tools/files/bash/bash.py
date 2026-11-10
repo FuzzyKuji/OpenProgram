@@ -15,6 +15,8 @@ from openprogram.state.worktree.context import current_worktree_path
 
 from .prompt import DEFAULT_MAX_TIMEOUT_MS, DESCRIPTION
 from openprogram.host.backend.workdir import prepare_command
+from openprogram.host.sandbox import SandboxPathDenied
+from openprogram.runtime.permissions import refusal
 
 
 # Bash output can be huge (find /, full log dump). 30K matches Claude
@@ -27,7 +29,7 @@ from openprogram.host.backend.workdir import prepare_command
     max_result_chars=30_000,
     persist_full=True,
     toolset=["core"],
-    unsafe_in=["wechat", "telegram", "plan"],  # destructive in public channels; hidden in plan mode
+    unsafe_in=["plan"],  # hidden in plan mode
     # workdir is resolved and checked in prepare_command against the ORIGINAL
     # workspace; generic parameter checks cannot resolve remote filesystem paths.
     # Commands still pass through the backend / OS sandbox.
@@ -92,6 +94,8 @@ def _run_session(command, workdir, yield_time_ms, tty, description=None):
         reply = session.run(command, cwd=run_cwd, run_command=run_command, tty=bool(tty),
                             yield_ms=session.clamp_exec_yield(yield_time_ms), shown_cwd=start_cwd,
                             title=description)
+    except SandboxPathDenied as exc:
+        raise refusal.sandbox("bash", exc.violation) from exc
     except (OSError, ValueError, RuntimeError) as exc:
         return AgentToolResult(
             content=[TextContent(text=f"Error: shell launch failed: {exc}")],
@@ -144,6 +148,8 @@ def _run_once(command, workdir):
             worktree=current_worktree_path(),
         )
         result = backend.run(run_command, timeout=timeout_sec, cwd=run_cwd)
+    except SandboxPathDenied as exc:
+        raise refusal.sandbox("bash", exc.violation) from exc
     except (OSError, ValueError, RuntimeError) as exc:
         return AgentToolResult(
             content=[TextContent(text=f"Error: shell launch failed: {exc}")],

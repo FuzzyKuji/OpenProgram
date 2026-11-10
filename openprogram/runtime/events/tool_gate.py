@@ -6,7 +6,7 @@ internally they are the ``tool.before`` slot of ``EventBus.subscribe_gate``
 / ``emit_gate``. Semantics unchanged:
 
 * gates must be fast — this is the synchronous hot path; no LLM calls, no
-  slow IO (docs/reference/design/proactive/execution-model.md §2).
+  slow IO (docs/reference/design/proactive/execution-model.html §2).
 * every gate is asked; any deny reason blocks the tool, reasons merge.
 * a raising gate is fail-open (stderr).
 * subagents are covered too: the ask sits outside the permission_mode
@@ -23,9 +23,7 @@ ToolGate = Callable[[Event], "str | None"]
 
 
 class ToolGateDenied(Exception):
-    """Raised inside the tool-execution try block when a gate denies the
-    call — caught by the existing error path, so the model receives the
-    deny reason as an error tool result."""
+    """Raised by a plugin's gate handler to deny the event with this reason."""
 
 
 def register_tool_gate(gate: ToolGate) -> Callable[[], None]:

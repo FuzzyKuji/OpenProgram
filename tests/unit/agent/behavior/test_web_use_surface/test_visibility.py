@@ -151,6 +151,36 @@ def test_open_page_forwards_background_contract_through_child_bridge(monkeypatch
 
 
 
+def test_child_background_open_names_the_run_window(monkeypatch):
+    """A scheduled run has a window and no Page: its background open names
+    that window, which is the only one the parent opens it in."""
+    from openprogram.runtime.conversation import surface_context
+    from openprogram.interfaces.server.ws_actions import webtab
+
+    sent = []
+    monkeypatch.setenv("OPENPROGRAM_IN_AGENTIC_SUBPROCESS", "1")
+    monkeypatch.setattr(
+        webtab,
+        "_request",
+        lambda command, timeout: sent.append(command) or {
+            "ok": True, "window_id": "window-7", "tab_id": "tab-1", "target_id": "target-1",
+            "created": True, "reused": False, "url": "https://example.test/", "title": "Example",
+            "binding_id": "surface-1", "page_key": "page-1",
+        },
+    )
+    token = surface_context.bind(surface_context.window_context("window-7"))
+    try:
+        opened = surface_context.open_page("https://example.test/", background=True)
+        surface_context.open_page("https://example.test/")
+    finally:
+        surface_context.reset(token)
+
+    assert sent[0]["window_id"] == "window-7" and sent[0]["background"] is True
+    assert opened["surfaces"][0]["binding_id"] == "surface-1"
+    # A Page opened in front goes where the App puts it, as before.
+    assert "window_id" not in sent[1]
+
+
 def test_open_page_background_response_timeout_requires_manual_cleanup(
     monkeypatch,
 ):

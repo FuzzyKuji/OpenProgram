@@ -2,10 +2,14 @@
 
 import copy
 import hashlib
+import logging
 import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +33,8 @@ from .transaction import (
 )
 from ..workspace_layout import TEMPORARY_PREFIX, is_internal_path, runtime_dir
 
+_log = logging.getLogger(__name__)
+
 
 #: A Topic file past this size holds several subjects and is split into
 #: a directory of them; the structure listing says so beside the file.
@@ -43,6 +49,23 @@ def _topic_size_note(relative: Path, text: str) -> str:
         target = relative.with_suffix("").as_posix() + "/"
         note += f" — over {TOPIC_SPLIT_BYTES // 1000} KB: split into {target}"
     return note + ")"
+
+
+_FOREIGN_SOURCE: ContextVar[bool] = ContextVar("memory_foreign_source", default=False)
+
+
+@contextmanager
+def foreign_source(active: bool) -> Iterator[None]:
+    """While ``active``, workspaces opened here refuse shell commands that cannot be sandboxed.
+
+    For a batch holding words from someone other than the owner, which the
+    writer agent reads and could be talked into acting on.
+    """
+    token = _FOREIGN_SOURCE.set(active)
+    try:
+        yield
+    finally:
+        _FOREIGN_SOURCE.reset(token)
 
 
 class MemoryWorkspace(
@@ -68,6 +91,7 @@ class MemoryWorkspace(
         )
         self.committed = False
         self._stage_usable = True
+        self._shell_needs_sandbox = _FOREIGN_SOURCE.get()
         # Set for the duration of one structured transaction; see update().
         self._transaction_source_refs: frozenset[str] | None = None
         # The chat message a record edit cites when it names none.
@@ -127,19 +151,26 @@ class MemoryWorkspace(
         self.last_created_blocks = 0
         before = self._workspace_fingerprint()
         before_units, before_block_ids, before_topics = self.baseline()
-        # This MCP endpoint is the nested agent's only command path. It is
-        # always sandboxed, even while interactive shell sandboxing remains
-        # disabled globally; an unavailable platform boundary is a refusal.
+        # This MCP endpoint is the nested agent's only command path. It runs
+        # in the sandbox wherever the platform has one, even while interactive
+        # shell sandboxing is off, and runs without it elsewhere, unless the
+        # text it is working from came from someone other than the owner.
         from openprogram.host.backend.local import _invocation
 
         policy = _sandbox.resolve_policy(required=True)
         assert policy is not None
-        args, use_shell, env, _sandboxed = _invocation(
-            command,
-            str(self.stage_dir),
-            policy=policy,
-            force_sandbox=True,
-        )
+        reason = _sandbox.unavailable_reason()
+        if reason is None:
+            args, use_shell, env, _sandboxed = _invocation(command, str(self.stage_dir), policy=policy)
+        elif self._shell_needs_sandbox:
+            raise _sandbox.SandboxUnavailable(
+                f"this batch holds messages from someone other than the owner and there is no sandbox here ({reason}); "
+                "use the Read, Write and Edit tools")
+        else:
+            _log.warning("memory workspace command runs without a sandbox: %s", reason)
+            with _sandbox.without_policy():
+                args, use_shell, env, _sandboxed = _invocation(command, str(self.stage_dir))
+            env = _sandbox.child_env(policy)
         result = subprocess.run(
             args,
             cwd=self.stage_dir,

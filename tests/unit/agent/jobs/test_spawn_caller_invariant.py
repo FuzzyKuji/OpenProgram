@@ -261,6 +261,7 @@ def _spawn_at(counts: dict, fn=None):
         set_chain_generations, set_chain_messages,
     )
     from openprogram.programs.tools.agents.agent.agent.agent import _agent_impl
+    from openprogram.runtime.permissions.refusal import Refused
 
     def _call():
         tokens = [
@@ -270,6 +271,8 @@ def _spawn_at(counts: dict, fn=None):
         try:
             return (fn or (lambda: _agent_impl(
                 prompt="go", start_from="clean")))()
+        except Refused as refused:
+            return refused.text
         finally:
             for tok in tokens:
                 tok.var.reset(tok)
@@ -277,22 +280,19 @@ def _spawn_at(counts: dict, fn=None):
     return _run_with_ctx(_call, session_id="p1", turn_id="a1")
 
 
-def test_agent_refuses_at_max_spawn_depth(store, captured_run):
-    """The generation budget (MAX_SPAWN_DEPTH=1) is deliberately tighter
-    than the message budget: only the main agent may agent(); a spawned
-    agent delegating again gets refused."""
-    from openprogram.programs.tools.agents.agent.agent.agent import MAX_SPAWN_DEPTH
-    out = _spawn_at({"generations": MAX_SPAWN_DEPTH})
-    assert "[agent refused]" in out and "generations" in out
+def test_agent_refuses_at_max_spawn_depth(store, captured_run, monkeypatch):
+    """With a generation budget set, a spawned agent delegating again is refused."""
+    _set_config(monkeypatch, max_spawn_depth=1)
+    out = _spawn_at({"generations": 1})
+    assert "[blocked by setting]" in out and "generations" in out
     assert "spawn_caller" not in captured_run  # never reached the spawn
 
 
-def test_agent_spawned_agent_cannot_redelegate(store, captured_run):
-    """One generation in (a spawned agent) must NOT agent() again — it
-    does the work itself with its own tools."""
-    out = _spawn_at({"generations": 1})
-    assert "[agent refused]" in out
-    assert "spawn_caller" not in captured_run
+def test_a_spawned_agent_can_delegate_by_default(store, captured_run):
+    """No budget is set out of the box: the job pool bounds concurrency."""
+    out = _spawn_at({"generations": 1, "messages": 50})
+    assert "[blocked by setting]" not in out
+    assert captured_run["spawn_caller"] == "a1"
 
 
 def test_spawn_depth_zero_means_unlimited(store, captured_run, monkeypatch):
@@ -300,18 +300,16 @@ def test_spawn_depth_zero_means_unlimited(store, captured_run, monkeypatch):
     a chain 50 generations in still spawns."""
     _set_config(monkeypatch, max_spawn_depth=0)
     out = _spawn_at({"generations": 50})
-    assert "[agent refused]" not in out
+    assert "[blocked by setting]" not in out
     assert captured_run["spawn_caller"] == "a1"   # the spawn really ran
 
 
-def test_messages_alone_can_refuse_a_spawn(store, captured_run):
+def test_messages_alone_can_refuse_a_spawn(store, captured_run, monkeypatch):
     """A spawn hands the child a message, so a chain out of messages
     cannot spawn either, however many generations it has left."""
-    from openprogram.programs.tools.agents.send_message.send_message.depth import (
-        MAX_MESSAGES,
-    )
-    out = _spawn_at({"generations": 0, "messages": MAX_MESSAGES})
-    assert "[agent refused]" in out and "messages" in out
+    _set_config(monkeypatch, max_messages=8)
+    out = _spawn_at({"generations": 0, "messages": 8})
+    assert "[blocked by setting]" in out and "messages" in out
     assert "spawn_caller" not in captured_run
 
 
@@ -320,7 +318,7 @@ def test_the_two_budgets_do_not_spend_each_other(store, captured_run):
     generation budget intact: this is the state a coordinator is in after
     reading a worker's result, and it must be able to spawn again."""
     out = _spawn_at({"generations": 0, "messages": 5})
-    assert "[agent refused]" not in out
+    assert "[blocked by setting]" not in out
     assert captured_run["spawn_caller"] == "a1"
 
 
@@ -387,12 +385,10 @@ def test_spawn_tools_visible_while_budget_remains():
     assert "agent" in names
 
 
-def test_spawn_tools_disappear_when_budget_spent():
+def test_spawn_tools_disappear_when_budget_spent(monkeypatch):
     """Both budgets spent → the agent tool leaves the listing entirely."""
-    from openprogram.programs.tools.agents.send_message.send_message.depth import (
-        MAX_MESSAGES,
-    )
-    names = _spawn_tool_names(MAX_MESSAGES)
+    _set_config(monkeypatch, max_messages=8)
+    names = _spawn_tool_names(8)
     assert "agent" not in names
     # Everything else is untouched.
     assert "read" in names

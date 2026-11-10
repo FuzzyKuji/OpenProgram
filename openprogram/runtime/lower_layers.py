@@ -197,6 +197,12 @@ def _broadcast(frame: dict) -> None:
     interface_link.broadcast(frame)
 
 
+def _forget_session_runs(session_id: str) -> None:
+    from openprogram.runtime.execution.store import default_store
+
+    default_store().tables.forget_session(session_id)
+
+
 def _load_programs() -> None:
     from openprogram.programs._host import services
 
@@ -215,6 +221,7 @@ def register() -> None:
         current_job_resource_context=_current_job_resource_context,
         current_job_operation_timeout=_current_job_operation_timeout,
         record_current_job_activity=_record_current_job_activity,
+        forget_session_runs=_forget_session_runs,
     )
     event_sink.register_event_sink(emit=_emit, emit_ws_frame=_emit_ws_frame)
     host_runtime_facts.register(

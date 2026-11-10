@@ -2,20 +2,93 @@
 
 const fs = require("node:fs");
 const path = require("node:path");
-const { execFileSync } = require("node:child_process");
+const { execFile, execFileSync } = require("node:child_process");
+const { promisify } = require("node:util");
 
+// The path travels in the environment: powershell.exe joins whatever follows
+// -Command into the command text, so a script there has no $args to read.
+const SIGNATURE_PATH_VARIABLE = "OPENPROGRAM_SIGNATURE_PATH";
 const SIGNATURE_SCRIPT = [
   "$ErrorActionPreference = 'Stop'",
-  "$signature = Get-AuthenticodeSignature -LiteralPath $args[0]",
+  `$signature = Get-AuthenticodeSignature -LiteralPath $env:${SIGNATURE_PATH_VARIABLE}`,
   "[pscustomobject]@{ status = [string]$signature.Status; subject = [string]$signature.SignerCertificate.Subject; thumbprint = [string]$signature.SignerCertificate.Thumbprint } | ConvertTo-Json -Compress",
 ].join("; ");
 
+const POWERSHELL_OPTIONS = {
+  encoding: "utf8",
+  windowsHide: true,
+  timeout: 30_000,
+};
+
+const SIGNATURE_ARGUMENTS = [
+  "-NoLogo",
+  "-NoProfile",
+  "-NonInteractive",
+  "-ExecutionPolicy",
+  "Bypass",
+  "-Command",
+  SIGNATURE_SCRIPT,
+];
+
+function powershellOptions(filePath) {
+  return {
+    ...POWERSHELL_OPTIONS,
+    env: { ...process.env, [SIGNATURE_PATH_VARIABLE]: filePath },
+  };
+}
+
+function parseSignature(output) {
+  try {
+    return JSON.parse(String(output).trim());
+  } catch (_error) {
+    throw new Error("Windows update signature result is invalid");
+  }
+}
+
+function validSigner(signature) {
+  return signature?.status === "Valid"
+    && typeof signature.subject === "string"
+    && Boolean(signature.subject)
+    && /^[A-Fa-f0-9]{40,64}$/.test(signature.thumbprint || "");
+}
+
+/**
+ * Which update line this installed App is on. The release build decides it by
+ * signing the App or not, and the answer lives in the App's own file, so nothing
+ * downloaded can change it: a signed App stays on the signed line with its own
+ * publisher, and only an App built unsigned takes unsigned updates. An App
+ * whose signature cannot be read counts as signed, the stricter line.
+ */
+async function readWindowsUpdateLine(
+  executable = process.execPath,
+  { platform = process.platform, execFileImpl = promisify(execFile) } = {},
+) {
+  if (platform !== "win32") return null;
+  let signature;
+  try {
+    const { stdout } = await execFileImpl("powershell.exe", SIGNATURE_ARGUMENTS, powershellOptions(executable));
+    signature = parseSignature(stdout);
+  } catch (_error) {
+    return { signed: true, subject: "", thumbprint: "" };
+  }
+  if (validSigner(signature)) {
+    return { signed: true, subject: signature.subject, thumbprint: signature.thumbprint.toUpperCase() };
+  }
+  return { signed: signature?.status !== "NotSigned", subject: "", thumbprint: "" };
+}
+
+/**
+ * Check a downloaded installer against the running App's line. It runs after
+ * the download has matched the release manifest's size and SHA-256, which is
+ * the only thing vouching for an installer on the unsigned line.
+ */
 function verifyWindowsAuthenticode(
   filePath,
   {
     platform = process.platform,
     existsSync = fs.existsSync,
     execFileSyncImpl = execFileSync,
+    line = null,
   } = {},
 ) {
   if (platform !== "win32") return null;
@@ -24,46 +97,26 @@ function verifyWindowsAuthenticode(
   }
   let output;
   try {
-    output = execFileSyncImpl(
-      "powershell.exe",
-      [
-        "-NoLogo",
-        "-NoProfile",
-        "-NonInteractive",
-        "-ExecutionPolicy",
-        "Bypass",
-        "-Command",
-        SIGNATURE_SCRIPT,
-        filePath,
-      ],
-      {
-        encoding: "utf8",
-        windowsHide: true,
-        timeout: 30_000,
-        stdio: ["ignore", "pipe", "pipe"],
-      },
-    );
+    output = execFileSyncImpl("powershell.exe", SIGNATURE_ARGUMENTS, {
+      ...powershellOptions(filePath),
+      stdio: ["ignore", "pipe", "pipe"],
+    });
   } catch (_error) {
     throw new Error("Windows update signature verification failed");
   }
-  let signature;
-  try {
-    signature = JSON.parse(String(output).trim());
-  } catch (_error) {
-    throw new Error("Windows update signature result is invalid");
+  const signature = parseSignature(output);
+  if (line && !line.signed && signature?.status === "NotSigned") {
+    return { subject: "", thumbprint: "", unsigned: true };
   }
-  if (
-    signature?.status !== "Valid"
-    || typeof signature.subject !== "string"
-    || !signature.subject
-    || !/^[A-Fa-f0-9]{40,64}$/.test(signature.thumbprint || "")
-  ) {
+  if (!validSigner(signature)) {
     throw new Error(`Windows update signature is not valid: ${signature?.status || "Unknown"}`);
   }
-  return {
-    subject: signature.subject,
-    thumbprint: signature.thumbprint.toUpperCase(),
-  };
+  const thumbprint = signature.thumbprint.toUpperCase();
+  // A renewed certificate has a new thumbprint and the same publisher name.
+  if (line?.signed && line.thumbprint && thumbprint !== line.thumbprint && signature.subject !== line.subject) {
+    throw new Error("Windows update is signed by a different publisher than this App");
+  }
+  return { subject: signature.subject, thumbprint };
 }
 
-module.exports = { verifyWindowsAuthenticode };
+module.exports = { readWindowsUpdateLine, verifyWindowsAuthenticode };

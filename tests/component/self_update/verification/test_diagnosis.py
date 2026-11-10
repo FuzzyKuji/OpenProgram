@@ -49,7 +49,7 @@ def diagnosis_environment(tmp_path, monkeypatch, store_fixture, request):
                              req=_request(session_id="p1", user_msg_id="u1"), assistant_id="a1",
                              manager=_Manager(worktree), store=store)
     update_id = result["update_id"]
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(update_id, phase)
     detail = {"previous_system_gate": {"candidate_sha": "3" * 40}, "error": "system probe failed: web"}
     store.transition(update_id, UpdatePhase.VERIFYING, detail=detail)
@@ -243,8 +243,8 @@ def test_restored_queue_validates_diagnosis_before_model(diagnosis_environment, 
                          source="self_update_diagnose", context_mode="clean", spawn_caller="a1",
                          advance_head=False, wait=damage != "followup", defer_dispatch=True, creates_agent=False)
     runner.shutdown()
-    with runner._governor.ledger.immediate() as conn:
-        conn.execute("UPDATE job_admissions SET dispatch_ready = 1 WHERE job_id = ?", (request["job_id"],))
+    with runner._governor.ledger.run_tables().transaction() as conn:
+        conn.update("job_admissions", {"dispatch_ready": 1}, job_id=request["job_id"])
     recovered = JobRunner(max_workers=1, governor=runner._governor)
     monkeypatch.setattr(recovered, "_dispatch_followup", lambda _: pytest.fail("diagnosis must not trigger general followup"))
     try:

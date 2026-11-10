@@ -209,18 +209,16 @@ def test_attach_card_carries_the_subagent_name(isolated_store, monkeypatch):
     assert extra["attach"]["label"] == "后端架构"
 
 
-def test_attach_write_broadcasts_reload_and_context_stats(
+def test_attach_write_refreshes_context_stats(
     isolated_store, monkeypatch,
 ):
-    """Finishing a sub-agent tells both readers of the graph.
+    """Finishing a sub-agent re-estimates the context ring at the write.
 
-    The DAG re-pulls the session and the context ring re-estimates —
-    without this the graph on screen still showed the pre-spawn shape
-    until the user clicked something.
+    Open transcripts and the DAG panel learn of the card from the
+    transcript publisher (test_transcript_publisher.py).
     """
-    frames: list[dict] = []
     monkeypatch.setattr(
-        'openprogram.runtime.jobs.runner.shared._broadcast', frames.append,
+        'openprogram.runtime.jobs.runner.shared._broadcast', lambda _frame: None,
     )
     stats: list[str] = []
     monkeypatch.setattr(
@@ -247,10 +245,4 @@ def test_attach_write_broadcasts_reload_and_context_stats(
         attach_pointer_id=attach_node_id,
     ))
 
-    reloads = [
-        f for f in frames
-        if f.get("type") == "session_reload"
-        and (f.get("data") or {}).get("session_id") == "p1"
-    ]
-    assert reloads, "attach write must broadcast a session reload"
     assert stats == ["p1"]

@@ -16,7 +16,7 @@ REV = "a" * 40
     ("path", "component"),
     [
         ("apps/web/components/chat/composer.tsx", "web"),
-        ("docs/start/GETTING_STARTED.md", "docs"),
+        ("docs/start/GETTING_STARTED.html", "docs"),
         ("scripts/docs_site/build.py", "docs"),
         ("apps/cli/src/index.tsx", "tui"),
         ("openprogram/interfaces/cli/__init__.py", "python"),
@@ -46,7 +46,7 @@ def test_component_of(path, component):
 
 
 def test_web_and_docs_hot_swap():
-    plan = classify(["apps/web/app/page.tsx", "docs/start/faq.md"], REV)
+    plan = classify(["apps/web/app/page.tsx", "docs/start/faq.html"], REV)
     assert (plan.scope, plan.restart, plan.components) == ("incremental", "hot", ("web", "docs"))
 
 
@@ -74,7 +74,7 @@ def test_dependency_change_needs_complete_build():
 
 
 def test_unknown_installed_revision_needs_complete_build():
-    assert classify(["docs/start/faq.md"], None).scope == "full"
+    assert classify(["docs/start/faq.html"], None).scope == "full"
 
 
 def test_test_only_change_still_records_revision():

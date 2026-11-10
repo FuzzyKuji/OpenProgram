@@ -1,6 +1,6 @@
 """list_agents — the discovery tool for branch-to-branch communication.
 
-See docs/reference/design/runtime/collaboration/agent-collaboration.md.
+See docs/reference/design/runtime/collaboration/agent-collaboration.html.
 """
 from __future__ import annotations
 

@@ -70,7 +70,7 @@ def isolated_websocket_state(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.fixture
 def user_error_store(tmp_path, monkeypatch: pytest.MonkeyPatch) -> UserErrorStore:
-    store = UserErrorStore(tmp_path / "user_errors.db")
+    store = UserErrorStore(tmp_path / "user_errors.jsonl")
     monkeypatch.setattr(ws_errors, "default_user_error_store", lambda: store)
     return store
 
@@ -279,5 +279,5 @@ def test_operation_error_persistence_rejects_tampered_frame(tmp_path) -> None:
         ws_errors.persist_operation_error_frame(
             ws,
             frame,
-            store=UserErrorStore(tmp_path / "user_errors.db"),
+            store=UserErrorStore(tmp_path / "user_errors.jsonl"),
         )

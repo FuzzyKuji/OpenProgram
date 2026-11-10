@@ -1,6 +1,5 @@
 """Execution control branches operations on the owning service."""
 from __future__ import annotations
-import sqlite3
 import time
 import uuid
 from typing import Any, Mapping
@@ -8,6 +7,7 @@ from ..attempts import AttemptConflict, AttemptRecord, AttemptStatus
 from ..checkpoints import CheckpointManifest
 from ..model import CommandKind, CommandStatus, ControlCommand, ExecutionRecord, ExecutionStatus, _json
 from ..store import ExecutionConflict
+from ..store.run_tables import RowConflict
 from ..safe_points import AgentSafePointConflict
 from ..state_machine import InvalidCommand
 
@@ -27,7 +27,6 @@ class BranchesOperations:
         expected_version: int,
         actor: Mapping[str, Any],
         owner_id: str | None = None,
-        ttl_seconds: float | None = None,
         activator: Activator | None = None,
         driver: Any | None = None,
         code_change_policy: str | None = None,
@@ -58,7 +57,6 @@ class BranchesOperations:
             kind=CommandKind.CONTINUE,
             payload={"code_change_policy": code_change_policy} if code_change_policy is not None else {},
             owner_id=owner_id or self.owner_id,
-            ttl_seconds=ttl_seconds or self.lease_ttl_seconds,
         )
         if duplicate:
             return ControlDispatch(command=command, execution=execution, delivered=False)
@@ -84,7 +82,6 @@ class BranchesOperations:
         expected_version: int,
         actor: Mapping[str, Any],
         owner_id: str | None = None,
-        ttl_seconds: float | None = None,
         activator: Activator | None = None,
         driver: Any | None = None,
     ) -> ControlDispatch:
@@ -104,7 +101,6 @@ class BranchesOperations:
             actor=actor,
             kind=CommandKind.STEP,
             owner_id=owner_id or self.owner_id,
-            ttl_seconds=ttl_seconds or self.lease_ttl_seconds,
         )
         if duplicate:
             return ControlDispatch(command=command, execution=execution, delivered=False)
@@ -128,7 +124,6 @@ class BranchesOperations:
         command_id: str,
         execution_id: str,
         owner_id: str,
-        ttl_seconds: float | None = None,
         activator: Activator | None = None,
         driver: Any | None = None,
     ) -> ControlDispatch:
@@ -151,7 +146,6 @@ class BranchesOperations:
             actor=command.actor,
             kind=command.kind,
             owner_id=owner_id,
-            ttl_seconds=ttl_seconds or self.lease_ttl_seconds,
             activate_existing_accepted=True,
             allow_queued_initial_step=True,
         )
@@ -313,11 +307,7 @@ class BranchesOperations:
                 raise ExecutionConflict("checkpoint_not_found", "specified checkpoint is not published")
             if checkpoint.execution_id != source.execution_id or checkpoint.revision_id != source.revision_id:
                 raise ExecutionConflict("invalid_checkpoint", "checkpoint does not belong to the source revision")
-            unresolved = connection.execute(
-                "SELECT 1 FROM effects WHERE execution_id = ? AND status IN ('dispatched', 'uncertain') LIMIT 1",
-                (execution_id,),
-            ).fetchone()
-            if unresolved is not None:
+            if self.executions._first_unresolved_effect(connection, execution_id) is not None:
                 raise ExecutionConflict("unresolved_effect", "source execution has an unresolved effect")
             if kind is CommandKind.FORK:
                 assert manifest is not None
@@ -361,7 +351,7 @@ class BranchesOperations:
             )
             try:
                 self.executions._insert_execution(connection, child)
-            except sqlite3.IntegrityError as exc:
+            except RowConflict as exc:
                 raise ExecutionConflict("execution_exists", f"execution already exists: {child_id}") from exc
             self.executions._copy_execution_input_in_transaction(
                 connection,
@@ -424,7 +414,6 @@ class BranchesOperations:
         actor: Mapping[str, Any],
         kind: CommandKind,
         owner_id: str,
-        ttl_seconds: float,
         activate_existing_accepted: bool = False,
         allow_queued_initial_step: bool = False,
         payload: Mapping[str, Any] | None = None,
@@ -436,8 +425,8 @@ class BranchesOperations:
         tuple[Mapping[str, Any], ...],
         bool,
     ]:
-        if not owner_id or ttl_seconds <= 0:
-            raise AttemptConflict("invalid_lease", "owner_id and a positive ttl_seconds are required")
+        if not owner_id:
+            raise AttemptConflict("invalid_lease", "owner_id is required")
         with self.executions._transaction() as connection:
             command, duplicate = self.executions._accept_command(
                 connection,
@@ -511,10 +500,7 @@ class BranchesOperations:
                         and execution.status is ExecutionStatus.QUEUED
                     )
                 )
-                and connection.execute(
-                    "SELECT COUNT(*) FROM attempts WHERE execution_id = ?",
-                    (execution_id,),
-                ).fetchone()[0] == 0
+                and not connection.exists("attempts", execution_id=execution_id)
             )
             # Startup recovery may intentionally retain the original
             # admission when the first provider response was interrupted
@@ -536,7 +522,7 @@ class BranchesOperations:
                     or checkpoint.revision_id != execution.revision_id
                 )
             ):
-                if (connection.execute("SELECT 1 FROM attempts WHERE execution_id = ? LIMIT 1", (execution_id,)).fetchone()
+                if (connection.exists("attempts", execution_id=execution_id)
                         or not self._agent_branch_checkpoint_is_valid(self.executions, connection, execution, checkpoint)):
                     raise ExecutionConflict("invalid_checkpoint", "checkpoint does not belong to the current execution revision")
             if (
@@ -552,16 +538,13 @@ class BranchesOperations:
                     rejection_code="no_next_action",
                 )
                 return rejected, execution, None, checkpoint, (), True
-            steering_rows = connection.execute(
-                "SELECT * FROM commands WHERE execution_id = ? AND kind = ? "
-                "AND status IN (?, ?) ORDER BY submitted_at, command_id",
-                (
-                    execution_id,
-                    CommandKind.STEER.value,
-                    CommandStatus.ACCEPTED.value,
-                    CommandStatus.APPLYING.value,
-                ),
-            ).fetchall()
+            steering_rows = connection.rows(
+                "commands",
+                order=("submitted_at", "command_id"),
+                execution_id=execution_id,
+                kind=CommandKind.STEER.value,
+                status=[CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value],
+            )
             steer_inputs = tuple(
                 {
                     "command_id": str(row["command_id"]),
@@ -569,21 +552,10 @@ class BranchesOperations:
                 }
                 for row in steering_rows
             )
-            unresolved = connection.execute(
-                "SELECT effect_id FROM effects WHERE execution_id = ? "
-                "AND status IN ('dispatched', 'uncertain') LIMIT 1",
-                (execution_id,),
-            ).fetchone()
+            unresolved = self.executions._first_unresolved_effect(connection, execution_id)
             if unresolved is not None:
-                raise ExecutionConflict(
-                    "unresolved_effect", f"effect requires resolution: {unresolved['effect_id']}"
-                )
-            generation = int(
-                connection.execute(
-                    "SELECT COALESCE(MAX(generation), 0) + 1 FROM attempts WHERE execution_id = ?",
-                    (execution_id,),
-                ).fetchone()[0]
-            )
+                raise ExecutionConflict("unresolved_effect", f"effect requires resolution: {unresolved}")
+            generation = self.attempts._next_generation(connection, execution_id)
             now = self.attempts._clock()
             attempt = AttemptRecord(
                 attempt_id=f"attempt_{uuid.uuid4().hex}",
@@ -591,24 +563,22 @@ class BranchesOperations:
                 generation=generation,
                 status=AttemptStatus.LEASED,
                 owner_id=owner_id,
-                lease_expires_at=now + ttl_seconds,
                 leased_at=now,
                 updated_at=now,
             )
             self.attempts._insert(connection, attempt)
             from ..process_owner import current_process_owner
-            connection.execute(
-                "UPDATE executions SET current_attempt_id = ?, owner_lease_json = ?, updated_at = ? "
-                "WHERE execution_id = ? AND status_version = ?",
-                (
-                    attempt.attempt_id,
-                    _json({"owner_id": owner_id, "generation": generation,
+            connection.update(
+                "executions",
+                {
+                    "current_attempt_id": attempt.attempt_id,
+                    "owner_lease_json": _json({"owner_id": owner_id, "generation": generation,
                            "process_owner": current_process_owner(),
                            **({"resume_checkpoint_id": checkpoint.checkpoint_id} if checkpoint is not None else {})}),
-                    now,
-                    execution_id,
-                    expected_version,
-                ),
+                    "updated_at": now,
+                },
+                execution_id=execution_id,
+                status_version=expected_version,
             )
             reserved = self.executions._transition_execution(
                 connection,
@@ -625,9 +595,10 @@ class BranchesOperations:
                 payload={"attempt": attempt.to_dict()},
                 created_at=now,
             )
-            connection.execute(
-                "UPDATE attempts SET status = ?, activated_at = ?, updated_at = ? WHERE attempt_id = ?",
-                (AttemptStatus.ACTIVE.value, now, now, attempt.attempt_id),
+            connection.update(
+                "attempts",
+                {"status": AttemptStatus.ACTIVE.value, "activated_at": now, "updated_at": now},
+                attempt_id=attempt.attempt_id,
             )
             active = self.attempts._require(connection, attempt.attempt_id)
             self.executions._append_event(
@@ -663,18 +634,6 @@ class BranchesOperations:
                 or record is None or record.assistant_message_id != f"{execution.execution_id}_reply"
                 or not payload or payload.get("kind") != "chat"):
             return False
-        from openprogram.runtime.execution.agent_checkpoint import AgentCheckpointV1
-        state = AgentCheckpointV1.load(store, checkpoint)
-        ancestors = set()
-        current = source
-        while current is not None and current.execution_id not in ancestors:
-            ancestors.add(current.execution_id)
-            current = store._get_execution(connection, current.parent_execution_id) if current.parent_execution_id else None
-        for receipt in state.payload["terminal_effect_receipts"]:
-            effect = connection.execute("SELECT * FROM effects WHERE effect_id = ?", (receipt["effect_id"],)).fetchone()
-            if (effect is None or effect["execution_id"] not in ancestors
-                    or effect["action_id"] != receipt["action_id"] or effect["status"] != receipt["outcome"]):
-                return False
         if execution.revision_id == checkpoint.revision_id:
             return True
         from ..revisions import RevisionControlService
@@ -691,7 +650,7 @@ class BranchesOperations:
         """
         if checkpoint is None:
             return False
-        state = checkpoint.state_refs.get("agent_checkpoint_v1")
+        state = checkpoint.state_refs.get("agent_position")
         if not isinstance(state, Mapping):
             return False
         safe_point = state.get("safe_point")

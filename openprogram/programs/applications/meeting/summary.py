@@ -2,9 +2,8 @@
 
 When transcription is complete the recorder opens a conversation titled
 after the meeting and starts one owner turn in it, with the transcript in
-the message and a fixed prompt. The turn has no tools and runs as an
-outside-content turn (``untrusted``): the transcript is what other people
-said, never instructions. Its answer becomes ``summary.md`` with the full
+the message and a fixed prompt. The turn has no tools: the transcript is
+what other people said, never instructions. Its answer becomes ``summary.md`` with the full
 transcript appended as a collapsible section, and the conversation stays
 for follow-up questions.
 """
@@ -98,7 +97,7 @@ def start_conversation(title: str, text: str, on_conversation: Callable[[str], N
         on_done(answer, "" if answer.strip() else "the summary turn did not answer")
 
     start_owner_turn(session_id, agent_id, text, tools=[], name="meeting-summary",
-                     reason_code="meeting_summary_failed", on_done=done, untrusted=True)
+                     reason_code="meeting_summary_failed", on_done=done)
     return session_id
 
 

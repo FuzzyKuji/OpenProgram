@@ -228,7 +228,6 @@ class CancellationOperations:
                 self._broadcast_job_status(updated)
                 self._wake_done(job_id)
                 self._update_attach_card(updated, error_text=updated.error)
-                shared._broadcast_session_reload(session_id, reason="job_errored")
             return updated
         if canonical_state is not None and canonical_state.status.value in {
             "completed", "failed", "cancelled", "interrupted",
@@ -281,7 +280,6 @@ class CancellationOperations:
                 self._broadcast_job_status(updated)
                 self._wake_done(job_id)
                 self._update_attach_card(updated)
-                shared._broadcast_session_reload(session_id, reason="job_cancelled")
                 with self._lock:
                     current_info = self._jobs.get(job_id)
                     if (

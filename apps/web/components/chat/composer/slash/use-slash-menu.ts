@@ -19,6 +19,7 @@
  * incoming filter.
  */
 
+import { appendLocalNotice } from "@/lib/chat/transcript/apply-read";
 import {
   useCallback,
   useEffect,
@@ -340,9 +341,10 @@ export function useSlashMenu({ input, textareaRef, send, openContextPanel, bound
       },
       showLocalReply: (content) => {
         if (!currentSessionId) return;
-        useSessionStore.getState().appendMessage(currentSessionId, {
+        appendLocalNotice(currentSessionId, {
           id: "local_cmd_" + Date.now().toString(36),
           role: "system",
+          rowKind: "system_text",
           content,
           status: "done",
         });
@@ -373,6 +375,7 @@ export function useSlashMenu({ input, textareaRef, send, openContextPanel, bound
     (text: string, submitter: Pick<SlashContext, "busy" | "sendChat">): SlashOutcome => {
       const hit = resolve(text);
       if (!hit) return null;
+      if (hit.cmd.ignoredWhileBusy && submitter.busy) return "failed";
       if (hit.cmd.needsIdle && submitter.busy) {
         showToast(translateText(
           `${hit.cmd.name} changes this conversation's history. Run it when the current turn has finished, or stop the turn first.`,

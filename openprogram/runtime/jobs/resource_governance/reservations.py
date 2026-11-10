@@ -15,6 +15,7 @@ from openprogram.models.usage.reservation import (
 )
 from openprogram.runtime.jobs.resource_governance.usage import (
     _durable_job_time_limits,
+    _scope_chain,
     _scope_usage_breakdown,
 )
 
@@ -35,42 +36,38 @@ class ReservationsOperations:
         """Persist meaningful job activity for the job and live ancestors."""
         if activity_kind not in MEANINGFUL_ACTIVITY_KINDS:
             return False
-        with self.ledger.immediate() as conn:
-            rows = conn.execute(
-                """WITH RECURSIVE lineage(job_id) AS (
-                       SELECT ?
-                       UNION ALL
-                       SELECT a.parent_job_id
-                       FROM job_admissions a
-                       JOIN lineage l ON a.job_id = l.job_id
-                       WHERE a.parent_job_id IS NOT NULL
-                   )
-                   SELECT job_id FROM job_admissions
-                   WHERE job_id IN (SELECT job_id FROM lineage)
-                     AND owner_instance_id = ?
-                     AND lease_generation = ?
-                     AND (
-                         state IN ('live','stopping')
-                         OR (
-                             state = 'queued'
-                             AND borrowed_parent_job_id IS NOT NULL
-                         )
-                     )""",
-                (job_id, owner_instance_id, lease_generation),
-            ).fetchall()
-            if not rows:
+        with self._write() as tables:
+            current: str | None = job_id
+            seen: set[str] = set()
+            claimed: list[str] = []
+            while current is not None and current not in seen:
+                seen.add(current)
+                admission = self._admission(tables, current)
+                if admission is None:
+                    break
+                if (
+                    admission["owner_instance_id"] == owner_instance_id
+                    and admission["lease_generation"] == lease_generation
+                    and (
+                        admission["state"] in ("live", "stopping")
+                        or (
+                            admission["state"] == "queued"
+                            and admission["borrowed_parent_job_id"] is not None
+                        )
+                    )
+                ):
+                    claimed.append(current)
+                current = admission["parent_job_id"]
+            if not claimed:
                 return False
-            now = time.time()
-            conn.executemany(
-                "UPDATE job_admissions SET last_activity_at = ? WHERE job_id = ?",
-                ((now, row["job_id"]) for row in rows),
+            tables.update(
+                "job_admissions", {"last_activity_at": time.time()}, job_id=claimed,
             )
             return True
 
 
-    @staticmethod
-    def _scope_usage(conn, scope_id: str, kind: str) -> tuple[int, int]:
-        usage = _scope_usage_breakdown(conn, scope_id)
+    def _scope_usage(self, tables, scope_id: str, kind: str) -> tuple[int, int]:
+        usage = _scope_usage_breakdown(self.ledger, tables, scope_id)
         if kind == "token":
             used = usage["actual_tokens"] + usage["reserved_tokens"]
         else:
@@ -88,22 +85,11 @@ class ReservationsOperations:
     ) -> ReservationDecision:
         if isinstance(amount, bool) or not isinstance(amount, int) or amount <= 0:
             raise ValueError("reservation amount must be a positive integer")
-        with self.ledger.immediate() as conn:
-            admission = conn.execute(
-                "SELECT budget_scope_id FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
+        with self._write() as tables:
+            admission = self._admission(tables, job_id)
             if admission is None:
                 return ReservationDecision(False, None, "quota.accounting_unavailable", True)
-            scopes = conn.execute(
-                """WITH RECURSIVE ancestors AS (
-                    SELECT * FROM budget_scopes WHERE budget_scope_id = ?
-                    UNION ALL
-                    SELECT b.* FROM budget_scopes b
-                    JOIN ancestors a ON a.parent_scope_id = b.budget_scope_id
-                ) SELECT * FROM ancestors""",
-                (admission["budget_scope_id"],),
-            ).fetchall()
+            scopes = _scope_chain(tables, admission["budget_scope_id"])
             limit_column = "max_total_tokens" if kind == "token" else "max_cost_microusd"
             if kind == "cost" and not price_known and any(
                 scope[limit_column] is not None for scope in scopes
@@ -113,25 +99,22 @@ class ReservationsOperations:
             for scope in scopes:
                 ceiling = scope[limit_column]
                 used, unknown_cost = self._scope_usage(
-                    conn, scope["budget_scope_id"], kind,
+                    tables, scope["budget_scope_id"], kind,
                 )
                 if kind == "cost" and ceiling is not None and unknown_cost:
                     return ReservationDecision(False, None, "quota.cost_unavailable", False)
                 if ceiling is not None and used + amount > int(ceiling):
                     return ReservationDecision(False, None, reason, False)
             reservation_id = "res_" + uuid.uuid4().hex
-            conn.execute(
-                """INSERT INTO usage_reservations (
-                    reservation_id, job_id, budget_scope_id, kind, state,
-                    reserved_tokens, reserved_cost_microusd, expires_at
-                ) VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?)""",
-                (
-                    reservation_id, job_id, admission["budget_scope_id"], kind,
-                    amount if kind == "token" else None,
-                    amount if kind == "cost" else None,
-                    time.time() + 300.0,
-                ),
-            )
+            tables.insert("usage_reservations", {
+                "reservation_id": reservation_id, "job_id": job_id,
+                "session_id": admission["session_id"],
+                "budget_scope_id": admission["budget_scope_id"], "kind": kind,
+                "state": "reserved",
+                "reserved_tokens": amount if kind == "token" else None,
+                "reserved_cost_microusd": amount if kind == "cost" else None,
+                "expires_at": time.time() + 300.0,
+            })
             return ReservationDecision(True, reservation_id, None, False)
 
 
@@ -156,12 +139,8 @@ class ReservationsOperations:
         model: Any,
     ) -> RequestReservation:
         """Atomically reserve token and known-cost exposure for one request."""
-        with self.ledger.immediate() as conn:
-            admission = conn.execute(
-                """SELECT budget_scope_id, session_id
-                   FROM job_admissions WHERE job_id = ?""",
-                (job_id,),
-            ).fetchone()
+        with self._write() as tables:
+            admission = self._admission(tables, job_id)
             if admission is None:
                 plan = plan_request_reservation(
                     input_token_upper_bound=input_token_upper_bound,
@@ -190,24 +169,15 @@ class ReservationsOperations:
                 return replace(
                     plan, allowed=False, reason_code="quota.accounting_unavailable",
                 )
-            conn.execute(
-                """UPDATE budget_scopes
-                   SET max_total_tokens = ?, max_cost_microusd = ?
-                   WHERE scope_kind = 'session' AND session_id = ?""",
-                (
-                    latest["max_total_tokens"], latest_cost,
-                    admission["session_id"],
-                ),
+            tables.update(
+                "budget_scopes",
+                {"max_total_tokens": latest["max_total_tokens"], "max_cost_microusd": latest_cost},
+                scope_kind="session", session_id=admission["session_id"],
+                where=lambda row: (
+                    row["max_total_tokens"], row["max_cost_microusd"],
+                ) != (latest["max_total_tokens"], latest_cost),
             )
-            scopes = conn.execute(
-                """WITH RECURSIVE ancestors AS (
-                    SELECT * FROM budget_scopes WHERE budget_scope_id = ?
-                    UNION ALL
-                    SELECT b.* FROM budget_scopes b
-                    JOIN ancestors a ON a.parent_scope_id = b.budget_scope_id
-                ) SELECT * FROM ancestors""",
-                (admission["budget_scope_id"],),
-            ).fetchall()
+            scopes = _scope_chain(tables, admission["budget_scope_id"])
 
             token_remaining: list[int] = []
             for scope in scopes:
@@ -215,7 +185,7 @@ class ReservationsOperations:
                 if ceiling is None:
                     continue
                 used, _ = self._scope_usage(
-                    conn, scope["budget_scope_id"], "token",
+                    tables, scope["budget_scope_id"], "token",
                 )
                 token_remaining.append(max(0, int(ceiling) - used))
             cost_budget_configured = any(
@@ -238,7 +208,7 @@ class ReservationsOperations:
                     if ceiling is None:
                         continue
                     used, unknown_cost = self._scope_usage(
-                        conn, scope["budget_scope_id"], "cost",
+                        tables, scope["budget_scope_id"], "cost",
                     )
                     if unknown_cost:
                         return replace(
@@ -251,41 +221,38 @@ class ReservationsOperations:
 
             root_id = "res_" + uuid.uuid4().hex
             expires_at = time.time() + 300.0
-            rows = [(
-                root_id + ":token", job_id, admission["budget_scope_id"],
-                "token", plan.token_reservation, None, expires_at,
-            )]
+            shared = {
+                "job_id": job_id, "session_id": admission["session_id"],
+                "budget_scope_id": admission["budget_scope_id"],
+                "state": "reserved", "expires_at": expires_at,
+            }
+            tables.insert("usage_reservations", {
+                **shared, "reservation_id": root_id + ":token", "kind": "token",
+                "reserved_tokens": plan.token_reservation,
+            })
             if plan.cost_known:
-                rows.append((
-                    root_id + ":cost", job_id, admission["budget_scope_id"],
-                    "cost", None, plan.cost_reservation_microusd, expires_at,
-                ))
-            conn.executemany(
-                """INSERT INTO usage_reservations (
-                    reservation_id, job_id, budget_scope_id, kind, state,
-                    reserved_tokens, reserved_cost_microusd, expires_at
-                ) VALUES (?, ?, ?, ?, 'reserved', ?, ?, ?)""",
-                rows,
-            )
+                tables.insert("usage_reservations", {
+                    **shared, "reservation_id": root_id + ":cost", "kind": "cost",
+                    "reserved_cost_microusd": plan.cost_reservation_microusd,
+                })
             return replace(plan, reservation_id=root_id)
 
 
     def start_provider_request(self, reservation_id: str) -> None:
         """Mark all reservations for a provider request as started."""
-        with self.ledger.immediate() as conn:
-            self.ledger.start_provider_reservation(conn, reservation_id)
+        with self._write() as tables:
+            self.ledger.check_reservation_startable(tables, reservation_id)
+            self.ledger.mark_reservation_started(tables, reservation_id)
 
 
     def settle_provider_request(self, reservation_id: str, event):
-        """Append one actual usage event and settle both request reservations."""
-        token_id = reservation_id + ":token"
-        cost_id = reservation_id + ":cost"
+        """Append one actual usage event, then settle both request reservations."""
+        tables = self._read()
         with self.ledger.immediate() as conn:
-            rows = conn.execute(
-                """SELECT job_id, budget_scope_id, state
-                   FROM usage_reservations WHERE reservation_id IN (?, ?)""",
-                (token_id, cost_id),
-            ).fetchall()
+            rows = tables.rows(
+                "usage_reservations",
+                reservation_id=[reservation_id + ":token", reservation_id + ":cost"],
+            )
             if not rows:
                 raise KeyError(reservation_id)
             if all(row["state"] == "settled" for row in rows):
@@ -301,44 +268,71 @@ class ReservationsOperations:
         Only a reserved request is releasable. A started request may have
         reached the provider and keeps conservative exposure until settlement.
         """
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE usage_reservations SET state = 'released'
-                   WHERE reservation_id IN (?, ?)
-                     AND state = 'reserved'""",
-                (reservation_id + ":token", reservation_id + ":cost"),
-            ).rowcount > 0
+        with self._write() as tables:
+            return tables.update(
+                "usage_reservations", {"state": "released"},
+                reservation_id=[reservation_id + ":token", reservation_id + ":cost"],
+                state="reserved",
+            ) > 0
+
+
+    def _settle_recorded_reservations(self, tables) -> None:
+        """Settle open reservations whose event is already in the ledger.
+
+        A settlement records the event first, so a stop before the reservation
+        changed leaves exactly this pair behind.
+        """
+        open_rows = tables.rows("usage_reservations", state=("reserved", "started"))
+        recorded_as = {
+            row["reservation_id"]: (
+                row["reservation_id"].rsplit(":", 1)[0] + ":token"
+                if row["reservation_id"].endswith((":token", ":cost"))
+                else row["reservation_id"]
+            )
+            for row in open_rows
+        }
+        events = {
+            row["reservation_id"]: row
+            for row in self.ledger.reservation_events(set(recorded_as.values()))
+        }
+        for row in open_rows:
+            reservation_id = row["reservation_id"]
+            event = events.get(recorded_as[reservation_id])
+            if event is None:
+                continue
+            if reservation_id.endswith(":token") and not event["tokens_known"]:
+                continue
+            if reservation_id.endswith(":cost") and (event["cost_source"] or "unknown") == "unknown":
+                continue
+            self.ledger.mark_reservations_settled(tables, [reservation_id], event["event_id"])
 
 
     def recover_provider_reservations(self, *, now: float | None = None) -> int:
-        """Release only expired requests that never reached provider start."""
+        """Finish interrupted settlements, then release expired unstarted requests."""
         current_time = time.time() if now is None else now
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE usage_reservations SET state = 'released'
-                   WHERE state = 'reserved' AND expires_at IS NOT NULL
-                     AND expires_at <= ?""",
-                (current_time,),
-            ).rowcount
+        with self._write() as tables:
+            self._settle_recorded_reservations(tables)
+            return tables.update(
+                "usage_reservations", {"state": "released"}, state="reserved",
+                where=lambda row: (
+                    row["expires_at"] is not None and row["expires_at"] <= current_time
+                ),
+            )
 
 
     def start_reservation(self, reservation_id: str) -> None:
-        with self.ledger.immediate() as conn:
-            conn.execute(
-                """UPDATE usage_reservations
-                   SET state = 'started', request_started_at = ?
-                   WHERE reservation_id = ? AND state = 'reserved'""",
-                (time.time(), reservation_id),
+        with self._write() as tables:
+            tables.update(
+                "usage_reservations",
+                {"state": "started", "request_started_at": time.time()},
+                reservation_id=reservation_id, state="reserved",
             )
 
 
     def settle_reservation(self, reservation_id: str, event) -> None:
+        run_tables = self._tables()
         with self.ledger.immediate() as conn:
-            reservation = conn.execute(
-                """SELECT job_id, budget_scope_id, state
-                   FROM usage_reservations WHERE reservation_id = ?""",
-                (reservation_id,),
-            ).fetchone()
+            reservation = run_tables.handle.get("usage_reservations", reservation_id)
             if reservation is None:
                 raise KeyError(reservation_id)
             if reservation["state"] == "settled":
@@ -348,10 +342,14 @@ class ReservationsOperations:
                 "budget_scope_id": reservation["budget_scope_id"],
                 "reservation_id": reservation_id,
             })
+
+            def settle() -> None:
+                with run_tables.transaction() as tables:
+                    tables.update(
+                        "usage_reservations",
+                        {"state": "settled", "settled_event_id": attributed.event_id},
+                        reservation_id=reservation_id,
+                    )
+
             self.ledger.append_in_transaction(conn, attributed)
-            conn.execute(
-                """UPDATE usage_reservations
-                   SET state = 'settled', settled_event_id = ?
-                   WHERE reservation_id = ?""",
-                (attributed.event_id, reservation_id),
-            )
+            self.ledger.after_commit(settle)

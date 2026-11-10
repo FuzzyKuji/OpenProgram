@@ -331,3 +331,288 @@ def test_post_message_chunks_at_platform_limit(
     assert len(sent) == 2
     assert all(len(c) <= 4000 for c in sent)
     assert "".join(sent) == text
+
+
+# ---------------------------------------------------------------------------
+# Arrival order: a slow attachment is not overtaken by later text
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture()
+def slow_download(monkeypatch: pytest.MonkeyPatch) -> tuple[threading.Event, threading.Event]:
+    """Downloads report ``started`` and block until ``finish`` is set."""
+    started, finish = threading.Event(), threading.Event()
+
+    def download(platform, account, attachments, failed=None):
+        started.set()
+        assert finish.wait(5)
+        return []
+
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._attachments.download_inbound", download)
+    return started, finish
+
+
+class _Order(list):
+    """Dispatched texts, with a way to wait for the next ones."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.changed = threading.Condition()
+
+    def wait_for(self, count: int, timeout: float = 5) -> bool:
+        with self.changed:
+            return self.changed.wait_for(lambda: len(self) >= count, timeout=timeout)
+
+
+def _record_dispatch(monkeypatch: pytest.MonkeyPatch, *, on_call=None) -> _Order:
+    order = _Order()
+    changed = order.changed
+
+    def fake_dispatch(**kw):
+        if kw.get("on_session_locked"):
+            kw["on_session_locked"]()
+        with changed:
+            order.append(kw["user_text"])
+            changed.notify_all()
+        if on_call:
+            on_call(kw)
+        return None
+
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._conversation.dispatch_inbound", fake_dispatch)
+    return order
+
+
+def test_text_after_a_slow_attachment_keeps_its_place(
+    monkeypatch: pytest.MonkeyPatch, slow_download,
+) -> None:
+    started, finish = slow_download
+    order = _record_dispatch(monkeypatch)
+    ch = _FakeChannel()
+
+    ch.handle_inbound(_msg(text="photo", attachments=[{"kind": "image"}]))
+    assert started.wait(5)
+    ch.handle_inbound(_msg(text="after the photo"))
+    assert not order.wait_for(1, timeout=0.2)
+    finish.set()
+
+    assert order.wait_for(2)
+    assert order[0].startswith("photo")
+    assert order[1] == "after the photo"
+
+
+def test_a_running_turn_lets_the_next_message_through_once_it_holds_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    release_turn = threading.Event()
+    def hold_first(kw):
+        if kw["user_text"] == "first":
+            assert release_turn.wait(5)
+    order = _record_dispatch(monkeypatch, on_call=hold_first)
+    ch = _FakeChannel()
+
+    ch.handle_inbound(_msg(text="first"))
+    ch.handle_inbound(_msg(text="second"))
+    try:
+        assert order.wait_for(2)
+    finally:
+        release_turn.set()
+    assert order == ["first", "second"]
+
+
+def test_commands_bypass_a_stuck_download(
+    monkeypatch: pytest.MonkeyPatch, slow_download,
+) -> None:
+    started, finish = slow_download
+    order = _record_dispatch(monkeypatch)
+    ch = _FakeChannel()
+
+    ch.handle_inbound(_msg(text="photo", attachments=[{"kind": "image"}]))
+    assert started.wait(5)
+    ch.handle_inbound(_msg(text="/answer q1 yes"))
+    try:
+        assert order.wait_for(1)
+        assert order == ["/answer q1 yes"]
+    finally:
+        finish.set()
+    assert order.wait_for(2)
+
+
+def test_other_chats_do_not_wait_for_a_slow_download(
+    monkeypatch: pytest.MonkeyPatch, slow_download,
+) -> None:
+    started, finish = slow_download
+    order = _record_dispatch(monkeypatch)
+    ch = _FakeChannel()
+
+    ch.handle_inbound(_msg(text="photo", attachments=[{"kind": "image"}]))
+    assert started.wait(5)
+    ch.handle_inbound(_msg(text="elsewhere", chat_id="43", user_id="9"))
+    try:
+        assert order.wait_for(1)
+        assert order == ["elsewhere"]
+    finally:
+        finish.set()
+    assert order.wait_for(2)
+
+
+def test_a_message_that_starts_no_turn_does_not_hold_up_the_queue(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A message turned away before its turn gives its place back."""
+    from openprogram.interfaces.channels.base import _INBOUND_ORDER
+
+    order = _record_dispatch(monkeypatch)
+    ch = _FakeChannel()
+
+    ch.handle_inbound(_msg(text="from another bot", from_bot=True))
+    ch.handle_inbound(_msg(text="from a person"))
+
+    assert order.wait_for(1)
+    assert order == ["from a person"]
+    assert ("faketg", "acct1", "42") not in _INBOUND_ORDER._queues
+
+
+def test_a_place_left_in_the_middle_of_the_line_is_skipped() -> None:
+    from openprogram.interfaces.channels.base import _INBOUND_ORDER
+
+    key = ("faketg", "acct1", "42")
+    first, stopped_early, last = (_INBOUND_ORDER.enter(key) for _ in range(3))
+    stopped_early.leave()
+    first.leave()
+
+    assert _INBOUND_ORDER._queues[key][0] is last
+    last.wait_for_turn()
+    last.leave()
+    assert key not in _INBOUND_ORDER._queues
+
+
+def test_dispatch_gives_the_place_back_only_once_it_holds_the_session(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openprogram.interfaces.channels import _conversation as C
+
+    events: list[object] = []
+    lock = C._session_lock_for("session-order")
+    monkeypatch.setattr(C, "_route", lambda *a: ("main", "session-order", "base"))
+    monkeypatch.setattr(C, "_run_session_turn", lambda **kw: events.append("turn"))
+
+    C.dispatch_inbound(
+        channel="faketg", account_id="acct1", peer_kind="direct", peer_id="42",
+        user_text="hello", speaker_id="7",
+        on_session_locked=lambda: events.append(("session held", lock.locked())),
+    )
+
+    assert events == [("session held", True), "turn"]
+
+
+def test_new_conversation_answers_busy_within_the_bound(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openprogram.interfaces.channels import _conversation as C
+
+    started: list[object] = []
+    monkeypatch.setattr(C, "RUN_SLOT_WAIT_SECONDS", 0.05)
+    monkeypatch.setattr(C, "_route", lambda *a: ("main", "session-busy", "base"))
+    monkeypatch.setattr(C, "start_new_generation", lambda *a: started.append(a))
+    lock = C._session_lock_for("session-busy")
+
+    assert lock.acquire(blocking=False)
+    try:
+        receipt = C.start_new_conversation(
+            channel="faketg", account_id="acct1", peer_kind="direct", peer_id="42")
+    finally:
+        lock.release()
+
+    assert receipt == C.BUSY_REPLY
+    assert started == []
+
+
+def test_busy_new_conversation_keeps_the_room_history(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openprogram.interfaces.channels import _conversation as C, _room
+
+    monkeypatch.setattr(C, "start_new_conversation", lambda **kw: C.BUSY_REPLY)
+    cleared: list[object] = []
+    monkeypatch.setattr(_room, "clear_pending", cleared.append)
+
+    receipt = _FakeChannel()._room_command(
+        "/new", _msg(text="/new", chat_type="group"), "42",
+        ("faketg", "acct1", "42"), True,
+    )
+
+    assert receipt == C.BUSY_REPLY
+    assert cleared == []
+
+
+def _empty_mention(quoted: str = "") -> ChannelMessage:
+    return ChannelMessage(
+        text="", chat_id="-100", user_id="7", user_display="Bob",
+        chat_type="group", mentioned=True, quoted_text=quoted,
+    )
+
+
+def _room_channel(monkeypatch: pytest.MonkeyPatch):
+    from openprogram.interfaces.channels import _access
+
+    class _RoomChannel(Channel):
+        platform_id = "emptyroom"
+
+        def run(self, stop):
+            return None
+
+    monkeypatch.setattr(_access, "group_sender_access", lambda *a, **k: "full")
+    return _RoomChannel()
+
+
+def test_empty_mention_starts_no_turn(monkeypatch: pytest.MonkeyPatch) -> None:
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._conversation.dispatch_inbound",
+        lambda **kw: seen.append(kw))
+    _room_channel(monkeypatch)._dispatch_and_reply(_empty_mention())
+    assert seen == []
+
+
+def test_empty_mention_does_not_use_up_the_room_turn_limit(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openprogram.interfaces.channels import _room
+
+    key = ("emptyroom", "default", "-100")
+    _room._turns.pop(key, None)
+    channel = _room_channel(monkeypatch)
+    for _ in range(_room.TURN_LIMIT + 1):
+        channel._dispatch_and_reply(_empty_mention())
+    assert len(_room._turns[key]) == 0
+
+
+def test_empty_mention_on_a_quoted_message_starts_a_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._conversation.dispatch_inbound",
+        lambda **kw: seen.append(kw))
+    _room_channel(monkeypatch)._dispatch_and_reply(_empty_mention("what about this"))
+    assert "what about this" in seen[0]["user_text"]
+
+
+def test_empty_mention_with_pending_history_starts_a_turn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from openprogram.interfaces.channels import _room
+
+    seen: list[dict] = []
+    monkeypatch.setattr(
+        "openprogram.interfaces.channels._conversation.dispatch_inbound",
+        lambda **kw: seen.append(kw))
+    channel = _room_channel(monkeypatch)
+    key = ("emptyroom", "default", "-100")
+    _room.clear_pending(key)
+    _room.record_pending(key, _room.PendingEntry(
+        speaker_id="8", speaker_display="Ann", text="lunch at noon?", ts=1.0))
+    channel._dispatch_and_reply(_empty_mention())
+    assert "lunch at noon?" in seen[0]["user_text"]

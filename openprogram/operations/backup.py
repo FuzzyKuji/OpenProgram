@@ -35,12 +35,12 @@ from collections.abc import Iterable
 from contextlib import ExitStack, contextmanager
 from pathlib import Path, PurePath
 
+from openprogram.state.last_good import BACKUP_SUFFIX, UNREADABLE_SUFFIX
+
 # Top-level entries worth preserving. Anything not listed is skipped.
-# Keep this list in sync with docs/server/backup.md when it changes.
+# Keep this list in sync with docs/server/backup.html when it changes.
 INCLUDED: tuple[str, ...] = (
     "memory",  # memory workspace (core.md, topics, timeline, ...)
-    "sessions",  # session transcripts on disk
-    "sessions.db",  # session index
     "session_aliases.json",
     "config.json",  # main configuration
     "cli-config.json",
@@ -63,10 +63,51 @@ INCLUDED: tuple[str, ...] = (
     "profiles",  # account metadata; credentials are inventory-filtered
     "worktrees.json",
     "usage.db",  # usage/accounting history
+    "run_index.jsonl",  # which session each run belongs to
+    "revisions.jsonl",  # Workflow versions and approvals
+    "programs",  # installed programs and the user's own
+    "workflows",  # the layout programs/ replaced, until it is migrated
+    "applications",  # the layout programs/ replaced, until it is migrated
+    "workflow_archives",  # archived versions of the user's Workflows
+    "recordings",  # recorded Workflow demonstrations and provider recordings
+    "scheduler",  # scheduled jobs
+    "always_on",  # always-on agents and their handoffs
+    "memory-spaces",  # memory kept per agent
+    "meetings",  # meeting recordings and transcripts
+    "output-styles",
+    "plugin-trust.json",
+    "plugins-enabled.json",
+    "project-file-history",  # earlier versions of project documents
+    "imports",  # which external sessions were imported, so none is imported twice
+    "AGENTS.md",  # the user's instructions for every project
 )
 
 # Whole top-level credential trees included only with --include-credentials.
-CREDENTIAL_ENTRIES: tuple[str, ...] = ("auth", "mcp_tokens")
+# plugin-options holds each plugin's settings, which can be its API keys.
+CREDENTIAL_ENTRIES: tuple[str, ...] = ("auth", "mcp_tokens", "plugin-options")
+
+# Everything else the code writes at the top level: rebuilt on demand, only
+# meaningful to the running process, or a secret that is never archived.
+# A contract test fails when a new name is in none of the three tuples.
+REGENERATED: tuple[str, ...] = (
+    # downloads and caches
+    "cache", "programs-cache", "program-dependencies", "extras", "voice", "node_modules",
+    "folder-sizes.json", "skills_discovery.json", "latest-release.json", "update.last_check",
+    # results and history that only serve the current machine
+    "tool_results", "browser-states", "chrome-profile", "computer-use", "cli-questions",
+    "trash", "shadow-git", "logs", "user_errors.jsonl", "run-state", "mutation-locks",
+    "file_operations.jsonl", "file_operations.lock",  # retry receipts, seven days
+    "processes.db", "session-resources.db",  # what is running now
+    "executions.db", "active", "delivery", "gui_harness",  # left by earlier versions, not written now
+    "cron", ".scheduler-store-migration",  # moved into scheduler
+    # the installation itself
+    "backups", "runtime", "self-updates", "release-source", "source-repo", "upgrade-state.json",
+    "migrations", "worktrees", "system-access-grant.json", "ssh", "source", "artifacts",
+    # live process files and secrets that are issued again
+    "web", "web.lock", "mcp_server_token", "browser-cdp-port", "browser-cdp.lock",
+    "worker.lock", "worker.log", "worker.pid", "worker.port", "worker-service.cmd",
+    ".restore.lock", ".restore-journal.d", ".restore-journal.json", ".write-test",
+)
 
 _MANIFEST_NAME = "backup-manifest.json"
 
@@ -125,6 +166,11 @@ def _excluded(path: Path) -> bool:
     if path.name in _SKIP_NAMES:
         return True
     if path.name.endswith(_SKIP_SUFFIXES):
+        return True
+    # A state file's recovery copies (<file>.bak, <file>.bad-<time>) are not
+    # state, and a credential file's would carry its secrets past the
+    # inventory's redaction (openprogram.state.last_good).
+    if path.name.endswith(BACKUP_SUFFIX) or UNREADABLE_SUFFIX in path.name:
         return True
     # Symlinks are skipped rather than followed: a link out of the state
     # dir would silently pull unrelated (possibly huge, possibly secret)

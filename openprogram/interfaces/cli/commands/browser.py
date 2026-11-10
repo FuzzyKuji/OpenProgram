@@ -49,7 +49,9 @@ def _kill_chrome_profile() -> None:
 
 def _cmd_browser_install(target: str) -> int:
     """Install browser-tool dependencies. Pure shell-out — no agent involved."""
-    if os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME") == "1":
+    from openprogram.operations.self_update.versions.layout import immutable_runtime
+
+    if immutable_runtime():
         print(
             "Browser dependencies are included in the complete release; "
             "the packaged runtime cannot be modified. Source checkout "

@@ -40,10 +40,17 @@ class TurnResult:
     user_msg_id: str
     assistant_msg_id: str
     tool_calls: list[dict] = field(default_factory=list)
+    # Files this turn's ``send_file`` calls attached: the only files a
+    # chat channel uploads for it, whatever markers the reply text holds.
+    attached_files: list[str] = field(default_factory=list)
+    # What the last model round said; final_text joins every round.
+    last_round_text: str = ""
     usage: dict = field(default_factory=dict)
     duration_ms: int = 0
     failed: bool = False
     error: Optional[str] = None
+    # The user stopped this turn; ``final_text`` is what it had written by then.
+    stopped: bool = False
     # Structured error taxonomy for a failed turn, so the webui can show an
     # actionable error (retryable rate-limit vs fatal auth/context) instead of a
     # string. See docs/design/providers/reliability/error-taxonomy-propagation.md.

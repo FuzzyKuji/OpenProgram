@@ -10,7 +10,9 @@ Modules:
 * ``manifest`` — read/write the per-turn ``manifest.json``.
 * ``store.CheckpointStore`` — prepare/commit/inspect mutation receipts and
   the legacy restore entry point used until the transactional planner lands.
-* ``gc`` — evict old turn directories beyond a soft cap.
+* ``prompt_checkpoints`` — one recovery point per prompt, with shared blobs.
+* ``restore_plan`` — target states to restore actions and report rows.
+* ``gc`` — cap turn directories and checkpoints per session.
 
 Typical usage::
 
@@ -22,6 +24,7 @@ Typical usage::
 """
 from .store import CheckpointStore, BackupStore, MutationJournalError
 from .gc import evict_old as gc_evict_old, MAX_TURNS
+from .prompt_checkpoints import PromptCheckpoints
 
 __all__ = [
     "CheckpointStore",
@@ -29,4 +32,5 @@ __all__ = [
     "MutationJournalError",
     "gc_evict_old",
     "MAX_TURNS",
+    "PromptCheckpoints",
 ]

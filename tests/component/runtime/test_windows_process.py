@@ -30,6 +30,28 @@ def test_process_command_line_uses_cim(monkeypatch) -> None:
     assert "ProcessId = 42" in scripts[0]
 
 
+def test_process_command_line_reads_the_kernel_before_cim(monkeypatch) -> None:
+    # A new PowerShell per query can outlast its timeout on a fresh or busy
+    # machine; the kernel answer needs none.
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(processes, "_windows_command_line",
+                        lambda pid: " python.exe -m openprogram worker run ")
+
+    def no_powershell(script: str, *, timeout: float = 5.0) -> str:
+        raise AssertionError("CIM must not run when the kernel answered")
+
+    monkeypatch.setattr(terminal, "_windows_powershell", no_powershell)
+    assert processes.process_command_line(42) == "python.exe -m openprogram worker run"
+
+
+def test_process_command_line_falls_back_to_cim(monkeypatch) -> None:
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(processes, "_windows_command_line", lambda pid: None)
+    monkeypatch.setattr(terminal, "_windows_powershell",
+                        lambda script, *, timeout=5.0: "python.exe x")
+    assert processes.process_command_line(42) == "python.exe x"
+
+
 def test_process_ids_by_name_validates_and_parses(monkeypatch) -> None:
     scripts: list[str] = []
     monkeypatch.setattr(sys, "platform", "win32")

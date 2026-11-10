@@ -122,7 +122,7 @@ test("undo and redo survive automatic file saves", async () => {
 // install is in flight, and neither the Memory status probe nor the writer
 // model list holds the form back.
 const { createElement: h } = await import("react");
-const { MemorySettings } = await import("../../components/settings/memory-settings.tsx");
+const { MemorySettings, OPTIONAL_LOAD_WAIT_MS } = await import("../../components/settings/memory-settings.tsx");
 
 const SETTINGS = {
   settings: [
@@ -134,6 +134,7 @@ const SETTINGS = {
 const ok = (body) => ({ ok: true, status: 200, json: async () => body });
 const settle = () => new Promise((resolve) => setTimeout(resolve, 0));
 const never = () => new Promise(() => {});
+const pastOptionalWait = () => new Promise((resolve) => setTimeout(resolve, OPTIONAL_LOAD_WAIT_MS + 50));
 
 function memoryFetch({ status = () => ok({ embedding_available: true }), save = (body) => ok({ value: body.value }), install } = {}) {
   const posts = [];
@@ -219,6 +220,7 @@ test("an unanswered Memory status request does not block the form", async () => 
   globalThis.memoryModels = async () => [];
   const posts = memoryFetch({ status: never });
   const view = await renderSettings();
+  await view.act(pastOptionalWait);
   assert.match(view.container.textContent, /Checking…/);
   assert.equal(control(view, "Automatic writing").disabled, false);
   await view.act(async () => { control(view, "Automatic writing").click(); await settle(); });
@@ -230,6 +232,7 @@ test("an unanswered writer-model list does not block the form", async () => {
   globalThis.memoryModels = never;
   const posts = memoryFetch();
   const view = await renderSettings();
+  await view.act(pastOptionalWait);
   const writer = control(view, "Writer model");
   assert.equal(writer.disabled, false);
   assert.deepEqual([...writer.querySelectorAll("option")].map((o) => o.value), [""], "only Automatic until the models arrive");

@@ -83,13 +83,16 @@ def _reset_owner_cache_for_tests() -> None:
     _owner_cache.clear()
 
 
+LOCAL_OWNER_SPEAKER = "owner/local"
+
+
 def owner_authority(principal_id: str) -> dict[str, Any]:
     """Build owner authority for one validated installation principal."""
     if not _OWNER_RE.fullmatch(str(principal_id)):
         raise AuthorityError("owner principal ID is invalid")
     return {
         "speaker_kind": "owner",
-        "speaker_id": "owner/local",
+        "speaker_id": LOCAL_OWNER_SPEAKER,
         "speaker_display": "Owner",
         "principal_id": str(principal_id),
         "authority_tier": "owner",
@@ -132,7 +135,8 @@ def channel_owner_authority(
 ) -> dict[str, Any]:
     """A chat-channel sender the owner treats as themselves.
 
-    Used when the account's ``sender_access`` setting is ``owner``: the
+    Used for a bound contact while the account's ``sender_access`` setting
+    is ``owner``, in a direct message or on a group's full-access list: the
     turn gets the owner's tier and approvals, exactly as a turn typed in
     the local UI, while the speaker fields keep naming the platform sender
     so the transcript and the model still see who spoke.

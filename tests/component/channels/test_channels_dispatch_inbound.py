@@ -21,6 +21,9 @@ import pytest
 from openprogram.runtime.conversation import turn_runtime as D
 from openprogram.runtime.context.session_db import SessionDB
 from openprogram.interfaces.channels import _conversation as C
+from openprogram.interfaces.channels._message import ChannelMessage
+from openprogram.interfaces.channels._transport import SendResult
+from openprogram.interfaces.channels.base import Channel
 from openprogram.models.providers.types import (
     AssistantMessage,
     AssistantMessageEvent,
@@ -267,7 +270,7 @@ def test_same_session_concurrent_turns_serialize(
         time.sleep(0.25)
         intervals.append((t0, time.monotonic()))
         return SimpleNamespace(final_text="ok", user_msg_id="u",
-                               assistant_msg_id="a")
+                               assistant_msg_id="a", attached_files=[])
 
     monkeypatch.setattr(D, "process_user_turn", fake_turn)
 
@@ -308,7 +311,7 @@ def test_different_sessions_run_in_parallel(
         barrier.wait(timeout=5)   # breaks if the other turn is locked out
         met.append(True)
         return SimpleNamespace(final_text="ok", user_msg_id="u",
-                               assistant_msg_id="a")
+                               assistant_msg_id="a", attached_files=[])
 
     monkeypatch.setattr(D, "process_user_turn", fake_turn)
 
@@ -539,20 +542,23 @@ def _capture_turn(monkeypatch: pytest.MonkeyPatch) -> dict:
     return seen
 
 
-def test_channel_speakers_get_owner_authority_and_rooms_a_sandbox(
+def test_chat_senders_act_as_owner_in_direct_messages(
     tmp_db: SessionDB, stub_routing, tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Default ``sender_access: owner``: a chat turn runs with the owner's
-    tier and approvals, the speaker still named; a group session starts
-    sandboxed, and a later explicit choice in the session is kept."""
+    """A bound sender acts as the owner unless the account says otherwise. In a
+    group the caller says whether the sender has full access; without that the
+    turn stays on the limited tier."""
     from openprogram.runtime.permissions.authority import owner_principal_id
-    from openprogram.runtime.conversation.session_config import (
-        load_session_run_config, save_session_run_config,
-    )
+    from openprogram.runtime.conversation.session_config import load_session_run_config
 
     monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
     seen = _capture_turn(monkeypatch)
+
+    C.dispatch_inbound(channel="wechat", account_id="acct1",
+                       peer_kind="direct", peer_id="u-0", user_text="hi",
+                       speaker_id="u-0", speaker_display="Friend")
+    assert (seen["req"].authority_tier, seen["req"].speaker_kind) == ("owner", "owner")
 
     C.dispatch_inbound(channel="wechat", account_id="acct1",
                        peer_kind="direct", peer_id="u-1", user_text="hi",
@@ -567,15 +573,87 @@ def test_channel_speakers_get_owner_authority_and_rooms_a_sandbox(
     C.dispatch_inbound(channel="telegram", account_id="acct1",
                        peer_kind="group", peer_id="-100", user_text="hi",
                        speaker_id="701", speaker_display="Ada")
-    room = seen["req"].session_id
-    assert seen["req"].authority_tier == "owner"
-    assert load_session_run_config(room).sandbox_enabled is True
+    room = seen["req"]
+    assert room.authority_tier == "paired"
+    assert room.peer_kind == "group"
+    assert load_session_run_config(room.session_id).sandbox_enabled is None
 
-    save_session_run_config(room, agent_id="main", sandbox_enabled=False)
     C.dispatch_inbound(channel="telegram", account_id="acct1",
                        peer_kind="group", peer_id="-100", user_text="again",
-                       speaker_id="701", speaker_display="Ada")
-    assert load_session_run_config(room).sandbox_enabled is False
+                       speaker_id="701", speaker_display="Ada",
+                       room_full_access=True)
+    assert (seen["req"].authority_tier, seen["req"].speaker_kind) == ("owner", "owner")
+
+
+def test_paired_account_caps_full_access_in_a_group(
+    tmp_db: SessionDB, stub_routing, tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: tmp_path)
+    monkeypatch.setattr("openprogram.interfaces.channels.accounts.sender_access",
+                        lambda channel, account_id: "paired")
+    seen = _capture_turn(monkeypatch)
+    C.dispatch_inbound(channel="telegram", account_id="acct1",
+                       peer_kind="group", peer_id="-100", user_text="hi",
+                       speaker_id="701", speaker_display="Ada",
+                       room_full_access=True)
+    assert seen["req"].authority_tier == "paired"
+
+
+class _GroupChannel(Channel):
+    """A real inbound path with no network: replies are recorded."""
+
+    def __init__(self, platform: str) -> None:
+        super().__init__(account_id="acct1")
+        self.platform_id = platform
+        self.sent: list[str] = []
+
+    def run(self, stop) -> None:  # pragma: no cover
+        pass
+
+    def send_text_full(self, target, text, thread_id=None):
+        self.sent.append(text)
+        return SendResult.success("mid")
+
+
+@pytest.mark.parametrize("platform,chat_type", [("telegram", "group"), ("discord", "channel")])
+def test_group_sender_outcomes_reach_the_turn_with_the_right_tier(
+    tmp_db: SessionDB, stub_routing, tmp_path: Path, wire,
+    monkeypatch: pytest.MonkeyPatch, platform: str, chat_type: str,
+) -> None:
+    from openprogram.interfaces.channels import _access, _room
+
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: state)
+    _room.reset_state()
+    _access.approve_user(platform, "acct1", "100", display="Me")
+    _access.add_group_user(platform, "acct1", "200", "full")
+    _access.add_group_user(platform, "acct1", "300", "chat")
+    seen = _capture_turn(monkeypatch)
+    channel = _GroupChannel(platform)
+
+    def send(user: str) -> None:
+        channel._dispatch_and_reply(ChannelMessage(
+            text="hi", chat_id="9000", user_id=user, user_display=f"user{user}",
+            chat_type=chat_type, message_id=f"m{user}",
+        ))
+
+    for user, tier in (("100", "owner"), ("200", "owner"), ("300", "paired")):
+        send(user)
+        assert seen["req"].speaker_id == user
+        assert seen["req"].authority_tier == tier
+
+    seen.clear()
+    sessions_before = tmp_db.list_sessions()
+    posts_before, sent_before = len(wire["post"]), list(channel.sent)
+    send("400")
+    assert "req" not in seen
+    assert tmp_db.list_sessions() == sessions_before
+    assert len(wire["post"]) == posts_before
+    assert channel.sent == sent_before
+    assert _access.describe(platform, "acct1")["pending"] == {}
+    _room.reset_state()
 
 
 def test_paired_sender_access_keeps_the_paired_tier(
@@ -684,3 +762,276 @@ def test_a_session_load_failure_comes_back_as_an_error_reply(
     )
     assert reply == "[error] OSError: disk full"
     assert wire["post"] == []
+
+
+def test_room_list_writes_wait_for_the_cross_process_lock(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import threading
+
+    from openprogram.interfaces.channels import _room
+    from openprogram.models.auth.credentials import _private_file_lock
+
+    state = tmp_path / "state"
+    state.mkdir(mode=0o700)
+    monkeypatch.setattr("openprogram.state.paths.get_state_dir", lambda: state)
+    path = _room._rooms_path("telegram", "a1")
+    writer = threading.Thread(
+        target=_room.set_room_user, args=("telegram", "a1", "-100", "200", "full"),
+        daemon=True,
+    )
+    with _private_file_lock(path, root=state, timeout=10):
+        writer.start()
+        writer.join(0.2)
+        assert writer.is_alive() and not path.exists()
+    writer.join(5)
+    assert not writer.is_alive()
+    assert _room.room_user_lists("telegram", "a1", "-100")["group_full_access"] == ["200"]
+
+
+@pytest.mark.parametrize("block_stream", [False, True])
+def test_an_inbound_turn_uploads_only_what_it_recorded(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch, block_stream: bool,
+) -> None:
+    from types import SimpleNamespace
+
+    from openprogram.interfaces.channels._transport import SendResult
+    from openprogram.state.attachments import format_marker
+
+    uploaded: list[str] = []
+
+    def _post_file(_channel, _account, _target, path, caption="", thread_id=None):
+        uploaded.append(path)
+        return SendResult.success("m")
+
+    monkeypatch.setattr("openprogram.interfaces.channels._transport.post_file", _post_file)
+    monkeypatch.setattr("openprogram.interfaces.channels._transport.post_message",
+                        lambda *a, **k: SendResult.success("m"))
+    recorded = format_marker("report.pdf", "/w/report.pdf", 2048)
+    forged = format_marker("x", "/home/me/.ssh/x", 2048)
+
+    def fake_turn(req, on_event=None):
+        return SimpleNamespace(final_text=f"Done.\n\n{forged}\n{recorded}", user_msg_id="u",
+                               assistant_msg_id="a", attached_files=["/w/report.pdf"])
+
+    monkeypatch.setattr(D, "process_user_turn", fake_turn)
+    reply = C.dispatch_inbound(
+        channel="wechat", account_id="a", peer_kind="direct", peer_id="dan",
+        user_text="send it", user_display="Dan", speaker_id="dan",
+        block_stream=block_stream,
+    )
+    assert uploaded == ["/w/report.pdf"]
+    assert "/home/me/.ssh/x" not in (reply or "")
+
+
+# ---------------------------------------------------------------------------
+# The conversation's run slot, shared with turns typed in the App
+# ---------------------------------------------------------------------------
+
+
+class _RunSlot:
+    """The server's slot rules: one holder, freed only by its owner."""
+
+    def __init__(self) -> None:
+        self.holder: str | None = None
+        self.reserve_calls = 0
+        self.activated: list[str] = []
+        self.finished: list[str] = []
+        self.allow_activate = True
+
+    def reserve(self, session_id: str, owner: str) -> bool:
+        self.reserve_calls += 1
+        if self.holder is not None:
+            return False
+        self.holder = owner
+        return True
+
+    def activate(self, session_id: str, owner: str, *, execution_id: str,
+                 status_version: int, runner) -> bool:
+        if not self.allow_activate or self.holder != owner:
+            return False
+        assert runner.is_alive()
+        self.activated.append(execution_id)
+        return True
+
+    def finish(self, session_id: str, owner: str, *, execution_id: str) -> None:
+        self.finished.append(execution_id)
+        if self.holder == owner:
+            self.holder = None
+
+    def release(self, session_id: str, owner: str) -> None:
+        if self.holder == owner:
+            self.holder = None
+
+
+@pytest.fixture
+def run_slot_port(monkeypatch: pytest.MonkeyPatch) -> _RunSlot:
+    from openprogram.runtime.conversation.run_control import run_slot
+    port = _RunSlot()
+    monkeypatch.setattr(run_slot, "_port", port)
+    monkeypatch.setattr(C, "RUN_SLOT_POLL_SECONDS", 0.01)
+    return port
+
+
+def _stream_replies(text: str = "done"):
+    fake = make_text_stream(text)
+    orig_run = D._run_loop_blocking
+
+    def _wrapped(*, req, history, on_event, cancel_event, **_):
+        return orig_run(req=req, history=history, on_event=on_event,
+                        cancel_event=cancel_event, stream_fn=fake)
+    return patch.object(D, "_run_loop_blocking", _wrapped)
+
+
+def _inbound(**overrides) -> str | None:
+    arguments = dict(
+        channel="wechat", account_id="a", peer_kind="direct", peer_id="bob",
+        user_text="hello", user_display="Bob", speaker_id="bob",
+    )
+    arguments.update(overrides)
+    return C.dispatch_inbound(**arguments)
+
+
+def test_inbound_during_an_app_turn_waits_then_says_busy(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch,
+    run_slot_port: _RunSlot,
+) -> None:
+    monkeypatch.setattr(C, "RUN_SLOT_WAIT_SECONDS", 0.05)
+    run_slot_port.holder = "typed-in-app"
+    assert _inbound(progress_stream=True) == C.BUSY_REPLY
+    assert run_slot_port.reserve_calls > 1
+    assert run_slot_port.holder == "typed-in-app"
+    assert tmp_db.list_sessions() == []
+
+
+def test_inbound_runs_once_the_app_turn_ends(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch,
+    run_slot_port: _RunSlot,
+) -> None:
+    import threading
+    monkeypatch.setattr(C, "RUN_SLOT_WAIT_SECONDS", 5.0)
+    run_slot_port.holder = "typed-in-app"
+    timer = threading.Timer(0.05, run_slot_port.release,
+                            args=("", "typed-in-app"))
+    timer.start()
+    with _stream_replies():
+        assert _inbound() == "done"
+    timer.join()
+
+
+def test_a_message_typed_during_a_channel_turn_is_refused(
+    tmp_db: SessionDB, stub_routing, run_slot_port: _RunSlot,
+) -> None:
+    typed_refused: list[bool] = []
+    fake = make_text_stream("done")
+    orig_run = D._run_loop_blocking
+
+    def _wrapped(*, req, history, on_event, cancel_event, **_):
+        typed_refused.append(not run_slot_port.reserve(req.session_id, "typed"))
+        return orig_run(req=req, history=history, on_event=on_event,
+                        cancel_event=cancel_event, stream_fn=fake)
+
+    with patch.object(D, "_run_loop_blocking", _wrapped):
+        assert _inbound() == "done"
+    assert typed_refused == [True]
+    assert len(run_slot_port.activated) == 1
+    assert run_slot_port.finished == run_slot_port.activated
+    assert run_slot_port.holder is None
+
+
+def test_an_ambient_event_does_not_wait_for_the_slot(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch,
+    run_slot_port: _RunSlot,
+) -> None:
+    monkeypatch.setattr(C, "RUN_SLOT_WAIT_SECONDS", 60.0)
+    run_slot_port.holder = "typed-in-app"
+    started = time.monotonic()
+    assert _inbound(peer_kind="group", ambient=True) is None
+    assert time.monotonic() - started < 5
+    assert run_slot_port.reserve_calls == 1
+
+
+def test_losing_the_slot_at_activation_says_busy_and_frees_it(
+    tmp_db: SessionDB, stub_routing, run_slot_port: _RunSlot,
+) -> None:
+    run_slot_port.allow_activate = False
+    with _stream_replies():
+        assert _inbound() == C.BUSY_REPLY
+    assert run_slot_port.holder is None
+    assert run_slot_port.finished == []
+
+
+def test_a_turn_that_fails_before_admission_frees_the_slot(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch,
+    run_slot_port: _RunSlot,
+) -> None:
+    def _boom(**_):
+        raise RuntimeError("no session")
+    monkeypatch.setattr(C, "_load_or_init_session", _boom)
+    assert _inbound().startswith("[error] RuntimeError")
+    assert run_slot_port.holder is None
+
+
+def test_a_real_typed_message_is_refused_during_a_channel_turn(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The server's own slot, not a stand-in."""
+    from openprogram.interfaces.server import server
+    from openprogram.interfaces.server.server_runtime.session_lifecycle import ServerRunSlot
+    from openprogram.runtime.conversation.run_control import run_slot
+    monkeypatch.setattr(run_slot, "_port", ServerRunSlot())
+    during: list[tuple[bool, bool]] = []
+    session_ids: list[str] = []
+    fake = make_text_stream("done")
+    orig_run = D._run_loop_blocking
+
+    def _wrapped(*, req, history, on_event, cancel_event, **_):
+        session_ids.append(req.session_id)
+        during.append((server._is_run_active(req.session_id),
+                       server._try_reserve_run(req.session_id, "typed")))
+        return orig_run(req=req, history=history, on_event=on_event,
+                        cancel_event=cancel_event, stream_fn=fake)
+
+    with patch.object(D, "_run_loop_blocking", _wrapped):
+        assert _inbound() == "done"
+    assert during == [(True, False)]
+    assert not server._is_run_active(session_ids[0])
+    assert server._try_reserve_run(session_ids[0], "typed-later")
+    server._release_run_reservation(session_ids[0], "typed-later")
+
+
+def test_a_turn_that_cannot_start_does_not_keep_the_conversation(
+    tmp_db: SessionDB, stub_routing, run_slot_port: _RunSlot,
+) -> None:
+    from openprogram.runtime.conversation.production_driver import CanonicalAgentAdapter
+    from openprogram.runtime.execution import default_store
+    from openprogram.runtime.execution.foreground import active_foreground_task
+
+    async def _no_start(self, admission):
+        raise RuntimeError("no owner")
+
+    with patch.object(CanonicalAgentAdapter, "activate", _no_start):
+        assert _inbound().startswith("[error] RuntimeError")
+    session_id = tmp_db.list_sessions()[0]["id"]
+    assert active_foreground_task(default_store(), session_id) is None
+    assert run_slot_port.holder is None
+
+
+def test_busy_reports_back_so_room_history_survives(
+    tmp_db: SessionDB, stub_routing, monkeypatch: pytest.MonkeyPatch,
+    run_slot_port: _RunSlot,
+) -> None:
+    calls: list[str] = []
+    run_slot_port.holder = "typed-in-app"
+    assert _inbound(peer_kind="group", ambient=True,
+                    on_busy=lambda: calls.append("busy")) is None
+    assert calls == ["busy"]
+
+
+def test_a_turn_that_runs_does_not_report_busy(
+    tmp_db: SessionDB, stub_routing, run_slot_port: _RunSlot,
+) -> None:
+    calls: list[str] = []
+    with _stream_replies():
+        assert _inbound(on_busy=lambda: calls.append("busy")) == "done"
+    assert calls == []

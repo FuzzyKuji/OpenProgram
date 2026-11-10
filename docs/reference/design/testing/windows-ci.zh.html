@@ -1,19 +1,35 @@
-<!doctype html><html lang="zh-CN"><meta charset="utf-8"><title>Windows CI 完整执行</title><body><main>
-<h1>Windows CI 完整执行</h1>
-<p>原生 x64 和 ARM64 作业使用四个 worker 执行平台合同及完整单元测试。测试计数完成不代表错误报告和进程退出已完成。</p>
-<h2>跨平台测试参数</h2>
-<p>大型参数化载荷使用显式短测试 ID。Pytest 会把完整节点 ID 写入 PYTEST_CURRENT_TEST；Windows 环境变量值必须少于 32767 个字符。从 8 MiB 图像字符串生成 ID 会阻止 setup 和 teardown，并在整个错误报告中重复载荷。载荷字节保持不变。POSIX mode 断言只在 POSIX 系统运行；目录往返测试仍在 Windows 运行。</p>
-<h2>失败诊断</h2>
-<p>Windows Python 输出不使用缓冲，单元测试结果包含测试名称。无论成功失败，均上传完整输出和单独的 traceback 文件。进程级 traceback 期限替代 pytest faulthandler 插件，避免异常报告取消该期限；它覆盖测试执行、报告和退出。测试步骤与作业也有有限执行期限。失败测试保持非零退出状态，不删除测试，也不将其视为通过。</p>
-<h2>文档读取与测试资源归属</h2>
-<p>文档发布在打开时通过设备和 inode 绑定文件身份，分别在描述符与路径名 stat API 内比较元数据稳定性。Windows 可能以不同方式表示时间戳；稳定的表示差异不能产生冲突。任一 API 内发生变化，或内容版本不匹配，仍拒绝发布并保留原始字节。</p>
-<p>历史归属测试 fixture 在构造后立即注册 SessionStore.close。关闭操作在生产线程 teardown 检查运行前取消并等待延迟索引写入线程，包括 setup 或断言失败的情况。检查机制保持不变。</p>
-<p>tracked-dispatch 测试 fixture 保留其 JobRunner，并在取得后立即注册清理。它们请求既有的不等待单例关闭，然后等待 dispatcher、reconciler 和 budget 线程，再关闭 SessionStore。生产关闭操作具有有限期限，并不证明测试所属资源已退出。</p>
-<p>子进程事件清理测试断言：普通回调仍阻塞时结果已经返回，随后释放并等待回调线程。setup 和主机调度时间不算回调清理延迟。同步期限用于检测挂起，不作为性能断言。</p>
-<h2>验收</h2>
-<p>两种原生架构都必须完成完整单元测试和平台合同。故意阻塞的诊断进程必须输出 Python 栈并以失败状态退出。普通失败测试必须输出详情并以失败状态退出。</p>
-<h2>实现状态</h2>
-<p>文档路由 fixture 隔离 HOME 和 USERPROFILE，并使用原始路径函数解析状态。因此延迟导入保留的是跟随当前环境的函数，而不是绑定到先前测试目录的临时 fixture 函数。</p>
-<p>原生 x64 诊断确认参数 ID 过长和仅适用于 POSIX 的权限断言问题。两者均已修正；最终原生 x64 和 ARM64 回归检查仍待完成。</p>
-<p>文档读取的可移植性和 fixture 清理通过公开文件写入回归覆盖、相关测试及独立规格与质量审查。四个 worker 的连续三次完整本地测试也通过。原生 Windows 确认仍待完成。</p>
-</main></body></html>
+<title>Windows CI 完成</title>
+<meta name="description" content="让原生 Windows 测试运行能结束并报告失败的规则。">
+<h1>Windows CI 完成</h1>
+
+<p>原生 x64 和 ARM64 作业用四个 worker 运行平台契约和完整单元测试。被阻塞的诊断进程和普通失败的测试都必须输出详情并以失败退出。</p>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">关注点</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">过长的测试 ID</th><td>大型参数化载荷使用显式的短 ID：pytest 把节点 ID 写入 <code translate="no">PYTEST_CURRENT_TEST</code>，Windows 环境变量值上限低于 32767 字符。载荷字节不变。</td></tr>
+<tr><th scope="row">POSIX 断言</th><td>权限位检查只在 POSIX 上运行；目录往返测试在 Windows 上照常运行</td></tr>
+<tr><th scope="row">输出</th><td>Python 不缓冲；单元测试结果带测试名；成功和失败都上传完整输出和 traceback 文件</td></tr>
+<tr><th scope="row">挂起</th><td>进程级 traceback 截止时间取代 pytest faulthandler 插件，并覆盖报告和退出；步骤和作业都有时限</td></tr>
+<tr><th scope="row">失败的测试</th><td>保持非零退出码；不删除测试，也不当作通过</td></tr>
+<tr><th scope="row">截止时间</th><td>同步截止时间是看门狗，不是性能断言</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Fixture 归属和文档读取</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">范围</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">文档发布</th><td>打开时按设备和 inode 绑定文件身份，并在描述符和路径两套 stat API 内分别比较元数据稳定性，因为 Windows 的时间戳表示可能不同。任一 API 内发生变化或内容版本不匹配，都拒绝发布并保留原始字节。</td></tr>
+<tr><th scope="row">文档路由 fixture</th><td>隔离 <code translate="no">HOME</code> 和 <code translate="no">USERPROFILE</code>，用原始路径函数解析状态，使惰性导入跟随当前环境</td></tr>
+<tr><th scope="row">历史归属 fixture</th><td>构造后立即注册 <code translate="no">SessionStore.close</code>；关闭时在生产线程收尾守卫运行前取消并合并延迟的索引写入线程</td></tr>
+<tr><th scope="row">跟踪派发 fixture</th><td>保留 <code translate="no">JobRunner</code>，获取后立即注册清理；先请求不等待的单例关闭，再合并 dispatcher、reconciler 和 budget 线程，最后关闭 <code translate="no">SessionStore</code></td></tr>
+<tr><th scope="row">子进程事件清理</th><td>断言回调阻塞时结果已返回，然后释放并合并回调线程；准备和主机调度时间不算延迟</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="status">实现状态</h2>
+
+<p>最终的 x64 和 ARM64 原生回归确认尚未完成。</p>

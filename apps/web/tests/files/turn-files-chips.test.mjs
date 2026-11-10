@@ -17,7 +17,7 @@ await build({
   stdin: {
     contents: [
       'export { TurnFilesChips } from "./components/chat/messages/turn-files/turn-files-chips.tsx";',
-      'export { useSessionStore } from "./lib/session-store/index.ts";',
+      'export { selectRow, useSessionStore } from "./lib/session-store/index.ts";',
       'export { setSocket } from "./lib/runtime-bridge/state.ts";',
       'export { useCenterTabs } from "./lib/tabs/center-tabs-store.ts";',
     ].join("\n"),
@@ -92,7 +92,7 @@ class FakeSocket {
 
 const { act, createElement } = await import("react");
 const { createRoot } = await import("react-dom/client");
-const { TurnFilesChips, setSocket, useCenterTabs, useSessionStore } = await import(pathToFileURL(bundlePath));
+const { TurnFilesChips, setSocket, useCenterTabs, useSessionStore, selectRow } = await import(pathToFileURL(bundlePath));
 
 async function flush() {
   await act(async () => {
@@ -187,7 +187,7 @@ test("legacy file cards hide empty results, retry errors, and ignore stale respo
 test("successful legacy summaries survive card remount without loading or repeated requests", async () => {
  const socket=new FakeSocket();setSocket(socket);const host=document.querySelector("#root"),root=createRoot(host);
  const sid="cached-session",id="cached-message";
- useSessionStore.setState({messageOrder:{[sid]:[id]},messagesById:{[id]:{id,role:"assistant",status:"done",content:""}}});
+ useSessionStore.setState({messageOrder:{[sid]:[id]},rowsByView:{[sid]:{[id]:{id,role:"assistant",status:"done",content:""}}}});
  const props={assistantMsgId:id,sessionIdOverride:sid,blocks:[{type:"tool",tool:"apply_patch",is_error:false}]};
  await act(async()=>root.render(createElement(TurnFilesChips,props)));await flush();
  await act(async()=>respond(socket,latestReviewRequest(socket),{files:[{path:"/repo/a.ts",rel:"a.ts",op:"modify",added:2,removed:1}],file_count:1}));
@@ -198,7 +198,7 @@ test("successful legacy summaries survive card remount without loading or repeat
  assert.equal(scans,0,"unrelated store updates must not rescan unchanged message ownership");
  delete order.includes;
  await act(async()=>root.render(null));
- useSessionStore.getState().setMessages(sid,[{id,role:"assistant",status:"done",content:"Reloaded"}]);
+ useSessionStore.getState().applyRead(sid,[{id,role:"assistant",status:"done",content:"Reloaded"}]);
  const count=socket.sent.filter(f=>f.action==="review_scope").length;
  await act(async()=>root.render(createElement(TurnFilesChips,props)));
  assert.match(host.textContent,/a.ts/,"cached summary renders immediately");await flush();
@@ -333,7 +333,7 @@ test("Undo asks the server to revert the turn, then marks the message reverted a
   const host = document.querySelector("#root");
   const root = createRoot(host);
   const sid = "history-session", id = "history-message";
-  useSessionStore.setState({ messageOrder: { [sid]: [id] }, messagesById: { [id]: { id, role: "assistant", status: "done", content: "" } } });
+  useSessionStore.setState({ messageOrder: { [sid]: [id] }, rowsByView: { [sid]: { [id]: { id, role: "assistant", status: "done", content: "" } } } });
   const announced = [];
   const onChanged = (event) => announced.push(event.detail);
   window.addEventListener("turn-files-history-changed", onChanged);
@@ -359,13 +359,37 @@ test("Undo asks the server to revert the turn, then marks the message reverted a
   const stateRequests = socket.sent.filter((frame) => frame.action === "turn_history_state").length;
   await act(async () => { respondTo(socket, "revert_turn", { session_id: sid, msg_id: id, status: "ok" }); });
   await flush();
-  assert.equal(useSessionStore.getState().messagesById[id].reverted, true);
+  assert.equal(selectRow(sid, id)(useSessionStore.getState()).reverted, true);
   assert.deepEqual(announced, [{ sessionId: sid, assistantMsgId: id }]);
   assert.equal(host.querySelector(".turn-files-card").dataset.reverted, "1");
   assert.equal(socket.sent.filter((frame) => frame.action === "turn_history_state").length, stateRequests + 1,
     "the history state is fetched again after the change");
 
   window.removeEventListener("turn-files-history-changed", onChanged);
+  await act(async () => root.unmount());
+  setSocket(null);
+});
+
+test("a list spanning turns withholds Undo and keeps its own rows, asking the server for neither", async () => {
+  const socket = new FakeSocket();
+  setSocket(socket);
+  const host = document.querySelector("#root");
+  const root = createRoot(host);
+  const files = ["a.py", "b.py"].map((path) => ({ path, op: "edit", added: 1, removed: 0 }));
+  const summary = { version: 1, files, file_count: 5, added: 2, removed: 0, spansTurns: true };
+  await act(async () => {
+    root.render(createElement(TurnFilesChips, { assistantMsgId: "joined", sessionIdOverride: "joined-session", summary }));
+  });
+  await flush();
+  const action = host.querySelector(".turn-files-action");
+  assert.equal(action.getAttribute("aria-disabled"), "true");
+  assert.match(action.getAttribute("aria-label"), /^Undo: This reply continued after a restart/);
+  assert.match(host.textContent, /5 files changed/);
+  assert.equal(host.querySelectorAll(".turn-files-row:not(.turn-files-overflow)").length, 2);
+  assert.match(host.querySelector(".turn-files-overflow").textContent, /and 3 more files/);
+  assert.deepEqual(socket.sent.filter((frame) => ["review_scope", "turn_history_state"].includes(frame.action)), []);
+  await act(async () => { action.dispatchEvent(new window.Event("click", { bubbles: true })); });
+  assert.equal(socket.sent.some((frame) => frame.action === "revert_turn"), false);
   await act(async () => root.unmount());
   setSocket(null);
 });

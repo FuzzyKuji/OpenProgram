@@ -3,6 +3,7 @@
 Run: python -m scripts.docs_site.checklang
 Code examples, scripts, styles and compatibility-anchor attributes are not prose.
 Chinese counterparts use the .zh suffix and are checked through bilingual reviews.
+scripts.docs_site.check reuses prose_violations; this command stays for the whole tree.
 """
 from __future__ import annotations
 
@@ -27,6 +28,9 @@ class _ProseParser(HTMLParser):
             if name in {"alt", "title", "aria-label", "placeholder"} and value:
                 if _CJK.search(value) and value.strip() not in {"中文", "简体中文"}:
                     self.bad.append((self.getpos()[0], f"{name}: {value[:100]}"))
+        fields = dict(attrs)
+        if tag == "meta" and (fields.get("name") or "").lower() == "description" and _CJK.search(fields.get("content") or ""):
+            self.bad.append((self.getpos()[0], f"description: {fields['content'][:100]}"))
         if tag in {"script", "style", "pre", "code"}:
             self.skip.append(tag)
 

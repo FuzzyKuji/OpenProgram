@@ -26,19 +26,19 @@ async function mark(provider) {
   return html;
 }
 
-test("a one-colour logo is drawn in the text colour through a mask", async () => {
+test("a one-colour logo is a BrandMark masked in the text colour", async () => {
   const html = await mark("openai-codex");
   assert.match(html, /data-provider-logo="openai-codex"/);
-  assert.match(html, /bg-current/);
+  assert.match(html, /data-brand-mark="fill"/);
+  assert.match(html, /background-color:currentColor/);
   assert.match(html, /mask:url\(&quot;\/images\/providers\/openai\.svg&quot;\)/);
 });
 
-test("a logo is drawn at a Solar glyph's live area, centred in its box", async () => {
+test("a logo fills its 16 px box", async () => {
+  // OpenAI's ink is 24 x 23.79 units: 16 px wide, centred.
   const html = await mark("openai-codex");
-  assert.match(html, /style="width:16px;height:16px/);
-  assert.match(html, /items-center justify-center/);
-  assert.match(html, /<span style="width:13\.33px;height:13\.33px;mask:/);
-  assert.match(await mark("anthropic"), /<img[^>]+style="width:13\.33px;height:13\.33px"/);
+  assert.match(html, /^<span style="width:16px;height:16px[;"]/);
+  assert.match(html, /<span style="position:absolute;left:0;top:0\.07px;width:16px;height:16px;/);
 });
 
 test("a coloured logo is the brand's own picture", async () => {

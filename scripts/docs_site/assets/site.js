@@ -18,13 +18,13 @@
       search: "搜索文档", search_ph: "搜索标题或正文…", on_this_page: "本页内容",
       prev: "上一篇", next: "下一篇", updated: "最后更新", nav_filter: "过滤目录…",
       copy: "复制", copied: "已复制 ✓", copy_fail: "复制失败", search_empty: "无匹配结果",
-      table_scroll: "文档表格", reading: "阅读进度", code: "代码",
+      table_scroll: "文档表格", reading: "阅读进度", code: "代码", skip: "跳到正文",
     },
     en: {
       search: "Search docs", search_ph: "Search titles or text…", on_this_page: "On this page",
       prev: "Previous", next: "Next", updated: "Last updated", nav_filter: "Filter docs…",
       copy: "Copy", copied: "Copied ✓", copy_fail: "Copy failed", search_empty: "No results",
-      table_scroll: "Documentation table", reading: "Reading progress", code: "Code",
+      table_scroll: "Documentation table", reading: "Reading progress", code: "Code", skip: "Skip to content",
     },
   };
   let curLang = "en";
@@ -301,7 +301,8 @@
     // Markdown tables are emitted without a wrapper. Keep authored scroll
     // containers intact, and wrap each remaining table exactly once so a
     // narrow article can scroll the table without scrolling the whole page.
-    document.querySelectorAll("article table").forEach((table) => {
+    // HTML document tables reflow on narrow columns instead of scrolling.
+    document.querySelectorAll("article:not(.doc) table").forEach((table) => {
       const columns = Array.from(table.rows[0]?.cells || []).reduce((sum, cell) => sum + cell.colSpan, 0);
       if (columns > 2) table.style.minWidth = Math.max(parseFloat(getComputedStyle(table).minWidth) || 0, columns * 128) + "px";
       let scroller = table.parentElement;
@@ -325,7 +326,7 @@
       if (pre.closest(".code-frame") || pre.querySelector(".copy-btn")) return;
       const code = pre.querySelector("code") || pre;
       const frame = document.createElement("div");
-      frame.className = "code-frame";
+      frame.className = pre.closest("article.doc") ? "code-frame code-plain" : "code-frame";
       const header = document.createElement("div");
       header.className = "code-header";
       const label = document.createElement("span");
@@ -574,7 +575,10 @@
     // main article + toc
     const curArticle = document.querySelector("main.content article");
     const newArticle = doc.querySelector("main.content article");
-    if (curArticle && newArticle) curArticle.innerHTML = newArticle.innerHTML;
+    if (curArticle && newArticle) {
+      curArticle.className = newArticle.className;
+      curArticle.innerHTML = newArticle.innerHTML;
+    }
     const curToc = document.querySelector("aside.toc");
     const newToc = doc.querySelector("aside.toc");
     if (curToc) curToc.innerHTML = newToc ? newToc.innerHTML : "";

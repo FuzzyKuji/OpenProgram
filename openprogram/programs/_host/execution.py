@@ -316,10 +316,8 @@ def dispatch_sandbox_error(
             else:
                 violation = validate_write_path(_path_for_write_check(raw))
             if violation:
-                return AgentToolResult(
-                    content=[TextContent(text=f"Error: sandbox policy: {violation}")],
-                    is_error=True,
-                )
+                from openprogram.runtime.permissions import refusal
+                return refusal.sandbox(tool_name, violation).result()
 
     for key in url_params or ():
         if key not in args:

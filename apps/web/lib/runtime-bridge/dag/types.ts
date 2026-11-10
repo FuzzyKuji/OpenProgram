@@ -2,7 +2,7 @@
  * History DAG renderer — shared types + constants.
  *
  * See ``./README.md`` for the module layout and
- * ``docs/reference/design/runtime/dag/rendering.md`` §1 for the node-field
+ * ``docs/reference/design/runtime/dag/rendering.html`` §1 for the node-field
  * semantics (function, role, _tier, _depth, _lane).
  */
 

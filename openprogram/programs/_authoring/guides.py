@@ -10,8 +10,9 @@ to the full instructions at the moment it uses a feature:
 ``lookup``    listed by name with ``summary``; ``help(name)`` returns it.
 ``on_error``  a failed result of a call matching ``when`` carries it.
 
-``required_for(args)`` marks a guide the call cannot run without: permission
-refuses the call and the refusal carries the guide, so the retry is informed.
+``required_for(args)`` marks a guide the call cannot run without:
+``prechecks.call_problem`` sends the call back and the result carries the guide,
+so the retry is informed.
 
 Whether the model knows a guide is read from the context it is looking at, not
 from a ledger: a guide counts as known while its marked text is in the last
@@ -19,9 +20,11 @@ request the loop sent (or in a result delivered since). Compaction, cleared
 tool results, a new agent and a restarted worker all drop the text, and the
 next call that needs the guide delivers it again.
 
-Design: docs/reference/design/function/tool-guides.md
+Design: docs/reference/design/function/tool-guides.html
 """
 from __future__ import annotations
+
+import json
 
 import contextvars
 from dataclasses import dataclass, field
@@ -169,7 +172,10 @@ def known(name: str) -> bool:
     view = _view.get()
     if view is None:
         return True
-    return name in view.delivered or marker(name) in view.text
+    tag = marker(name)
+    # A prompt from another speaker (an agent starting this one) reaches the
+    # model inside a JSON envelope, where the marker's quotes are escaped.
+    return name in view.delivered or tag in view.text or json.dumps(tag)[1:-1] in view.text
 
 
 def _mark_delivered(guides: Iterable[Guide]) -> None:

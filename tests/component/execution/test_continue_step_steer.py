@@ -40,7 +40,6 @@ def _paused(tmp_path):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker",
-        ttl_seconds=30,
         attempt_id="attempt_1",
     )
     active, running = attempts.activate(
@@ -113,7 +112,6 @@ def test_resume_rejects_an_existing_idle_owner_concurrently(tmp_path, operation)
         paused.execution_id,
         expected_version=paused.status_version,
         owner_id="worker_2",
-        ttl_seconds=30,
         attempt_id="attempt_2",
     )
 
@@ -151,7 +149,6 @@ def test_owner_loss_paused_idle_attempt_applies_pause_and_is_idempotent(
         paused.execution_id,
         expected_version=paused.status_version,
         owner_id="worker_2",
-        ttl_seconds=30,
         attempt_id="attempt_2",
     )
 
@@ -774,7 +771,6 @@ def test_pause_and_step_applied_fast_paths_reject_cross_execution_command(tmp_pa
         other.execution_id,
         expected_version=other.status_version,
         owner_id="other-worker",
-        ttl_seconds=30,
         attempt_id="other_attempt",
     )
     other_attempt, other_running = attempts.activate(

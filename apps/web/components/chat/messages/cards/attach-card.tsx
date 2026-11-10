@@ -15,7 +15,8 @@ import { useEffect, useRef, useState } from "react";
 
 import type { ChatMsg } from "@/lib/session-store";
 
-import { useSessionStore } from "@/lib/session-store";
+import { selectRow, selectViewRows, useSessionStore } from "@/lib/session-store";
+import { isAgentRunning } from "@/lib/chat/transcript/row-status";
 import { useTranslation } from "@/lib/i18n";
 import type { JobResourceView } from "@/lib/net/ws/ws-events";
 import { navigate } from "@/lib/nav/navigate";
@@ -28,6 +29,7 @@ import {
 } from "@/components/animated-icons";
 import { renderMarkdown, useMarkdownReady } from "../bubbles/markdown";
 import { MessageTimestamp } from "../bubbles/message-actions";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 /** Commands go out as they are; a `load_session` goes through the managed
  *  session read, since the transcript applies only the reply to a read it
@@ -90,8 +92,9 @@ function _findFollowupMsgId(
   const order = s.messageOrder[sessionId] || [];
   const myIdx = order.indexOf(attachMsgId);
   if (myIdx < 0) return null;
+  const rows = selectViewRows(sessionId)(s);
   for (let i = myIdx + 1; i < order.length; i++) {
-    const next = s.messagesById[order[i]];
+    const next = rows[order[i]];
     if (!next) continue;
     if (next.role === "user" && next.source === "job_followup") {
       return next.id;
@@ -101,16 +104,16 @@ function _findFollowupMsgId(
 }
 
 function useFollowupMsgId(attachMsgId: string): string | null {
-  const sessionId = useSessionStore((s) => s.currentSessionId);
+  const sessionId = useRowSessionId();
   return useSessionStore((s) => _findFollowupMsgId(s, sessionId, attachMsgId));
 }
 
 function useFollowupNotice(attachMsgId: string): string | null {
-  const sessionId = useSessionStore((s) => s.currentSessionId);
+  const sessionId = useRowSessionId();
   return useSessionStore((s) => {
     const id = _findFollowupMsgId(s, sessionId, attachMsgId);
     if (!id) return null;
-    return s.messagesById[id]?.content || null;
+    return selectRow(sessionId, id)(s)?.content || null;
   });
 }
 
@@ -121,7 +124,7 @@ export function AttachCard({ msg }: { msg: ChatMsg }) {
   // 默认一行（头部：图标 + 名字 + 状态 + Switch），预览等内容点开才
   // 渲染——中间产物不占版面。运行中的取消按钮保持可见。
   const [expanded, setExpanded] = useState(false);
-  const currentSessionId = useSessionStore((s) => s.currentSessionId);
+  const currentSessionId = useRowSessionId();
   const attach = msg.attach || {};
   const jobId = attach.job_id;
   const executionId = attach.execution_id;
@@ -270,8 +273,7 @@ export function AttachCard({ msg }: { msg: ChatMsg }) {
               <span
                 className={`attach-card-status-pill attach-card-status-${attach.status}`}
               >
-                {attach.status === "running" || attach.status === "pending"
-                  || attach.status === "queued" ? (
+                {isAgentRunning(attach.status) ? (
                   <span className="indicator-dot sm pulse-opacity" />
                 ) : null}
                 {attach.status}
@@ -349,8 +351,7 @@ export function AttachCard({ msg }: { msg: ChatMsg }) {
       ) : null}
       {/* Live-job footer: cancel button for in-flight jobs. */}
       {executionId && typeof expectedVersion === "number"
-        && (attach.status === "running" || attach.status === "pending"
-            || attach.status === "queued") ? (
+        && isAgentRunning(attach.status) ? (
         <div className="attach-card-footer">
           <span className="attach-card-status">
             {text("Running - embedding placeholder until done", "运行中，完成前使用嵌入占位")}

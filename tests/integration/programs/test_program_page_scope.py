@@ -99,11 +99,11 @@ def test_effective_parent_policy_survives_existing_page_scope(tmp_path, scenario
         assert data['parent_decision'][:2] == ['deny', 'PLAN_MODE_DENY']
         assert data['child_mode'] == data['inner_mode'] == 'plan'
     elif scenario == 'live_deny':
-        assert data['parent_decision'][:2] == ['deny', 'PERMISSION_RULE_DENY']
-        assert '[denied]' in data['listed_text']
+        assert data['parent_decision'][:2] == ['deny', 'RULE_DENY']
+        assert '[blocked by rule]' in data['listed_text']
     else:
-        assert data['parent_decision'][:2] == ['ask', 'PERMISSION_RULE_ASK']
-        assert 'interactive local owner' in data['listed_text']
+        assert data['parent_decision'][:2] == ['ask', 'RULE_ASK']
+        assert 'no one to approve' in data['listed_text']
 
 
 def test_new_owner_page_scope_survives_old_interrupted_effect(tmp_path):

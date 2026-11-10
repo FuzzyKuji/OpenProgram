@@ -185,7 +185,8 @@ def execute(file_path: str,
     from openprogram.host.sandbox import validate_read_path
     violation = validate_read_path(file_path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("read", violation)
     if not os.path.exists(file_path):
         return f"Error: file not found: {file_path}"
     if os.path.isdir(file_path):

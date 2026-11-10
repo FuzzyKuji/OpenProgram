@@ -660,7 +660,7 @@ def test_registered_page_inventory_keeps_web_use_when_preview_is_unavailable(
     prompt = browser_prompt.render_for_model(
         context, web_use_enabled=enabled,
     )
-    assert 'computer_use_agent(target="browser"): tabs lists them' in prompt
+    assert 'computer_use_agent(target="browser"): tabs lists the ones this conversation opened' in prompt
     assert "navigate(url) moves the current tab" in prompt
 
 
@@ -759,7 +759,7 @@ def test_subprocess_permission_snapshot_denies_nested_browser_page_before_bypass
 
     assert calls == []
     assert result.is_error is True
-    assert result.details["reason_code"] == "PERMISSION_RULE_DENY"
+    assert result.details["reason_code"] == "RULE_DENY"
 
 
 

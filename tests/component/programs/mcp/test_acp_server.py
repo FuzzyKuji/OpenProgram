@@ -260,7 +260,7 @@ def bind_durable_question_execution(tmp_path: Path, monkeypatch: pytest.MonkeyPa
         attempts = AttemptStore(store)
         leased, reserved = attempts.lease(
             execution.execution_id, expected_version=execution.status_version,
-            owner_id="acp-test", ttl_seconds=30,
+            owner_id="acp-test",
         )
         active, _running = attempts.activate(
             leased.attempt_id, generation=leased.generation,

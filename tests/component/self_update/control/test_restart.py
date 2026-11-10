@@ -48,7 +48,7 @@ def _environment(tmp_path, monkeypatch):
     from openprogram.state import paths
 
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
-    executions = ExecutionStore(tmp_path / "executions.db")
+    executions = ExecutionStore(tmp_path / "run-state")
     revision = executions.create_revision(manifest={"entrypoint": "test"})
     execution = executions.create_execution(
         execution_id="active",
@@ -64,7 +64,6 @@ def _environment(tmp_path, monkeypatch):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="worker",
-        ttl_seconds=300,
     )
     attempt, execution = attempts.activate(
         leased.attempt_id,
@@ -78,9 +77,21 @@ def _environment(tmp_path, monkeypatch):
     runner = SimpleNamespace(_execution_store=executions, _execution_control=service)
     updates = SelfUpdateStore()
     updates.create(_request())
-    updates.transition("su_test", UpdatePhase.STAGING)
+    updates.transition("su_test", UpdatePhase.BUILDING)
     updates.transition("su_test", UpdatePhase.READY)
     return updates, runner, service, attempt
+
+
+def test_an_update_does_not_pause_a_check_in_to_continue_it(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.control.maintenance import enter_maintenance
+    from openprogram.operations.self_update.delivery import restart
+    from openprogram.runtime.execution import restart as policy
+
+    _updates, runner, _service, _attempt = _environment(tmp_path, monkeypatch)
+    monkeypatch.setattr(policy, "is_check_in", lambda _store, _execution_id: True)
+    enter_maintenance("su_test")
+    restart.reconcile(runner)
+    assert runner._execution_store.get_execution("active").status.value == "running"
 
 
 @pytest.mark.parametrize("window", [-1, 7200])
@@ -155,6 +166,21 @@ def test_update_pause_survives_restart_and_continues_once(tmp_path, monkeypatch,
     assert len(runner._execution_store.list_commands("active")) == 2
 
 
+def test_update_leaves_a_turn_another_process_owns(tmp_path, monkeypatch):
+    import json
+    from openprogram.operations.self_update.control.maintenance import enter_maintenance
+    from openprogram.operations.self_update.delivery import restart
+
+    _updates, runner, _service, _attempt = _environment(tmp_path, monkeypatch)
+    with runner._execution_store._transaction() as connection:
+        connection.update("executions", {"owner_lease_json": json.dumps(
+            {"process_owner": {"instance": "a-scheduled-run", "pid": 1, "started": "then"}})}, execution_id="active")
+    enter_maintenance("su_test")
+    restart.reconcile(runner)
+    assert runner._execution_store.get_execution("active").status.value == "running"
+    assert not runner._execution_store.list_commands("active")
+
+
 def test_user_pause_is_not_claimed_by_update(tmp_path, monkeypatch):
     import asyncio
     from openprogram.operations.self_update.delivery import restart
@@ -195,7 +221,7 @@ def test_maintenance_keeps_job_queued_until_release(
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path / "state")
     updates = SelfUpdateStore()
     updates.create(_request())
-    updates.transition("su_test", UpdatePhase.STAGING)
+    updates.transition("su_test", UpdatePhase.BUILDING)
     updates.transition("su_test", UpdatePhase.READY)
     enter_maintenance("su_test")
     runner = JobRunner(max_workers=1)
@@ -245,6 +271,24 @@ def test_supervisor_refreshes_session_status_written_by_worker(tmp_path, monkeyp
         stale.close()
 
 
+def test_a_locked_session_cannot_stall_the_check_past_its_deadline(tmp_path, monkeypatch):
+    from openprogram.operations.self_update.control import supervisor
+    from openprogram.runtime.jobs import store as job_store
+    from openprogram.state.store.session.session_lock import session_interprocess_lock
+
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setattr(
+        "openprogram.state.store.default_store",
+        lambda: SimpleNamespace(list_sessions=lambda **_: [{"id": "held", "status": "idle"}]),
+    )
+    monkeypatch.setattr(job_store, "_jobs_path", lambda session_id: None)
+    with session_interprocess_lock("held"):
+        started = supervisor.time.monotonic()
+        assert supervisor.active_work() == ["conversation held (locked by another process)"]
+        assert not supervisor._wait_for_quiescence(supervisor.time.time() + 0.01)
+        assert supervisor.time.monotonic() - started < 10
+
+
 def test_quiescence_preserves_inactive_effect_reconciliation(tmp_path, monkeypatch):
     from openprogram.operations.self_update.control import supervisor
     from openprogram.runtime.execution.model import ExecutionStatus
@@ -259,6 +303,7 @@ def test_quiescence_preserves_inactive_effect_reconciliation(tmp_path, monkeypat
     )
     # An owned attempt still prevents installation.
     assert not supervisor._wait_for_quiescence(supervisor.time.time() + 0.01)
+    assert any("active" in item for item in supervisor.active_work()), "the blocking work is named"
     before = executions.get_execution("active")
     service.attempts.finish(
         attempt.attempt_id,

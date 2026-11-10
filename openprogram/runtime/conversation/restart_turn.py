@@ -76,12 +76,18 @@ def start_recovery_turn(store, execution, event):
                 chat.publish(execution.session_id, goal)
                 if goal.get("usage_pending_until") is not None:
                     raise goals.GoalStateUnavailable("Interrupted Goal usage settlement is pending")
+                if request.get("goal_trigger"):
+                    chat.charge_daily_budget(execution.session_id, goal, execution.execution_id)
                 if exhausted:
                     return "budget_exhausted"
             request.update(goal_trigger=True, goal_previous_execution=execution.execution_id)
         elif goal and goal.get("execution_mode") == "chat" and goal.get("status") == "active":
             # A new/revised Goal is not authority to continue the abandoned task.
             return "goal_changed"
+        from openprogram.runtime.permissions.identity import HANDOFF_TURNS
+        if request.get("automation") in HANDOFF_TURNS:
+            # A chain knows the first turn's message; a second restart keeps it.
+            request["resumes_message_id"] = request.get("resumes_message_id") or request.get("user_msg_id")
         request.update(
             # The last sentence names the prompt's source, as Codex wraps its
             # recovery input in an internal-context tag: the chat hides this
@@ -106,11 +112,17 @@ def start_recovery_turn(store, execution, event):
         if latest.status is not ExecutionStatus.QUEUED or latest.current_attempt_id:
             return  # Startup's checkpoint consumer owns already recovered admissions.
         try:
-            asyncio.run(adapter.activate(admission))
+            ran = asyncio.run(adapter.activate(admission))
         except Exception:
             # A concurrent activation/CAS must never fail the winning owner.
             latest = store.get_execution(admission.execution_id)
             if latest.status is ExecutionStatus.QUEUED and latest.current_attempt_id is None:
                 adapter.fail_admission(admission, reason_code="restart_activation_failed")
+                restart.not_continued(store, latest)
+            return
+        if ran is not None and ran[1] is not None:
+            # A raise outside the turn's own loop leaves no turn to report it.
+            from openprogram.runtime.conversation.always_on import handoff
+            handoff.run_ended(store, store.get_execution(admission.execution_id), ran[1])
     threading.Thread(target=activate, name="chat-restart", daemon=True).start()
     return "new_turn_admitted"

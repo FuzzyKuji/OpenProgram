@@ -22,7 +22,7 @@ function sessionLoadedEntry(notify, loadSessionData) {
     compilerOptions: { target: ts.ScriptTarget.ES2022 },
   }).outputText;
   return vm.runInNewContext(code, {
-    clearHydratedTreePaths() {}, clearSessionByMsgId() {}, replayStreamAfterLoad() {}, loadSessionData,
+    clearHydratedTreePaths() {}, clearSessionByMsgId() {}, loadSessionData,
     notifyDesktopSessionLoaded: notify,
     clearTimeout() {}, historyDeadline: undefined,
     socket: {}, acceptSessionLoad: (_socket, data, apply) => { apply(data); return true; },

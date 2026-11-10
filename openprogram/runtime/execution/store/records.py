@@ -4,16 +4,7 @@ from __future__ import annotations
 
 import json
 
-
-import sqlite3
-
-
-
-
-
-
-
-from typing import Any
+from typing import Any, Mapping
 
 
 
@@ -24,45 +15,37 @@ from .shared import (
     ExecutionConflict,
     _object,
 )
+from .run_tables import TableHandle
 
 class RecordsOperations:
     @staticmethod
     def _insert_execution(
-        connection: sqlite3.Connection, record: ExecutionRecord
+        connection: TableHandle, record: ExecutionRecord
     ) -> None:
-        connection.execute(
-            "INSERT INTO executions "
-            "(execution_id, run_id, session_id, parent_execution_id, source_checkpoint_id, "
-            "revision_id, status, status_version, reason_code, "
-            "current_attempt_id, owner_lease_json, checkpoint_head_id, "
-            "safe_point_json, capabilities_json, effect_summary_json, "
-            "created_at, updated_at, terminal_at) VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                record.execution_id,
-                record.run_id,
-                record.session_id,
-                record.parent_execution_id,
-                record.source_checkpoint_id,
-                record.revision_id,
-                record.status.value,
-                record.status_version,
-                record.reason_code,
-                record.current_attempt_id,
-                _json(record.owner_lease),
-                record.checkpoint_head_id,
-                _json(record.safe_point),
-                _json(record.capabilities.to_dict()),
-                _json(record.effect_summary),
-                record.created_at,
-                record.updated_at,
-                record.terminal_at,
-            ),
-        )
+        connection.insert("executions", {
+            "execution_id": record.execution_id,
+            "run_id": record.run_id,
+            "session_id": record.session_id,
+            "parent_execution_id": record.parent_execution_id,
+            "source_checkpoint_id": record.source_checkpoint_id,
+            "revision_id": record.revision_id,
+            "status": record.status.value,
+            "status_version": record.status_version,
+            "reason_code": record.reason_code,
+            "current_attempt_id": record.current_attempt_id,
+            "owner_lease_json": _json(record.owner_lease),
+            "checkpoint_head_id": record.checkpoint_head_id,
+            "safe_point_json": _json(record.safe_point),
+            "capabilities_json": _json(record.capabilities.to_dict()),
+            "effect_summary_json": _json(record.effect_summary),
+            "created_at": record.created_at,
+            "updated_at": record.updated_at,
+            "terminal_at": record.terminal_at,
+        })
 
 
     @staticmethod
-    def _record(row: sqlite3.Row) -> ExecutionRecord:
+    def _record(row: Mapping[str, Any]) -> ExecutionRecord:
         return ExecutionRecord(
             execution_id=str(row["execution_id"]),
             run_id=str(row["run_id"]),
@@ -88,7 +71,7 @@ class RecordsOperations:
 
 
     @staticmethod
-    def _execution_input(row: sqlite3.Row) -> ExecutionInputRecord:
+    def _execution_input(row: Mapping[str, Any]) -> ExecutionInputRecord:
         return ExecutionInputRecord(
             execution_id=str(row["execution_id"]),
             input_ref=str(row["input_ref"]),
@@ -104,34 +87,7 @@ class RecordsOperations:
 
 
     @staticmethod
-    def _projection_outbox(row: sqlite3.Row):
-        from ..outbox import ProjectionOutboxRecord, ProjectionOutboxState
-
-        return ProjectionOutboxRecord(
-            outbox_id=str(row["outbox_id"]),
-            event_sequence=int(row["event_sequence"]),
-            execution_id=str(row["execution_id"]),
-            projection_kind=str(row["projection_kind"]),
-            dedupe_key=str(row["dedupe_key"]),
-            payload_ref=str(row["payload_ref"]),
-            state=ProjectionOutboxState(str(row["state"])),
-            claim_owner=row["claim_owner"],
-            claim_expires_at=(
-                float(row["claim_expires_at"])
-                if row["claim_expires_at"] is not None
-                else None
-            ),
-            attempts=int(row["attempts"]),
-            available_at=float(row["available_at"]),
-            delivered_at=(
-                float(row["delivered_at"]) if row["delivered_at"] is not None else None
-            ),
-            last_error=row["last_error"],
-        )
-
-
-    @staticmethod
-    def _resource_intent(row: sqlite3.Row | None) -> dict[str, Any]:
+    def _resource_intent(row: Mapping[str, Any] | None) -> dict[str, Any]:
         if row is None:
             raise ExecutionConflict("not_found", "resource intent not found")
         return {
@@ -158,7 +114,7 @@ class RecordsOperations:
 
 
     @staticmethod
-    def _command(row: sqlite3.Row) -> ControlCommand:
+    def _command(row: Mapping[str, Any]) -> ControlCommand:
         return ControlCommand(
             command_id=str(row["command_id"]),
             execution_id=str(row["execution_id"]),
@@ -176,16 +132,15 @@ class RecordsOperations:
 
 
     def _get_execution(
-        self, connection: sqlite3.Connection, execution_id: str
+        self, connection: TableHandle, execution_id: str
     ) -> ExecutionRecord | None:
-        row = connection.execute(
-            "SELECT * FROM executions WHERE execution_id = ?", (execution_id,)
-        ).fetchone()
+        self.tables.ensure_execution(execution_id)
+        row = connection.get("executions", execution_id)
         return self._record(row) if row is not None else None
 
 
     def _require_execution(
-        self, connection: sqlite3.Connection, execution_id: str
+        self, connection: TableHandle, execution_id: str
     ) -> ExecutionRecord:
         record = self._get_execution(connection, execution_id)
         if record is None:
@@ -194,16 +149,14 @@ class RecordsOperations:
 
 
     def _get_command(
-        self, connection: sqlite3.Connection, command_id: str
+        self, connection: TableHandle, command_id: str
     ) -> ControlCommand | None:
-        row = connection.execute(
-            "SELECT * FROM commands WHERE command_id = ?", (command_id,)
-        ).fetchone()
+        row = connection.get("commands", command_id)
         return self._command(row) if row is not None else None
 
 
     @staticmethod
-    def _revision(row: sqlite3.Row) -> RevisionRecord:
+    def _revision(row: Mapping[str, Any]) -> RevisionRecord:
         return RevisionRecord(
             revision_id=str(row["revision_id"]),
             parent_revision_id=row["parent_revision_id"],
@@ -214,19 +167,15 @@ class RecordsOperations:
 
 
     def _get_revision(
-        self, connection: sqlite3.Connection, revision_id: str
+        self, connection: TableHandle, revision_id: str
     ) -> RevisionRecord | None:
-        row = connection.execute(
-            "SELECT * FROM revisions WHERE revision_id = ?", (revision_id,)
-        ).fetchone()
+        row = connection.get("revisions", revision_id)
         return self._revision(row) if row is not None else None
 
 
     @staticmethod
-    def _get_run(connection: sqlite3.Connection, run_id: str) -> RunRecord | None:
-        row = connection.execute(
-            "SELECT * FROM runs WHERE run_id = ?", (run_id,)
-        ).fetchone()
+    def _get_run(connection: TableHandle, run_id: str) -> RunRecord | None:
+        row = connection.get("runs", run_id)
         if row is None:
             return None
         return RunRecord(

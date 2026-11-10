@@ -3,7 +3,8 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Agents Web UI 交互原型 — OpenProgram</title>
+<title>Agents Web UI 交互原型</title>
+<meta name="description" content="Agent 核心配置页的交互原型。">
 <style>
 
 .ad{--bg:#f6f7f9;--surface:#fff;--ink:#202329;--muted:#59616e;--line:#dce0e7;--accent:#3859b8;max-width:1180px;overflow-wrap:anywhere;margin:auto;padding:32px 28px 80px;color:var(--ink);font:16px/1.7 system-ui,-apple-system,sans-serif;background:var(--bg);box-sizing:border-box}.ad *{box-sizing:border-box}.ad a{color:var(--accent);text-underline-offset:3px}.ad h1{font-size:clamp(28px,4vw,42px);letter-spacing:-.035em;line-height:1.2;margin:20px 0}.ad h2{font-size:25px;margin:0 0 18px;line-height:1.35}.ad h3{font-size:18px;margin:22px 0 8px}.ad p{margin:10px 0}.ad .lead{font-size:19px;max-width:880px}.ad .eyebrow{font-size:13px;letter-spacing:.07em;text-transform:uppercase;color:var(--muted)}.ad .status{padding:16px 20px;border-left:3px solid var(--accent);background:var(--surface);margin:22px 0}.ad nav{display:flex;flex-wrap:wrap;gap:10px 20px;margin:20px 0}.ad .toc{padding:18px;background:var(--surface);border:1px solid var(--line);border-radius:10px}.ad section{scroll-margin-top:24px;margin:38px 0 0;padding:28px;background:var(--surface);border:1px solid var(--line);border-radius:12px}.ad .table-wrap{overflow:auto;max-width:100%;margin:18px 0}.ad table{border-collapse:collapse;width:100%;font-size:14px;text-align:left}.ad th,.ad td{padding:12px;vertical-align:top;border-bottom:1px solid var(--line);min-width:120px}.ad th{background:var(--bg);font-weight:600}.ad code{font:13px/1.6 ui-monospace,SFMono-Regular,monospace;overflow-wrap:anywhere}.ad pre{white-space:pre-wrap;overflow-wrap:anywhere;padding:18px;background:var(--bg);border:1px solid var(--line);border-radius:8px}.ad .grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.ad .cell{padding:18px;border:1px solid var(--line);border-radius:9px}.ad small,.ad .muted{color:var(--muted)}.ad li{margin:8px 0}.ad input,.ad select,.ad textarea,.ad button{font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);border-radius:7px;padding:9px 12px;max-width:100%}.ad label{display:block;margin:12px 0}.ad select{display:block;width:100%;margin-top:6px}.ad button{cursor:pointer}.ad :focus-visible{outline:3px solid var(--accent);outline-offset:3px}.ad .demo{padding:20px;background:var(--bg);border-radius:10px}.ad output{display:block;margin-top:16px;padding:14px;border-left:3px solid var(--accent);background:var(--surface)}.ad .mock{display:grid;grid-template-columns:170px minmax(0,1fr);border:1px solid var(--line);border-radius:10px;overflow:hidden}.ad .mock aside{padding:18px;background:var(--bg)}.ad .mock aside>strong,.ad .mock aside>span{display:block;margin-bottom:10px}.ad .mock-main{padding:22px;min-width:0}.ad .tabs{display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);padding-bottom:12px}.ad [aria-selected=true]{background:var(--accent);color:var(--surface)}.ad .field{display:grid;grid-template-columns:minmax(120px,1fr) minmax(120px,1.5fr);gap:18px;border-bottom:1px solid var(--line);padding:15px 0}.ad .tag{display:inline-block;font-size:12px;border:1px solid var(--line);border-radius:6px;padding:2px 8px;color:var(--muted)}.ad .diagram{width:100%;height:auto}.ad .diagram text{font-family:system-ui,sans-serif;fill:var(--ink)}.ad .diagram rect{fill:var(--bg);stroke:var(--line)}.ad .diagram path{stroke:var(--accent);fill:none;stroke-width:2}.ad [hidden]{display:none!important}@media(prefers-color-scheme:dark){.ad{--bg:#17191e;--surface:#202329;--ink:#e8ebf0;--muted:#a8b2c2;--line:#424956;--accent:#a0b7ff}}@media(max-width:640px){.ad{padding:20px 12px 50px;font-size:15px}.ad section{padding:18px 14px}.ad .grid{grid-template-columns:1fr}.ad .mock{grid-template-columns:1fr}.ad .mock aside{display:flex;gap:12px;flex-wrap:wrap}.ad .field{grid-template-columns:1fr;gap:5px}.ad th,.ad td{padding:9px}.ad .mock-main{padding:14px}}@media print{.ad{max-width:none;color:#111;background:#fff}.ad section{break-inside:avoid}.ad .toc{display:none}.ad [hidden]{display:block!important}}
@@ -31,124 +32,105 @@
 <div id="global-banner" class="banner" role="status" hidden></div><div class="tabs" id="config-tabs" role="tablist" aria-label="Agent 配置分区"></div><div class="body-split"><div class="editor-scroll" id="panels"></div><aside class="testpane" id="trial-pane" aria-label="试运行对话" hidden><div class="test-head"><strong id="trial-title">试运行对话</strong><span class="pill soft">原型</span><button class="icon-button" data-action="trial-reset" aria-label="清空对话"><span class="icon" data-animated-icon="refresh" aria-hidden="true"></span></button><button class="icon-button" data-action="trial-close" aria-label="关闭试运行"><span class="icon" data-animated-icon="close" aria-hidden="true"></span></button></div><div class="test-meta" id="trial-meta"></div><div class="test-history" id="trial-history" role="log" aria-label="示例消息"></div><div class="test-compose"><textarea id="trial-input" aria-label="试运行消息" placeholder="输入消息，查看交互过程…"></textarea><div class="compose-foot"><small>仅本地模拟</small><button class="button primary" id="trial-submit" data-action="trial-send">发送</button></div></div></aside></div><div class="bottom-strip"><span id="draft-notice"></span><a href="#design-notes" id="show-notes">交互说明</a></div></div></div></main><div class="scrim" id="trial-scrim" data-action="trial-close"></div>
 <dialog id="modal" aria-labelledby="dialog-title"></dialog><div class="toast" id="toast" role="status" hidden></div>
 
-<details class="design-notes" id="design-notes"><summary>交互规范与实现状态</summary><div class="ad"><section id="ui-contract"><h2>Web UI 布局与交互范围</h2><p>沿用 Agents 列表与单个编辑器结构，八个配置分区共享一个草稿和一个保存入口。桌面保留左侧列表；窄屏改为顶部 Agent 选择器。试运行在宽屏显示右侧面板，窄屏使用带焦点约束的全屏面板。</p><p>图标直接使用仓库 components/animated-icons 的 pqoqubbw 动态组件及既有 start/stop 接口，悬停整个控件或键盘聚焦时触发；减少动画偏好下停用运动。Logo 使用项目现有文件，主题沿用 neutral light/dark token，不增加另一套图标风格。HTML 内嵌的是现有组件构建结果，不是新写的 SVG 替代图形。</p><p>试运行使用当前草稿与全新对话，记忆最多只读；选择“开始新对话”使用保存版本，并可在启动前覆盖本次模型、记忆和初始上下文。记忆覆盖只能收紧已有访问范围。两类操作都不修改已保存配置。原型明确显示模拟回复，不发送模型请求、读取真实历史或写入真实记忆。</p><p>状态选择器属于设计预览，可切换加载、空列表、错误、保存冲突和依赖不可用；不是产品设置。保存冲突展示两份指令并要求明确选择，不自动合并。生产实现接收服务端的模型能力、授权、生效范围及 readiness，不能照搬原型的示例计算。</p><p>交互验收覆盖八个分区、双语/深浅主题、桌面/窄屏、键盘分区导航、动态控件、草稿保留、冲突恢复与临时覆盖。原型通过不代表真实 API、权限或执行已实现。</p></section>
-<section id="editing">
-<h2>编辑与继承交互</h2>
-<ul>
-<li>有继承含义的字段提供“使用继承值 / 明确设置”，旁边显示实际值与来源。不可获取时显示未知，不制造默认值。</li>
-<li>模型选项来自已启用 provider/账户模型目录，保存完整 ID，不保存显示名。effort 跟随模型能力，原值不支持时保留并报错，不自动更换。Provider/MCP 登录仍在全局连接设置管理。</li>
-<li>保存 Agent 的继承字段来自系统默认，不来自打开设置页时碰巧使用的 Agent。调用预览可额外指定调用方/会话，必须显示预览范围。</li>
-<li>八个分区共享一份草稿，切换页签不保存、不清空、不单独提交。带修改离开时提供保存、放弃、取消；失败保留字段、选中项和滚动位置。</li>
-<li>草稿基于保存 revision；409 打开逐字段差异，指令正文不自动合并。更新基础版本后明确提交候选配置。必需依赖缺失影响就绪，不阻止保留草稿。</li>
-</ul>
-</section>
-<section id="memory-ui">
-<h2>记忆与上下文控件</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>控件</th>
-<th>可见结果</th>
-<th>边界情况</th>
-</tr>
-</thead>
+<details class="design-notes" id="design-notes"><summary>交互规范与实现状态</summary><div class="ad"><section id="ui-contract"><h2>布局与范围</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr>
-<td>关闭记忆</td>
-<td>不检索、不写入；单独显示保留的原存储</td>
-<td>不会移除对话里已经出现的事实</td>
-</tr>
-<tr>
-<td>读写空间</td>
-<td>选择自身/项目/共享引用并显示读写标记</td>
-<td>改变共享范围需明确选择与授权检查</td>
-</tr>
-<tr>
-<td>只读</td>
-<td>显示读取标记，不把 writer 选项显示为生效</td>
-<td>压缩与后续 writer 同样遵守执行来源资格</td>
-</tr>
-<tr>
-<td>必需 backend</td>
-<td>说明不可用时阻止执行还是降级</td>
-<td>不能静默换到全局存储</td>
-</tr>
-<tr>
-<td>上下文选择</td>
-<td>继承 / 全新 / 明确指定资料</td>
-<td>保留对话与保留记忆分别设置</td>
-</tr>
-<tr>
-<td>指令文件</td>
-<td>打开允许的文件，显示来源和散列/版本</td>
-<td>缺失按必需性处理；打开页面不创建文件</td>
-</tr>
-<tr>
-<td>频道重置</td>
-<td>高级范围、空闲时间、每日时间和时区</td>
-<td>仅影响之后路由，不合并或删除旧会话</td>
-</tr>
+<tr><th scope="row">编辑器</th><td>Agent 列表加单个编辑器。八个分区，一份草稿，一个保存入口。</td></tr>
+<tr><th scope="row">窄屏</th><td>顶部 Agent 选择器取代左侧列表，表单单列。</td></tr>
+<tr><th scope="row">试运行面板</th><td>宽屏在右侧；窄屏全屏并约束焦点。</td></tr>
+<tr><th scope="row">图标</th><td><code translate="no">components/animated-icons</code> 的 pqoqubbw 组件及其 start/stop 接口。悬停整个控件或键盘聚焦时触发，减少动画偏好下停用。此处嵌入的是组件构建结果，不是重画的 SVG。</td></tr>
+<tr><th scope="row">Logo 与颜色</th><td>项目现有文件；neutral 亮暗 token。</td></tr>
+<tr><th scope="row">状态选择器</th><td>仅用于预览，不是产品设置。</td></tr>
+<tr><th scope="row">原型数据</th><td>模拟回复有标注。不发模型请求，不读真实历史，不写记忆。生产环境的模型能力、授权、生效范围和就绪状态来自服务端。</td></tr>
 </tbody>
-</table>
-</div>
-</section>
-<section id="states">
-<h2>生命周期与页面状态</h2>
-<div class="table-wrap">
-<table>
-<thead>
-<tr>
-<th>状态/动作</th>
-<th>要求的交互</th>
-</tr>
-</thead>
+</table></div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">启动方式</th><th scope="col">配置</th><th scope="col">历史</th><th scope="col">记忆</th></tr></thead>
 <tbody>
-<tr>
-<td>新建</td>
-<td>列表内名称输入，其他字段后填；失败保留名称，成功选中新配置</td>
-</tr>
-<tr>
-<td>复制</td>
-<td>预览配置与共享引用；不复制会话/记忆/计划；指令正文复制需明确选择</td>
-</tr>
-<tr>
-<td>默认</td>
-<td>仅一个权威默认值；影响之后按默认值创建的会话</td>
-</tr>
-<tr>
-<td>删除</td>
-<td>显示自有与引用资源；默认/忙碌状态拒绝；明确确认；不声称所有会话都在目录内</td>
-</tr>
-<tr>
-<td>空/加载/网络错误</td>
-<td>分别显示；API 读取失败不能显示空列表；重试保留草稿</td>
-</tr>
-<tr>
-<td>依赖部分不可用</td>
-<td>对应分区与就绪摘要显示不可用，仍可编辑其他内容</td>
-</tr>
-<tr>
-<td>排队/运行中</td>
-<td>显示配置版本提示并链接执行记录，不在中途静默切换</td>
-</tr>
-<tr>
-<td>移动端/键盘</td>
-<td>窄屏使用顶部 Agent 选择器，单列表单；方向键/Home/End 切换页签，可见焦点，原生控件</td>
-</tr>
-<tr>
-<td>无障碍</td>
-<td>正文基准 16px，辅助文字足够对比，字段标签和状态播报，不依赖悬停</td>
-</tr>
+<tr><th scope="row">试运行草稿</th><td>当前草稿</td><td>全新</td><td>最多只读</td></tr>
+<tr><th scope="row">开始新对话</th><td>保存版本，可选本次模型、记忆、初始上下文覆盖</td><td>全新</td><td>覆盖只能收紧访问范围</td></tr>
 </tbody>
-</table>
-</div>
+</table></div>
+<p class="muted">两者都不修改已保存配置。</p>
 </section>
-<section id="implementation">
-<p>生产页面已实现八分区和真实配置 API。试运行打开独立新对话并持久保存受限快照；此原型展示的内嵌面板仍是目标。有效配置预览、任意共享空间和便携导入导出尚未实现。生产验收与独立原型验收分别记录。</p>
-<h2>组件归属与验收</h2>
-<p>复用 AgentsPage、ManagePageHeader、ManageRow、Tabs、连接/模型选择器与已有设置控件。只有行为和校验需要独立管理时拆分 panel，不新建页面/窗口框架。纯草稿规范化函数负责设置、重置和差异，服务端解析器仍是权威。权限和就绪错误使用类型化 API 响应，前端摘要不实现第二套策略引擎。</p>
-<p>验收对应总设计 A01/A02/A07/A09/A10。通过构建页面操作八个分区、记忆模式、冲突恢复、失效引用、模型选择和键盘导航，不能仅用源码字符串检查证明行为。独立原型通过规格与质量审查、中英文桌面/窄屏浏览器流程，以及原有组件的动画检查；示例不发送模型请求。生产页面的已实现范围和原型目标之间的差异见本节开头。</p>
+<section id="editing"><h2>编辑与继承</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">情形</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">可继承字段</th><td>使用继承值或明确设置，旁边显示实际值与来源。无法获取时显示未知，不制造默认值。</td></tr>
+<tr><th scope="row">模型</th><td>选项来自已启用的 provider 和账户目录。保存完整 ID，不保存显示名。</td></tr>
+<tr><th scope="row">思考强度</th><td>跟随所选模型。已保存的值不受支持时保留并报错。</td></tr>
+<tr><th scope="row">Provider 与 MCP 登录</th><td>全局连接设置。</td></tr>
+<tr><th scope="row">继承值</th><td>来自系统默认，不来自打开设置页的 Agent。调用预览可额外选择调用方或会话，并标明预览范围。</td></tr>
+<tr><th scope="row">切换分区</th><td>不保存、不清空、不提交字段。</td></tr>
+<tr><th scope="row">带修改离开</th><td>保存、放弃或取消。</td></tr>
+<tr><th scope="row">保存失败</th><td>保留字段值、选中项和滚动位置。</td></tr>
+<tr><th scope="row"><code translate="no">409</code> 保存冲突</th><td>草稿仍基于已保存 revision。逐字段比较，由用户明确选择；指令正文绝不自动合并。</td></tr>
+<tr><th scope="row">必需依赖缺失</th><td>影响就绪状态，不影响保留草稿。</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="memory-ui"><h2>记忆与上下文控件</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">控件</th><th scope="col">可见结果</th><th scope="col">边界情况</th></tr></thead>
+<tbody>
+<tr><th scope="row">关闭记忆</th><td>不检索、不写入；单独显示保留的原存储</td><td>对话里已有的事实不会移除</td></tr>
+<tr><th scope="row">读写空间</th><td>选择自身、项目或共享引用，并显示读写标记</td><td>改变共享范围需明确选择并检查授权</td></tr>
+<tr><th scope="row">只读</th><td>显示读取标记；writer 控件不生效</td><td>压缩与后续 writer 同样遵守只读执行来源</td></tr>
+<tr><th scope="row">必需 backend</th><td>说明不可用时阻止执行还是降级</td><td>绝不静默换到全局存储</td></tr>
+<tr><th scope="row">上下文选择</th><td>继承、全新或明确指定资料</td><td>保留对话与保留记忆分别设置</td></tr>
+<tr><th scope="row">指令文件</th><td>打开允许的文件，显示来源和散列或版本</td><td>缺失按声明的必需性报错或警告；打开页面不创建文件</td></tr>
+<tr><th scope="row">频道重置</th><td>高级范围、空闲时间、每日时间、时区</td><td>只影响之后的路由，不合并、不删除旧会话</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="states"><h2>生命周期与页面状态</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">状态或动作</th><th scope="col">交互</th></tr></thead>
+<tbody>
+<tr><th scope="row">新建</th><td>行内输入名称，其他字段后填。失败保留名称，成功选中新配置。</td></tr>
+<tr><th scope="row">复制</th><td>预览配置与共享引用。不复制会话、记忆和计划。复制指令正文需明确选择。</td></tr>
+<tr><th scope="row">默认</th><td>只有一个权威默认值；更改影响之后按默认值创建的会话。</td></tr>
+<tr><th scope="row">删除</th><td>显示自有与引用资源。默认或忙碌时拒绝。明确确认。不声称所有会话都在目录内。</td></tr>
+<tr><th scope="row">空、加载、网络错误</th><td>分别显示。读取失败不是空列表。重试保留草稿。</td></tr>
+<tr><th scope="row">依赖部分不可用</th><td>对应分区和就绪摘要显示不可用，其他内容仍可编辑。</td></tr>
+<tr><th scope="row">排队或运行中的执行</th><td>显示配置版本提示并链接执行记录。不在运行中途静默切换。</td></tr>
+<tr><th scope="row">键盘</th><td>方向键、Home、End 切换页签；可见焦点；原生控件。</td></tr>
+<tr><th scope="row">无障碍</th><td>正文 16px，辅助文字清晰，字段有标签，状态播报，不依赖悬停。</td></tr>
+</tbody>
+</table></div>
+</section>
+<section id="implementation"><h2>组件、验收与状态</h2>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">部分</th><th scope="col">归属</th></tr></thead>
+<tbody>
+<tr><th scope="row">页面</th><td>复用 <code translate="no">AgentsPage</code>、<code translate="no">ManagePageHeader</code>、<code translate="no">ManageRow</code>、<code translate="no">Tabs</code>、连接与模型选择器、已有设置控件。不新建页面或窗口框架。</td></tr>
+<tr><th scope="row">面板</th><td>只在行为有独立校验时拆分。</td></tr>
+<tr><th scope="row">草稿</th><td>纯规范化函数负责设置、重置和差异。服务端解析器仍是权威。</td></tr>
+<tr><th scope="row">错误</th><td>权限和就绪错误来自类型化 API 响应；前端摘要不是第二套策略引擎。</td></tr>
+</tbody>
+</table></div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">验收</th><th scope="col">覆盖</th></tr></thead>
+<tbody>
+<tr><th scope="row">配置契约</th><td>A01、A02、A07、A09、A10</td></tr>
+<tr><th scope="row">构建后的页面</th><td>八个分区、记忆模式、冲突恢复、失效引用、原生模型选择、键盘导航。源码字符串检查不能证明这些行为。</td></tr>
+<tr><th scope="row">原型</th><td>双语与深浅主题、桌面与窄屏、动态控件、草稿保留、临时覆盖。原型通过不证明真实 API、授权或执行。</td></tr>
+</tbody>
+</table></div>
+<div class="table-wrap"><table>
+<thead><tr><th scope="col">领域</th><th scope="col">生产页面</th><th scope="col">此原型</th></tr></thead>
+<tbody>
+<tr><th scope="row">分区</th><td>常规、程序、技能、MCP、长期记忆、上下文、常驻、高级</td><td>概览、模型与指令、程序、技能、MCP、记忆、上下文、高级</td></tr>
+<tr><th scope="row">配置</th><td>真实 API，含 revision 冲突</td><td>示例数据</td></tr>
+<tr><th scope="row">冲突</th><td>逐字段比较，然后加载服务端版本或保留我的草稿</td><td>两份指令，明确选择</td></tr>
+<tr><th scope="row">试运行草稿</th><td>独立新对话，使用受限快照</td><td>内嵌面板（目标）</td></tr>
+<tr><th scope="row">开始新对话</th><td>保存版本，此页不提供覆盖</td><td>覆盖（目标）</td></tr>
+<tr><th scope="row">指令文件</th><td><code translate="no">AGENTS.md</code> 位置，可复制路径</td><td>打开并显示来源和散列（目标）</td></tr>
+<tr><th scope="row">尚未实现</th><td>有效配置预览、任意共享空间、便携导入导出</td><td>未展示</td></tr>
+</tbody>
+</table></div>
 </section>
 </div></details>
 <script>

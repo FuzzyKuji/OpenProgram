@@ -50,7 +50,7 @@
 curl -fsSL https://openprogram.io/install | sh
 ```
 
-Windows：`irm https://openprogram.io/install.ps1 | iex`。macOS 桌面 App 是經過簽署的 DMG，可在[發行頁](https://github.com/FuzzyKuji/OpenProgram/releases)下載。更多方式見[安裝說明](docs/install/install.md)（英文）。
+Windows（v1.1.0 起）：`irm https://openprogram.io/install.ps1 | iex`。macOS 桌面 App 是 DMG，可在[發行頁](https://github.com/FuzzyKuji/OpenProgram/releases)下載；Linux 和 Windows App 從 v1.1.0 起提供。openprogram.io 無法連線時：`curl -fsSL https://raw.githubusercontent.com/FuzzyKuji/OpenProgram/main/docs/_static_root/install.sh | sh`。更多方式見[安裝說明](https://openprogram.io/docs/install/install.html)（英文）。
 
 ## 快速開始
 
@@ -59,7 +59,7 @@ openprogram        # 設定精靈，然後進入終端機聊天
 openprogram web    # 工作區，網址 http://localhost:18100
 ```
 
-接下來：[快速上手](docs/start/GETTING_STARTED.md) · [模型設定](docs/models/README.md) · [全部文件](docs/README.md)（英文）
+接下來：[快速上手](docs/start/GETTING_STARTED.html) · [模型設定](docs/models/README.html) · [全部文件](docs/README.html)（英文）
 
 ## 一眼看懂
 
@@ -76,7 +76,7 @@ class SupportAgent(Agent):
         return self("Draft a short reply.")
 ```
 
-模型負責判斷，Python 確保必要的步驟一定會執行。參見[撰寫 Agent](docs/capabilities/agentic-programming/writing-functions/agent.md)（英文）。
+模型負責判斷，Python 確保必要的步驟一定會執行。參見[撰寫 Agent](docs/capabilities/agentic-programming/writing-functions/agent.html)（英文）。
 
 ## 功能
 
@@ -101,7 +101,7 @@ class SupportAgent(Agent):
 
 | | |
 |---|---|
-| **[桌面與網頁介面](https://openprogram.io/docs/reference/design/ui/README.html)** | 同一個工作區，支援 macOS、Windows、Linux 和伺服器。 |
+| **[桌面與網頁介面](https://openprogram.io/docs/reference/design/ui/README.html)** | macOS 上用 App，v1.1.0 起 Linux 和 Windows 也有 App；網頁介面可在這些系統或伺服器上使用。 |
 | **[分割畫面](https://openprogram.io/docs/reference/design/ui/workspace/center-tabs-and-split-layout.html)** | 聊天、檔案、終端機和網頁並排呈現。 |
 | **[內建瀏覽器](https://openprogram.io/docs/reference/design/ui/browser/built-in-browser.html)** | Agent 能讀取和操作網頁，你在一旁觀看。 |
 | **[整合終端機](https://openprogram.io/docs/reference/design/ui/workspace/integrated-terminal.html)** | 工作區裡的終端機，與 Agent 共用。 |

@@ -16,9 +16,11 @@ def render_for_model(
 ) -> str:
     available = web_use_available(context) if web_use_enabled is None else web_use_enabled
     usage = (
-        'Operate the App\'s browser tabs with computer_use_agent(target="browser"): tabs lists them, '
+        'Operate the App\'s browser tabs with computer_use_agent(target="browser"): tabs lists the ones this conversation opened, '
         "open(url) opens one, read returns the page with a ref on each element, and actions name "
-        "elements by ref; navigate(url) moves the current tab."
+        "elements by ref; navigate(url) moves the current tab. Tabs you open are yours to clean up: "
+        "use one already open for the same page, close each when done, and before finishing close "
+        "any left, keeping only what the user asked to see."
     )
     if not context or not context.get("surfaces"):
         if not available:

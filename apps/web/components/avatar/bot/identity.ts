@@ -12,6 +12,7 @@ export interface BotLook {
 /** The built-in Agents wear a character that fits their job. */
 const BUILT_IN: Record<string, BotLook> = {
   main: { shape: "cloud", color: "blue" },
+  butler: { shape: "cat", color: "teal" },
   utility: { shape: "lightbulb", color: "yellow" },
   planner: { shape: "controller", color: "violet" },
   decision: { shape: "star", color: "orange" },

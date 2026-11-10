@@ -20,6 +20,11 @@ from ._support import (
 from tests.support.executables import ExecutablePool
 
 
+# Each script run starts hundreds of processes and takes seconds alone, far
+# longer when every xdist worker runs one. The limit only bounds a real hang.
+SCRIPT_TIMEOUT = 90
+
+
 @pytest.fixture(scope="session")
 def executable_pool(tmp_path_factory) -> ExecutablePool:
     return ExecutablePool(tmp_path_factory.mktemp("executable-pool"))
@@ -492,6 +497,7 @@ def _prepare_local_refresh_fixture(
 
 
 @POSIX_SHELL_INTEGRATION
+@pytest.mark.timeout(6 * SCRIPT_TIMEOUT)  # Six script runs in one test.
 def test_local_app_refresh_rejects_dirty_version_change_after_build(
     tmp_path: Path,
     executables: ExecutablePool,
@@ -511,7 +517,7 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
         env=env,
         capture_output=True,
         text=True,
-        timeout=15,
+        timeout=SCRIPT_TIMEOUT,
     )
 
     detached_log = Path(env["TMPDIR"]) / f"openprogram-refresh-{os.getuid()}.log"
@@ -541,7 +547,7 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
     bad_node = subprocess.run(
         ["bash", str(scripts / "refresh-local-app.sh")],
         env=env | {"NODE_PROBE_FAIL": "1"},
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=SCRIPT_TIMEOUT,
     )
     bad_node_output = bad_node.stdout + bad_node.stderr
     if detached_log.exists():
@@ -561,7 +567,7 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
             env=env,
             capture_output=True,
             text=True,
-            timeout=15,
+            timeout=SCRIPT_TIMEOUT,
         )
     finally:
         lock_file.unlink()
@@ -580,7 +586,7 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
         fake_pgrep,
         "#!/bin/sh\n"
         'touch "$SIGNAL_READY"\n'
-        "sleep 10\n"
+        "sleep 30\n"
         "exit 1\n",
     )
     signal_env = env | {
@@ -595,14 +601,14 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
         start_new_session=True,
         text=True,
     )
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + SCRIPT_TIMEOUT
     while not signal_ready.exists() and interrupted.poll() is None:
         if time.monotonic() >= deadline:
             interrupted.kill()
             raise AssertionError("refresh did not acquire the install lock")
         time.sleep(0.02)
     os.killpg(interrupted.pid, signal.SIGTERM)
-    stdout, stderr = interrupted.communicate(timeout=5)
+    stdout, stderr = interrupted.communicate(timeout=SCRIPT_TIMEOUT)
 
     # The flock-owning Python parent reports a signal directly; Bash reports 128+signal.
     assert interrupted.returncode in {-signal.SIGTERM, 143}, (stdout, stderr)
@@ -635,7 +641,7 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
         '  *".openprogram-app-install.lock"*)\n'
         '    /bin/rm "$@"\n'
         '    touch "$CLEANUP_READY"\n'
-        "    sleep 10\n"
+        "    sleep 30\n"
         "    ;;\n"
         '  *) exec /bin/rm "$@" ;;\n'
         "esac\n",
@@ -652,14 +658,14 @@ def test_local_app_refresh_rejects_dirty_version_change_after_build(
         start_new_session=True,
         text=True,
     )
-    deadline = time.monotonic() + 10
+    deadline = time.monotonic() + SCRIPT_TIMEOUT
     while not cleanup_ready.exists() and cleanup_interrupted.poll() is None:
         if time.monotonic() >= deadline:
             cleanup_interrupted.kill()
             raise AssertionError("refresh did not enter final cleanup")
         time.sleep(0.02)
     os.killpg(cleanup_interrupted.pid, signal.SIGTERM)
-    stdout, stderr = cleanup_interrupted.communicate(timeout=5)
+    stdout, stderr = cleanup_interrupted.communicate(timeout=SCRIPT_TIMEOUT)
 
     assert cleanup_interrupted.returncode in {-signal.SIGTERM, 143}, (stdout, stderr)
     assert not lock_file.exists()
@@ -788,7 +794,7 @@ def test_default_local_refresh_requires_committed_source_before_mutation(
     installed_before = {str(p.relative_to(app)): p.read_bytes()
                         for p in app.rglob("*") if p.is_file()}
     result = subprocess.run(
-        ["bash", str(script)], env=env, capture_output=True, text=True, timeout=20,
+        ["bash", str(script)], env=env, capture_output=True, text=True, timeout=SCRIPT_TIMEOUT,
     )
     output = result.stdout + result.stderr
     mutation_log = Path(env["MUTATION_LOG"])
@@ -897,7 +903,10 @@ def test_local_refresh_completion_preserves_failure_and_reopens_verified_app(
         env["HEALTH_AFTER"] = "56"
     elif case.startswith("timeout"):
         env["HEALTH_AFTER"] = "999999"
-        script.write_text(script.read_text().replace("health_timeout=120", "health_timeout=1"))
+        source = script.read_text()
+        shortened, replaced = re.subn(r"^health_timeout=\d+$", "health_timeout=1", source, flags=re.M)
+        assert replaced == 1
+        script.write_text(shortened)
         if case == "timeout_open_failure":
             env["OPEN_RC"] = "42"
     elif case == "owner_failure":
@@ -909,7 +918,7 @@ def test_local_refresh_completion_preserves_failure_and_reopens_verified_app(
     else:
         env["OPEN_RC"] = "42"
     result = subprocess.run(
-        ["bash", str(script)], env=env, capture_output=True, text=True, timeout=15,
+        ["bash", str(script)], env=env, capture_output=True, text=True, timeout=SCRIPT_TIMEOUT,
     )
     output = result.stdout + result.stderr
     expected = {"delayed": 0, "timeout": 7, "timeout_open_failure": 7,
@@ -920,7 +929,8 @@ def test_local_refresh_completion_preserves_failure_and_reopens_verified_app(
     if case == "sign_failure":
         assert not opens.exists(), output
     else:
-        assert opens.read_text().splitlines() == [f"-a {app}"], output
+        # Nobody was in the App when the refresh closed it, so it reopens behind what they are doing.
+        assert opens.read_text().splitlines() == [f"-g -a {app}"], output
     calls = Path(env["MUTATION_LOG"]).read_text().splitlines()
     assert sum("embedded -I -B -m openprogram worker install" == c for c in calls) == int(service and case != "sign_failure")
     assert sum("embedded -I -B -m openprogram worker start" == c for c in calls) == int(not service and case != "sign_failure")
@@ -955,12 +965,12 @@ def test_local_refresh_preserves_cleanup_error_without_masking_primary(
     )
     result = subprocess.run(
         ["bash", str(repo / "scripts/refresh-local-app.sh")], env=env,
-        capture_output=True, text=True, timeout=15,
+        capture_output=True, text=True, timeout=SCRIPT_TIMEOUT,
     )
     assert result.returncode == (primary or 47), result.stdout + result.stderr
     assert "refreshed " not in result.stdout + result.stderr
     assert "refresh cleanup failed (exit 47)" in result.stderr
-    assert Path(env["OPEN_LOG"]).read_text().splitlines() == [f"-a {app}"]
+    assert Path(env["OPEN_LOG"]).read_text().splitlines() == [f"-g -a {app}"]
     assert not (app.parent / ".openprogram-app-install.lock").exists()
     assert list(Path(env["TMPDIR"]).glob("openprogram-local-wheel.*"))
 

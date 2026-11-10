@@ -15,6 +15,7 @@ import math
 from contextlib import contextmanager
 from pathlib import Path
 
+from openprogram.state.store import reader_floor
 from openprogram.state.store.session.session_lock import registry_file_lock
 from openprogram.state.store.snapshot.checkpoint.store import CheckpointStore
 
@@ -106,7 +107,7 @@ class DocumentHistory:
             try:
                 db.execute("PRAGMA synchronous=FULL")
                 schema = db.execute("PRAGMA user_version").fetchone()[0]
-                if schema not in {0, 1}:
+                if schema not in {0, 1} and not (schema > 1 and reader_floor.readable_when_newer(db, 1)):
                     raise DocumentHistoryError("unsupported document history schema", "HISTORY_CORRUPT")
                 db.executescript("""
                     CREATE TABLE IF NOT EXISTS operations (
@@ -132,6 +133,9 @@ class DocumentHistory:
                 """)
                 if schema == 0:
                     db.execute("PRAGMA user_version=1")
+                    db.commit()
+                if schema <= 1:
+                    reader_floor.record_floor(db, 1)
                     db.commit()
                 os.chmod(self.root / "history.sqlite3", 0o600)
                 yield db

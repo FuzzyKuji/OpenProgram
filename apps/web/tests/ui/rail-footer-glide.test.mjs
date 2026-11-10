@@ -1,7 +1,7 @@
 // The left sidebar's avatar glides between its two resting places while the
-// rail opens or closes: the trigger's left padding is 16px open and 6px
+// rail opens or closes: the trigger's left padding is 16px open and 5px
 // collapsed, transitioned on the rail's own duration and curve, and its right
-// padding moves from 16px to 26px with it, so the name keeps one width. The
+// padding moves from 16px to 27px with it, so the name keeps one width. The
 // footer sits beside .rail-content in the card and is laid out at the open
 // width in both states, so nothing clips the avatar on its way and nothing
 // in it re-wraps; the name and the chevron fade.
@@ -32,24 +32,24 @@ const hookSource = read('components/layout/use-resizable-rail.ts');
 const RAIL_MOVE_MS = Number(hookSource.match(/const RAIL_MOVE_MS = (\d+);/)[1]);
 const RAIL_EASING = hookSource.match(/const RAIL_EASING = "([^"]+)";/)[1];
 
-test('the trigger rests at 16px open and 6px collapsed, the values the old width clamp gave', () => {
+test('the trigger rests at 16px open and 5px collapsed, the values the old width clamp gave', () => {
   const trigger = declarations('module', '.trigger');
   assert.equal(trigger.get('padding-left'), '16px');
   assert.equal(trigger.get('padding-right'), '16px');
   const collapsed = declarations('sidebar', '.sidebar.collapsed .user-menu-footer-trigger');
-  assert.equal(collapsed.get('padding-left'), '6px');
+  assert.equal(collapsed.get('padding-left'), '5px');
   // The content box keeps its width: what follows the avatar moves with it.
-  assert.equal(collapsed.get('padding-right'), '26px');
-  // max(6px, min(16px, 100% - 47px)) at the collapsed card (47px) and at
+  assert.equal(collapsed.get('padding-right'), '27px');
+  // max(5px, min(16px, 100% - 46px)) at the collapsed card (46px) and at
   // every open card the resize handle allows (180..480 minus the gutter).
-  const clamp = (w) => Math.max(6, Math.min(16, w - 47));
-  assert.equal(clamp(47), 6);
+  const clamp = (w) => Math.max(5, Math.min(16, w - 46));
+  assert.equal(clamp(46), 5);
   for (let w = 164; w <= 464; w += 1) assert.equal(clamp(w), 16);
   // Before hydration the forced-collapsed sidebar shows the collapsed place
   // at once and does not animate into it.
   const early = declarations('sidebar', 'html[data-sidebar-closed] #sidebar .user-menu-footer-trigger');
-  assert.equal(early.get('padding-left'), '6px');
-  assert.equal(early.get('padding-right'), '26px');
+  assert.equal(early.get('padding-left'), '5px');
+  assert.equal(early.get('padding-right'), '27px');
   assert.equal(early.get('transition'), 'none');
 });
 
@@ -68,7 +68,7 @@ test('the footer is laid out at the open width in both states, and only its widt
   assert.deepEqual([...held.keys()].sort(), ['align-self', 'width']);
   assert.equal(held.get('width'), 'var(--rail-open-card-w)');
   assert.equal(held.get('align-self'), 'flex-start');
-  assert.match(hookSource, /"--rail-open-w": `\$\{width\}px`/);
+  assert.match(hookSource, /"--rail-open-w": `\$\{shownWidth\}px`/);
 });
 
 test('the name and the chevron fade by opacity alone, never switched off', () => {
@@ -97,7 +97,7 @@ test('the avatar never reaches the card\'s moving edge and never steps more than
   const progress = bezier(RAIL_EASING);
   const AVATAR = 36;
   for (const open of [164, 272, 464]) {
-    for (const [from, to] of [[[47, 6], [open, 16]], [[open, 16], [47, 6]]]) {
+    for (const [from, to] of [[[46, 5], [open, 16]], [[open, 16], [46, 5]]]) {
       let last = from[1];
       let largest = 0;
       for (let ms = 0; ms <= RAIL_MOVE_MS; ms += 1000 / 60) {
@@ -108,7 +108,7 @@ test('the avatar never reaches the card\'s moving edge and never steps more than
         largest = Math.max(largest, Math.abs(pad - last));
         last = pad;
       }
-      // 10px over 200ms at 60 Hz: about 2.2px in the steepest frame of the curve.
+      // 11px over 200ms at 60 Hz: about 2.2px in the steepest frame of the curve.
       assert.ok(largest < 2.5, `largest step ${largest}px`);
     }
   }
@@ -171,4 +171,9 @@ test('the footer is the card\'s last child, beside the held content, and the she
     await act(async () => root.unmount());
     host.remove();
   }
+});
+
+test('a favourite row is moved, never scaled, when the sidebar changes width', () => {
+  // Reorder.Item animates size by default: a drag of the rail's edge stretched the row's text.
+  assert.match(read('components/sidebar/sessions/favorites-list.tsx'), /<Reorder\.Item[^>]*?layout="position"/s);
 });

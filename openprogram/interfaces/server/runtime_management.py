@@ -139,12 +139,6 @@ def _get_sessions():
 # Runtime inspection
 # ---------------------------------------------------------------------------
 
-def _prev_rt_closed(rt) -> bool:
-    """Check if a Claude Code runtime's process has exited."""
-    proc = getattr(rt, "_proc", None)
-    return proc is None or proc.poll() is not None
-
-
 # ---------------------------------------------------------------------------
 # Runtime creation — provider-specific setup
 # ---------------------------------------------------------------------------
@@ -255,7 +249,9 @@ def _create_runtime_for_visualizer(provider: str, model: str | None = None):
     if _get_model(provider, model) is None:
         from openprogram.models.providers.catalog.enabled_models import register_model_from_config
         if not register_model_from_config(provider, model):
-            raise RuntimeError(f"Unknown model {provider}:{model}")
+            from openprogram.models.providers.catalog.suggestions import unknown_model_message
+
+            raise RuntimeError(unknown_model_message(provider, model))
     return Runtime(model=f"{provider}:{model}")
 
 
@@ -616,26 +612,6 @@ def _default_is_enabled(provider: str | None, model: str | None) -> bool:
     # Provider set but no specific model → enabled iff the provider has
     # at least one enabled model.
     return any(p == provider for (p, _m) in keys)
-
-
-def _get_exec_runtime(no_tools: bool = False):
-    """Create a fresh runtime for function execution."""
-    _init_providers()
-    if not _exec_provider:
-        raise RuntimeError(
-            "No provider available. Install a CLI (codex/gemini) or set an API key."
-        )
-    if no_tools and _exec_provider == "openai-codex":
-        from openprogram.runtime.agent.runtime.factory import create_runtime
-        rt = create_runtime(
-            provider="openai-codex", session_id=None, search=False,
-            full_auto=False, sandbox="read-only",
-        )
-    else:
-        rt = _create_runtime_for_visualizer(_exec_provider)
-    if _exec_model:
-        rt.model = _exec_model
-    return rt
 
 
 def _switch_runtime(provider: str, session_id: str = None, msg_id: str = None):

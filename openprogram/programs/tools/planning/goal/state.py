@@ -164,10 +164,9 @@ def _chat_active_boundary(goal: dict, current: float) -> tuple[float, bool, bool
         if attempt is None:
             return started, False, False
         if attempt.status is not AttemptStatus.ENDED:
-            live = (execution is not None and execution.current_attempt_id == attempt.attempt_id
-                    and attempt.lease_expires_at > current)
+            live = execution is not None and execution.current_attempt_id == attempt.attempt_id
             return (current, True, True) if live else (min(current, attempt.updated_at), False, False)
-        if attempt.lease_expires_at != 0:
+        if not attempt.fenced:
             return min(current, attempt.ended_at or started), True, False
         events = events if events is not None else store.list_events(attempt.execution_id)
         ended = next((event for event in reversed(events) if event.kind == "attempt.ended"

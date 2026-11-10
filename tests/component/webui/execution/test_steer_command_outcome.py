@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 import openprogram.runtime.execution as execution_module
 from openprogram.runtime.execution.attempts import AttemptStore
 from openprogram.runtime.execution.model import CapabilitySet, CommandKind, CommandStatus
-from openprogram.runtime.execution.projections import ExecutionProjectionReadModel
+from openprogram.runtime.execution.event_effects import ExecutionEventEffects
 from openprogram.runtime.execution.store import ExecutionStore
 from openprogram.runtime.permissions.authority import owner_authority
 
@@ -25,7 +25,7 @@ def test_steer_outcome_frame_names_the_command_without_its_payload(monkeypatch, 
         "actor": {"source": "web"}, "rejection_code": None,
     }
 
-    ExecutionProjectionReadModel._publish_steer_outcome(
+    ExecutionEventEffects._publish_steer_outcome(
         types.SimpleNamespace(kind=kind, payload={"command": command}),
     )
 
@@ -41,11 +41,11 @@ def test_other_command_outcomes_are_not_republished(monkeypatch):
     frames: list[dict] = []
     monkeypatch.setattr("openprogram.runtime.events.emit_ws_frame", frames.append)
 
-    ExecutionProjectionReadModel._publish_steer_outcome(types.SimpleNamespace(
+    ExecutionEventEffects._publish_steer_outcome(types.SimpleNamespace(
         kind="command.applied",
         payload={"command": {"kind": "execution.cancel", "command_id": "c"}},
     ))
-    ExecutionProjectionReadModel._publish_steer_outcome(types.SimpleNamespace(
+    ExecutionEventEffects._publish_steer_outcome(types.SimpleNamespace(
         kind="command.accepted",
         payload={"command": {"kind": "execution.steer", "command_id": "s"}},
     ))
@@ -66,7 +66,7 @@ def client(monkeypatch, tmp_path):
     attempts = AttemptStore(store)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id="test", ttl_seconds=30,
+        owner_id="test",
     )
     _attempt, execution = attempts.activate(
         leased.attempt_id, generation=leased.generation,

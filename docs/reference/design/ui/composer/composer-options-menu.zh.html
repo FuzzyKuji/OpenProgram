@@ -1,78 +1,55 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram · Composer 选项菜单</title>
-<style>
-  :root { color-scheme:dark; --bg:#11141a; --panel:#181d26; --line:#303a4a;
-    --text:#dce3ec; --muted:#96a1b1; --blue:#72a8ff; --green:#55d69c;
-    --amber:#f0c562; --mono:ui-monospace,SFMono-Regular,Menlo,monospace }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
-    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif }
-  main { max-width:1000px; margin:auto; padding:42px 28px 80px }
-  h1 { margin:0 0 8px; font-size:29px } h2 { margin:38px 0 12px; padding-top:15px;
-    border-top:1px solid var(--line); font-size:20px } p { margin:8px 0 }
-  code { padding:1px 5px; border:1px solid #2b3544; border-radius:5px;
-    background:#0d1015; font-family:var(--mono); font-size:.91em }
-  .sub { color:var(--muted) } .lead,.card,.table-wrap { border:1px solid var(--line);
-    border-radius:11px; background:var(--panel) } .lead { margin-top:20px; padding:15px 17px;
-    border-left:4px solid var(--blue) } .grid { display:grid;
-    grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px } .card { padding:14px 15px }
-  h3 { margin:0 0 6px; font-size:15px } ul { margin:6px 0; padding-left:20px }
-  .table-wrap { max-width:100%; overflow:auto; overscroll-behavior-x:contain }
-  table { width:100%; border-collapse:collapse }
-  th,td { padding:9px 11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
-  th { color:#cbd5e3 } tr:last-child td { border-bottom:0 }
-  .table-wrap:focus-visible { outline:2px solid var(--blue); outline-offset:3px }
-  .ok { color:var(--green) } .pending { color:var(--amber) }
-  @media(max-width:760px) { main { padding:28px 20px 60px } .grid { grid-template-columns:1fr } code { overflow-wrap:anywhere } }
-</style>
-</head>
-<body><main>
-  <h1>Composer 选项菜单</h1>
-  <p class="sub">范围：<code>ControlsCluster</code> 中的选项（<code>+</code>）菜单。本文是它的设计与验收清单。</p>
-  <div class="lead">选项菜单就是全应用通用的那套 radix 下拉——<code>components/ui/dropdown-menu.tsx</code> 的 <code>DropdownMenu</code> / <code>DropdownMenuContent</code> / <code>DropdownMenuItem</code>——铺在 <code>components/chat/top-bar/menu-styles.ts</code> 的共享菜单 token 上：玻璃材质的 <code>MENU_PANEL</code> 画框（10px 圆角、6px 衬）、<code>itemCls</code> 行（24px 高、13px 字、6px 圆角、hover 是唯一底色）、通铺的 <code>MENU_SEPARATOR</code>，以及右对齐的勾列（<code>CHECK_SLOT</code> / <code>CHECK_SLOT_PAD</code>）。它没有自己的 module CSS。</div>
+<title>输入框选项菜单</title>
+<meta name="description" content="输入框选项菜单：菜单行、共用菜单样式和验收。">
+<h1>输入框选项菜单</h1>
 
-  <h2>行</h2>
-  <p>从上到下：添加文件或照片、录制 Workflow（仅 macOS 桌面 App）、分隔线、网页搜索、沙箱、分隔线、无人值守。每一行都是 <code>PlusMenuRow</code>（<code>controls/menu-pieces.tsx</code>）：一个穿着 <code>itemCls(false)</code> 加 <code>MENU_ITEM_STATES</code> 的 <code>DropdownMenuItem</code>，后者把 radix 的键盘高亮和禁用属性映射到同一条 hover 规则上。布局就是共享文法——16px Solar 图标列、标签、可选的右侧元数据、再是勾列。选中行显示 14px 墨色 <code>check-circle</code>，在变为选中的那一刻弹入一次；其余行用 <code>CHECK_SLOT_PAD</code> 占住这一列，所以标签和勾与顶栏菜单落在同一竖列。开关类行（网页搜索、沙箱、无人值守）通过阻止 radix 的 select 保持菜单打开；添加文件让菜单关闭。沙箱不可用时是禁用行，保留原生 <code>title</code> 说明原因。</p>
+<p><code translate="no">ControlsCluster</code> 里的 <code translate="no">+</code> 菜单。和其他菜单一样，是基于 <code translate="no">apps/web/components/ui/menu/menu-styles.ts</code> token 的 Radix <code translate="no">DropdownMenu</code>。没有模块 CSS。</p>
 
-  <h2>没有工具开关</h2>
-  <p>菜单里没有 Tools 开关，也没有 Access preset。对话能调用哪些工具由 Agent 配置决定（Agents → 能力 → Programs：全部、指定范围或 Access preset、不使用）。不该调用工具的对话，用一个 Programs 设为"不使用"的 Agent。输入框只在 Agent 工具集之上叠加网页搜索（见 <a href="../../runtime/agent-configuration/tool-toggle-management.zh.md">tool-toggle-management</a>）。</p>
+<h2>菜单行</h2>
+<table class="stack">
+<thead><tr><th scope="col">行</th><th scope="col">类型</th><th scope="col">选择后</th></tr></thead>
+<tbody>
+<tr><th scope="row">添加文件或照片</th><td>动作</td><td>关闭</td></tr>
+<tr><th scope="row">录制 Workflow</th><td>动作；仅 macOS 桌面 App</td><td>关闭</td></tr>
+<tr><th scope="row">网页搜索</th><td>开关，在分隔线后</td><td>保持打开</td></tr>
+<tr><th scope="row">沙箱</th><td>开关。不可用时禁用，原生 <code translate="no">title</code> 说明原因</td><td>保持打开</td></tr>
+<tr><th scope="row">无人值守</th><td>开关，在分隔线后</td><td>保持打开</td></tr>
+</tbody>
+</table>
+<p class="note">每行都是 <code translate="no">PlusMenuRow</code>（<code translate="no">controls/menu-pieces.tsx</code>）：<code translate="no">itemCls(false)</code> 加 <code translate="no">MENU_ITEM_STATES</code>。16px Solar 图标列、标签、可选元数据、勾选列。选中行显示 14px <code translate="no">check-circle</code>，只弹入一次；其他行用 <code translate="no">CHECK_SLOT_PAD</code> 占位。</p>
 
-  <h2>参考实现比较</h2>
-  <div class="table-wrap" role="region" aria-label="参考实现比较表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>方案</th><th>能力</th><th>结论</th></tr></thead><tbody>
-    <tr><td>共享菜单 token 上的 radix 下拉</td><td>受控打开状态、portal、带翻转与碰撞处理的浮动定位、roving focus、typeahead、Escape、外部点击；与顶栏、Recents、标签页菜单同一套包装与 token</td><td class="ok">采用；全应用一种菜单文法</td></tr>
-    <tr><td>Base UI <code>Menu</code> 加 CSS module 样式</td><td>行为相同，但多一个菜单库，以及一份手工维护、已与共享样式分叉的画框和行样式</td><td>已移除；选项菜单是唯一使用者</td></tr>
-    <tr><td>手写 fixed 定位与遮罩</td><td>能做点击状态，但缺 portal 层序、自动翻转和完整的键盘 / 焦点行为</td><td>不采用；重复已有基础设施</td></tr>
-    <tr><td>原生 Popover API</td><td>有顶层和轻量关闭，但缺菜单的 roving focus 与定位约定</td><td>不采用；会维护两套菜单语义</td></tr>
-  </tbody></table></div>
+<dl class="pairs">
+<dt>面板</dt><dd><code translate="no">MENU_PANEL</code>：<code translate="no">rounded-lg</code>、<code translate="no">p-1</code></dd>
+<dt>行</dt><dd><code translate="no">itemCls</code>：最小 28px、<code translate="no">rounded-md</code>、基础字号，悬停是唯一着色</dd>
+<dt>分隔线</dt><dd><code translate="no">MENU_SEPARATOR</code>，通栏</dd>
+<dt>位置</dt><dd>挂在 body 的 Radix portal，<code translate="no">z-[200]</code>，<code translate="no">side="top" align="start" sideOffset={9}</code>；Radix 处理锚定、翻转和碰撞</dd>
+</dl>
 
-  <h2>DOM 与层级</h2>
-  <p>菜单通过 radix portal 渲染到 body，层级 <code>z-[200]</code>，高于 composer 自己的层；radix 把内容的 z-index 复制到 popper 包装上，并负责锚定、翻转和碰撞。打开参数为 <code>side="top" align="start" sideOffset={9}</code>。不涉及信任、隐私、并发或取消边界：这只是本地呈现。</p>
+<h2 id="no-tool-switch">没有工具开关</h2>
+<p>没有 Tools 开关，也没有 Access 预设。聊天能调用哪些工具由 Agent 配置决定（Agents → 能力 → Programs：全部、某范围或预设、无）。输入框只叠加网页搜索。见<a href="../../runtime/agent-configuration/tool-toggle-management.zh.html">工具开关管理</a>。</p>
 
-  <h2>验收</h2>
-  <p>生产文件：<code>apps/web/components/chat/composer/controls/controls-cluster.tsx</code>、<code>controls/menu-pieces.tsx</code>、<code>components/chat/top-bar/menu-styles.ts</code>。回归入口：<code>npm run check:composer-options-menu</code>。</p>
-  <ul>
-    <li>选项画框、行、分隔线和勾都来自 <code>menu-styles.ts</code>；<code>composer.module.css</code> 没有 <code>.plusMenu*</code> 规则。</li>
-    <li>菜单没有 Tools 行、没有 Access preset 二级菜单，旁边也没有 Tools 标签。</li>
-    <li>不存在 <code>menuPosition</code> 或手写 fixed 坐标。</li>
-  </ul>
+<details>
+<summary>方案对比</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方案</th><th scope="col">结果</th></tr></thead>
+<tbody>
+<tr><th scope="row">共用 token 的 Radix</th><td>采用：打开状态、portal、翻转、roving focus、typeahead、Escape、点外部关闭；全站一套菜单语法</td></tr>
+<tr><th scope="row">Base UI <code translate="no">Menu</code> 加 CSS 模块</th><td>移除：第二个库，样式副本会漂移</td></tr>
+<tr><th scope="row">手动固定定位</th><td>否决：没有 portal 顺序、翻转和完整键盘行为</td></tr>
+<tr><th scope="row">原生 Popover API</th><td>未采用：没有 roving focus 和定位约定</td></tr>
+</tbody>
+</table>
+</details>
 
-  <h2>验证</h2>
-  <div class="table-wrap" role="region" aria-label="验证表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>项目</th><th>方式</th></tr></thead><tbody>
-    <tr><td>菜单文法</td><td><code>npm run check:composer-options-menu</code>：radix 包装、共享 token、无 module CSS、无工具开关、层级</td></tr>
-    <tr><td>类型检查</td><td>在 <code>apps/web</code> 运行 <code>npx tsc --noEmit -p .</code></td></tr>
-    <tr><td>完整前端检查</td><td>在 <code>apps/web</code> 运行 <code>npm run check</code> 与 <code>npm run test:unit</code></td></tr>
-    <tr><td>可见验收</td><td><code>/Applications/OpenProgram.app</code>、默认 profile 和端口 <code>18100</code>；不以第二实例作为验收依据</td></tr>
-  </tbody></table></div>
-<script>
-document.querySelectorAll('[data-scroll-region]').forEach(region=>region.addEventListener('keydown',event=>{
-  const step=Math.max(80,Math.round(region.clientWidth*.75));
-  if(event.key==='ArrowRight'){event.preventDefault();region.scrollLeft+=step}
-  else if(event.key==='ArrowLeft'){event.preventDefault();region.scrollLeft-=step}
-  else if(event.key==='Home'){event.preventDefault();region.scrollLeft=0}
-  else if(event.key==='End'){event.preventDefault();region.scrollLeft=region.scrollWidth}
-}));
-</script>
-</main></body></html>
+<details>
+<summary>验收</summary>
+<ul>
+<li>面板、行、分隔线和勾选来自 <code translate="no">menu-styles.ts</code>；<code translate="no">composer.module.css</code> 没有 <code translate="no">.plusMenu*</code> 规则。</li>
+<li>没有 Tools 行、Access 预设子菜单或 Tools chip。</li>
+<li>没有 <code translate="no">menuPosition</code> 或手算的固定坐标。</li>
+</ul>
+<dl class="commands">
+<dt><code translate="no">node apps/web/scripts/chat/check-composer-options-menu.mjs</code></dt><dd>菜单语法</dd>
+<dt><code translate="no">npx tsc --noEmit -p .</code></dt><dd>类型，在 <code translate="no">apps/web</code></dd>
+<dt><code translate="no">npm run check</code>、<code translate="no">npm run test:unit</code></dt><dd>前端检查，在 <code translate="no">apps/web</code></dd>
+</dl>
+</details>

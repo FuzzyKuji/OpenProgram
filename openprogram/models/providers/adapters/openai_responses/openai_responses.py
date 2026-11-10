@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from typing import TYPE_CHECKING, Any
 
 from openprogram.models.providers.shared.github_copilot_headers import build_copilot_dynamic_headers, has_copilot_vision_input
@@ -46,20 +45,12 @@ def stream_openai_responses(
             )
 
         from openprogram.models.providers.settings.env_api_keys import resolve_provider_key
-        from openprogram.models.providers.types import AssistantMessage, Usage
+        from openprogram.models.providers.types import AssistantMessage
 
         # AssistantMessage object, NOT a dict — process_responses_stream
         # (and every consumer downstream) uses attribute access; the codex
         # provider is the reference shape.
-        output = AssistantMessage(
-            content=[],
-            api=model.api,
-            provider=model.provider,
-            model=model.id,
-            usage=Usage(),
-            stop_reason="stop",
-            timestamp=int(time.time() * 1000),
-        )
+        output = AssistantMessage.empty(model)
 
         try:
             from openprogram.models.auth import usage as _auth_usage
@@ -288,7 +279,7 @@ def _build_params(
     tool_list: list[dict[str, Any]] = (
         convert_responses_tools(tools, model.api, model.id) if tools else []
     )
-    # Provider-side web search (docs/reference/design/providers/web-search.md):
+    # Provider-side web search (docs/reference/design/providers/web-search.html):
     # the model runs the search on OpenAI's side and the stream reports it as
     # web_search_call items, which the shared processor turns into
     # ServerToolUse blocks.

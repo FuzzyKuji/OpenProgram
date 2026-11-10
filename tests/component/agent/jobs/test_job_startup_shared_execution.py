@@ -18,7 +18,7 @@ def test_job_runner_recovers_foreground_agent_without_job_projection(
     from openprogram.models.usage.ledger import UsageLedger
 
     db = tmp_path / "execution.sqlite3"
-    monkeypatch.setattr("openprogram.state.paths.get_execution_db_path", lambda: db)
+    monkeypatch.setattr("openprogram.state.paths.get_run_state_path", lambda: db)
     store = ExecutionStore(db)
     revision = store.create_revision(manifest={"entrypoint": "agent"})
     execution = store.admit_execution(
@@ -38,7 +38,7 @@ def test_job_runner_recovers_foreground_agent_without_job_projection(
         attempts = AttemptStore(store)
         attempt, leased = attempts.lease(
             execution.execution_id, expected_version=execution.status_version,
-            owner_id="lost-owner", ttl_seconds=30,
+            owner_id="lost-owner",
         )
         attempts.activate(
             attempt.attempt_id, generation=attempt.generation,

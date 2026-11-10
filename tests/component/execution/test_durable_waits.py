@@ -33,7 +33,7 @@ def _active_execution(
     attempts = AttemptStore(executions)
     leased, reserved = attempts.lease(
         execution.execution_id, expected_version=execution.status_version,
-        owner_id=f"worker_{execution_id}", ttl_seconds=30, attempt_id=attempt_id,
+        owner_id=f"worker_{execution_id}", attempt_id=attempt_id,
     )
     attempt, execution = attempts.activate(
         leased.attempt_id, generation=leased.generation,
@@ -187,7 +187,7 @@ def test_expired_wait_rejects_command_without_losing_timeout_record(tmp_path) ->
         policy_snapshot={"version": 1}, expires_at=9_999_999_999,
     )
     with executions._transaction() as connection:
-        connection.execute("UPDATE execution_waits SET expires_at = 1 WHERE wait_id = ?", (wait.wait_id,))
+        connection.update("execution_waits", {"expires_at": 1}, wait_id=wait.wait_id)
     dispatch = asyncio.run(RuntimeControlService(executions, attempts, DriverRegistry()).request_wait_answer(
         command_id="expired_answer", execution_id=execution.execution_id,
         expected_version=execution.status_version, actor={"surface": "test"},
@@ -348,9 +348,9 @@ def test_startup_recovers_committed_wait_outcome_once(tmp_path, resume_blocked) 
         # A prior resume already checked and rejected an incompatible runtime.
         # The old answer must not repeatedly trigger that operation on restart.
         with executions._transaction() as connection:
-            connection.execute(
-                "UPDATE executions SET reason_code = 'continuation_contract_mismatch' WHERE execution_id = ?",
-                (execution.execution_id,),
+            connection.update(
+                "executions", {"reason_code": "continuation_contract_mismatch"},
+                execution_id=execution.execution_id,
             )
     recover_execution_startup(control_service=service)
     # The saga scan is safe to repeat while the resumed owner is active.
@@ -387,7 +387,7 @@ def test_timeout_policy_is_persisted_and_settled_on_startup(tmp_path) -> None:
         wait_id="wait_timeout",
     )
     with executions._transaction() as connection:
-        connection.execute("UPDATE execution_waits SET expires_at = 1 WHERE wait_id = ?", (suspended.wait.wait_id,))
+        connection.update("execution_waits", {"expires_at": 1}, wait_id=suspended.wait.wait_id)
 
     recover_execution_startup(control_service=service)
 
@@ -786,10 +786,7 @@ def test_stale_wait_outcome_does_not_own_later_wait_frontier(tmp_path, stale_kin
     )
     if stale_kind == "null_checkpoint":
         with executions._transaction() as connection:
-            connection.execute(
-                "UPDATE execution_waits SET checkpoint_id = NULL WHERE wait_id = ?",
-                ("wait_a",),
-            )
+            connection.update("execution_waits", {"checkpoint_id": None}, wait_id="wait_a")
     if stale_kind == "scheduler":
         service.set_wait_resume_scheduler(lambda wait, _execution: scheduled.append(wait.wait_id))
 

@@ -1,5 +1,6 @@
 "use client";
 
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useState } from "react";
 
 import styles from "./channels.module.css";
@@ -54,24 +55,17 @@ export function AddAccountDialog({ onClose, onAdded }: Props) {
     }
     setSubmitting(true);
     try {
-      const r = await fetch("/api/channels/accounts", {
+      await jsonFetch("/api/channels/accounts", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           channel,
           account_id: accountId.trim(),
           token: token.trim(),
         }),
       });
-      if (!r.ok) {
-        const d = await r.json().catch(() => null);
-        setError(d?.detail || `HTTP ${r.status}`);
-        setSubmitting(false);
-        return;
-      }
       await onAdded();
     } catch (e) {
-      setError(String(e));
+      setError((e as Error).message);
       setSubmitting(false);
     }
   };

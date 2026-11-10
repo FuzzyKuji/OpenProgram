@@ -23,7 +23,6 @@ import json
 import logging
 import threading
 import time
-from pathlib import Path
 from typing import Any, Optional
 
 from openprogram.runtime.jobs.types import Job, JobStatus
@@ -47,13 +46,15 @@ def deliver_session_of(job: Job) -> str:
     return job.caller_session_id or job.parent_session_id
 
 
-def _path(session_id: str) -> Optional[Path]:
+def _path(session_id: str):
     from openprogram.runtime.context.session_db import default_db
-    sdir = default_db()._session_dir(session_id)  # noqa: SLF001 — same as inbox
-    return sdir / "notices.json" if sdir.exists() else None
+    sessions = default_db()
+    if not sessions._session_dir(session_id).exists():  # noqa: SLF001 — same as inbox
+        return None
+    return sessions.state_file(session_id, "notices.json")
 
 
-def _load(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
+def _load(path) -> tuple[list[dict[str, Any]], list[str]]:
     try:
         blob = json.loads(path.read_text(encoding="utf-8"))
     except Exception:
@@ -65,14 +66,11 @@ def _load(path: Path) -> tuple[list[dict[str, Any]], list[str]]:
             done if isinstance(done, list) else [])
 
 
-def _write(path: Path, entries: list[dict[str, Any]], done: list[str]) -> None:
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(json.dumps({"version": 1, "entries": entries,
-                               "done": done[-_DONE_KEPT:]}), encoding="utf-8")
-    tmp.replace(path)
+def _write(path, entries: list[dict[str, Any]], done: list[str]) -> None:
+    path.write_text(json.dumps({"version": 1, "entries": entries, "done": done[-_DONE_KEPT:]}))
 
 
-def _settle(path: Path, ids: set[str]) -> None:
+def _settle(path, ids: set[str]) -> None:
     """Drop these entries (job ids or watch ids) and remember them as
     done. Caller holds _lock."""
     entries, done = _load(path)
@@ -334,10 +332,11 @@ def _seed() -> None:
     global _seeded
     from openprogram.state.store import default_store
     from openprogram.state.store.session.placement import iter_session_dirs
-    root = default_store().root_path
+    sessions = default_store()
+    root = sessions.root_path
     if root.exists():
         found = {sid for sid, sdir in iter_session_dirs(root)
-                 if (sdir / "notices.json").exists() and _load(sdir / "notices.json")[0]}
+                 if _load(sessions.state_file_at(sdir, "notices.json"))[0]}
         with _lock:
             _due.update(found)
     _seeded = True

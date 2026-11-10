@@ -14,19 +14,18 @@ def boundary(tmp_path, monkeypatch):
     from openprogram.runtime.permissions import authority
     from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.runtime.events import bus as event_bus
+    from openprogram.state.store.session.session_store import SessionStore
     from openprogram.state.worktree.context import reset_worktree, set_worktree
 
     state = tmp_path / "state"
-    session_dir = state / "projects" / "default" / "chats" / "audit-session"
-    session_dir.mkdir(parents=True)
-    # A real session has meta.json; the event log routes to a session
-    # directory only when it looks present, whichever store is cached.
-    (session_dir / "meta.json").write_text("{}", encoding="utf-8")
     monkeypatch.setattr(paths, "get_state_dir", lambda: state)
+    # The event log routes to a session directory only when it holds a real
+    # session, whichever process-wide store an earlier test left cached.
+    SessionStore(state / "projects").create_session("audit-session", "worker")
     authority._reset_owner_cache_for_tests()
     req = TurnRequest(
         session_id="audit-session", user_text="", agent_id="worker",
-        source="agent_spawn", permission_mode="bypass",
+        source="mcp", permission_mode="bypass",
         **authority.local_owner_authority(),
     )
     project = tmp_path / "project"
@@ -77,6 +76,7 @@ def test_delegated_audit_never_records_argument_text(boundary, mode, tool_name, 
     from openprogram.runtime.events import ORIGINS
 
     req, events, state, _, _ = boundary
+    req.source = "agent_spawn"
     if mode == "allow-rule":
         req.permission_mode = "ask"
         req.permission_rules = PermissionRules(allow=[tool_name])
@@ -108,7 +108,7 @@ def test_delegated_missing_target_is_denied_and_audited(boundary, tool_name, arg
     req, events, _, _, _ = boundary
     result, calls = execute(req, tool_name, args)
     assert result.is_error and not calls
-    assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
+    assert result.details["reason_code"] == "IDENTITY_SCOPE"
     audit = [ev for ev in events if ev.type == "security.path_violation"]
     assert audit
     assert audit[-1].payload["tool"] == tool_name
@@ -133,7 +133,7 @@ def test_permission_entry_preserves_bound_worktree_and_symlink_containment(bound
     assert bool(calls) is allowed
     assert bool(result.is_error) is not allowed
     if not allowed:
-        assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
+        assert result.details["reason_code"] == "IDENTITY_SCOPE"
     assert (outside / "file.txt").read_text() == "original"
 
 
@@ -163,19 +163,16 @@ def test_unsafe_target_is_audited_without_path_or_content(boundary):
 
 @pytest.mark.parametrize("source", ["agent_spawn", "mcp"])
 @pytest.mark.parametrize("tool_name", ["write", "apply_patch"])
-def test_protected_agentic_target_denial_is_audited(boundary, source, tool_name):
-    from openprogram.host.sandbox.protected_paths import applications_root
-
-    req, events, _, _, _ = boundary
+def test_a_program_file_is_an_ordinary_write_target(boundary, source, tool_name):
+    req, events, state, _, _ = boundary
     req.source = source
-    secret = "SYNTHETIC_PROTECTED_PATH_4a98"
-    target = f"{applications_root()}/{secret}.py"
+    secret = "SYNTHETIC_PROGRAM_PATH_4a98"
+    target = f"{state}/programs/{secret}.py"
     args = ({"file_path": target, "content": secret} if tool_name == "write"
             else {"patch": f"*** Begin Patch\n*** Add File: {target}\n+{secret}\n*** End Patch"})
-    result, calls = execute(req, tool_name, args)
-    assert result.is_error and not calls
-    assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
+    result, _calls = execute(req, tool_name, args)
+    assert (result.details or {}).get("reason_code") != "AGENTIC_PYTHON_WRITE"
+    assert not [ev for ev in events if ev.type == "security.path_violation"
+                and ev.payload.get("reason") == "protected agentic target"]
     audit = [ev for ev in events if ev.type == "security.path_violation"]
-    assert audit, "protected delegated targets must also be audited"
-    assert audit[-1].payload["reason"] == "protected agentic target"
     assert secret not in json.dumps([asdict(ev) for ev in audit])

@@ -61,6 +61,10 @@ _credential_overrides: contextvars.ContextVar[dict[str, Credential]] = contextva
     "openprogram.models.auth.credential_overrides",
     default={},
 )
+_affinity_key: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "openprogram.models.auth.affinity_key",
+    default="",
+)
 _subprocess_env_hook: contextvars.ContextVar[Optional[Callable[[], dict[str, str]]]] = \
     contextvars.ContextVar(
         "openprogram.models.auth.subprocess_env_hook",
@@ -93,6 +97,29 @@ def get_credential_override(provider_id: str) -> Optional[Credential]:
     goes through normal pool resolution."""
     overrides = _credential_overrides.get()
     return overrides.get(provider_id)
+
+
+def get_affinity_key() -> str:
+    """The conversation the current model call belongs to, or ``""``.
+
+    A rotating credential pool keeps a conversation on the credential that
+    served it (:func:`openprogram.models.auth.pool.pick`), so what the
+    vendor cached of the conversation is read again instead of paid for in
+    full under another key."""
+    return _affinity_key.get()
+
+
+@contextlib.contextmanager
+def conversation_affinity(key: Optional[str]) -> Iterator[None]:
+    """Credentials picked inside the block stick to conversation ``key``.
+
+    Separate from :func:`auth_scope`, which resets the account: affinity
+    only says which conversation is asking, never which account answers."""
+    token = _affinity_key.set(key or "")
+    try:
+        yield
+    finally:
+        _affinity_key.reset(token)
 
 
 def get_subprocess_env() -> Optional[dict[str, str]]:

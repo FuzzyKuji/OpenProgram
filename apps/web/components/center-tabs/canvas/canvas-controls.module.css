@@ -318,9 +318,9 @@
    拖动时变成纯白（浅色主题再垫一圈浅阴影，免得融进米色缝隙）。
    整条缝隙都能拖。 */
 .divider {
-  --divider-hover: light-dark(color-mix(in oklch, var(--text-muted) 32%, var(--pane-divider-hover-mix)), var(--pane-divider-hover-dark));
+  --divider-hover: var(--pane-divider-hover);
   --divider-active: var(--pane-divider-active);
-  --divider-active-ring: 0 0 0 .5px light-dark(var(--pane-divider-ring-near), transparent), 0 1px 3px light-dark(var(--pane-divider-ring-far), transparent);
+  --divider-active-ring: var(--pane-divider-active-ring);
   position: absolute;
   z-index: 11;
   display: flex;

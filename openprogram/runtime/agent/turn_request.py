@@ -21,6 +21,13 @@ from typing import Any, Literal, Optional
 PermissionMode = Literal["ask", "acceptEdits", "plan", "auto", "bypass"]
 
 
+def _default_permission() -> PermissionMode:
+    # Read when a request is built: importing the permission package here
+    # would break this module's standard-library-only promise.
+    from openprogram.runtime.permissions.modes import DEFAULT_PERMISSION
+    return DEFAULT_PERMISSION
+
+
 # Sentinel: "caller did not specify predecessor, dispatcher should pick"
 # vs explicit ``None`` which means "fork from root". The two cases need
 # different behavior — see TurnRequest.caller.
@@ -42,7 +49,7 @@ class TurnRequest:
     peer_id: Optional[str] = None
     model_override: Optional[str] = None
     thinking_effort: Optional[str] = None
-    permission_mode: PermissionMode = "ask"
+    permission_mode: PermissionMode = field(default_factory=_default_permission)
     # Optional explicit tool whitelist that overrides the agent's
     # configured tools. Channels can opt out of risky tools per turn
     # (e.g. wechat shouldn't ever hit destructive bash).
@@ -97,7 +104,7 @@ class TurnRequest:
     # See docs/design/runtime/dag/overview.md §2.3.
     spawn_caller: Optional[str] = None
     # 用户配的权限规则（allow/deny/ask，各来源合并后），供 _gated_execute 的
-    # _match_rule 判定。见 docs/design/runtime/permission-model.md §3.4。
+    # match_rule 判定。见 docs/reference/design/runtime/security/permission-decision.html。
     # 类型是 session_config.PermissionRules，这里用 Any 避免循环 import。
     permission_rules: Any = None
     # HEAD single-writer (context/compaction.md §5): a same-session
@@ -121,6 +128,10 @@ class TurnRequest:
     authority_tier: Optional[Literal["owner", "paired"]] = None
     interaction: Optional[str] = None
     response_format: Any = None
+    # ``agent_delivery`` for a message another agent delivered to this branch.
+    message_origin: Optional[str] = None
+    # The text of the turn's last model round, without what earlier rounds said.
+    last_round_text: str = ""
     structured_output: Any = None
     structured_output_mode: Optional[str] = None
     structured_output_attempt: Optional[int] = None
@@ -153,11 +164,39 @@ class TurnRequest:
     # prompt is an instruction to the model, not something the owner said,
     # so the chat shows the continued reply without a user message.
     restart_resume: bool = False
-    # An always-on check-in: what the owner should see it reports mid-turn
-    # with ``always_on_report``, which marks the conversation unread then.
-    # Its end leaves the unread dot alone, so a check-in that finds nothing
-    # stays quiet in the sidebar.
+    # On such a turn of a handoff chain: the first message of the line of turns
+    # it continues, which is the one the chain saved.
+    resumes_message_id: Optional[str] = None
+    # Why a turn nobody typed started; ``"handoff"`` marks a turn of a handoff
+    # chain, ``"reminder"`` a reminder's wake, ``"automatic_goal"`` what an
+    # automatic Goal's turn started for itself. Written on its user message.
+    # Kept in the admitted input, so its continuations stay marked.
+    automation: Optional[str] = None
+    # The turn's end leaves the unread dot alone (a failure still sets
+    # it): whatever the owner should see, the turn marks unread itself.
     quiet_finish: bool = False
+    # A turn that runs beside the conversation instead of in it: an
+    # always-on check-in on a side branch (``advance_head=False``). It never
+    # changes the conversation's status, unread dot, model or title, and its
+    # reply is never delivered to a channel the chat is bound to. It never
+    # compacts the conversation, on the normal or the overflow path, and it
+    # reads only the summary and a bounded tail (context/tail.py).
+    background: bool = False
+    # Told to the model with this turn's message and not shown as part of it:
+    # a scheduled run's last result and how to say there is nothing new.
+    run_note: Optional[str] = None
+    # The scheduled task whose run this turn is (``id`` and ``title``), kept in
+    # the admitted input: a turn resumed after a restart still ends as that run.
+    scheduled_task: Optional[dict[str, Any]] = None
+    # "direct", or the kind of group room a channel turn came from.
+    peer_kind: Optional[str] = None
+    # What memory recall looks for when the turn's prompt is not what the turn
+    # is about, as with a check-in's fixed instructions. None: the prompt
+    # itself. Empty: nothing to look for, so no recall.
+    recall_query: Optional[str] = None
+    # Started by a turn no window is attached to, so a sub-agent or a Program
+    # keeps off the page in front as that turn does (detached_from_window).
+    detached: bool = False
 
     def __post_init__(self) -> None:
         if self.profile_snapshot is not None:
@@ -198,6 +237,7 @@ def inner_turn_request(source: str) -> Optional[Any]:
     if outer is None:
         return None
     from openprogram.runtime.permissions.authority import runtime_authority
+    from openprogram.runtime.permissions.identity import inherited_automation
 
     authority = runtime_authority(outer, source)
     if not authority:
@@ -215,6 +255,7 @@ def inner_turn_request(source: str) -> Optional[Any]:
         additional_working_dirs=list(
             getattr(outer, "additional_working_dirs", None) or ()
         ),
+        automation=inherited_automation(outer),
         **authority,
     )
 

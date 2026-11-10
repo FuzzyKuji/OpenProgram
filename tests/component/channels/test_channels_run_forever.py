@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import threading
 
+from openprogram.interfaces.channels import _heartbeats
 from openprogram.interfaces.channels.base import Channel
 
 
@@ -87,3 +88,17 @@ def test_worker_runs_adapters_via_run_forever() -> None:
     from openprogram.operations.worker import runner
     src = inspect.getsource(runner._safe_run_channel)
     assert "run_forever(" in src
+
+
+def test_a_crash_marks_the_adapter_as_reconnecting() -> None:
+    _heartbeats.clear_stop("faketg", "a1")
+    _Adapter(["crash", "clean"]).run_forever(threading.Event())
+    assert _heartbeats.is_retrying("faketg", "a1")
+    _heartbeats.clear_stop("faketg", "a1")
+    assert not _heartbeats.is_retrying("faketg", "a1")
+
+
+def test_a_clean_run_does_not_mark_reconnecting() -> None:
+    _heartbeats.clear_stop("faketg", "a1")
+    _Adapter(["clean"]).run_forever(threading.Event())
+    assert not _heartbeats.is_retrying("faketg", "a1")

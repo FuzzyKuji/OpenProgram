@@ -147,12 +147,7 @@ def main() -> int:
         node = _idx.nodes_by_id.get(amid)
         node.metadata = {**(node.metadata or {}),
                          "project_commit": {"repo": str(proj), "sha": sha}}
-        import json as _json
-        rl = (node.role or "x")[0]
-        fp = _g.path / "history" / f"{node.seq:04d}-{rl}-{node.id}.json"
-        if fp.exists():
-            fp.write_text(_json.dumps(node.to_dict(), ensure_ascii=False, default=str),
-                          encoding="utf-8")
+        _g.patch_node(node.id, {}, {"project_commit": {"repo": str(proj), "sha": sha}})
 
         res = revert_turn("rv1", amid)
         gu = res.get("git_undo") or {}

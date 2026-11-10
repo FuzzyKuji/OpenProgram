@@ -43,10 +43,6 @@ class SessionFacts:
         """Whether a turn of ``execution_id`` is running on the session."""
         return False
 
-    def in_plan_mode(self, session_id: str | None) -> bool:
-        """Whether the session is in plan mode."""
-        return False
-
     def project_defaults(self, session_id: str) -> dict:
         """The session's project defaults (``permission_mode`` and others)."""
         return {}
@@ -69,7 +65,7 @@ class SessionFacts:
 
     def holds_outbound(self, agent_id: str) -> bool:
         """Whether the Agent holds what it sends on the user's behalf as a draft."""
-        return True
+        return False
 
     def session_chat_model(self, session_id: str | None) -> tuple[Any, Any]:
         """``(provider, model_id)`` the session chats on."""

@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import asyncio
 
-from openprogram.runtime.context.request_compaction import RequestCompactor
+from openprogram.runtime.context.compaction.request import RequestCompactor
 from openprogram.models.providers import SimpleStreamOptions
 from openprogram.models.providers.types import Context, Model
 

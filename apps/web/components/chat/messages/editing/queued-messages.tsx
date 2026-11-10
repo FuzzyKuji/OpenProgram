@@ -2,14 +2,16 @@
 
 /**
  * Messages typed during a run, as one raised card docked above the input
- * box. Each row is one line: a tag says where the message goes ("This
- * turn" while it is being added to the current turn at its next safe
- * point, "Next turn" while it waits for the run to finish), then the text,
- * then hover actions (add to this turn, retry, edit, remove). Clicking the
- * text expands the full message and its attachments. The heading collapses
- * the card; "Clear all" removes every row that is not being edited.
- * Editing or removing a "This turn" row first takes the message back from
- * the turn; one the turn already has stays and leaves as delivered.
+ * box. A message on its way into the current turn is not here: it shows at
+ * the end of the running reply (PendingSteers) and comes back to this card
+ * only if adding it fails. Each row is one line: a tag says where the
+ * message goes ("Next turn" while it waits for the run to finish, or why it
+ * was not sent), then the text, then hover actions (add to this turn,
+ * retry, edit, remove). Clicking the text expands the full message and its
+ * attachments. The heading collapses the card; "Clear all" removes every
+ * row that is not being edited. Editing or removing a row whose delivery is
+ * unconfirmed first takes the message back from the turn; one the turn
+ * already has stays and leaves as delivered.
  * Dragging a row's line, or Alt+↑/↓ on its text, changes the send order;
  * rows being delivered or edited stay put.
  */
@@ -17,7 +19,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Reorder, useDragControls } from "framer-motion";
 import { useTranslation } from "@/lib/i18n";
-import { useSendQueue, type QueuedMessage } from "@/lib/chat/send/send-queue";
+import { steeringIntoTurn, useSendQueue, type QueuedMessage } from "@/lib/chat/send/send-queue";
 import { queuedHasAttachments, snapshotQueuedAttachments } from "@/lib/chat/send/queued-attachments";
 import { steerQueuedMessage, takeBackQueuedSteer } from "@/lib/chat/send/steer-message";
 import { showToast } from "@/lib/format-utils/toast";
@@ -251,8 +253,11 @@ const pinnedRow = (row: QueuedMessage) => Boolean(row.injecting || row.steerComm
 
 export function QueuedMessages({ sessionId }: { sessionId: string | null }) {
   const { text } = useTranslation();
-  const rows = useSendQueue(s => sessionId ? s.queues[sessionId] ?? EMPTY : EMPTY);
+  const queued = useSendQueue(s => sessionId ? s.queues[sessionId] ?? EMPTY : EMPTY);
   const [collapsed, setCollapsed] = useState(false);
+  // A message going into the running turn shows in the transcript at once
+  // (PendingSteers); only one that waits or failed stays in this card.
+  const rows = queued.filter(row => !steeringIntoTurn(row));
   if (!sessionId || !rows.length) return null;
   const adding = rows.filter(addingToTurn).length;
   const editing = rows.some(row => row.editing);

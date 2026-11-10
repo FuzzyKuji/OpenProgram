@@ -15,7 +15,7 @@ import time
 from typing import Any
 
 from openprogram.programs.tools.computer_use.computer_use_agent.desktop import keys as keymap
-from openprogram.programs.tools.computer_use.computer_use_agent.desktop.macos import REFUSED_BUNDLES, _Frameworks
+from openprogram.programs.tools.computer_use.computer_use_agent.desktop.macos import _Frameworks
 from openprogram.programs.tools.computer_use.computer_use_agent.desktop.tree import role_name
 
 from .session import Recording, RecordingError
@@ -27,8 +27,11 @@ POLL_SECONDS = 0.4
 VALUE_DELAY = 0.25
 
 # Events in these applications are dropped: OpenProgram itself (its
-# recording bar included), credential prompts and password managers.
-DROPPED_BUNDLES = REFUSED_BUNDLES | frozenset({
+# recording bar included), credential prompts and password managers. A
+# fixed list: what a recording keeps does not follow computer_use.refused_apps.
+DROPPED_BUNDLES = frozenset({
+    "ai.openprogram.desktop", "ai.openprogram.runtime",
+    "com.apple.securityagent", "com.apple.loginwindow", "com.apple.keychainaccess", "com.apple.passwords",
     "com.1password.1password", "com.agilebits.onepassword7", "com.agilebits.onepassword-osx",
     "com.bitwarden.desktop", "com.lastpass.lastpassmacdesktop", "com.dashlane.dashlanephonefinal",
     "org.keepassxc.keepassxc", "com.apple.coreservices.uiagent",

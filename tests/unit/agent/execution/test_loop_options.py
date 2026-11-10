@@ -286,8 +286,13 @@ def test_exec_defaults_publish_only_the_20_round_cap():
 
 
 def test_default_chat_completes_after_more_than_two_hundred_tool_rounds():
+    # Each round asks for a different step: work that moves has no round
+    # cap (identical rounds are the tool-loop guard's, test_tool_loop_guard).
     stream_fn, state = _make_stream_fn(
-        [_tool_call_msg(i) for i in range(205)] + [_text_msg()]
+        [
+            _assistant([ToolCall(id=f"call_{i}", name="echo", arguments={"step": i})])
+            for i in range(205)
+        ] + [_text_msg()]
     )
     session = _session(stream_fn)
     asyncio.run(session.run('Complete the whole task'))

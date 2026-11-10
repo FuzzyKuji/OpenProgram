@@ -20,6 +20,29 @@ def _desktop_unavailable_result(exc: BaseException) -> dict:
     }
 
 
+def _detached_turn() -> bool:
+    """Whether the Page in front belongs to whatever the owner is doing."""
+    from openprogram.runtime.agent.turn_request import get_turn_request
+    from openprogram.runtime.permissions.identity import detached_from_window
+
+    return detached_from_window(get_turn_request())
+
+
+def _detached_turn_needs_page_result() -> dict:
+    """observe's answer when a detached turn names neither a URL nor a Page."""
+    return {
+        "ok": False,
+        "reason_code": "page_required",
+        "recovery_command": "observe",
+        "message": (
+            "No window is attached to this turn, so there is no current Page, "
+            "and the Page in front belongs to the user. Call observe with "
+            "arguments.url to open your own tab, or name a Page or "
+            "page_context_token from list_pages."
+        ),
+    }
+
+
 def _execute_web_use(
     command: str, backend: str = "", page: str = "",
     page_context_token: str = "", web_session_id: str = "",
@@ -87,9 +110,12 @@ def _execute_web_use(
                 context = surface_context.capture_pages_for_listing()
             except surface_context.DesktopUnavailableError as exc:
                 return _desktop_unavailable_result(exc)
-        else:
+            captured_here = True
+        elif not _detached_turn():
             context = surface_context.capture_active()
-        captured_here = True
+            captured_here = True
+        elif not page:
+            return _detached_turn_needs_page_result()
 
     if command == "list_pages":
         if not captured_here:
@@ -226,6 +252,8 @@ def _listed_page_token(page: str) -> str | dict:
     """The page_context_token of ``page`` (a name or alias from list_pages), or,
     with no name, of the one Page the user is looking at. A failure lists the
     Pages to choose from."""
+    if not (page or "").strip() and _detached_turn():
+        return _detached_turn_needs_page_result()
     listed = _execute_web_use("list_pages")
     if not isinstance(listed, dict) or listed.get("ok") is not True:
         return listed if isinstance(listed, dict) else {

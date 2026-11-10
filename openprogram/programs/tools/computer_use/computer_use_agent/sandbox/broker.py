@@ -11,14 +11,15 @@ from dataclasses import dataclass
 import json
 import hashlib
 import logging
+import os
 import threading
 import time
-from types import MappingProxyType
+from types import MappingProxyType, SimpleNamespace
 from typing import Callable, Mapping
 import uuid
 
 from openprogram.runtime.execution.attempts import AttemptStore, AttemptStatus
-from openprogram.runtime.execution.effects import EffectClassification, EffectStatus, EffectStore
+from openprogram.runtime.execution.effects import EffectClassification, EffectConflict, EffectStatus, EffectStore
 from openprogram.runtime.execution.model import ExecutionStatus
 from openprogram.runtime.execution.state_blobs import ExecutionStateBlobStore
 from openprogram.runtime.execution.store import MAX_AGENT_STATE_BLOB_BYTES
@@ -44,13 +45,94 @@ class _Resource:
     reads: Callable[[str, dict], bool]
 
 
+class _RunTableSteps:
+    """A chat turn's GUI steps: recorded in the run tables so recovery can see them."""
+
+    def __init__(self, effects: EffectStore):
+        self._effects = effects
+
+    def admission_open(self, execution_id: str, attempt_id: str, generation: int) -> bool:
+        execution = self._effects.executions.get_execution(execution_id)
+        attempt = AttemptStore(self._effects.executions).get(attempt_id)
+        return not (execution is None or execution.status is not ExecutionStatus.RUNNING
+                    or execution.current_attempt_id != attempt_id
+                    or execution.owner_lease.get("generation") != generation
+                    or attempt is None or attempt.execution_id != execution_id
+                    or attempt.generation != generation or attempt.status is not AttemptStatus.ACTIVE)
+
+    def open_steps(self, execution_id: str, invocation_id: str):
+        from contextlib import closing
+
+        def is_step_of_invocation(effect):
+            metadata = json.loads(effect["metadata_json"])
+            return (isinstance(metadata, dict) and metadata.get("kind") == "gui.primitive"
+                    and metadata.get("invocation_id") == invocation_id)
+
+        with closing(self._effects.executions._connect()) as connection:
+            return connection.rows("effects", execution_id=execution_id, status=("dispatched", "uncertain"),
+                                   where=is_step_of_invocation)
+
+    def save_images(self, execution_id: str, attempt_id: str, effect_id: str, images, check) -> list[dict]:
+        blobs = ExecutionStateBlobStore(self._effects.executions)
+        records = []
+        for index, image in enumerate(images):
+            chunks = []
+            for offset in range(0, len(image), MAX_AGENT_STATE_BLOB_BYTES):
+                check()
+                name = f"gui_image_{index}_{offset}"
+                blob = blobs.put(execution_id=execution_id, attempt_id=attempt_id,
+                                 name=name, payload=image[offset:offset + MAX_AGENT_STATE_BLOB_BYTES],
+                                 media_type="application/octet-stream", schema_version=1)
+                blobs.attach_ref(execution_id=execution_id, ref=blob.ref, name=name,
+                                 reference_kind="effect", reference_id=effect_id)
+                chunks.append(blob.ref)
+            records.append({"mime_type": "image/png", "byte_length": len(image),
+                            "sha256": hashlib.sha256(image).hexdigest(), "chunks": chunks})
+        return records
+
+
+class SubprocessGuiSteps:
+    """A function subprocess's GUI steps, which nothing needs to recover.
+
+    If the subprocess dies, its parent reports one tool error and the model
+    reads the screen. The caller already gets each receipt as the step's result.
+    Used in place of the ``EffectStore``.
+    """
+
+    def __init__(self):
+        self._parent = os.getppid()
+
+    def admission_open(self, execution_id: str, attempt_id: str, generation: int) -> bool:
+        return os.getppid() == self._parent
+
+    def open_steps(self, execution_id: str, invocation_id: str):
+        return ()
+
+    def save_images(self, execution_id: str, attempt_id: str, effect_id: str, images, check) -> list[dict]:
+        return [{"mime_type": "image/png", "byte_length": len(image),
+                 "sha256": hashlib.sha256(image).hexdigest()} for image in images]
+
+    def register(self, *, effect_id: str, **_details):
+        return SimpleNamespace(effect_id=effect_id)
+
+    def mark_dispatched(self, *_args, **_details) -> None:
+        return None
+
+    def mark_uncertain(self, *_args, **_details) -> None:
+        return None
+
+    def resolve(self, *_args, **_details) -> None:
+        return None
+
+
 class GuiBroker:
-    def __init__(self, *, effects: EffectStore, execution_id: str, attempt_id: str,
+    def __init__(self, *, effects: EffectStore | SubprocessGuiSteps, execution_id: str, attempt_id: str,
                  generation: int, invocation_id: str):
         if not all((execution_id, attempt_id, invocation_id)) or generation < 1:
             raise ValueError("GUI broker requires host execution and invocation identity")
         self._owner_context = copy_context()
         self._effects = effects
+        self._steps = effects if isinstance(effects, SubprocessGuiSteps) else _RunTableSteps(effects)
         self._execution_id = execution_id
         self._attempt_id = attempt_id
         self._generation = generation
@@ -85,6 +167,38 @@ class GuiBroker:
     def revoke_resource(self, handle: str):
         with self._lock:
             self._resources.pop(handle, None)
+
+    def settle(self) -> int:
+        """Close the steps of the bound call that are still open as it ends; return how many.
+
+        A step that failed after it started, or that the call's deadline cut
+        off, has no receipt of its own. The call's result reports it to the
+        model, which reads the screen before repeating it, so the record is
+        closed with what is known. Left open, it would stop the turn at its
+        next checkpoint and wait for a person to resolve what the screen
+        already shows. Only the attempt that owns the call can close them.
+        """
+        with self._lock:
+            invocation = self._invocation_id
+        rows = self._steps.open_steps(self._execution_id, invocation)
+        closed = 0
+        for row in rows:
+            try:
+                known = json.loads(row["receipt_json"]) if row["receipt_json"] else {}
+            except ValueError:
+                known = {}
+            try:
+                self._effects.resolve(
+                    row["effect_id"], expected_status=EffectStatus(row["status"]),
+                    outcome=EffectStatus.COMMITTED,
+                    receipt={**(known if isinstance(known, dict) else {}), "state": "unknown",
+                             "reported_by": "call_result"},
+                    attempt_id=self._attempt_id, generation=self._generation,
+                )
+                closed += 1
+            except Exception:
+                _log.warning("failed to settle GUI effect effect_id=%s", row["effect_id"], exc_info=True)
+        return closed
 
     def revoke(self):
         # Close admission before cancellation/child teardown. Never wait for a
@@ -130,15 +244,8 @@ class GuiBroker:
         def check():
             check_admission()
             resource.validate(method, args, observation)
-            # A validator can wait; re-read durable admission after it returns.
-            execution = self._effects.executions.get_execution(self._execution_id)
-            attempt = AttemptStore(self._effects.executions).get(self._attempt_id)
-            if (execution is None or execution.status is not ExecutionStatus.RUNNING
-                    or execution.current_attempt_id != self._attempt_id
-                    or execution.owner_lease.get("generation") != self._generation
-                    or attempt is None or attempt.execution_id != self._execution_id
-                    or attempt.generation != self._generation or attempt.status is not AttemptStatus.ACTIVE
-                    or attempt.lease_expires_at <= time.time()):
+            # A validator can wait; re-read admission after it returns.
+            if not self._steps.admission_open(self._execution_id, self._attempt_id, self._generation):
                 raise PermissionError("GUI execution attempt is stale or admission is closed")
             check_admission()
 
@@ -171,20 +278,8 @@ class GuiBroker:
                                           or not image.startswith(b"\x89PNG\r\n\x1a\n") for image in images):
                     raise ValueError("GUI images must be bounded PNG bytes, never paths or URLs")
                 value = {"text": value.text, "json_data": value.json_data}
-                blobs = ExecutionStateBlobStore(self._effects.executions)
-                for index, image in enumerate(images):
-                    chunks = []
-                    for offset in range(0, len(image), MAX_AGENT_STATE_BLOB_BYTES):
-                        check()
-                        name = f"gui_image_{index}_{offset}"
-                        blob = blobs.put(execution_id=self._execution_id, attempt_id=self._attempt_id,
-                                         name=name, payload=image[offset:offset + MAX_AGENT_STATE_BLOB_BYTES],
-                                         media_type="application/octet-stream", schema_version=1)
-                        blobs.attach_ref(execution_id=self._execution_id, ref=blob.ref, name=name,
-                                         reference_kind="effect", reference_id=effect.effect_id)
-                        chunks.append(blob.ref)
-                    image_records.append({"mime_type": "image/png", "byte_length": len(image),
-                                          "sha256": hashlib.sha256(image).hexdigest(), "chunks": chunks})
+                image_records = self._steps.save_images(self._execution_id, self._attempt_id,
+                                                        effect.effect_id, images, check)
             # The adapter receipt, never a child message, resolves this effect.
             receipt = {"state": "applied", "target": resource.target, "method": method, "value": value}
             if image_records:
@@ -225,6 +320,9 @@ class GuiBroker:
                 else:
                     self._effects.mark_uncertain(effect.effect_id, expected_status=EffectStatus.DISPATCHED,
                                                  receipt=diagnostic)
+            except EffectConflict:
+                # The call ended first and settled this step with its own result.
+                _log.debug("GUI effect already settled effect_id=%s", effect.effect_id, exc_info=True)
             except Exception:
                 _log.warning("failed to resolve GUI effect effect_id=%s", effect.effect_id, exc_info=True)
             raise

@@ -1,6 +1,10 @@
 """HTTP adapter for the same business command handlers used by WebSocket clients."""
 import json
 
+from openprogram.interfaces.server.transcript.flat_rows import HTTP_ROW_BYTES
+
+PERMISSION_COMMANDS = {'set_permission', 'add_permission_rule', 'remove_permission_rule'}
+
 
 class CommandReply:
     """Request-scoped reply sink; ongoing execution stays in canonical stores."""
@@ -11,8 +15,8 @@ class CommandReply:
         self.frames = []
         self.closed = False
         self.size = 0
-        self._history_protocol = 1
-        self._bounded_history = True
+        # load_session answers with the newest plain rows that fit.
+        self.flat_row_byte_limit = HTTP_ROW_BYTES
 
     async def send_text(self, text):
         if self.closed:
@@ -30,11 +34,12 @@ async def invoke(request, name, arguments):
     from .catalog import commands
     from openprogram.interfaces.server import server
     from openprogram.interfaces.server.ws_errors import OperationError
+    from openprogram.runtime.permissions import refusal
+    if name in PERMISSION_COMMANDS or 'permission_mode' in arguments or (
+            name == 'set_project_config' and arguments.get('key') == 'permission_mode'):
+        raise refusal.framework_permission_settings(name)
     if name not in commands():
         raise ValueError('unknown_or_internal_framework_command')
-    if ('permission_mode' in arguments or
-            (name == 'set_project_config' and arguments.get('key') == 'permission_mode')):
-        raise ValueError('framework_cannot_change_approval_policy')
     reply = CommandReply(request)
     try:
         await server._handle_ws_command(reply, {**arguments, 'action': name})

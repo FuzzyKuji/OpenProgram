@@ -4,6 +4,7 @@ from __future__ import annotations
 import difflib
 import hashlib
 import json
+import logging
 import os
 import shutil
 import stat
@@ -19,6 +20,9 @@ from .paths import (
     turn_backup_dir,
     turn_manifest_path,
 )
+from .prompt_checkpoints import record_writer
+
+_log = logging.getLogger(__name__)
 
 
 _STATS_MAX_BYTES = 1024 * 1024
@@ -182,6 +186,7 @@ class CheckpointStore:
             raise MutationJournalError(
                 f"hardlinked file has {target_stat.st_nlink} links",
             )
+        self._note_writer(abs_path, "started")
         existing = manifest.load(manifest_path).get("files", {}).get(backup_name)
         if existing and existing.get("status") != "aborted":
             if existing.get("status") == "committed":
@@ -266,7 +271,9 @@ class CheckpointStore:
             if canonical_operation in {"write", "edit", "update", "add"}:
                 canonical_operation = "modify"
         stats, diff_state = _line_stats(before_blob, after_blob)
-        mutation_sequence = self._next_mutation_sequence()
+        mutation_sequence = self._next_mutation_sequence(
+            path=abs_path, session=self.session_dir.name,
+        )
         manifest.commit(
             manifest_path,
             backup_name,
@@ -277,8 +284,17 @@ class CheckpointStore:
             mutation_sequence=mutation_sequence,
         )
 
+    def _note_writer(self, path: str, stage: str) -> None:
+        try:
+            self._next_mutation_sequence(path=path, session=self.session_dir.name, stage=stage)
+        except OSError:
+            # Attribution is advisory; it never stops the edit.
+            pass
+
     @staticmethod
-    def _next_mutation_sequence() -> int:
+    def _next_mutation_sequence(
+        *, path: str | None = None, session: str | None = None, stage: str = "finished",
+    ) -> int:
         """Allocate one durable workspace-wide mutation order value."""
         from openprogram.host._platform import locking
 
@@ -309,12 +325,19 @@ class CheckpointStore:
                         os.close(self_descriptor)
                 except OSError:
                     pass  # Windows has no directory descriptor to sync
+                if path and session:
+                    try:
+                        record_writer(path, session, value, stage)
+                    except OSError:
+                        # Attribution is advisory; the edit itself is journaled.
+                        pass
                 return value
             finally:
                 locking.flock(lock.fileno(), locking.LOCK_UN)
 
     def abort_edit(self, turn_id: str, abs_path: str, error: str | None = None) -> None:
         if turn_id and abs_path:
+            self._note_writer(abs_path, "aborted")
             manifest.abort(
                 turn_manifest_path(self.session_dir, turn_id),
                 path_basename(abs_path),
@@ -989,6 +1012,108 @@ class CheckpointStore:
         self._fsync_directory(parent)
 
     @staticmethod
+    def _sibling(action: dict, transaction_id: str, suffix: str) -> Path:
+        target = Path(action["path"])
+        return target.parent / f".{target.name}.{transaction_id}.{suffix}"
+
+    def _unlink_sibling(self, action: dict, name: str) -> None:
+        chain = action["expected_current"].get("parent_chain") or self._capture_parent_chain(action["path"])
+        if not _DIR_FD_APPLY_SUPPORTED:
+            os.unlink(self._verify_parent_path(action["path"], chain) / name)
+            return
+        descriptor = self._open_verified_parent(action["path"], chain)
+        try:
+            os.unlink(name, dir_fd=descriptor)
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _discard_guards(self, intent: dict, intent_path: Path) -> None:
+        """Remove what a finished transaction left beside the files it touched.
+
+        A guard goes only while it still holds the state the transaction moved
+        aside; anything else in its place is not ours to delete. The
+        transaction has already finished, so a failure here changes nothing.
+        """
+        transaction_id = str(intent.get("transaction_id") or "")
+        try:
+            for action in intent.get("actions") or []:
+                for candidate, expected in (
+                    (self._sibling(action, transaction_id, "guard"), action.get("rollback") or {}),
+                    (self._sibling(action, f"{transaction_id}_rollback", "guard"), action.get("target") or {}),
+                ):
+                    try:
+                        if expected.get("kind") == "regular" and self._state_matches(
+                            self._inspect_state(str(candidate)), expected,
+                        ):
+                            self._unlink_sibling(action, candidate.name)
+                    except OSError:
+                        _log.warning("could not remove %s", candidate, exc_info=True)
+                try:
+                    self._unlink_sibling(action, self._sibling(action, transaction_id, "tmp").name)
+                except OSError:
+                    # Absent unless the transaction was interrupted.
+                    pass
+            intent["guards_discarded"] = True
+            manifest.save(intent_path, intent)
+        except Exception:
+            _log.warning("could not finish guard removal for %s", transaction_id, exc_info=True)
+
+    def _put_guard_back(self, action: dict, guard: Path, expected: dict) -> bool:
+        """Return a file moved aside by an interrupted apply to its path."""
+        if expected.get("kind") != "regular" or not self._state_matches(
+            self._inspect_state(str(guard)), expected,
+        ):
+            return False
+        target = Path(action["path"])
+        chain = action["expected_current"].get("parent_chain") or self._capture_parent_chain(action["path"])
+        try:
+            if _DIR_FD_APPLY_SUPPORTED:
+                descriptor = self._open_verified_parent(action["path"], chain)
+                try:
+                    os.link(
+                        guard.name, target.name,
+                        src_dir_fd=descriptor, dst_dir_fd=descriptor,
+                        follow_symlinks=False,
+                    )
+                    os.unlink(guard.name, dir_fd=descriptor)
+                    os.fsync(descriptor)
+                finally:
+                    os.close(descriptor)
+            else:
+                parent = self._verify_parent_path(action["path"], chain)
+                os.link(parent / guard.name, target)
+                os.unlink(parent / guard.name)
+                self._fsync_directory(parent)
+        except OSError:
+            _log.warning("could not put back %s", guard, exc_info=True)
+            return False
+        return True
+
+    def _classify_interrupted_action(self, action: dict, transaction_id: str) -> str:
+        """Where one action of an interrupted rewind stands on disk.
+
+        An apply that stopped between moving the current file aside and
+        linking the new one leaves the path absent; the moved file is put back
+        and the action reads as it was before that step.
+        """
+        actual = self._inspect_state(action["path"])
+        if self._state_matches(actual, action["rollback"]):
+            return "source"
+        if self._state_matches(actual, action["target"]):
+            return "target"
+        if actual.get("kind") == "absent":
+            if self._put_guard_back(
+                action, self._sibling(action, transaction_id, "guard"), action["rollback"],
+            ):
+                return "source"
+            if self._put_guard_back(
+                action, self._sibling(action, f"{transaction_id}_rollback", "guard"), action["target"],
+            ):
+                return "target"
+        return "external"
+
+    @staticmethod
     def _fsync_directory(path: Path) -> None:
         try:
             descriptor = os.open(path, os.O_RDONLY)
@@ -1038,8 +1163,13 @@ class CheckpointStore:
             "target_msg_id": intent.get("target_msg_id"),
             "user_text": intent.get("user_text", ""),
             "turn_ids": intent.get("turn_ids", []),
-            "head_changed": committed and not replayed,
+            "head_changed": (
+                committed and not replayed
+                and intent.get("target_head_id") != intent.get("expected_head_id")
+            ),
             "replayed": replayed,
+            "mode": intent.get("mode", "code_and_conversation"),
+            "skipped": intent.get("skipped", []),
         }
 
     def read_rewind_intent(self, key: str) -> dict | None:
@@ -1094,15 +1224,11 @@ class CheckpointStore:
             head = get_head()
             expected_head = intent.get("expected_head_id")
             target_head = intent.get("target_head_id")
-            states = []
-            for action in actions:
-                actual = self._inspect_state(action["path"])
-                if self._state_matches(actual, action["rollback"]):
-                    states.append("source")
-                elif self._state_matches(actual, action["target"]):
-                    states.append("target")
-                else:
-                    states.append("external")
+            transaction_id = str(intent.get("transaction_id") or "recovery")
+            states = [
+                self._classify_interrupted_action(action, transaction_id)
+                for action in actions
+            ]
             if all(state == "target" for state in states) and head == target_head:
                 if expected_head == target_head and not compare_and_set_head(
                     intent, expected_head, target_head,
@@ -1115,6 +1241,7 @@ class CheckpointStore:
                 intent["status"] = "committed"
                 intent["error"] = None
                 manifest.save(intent_path, intent)
+                self._discard_guards(intent, intent_path)
                 return self._rewind_intent_result(intent, replayed=True)
             if head not in {expected_head, target_head} or "external" in states:
                 intent["status"] = "recovery_required"
@@ -1147,7 +1274,7 @@ class CheckpointStore:
                     recovery_required = True
                     action["error"] = str(exc)
             if not recovery_required and head == target_head:
-                if not compare_and_set_head(intent, target_head, expected_head):
+                if not compare_and_set_head(intent, target_head, expected_head, rollback=True):
                     recovery_required = True
             intent["status"] = (
                 "recovery_required" if recovery_required else "rolled_back"
@@ -1159,6 +1286,8 @@ class CheckpointStore:
                 if recovery_required else "interrupted rewind rolled back"
             )
             manifest.save(intent_path, intent)
+            if not recovery_required:
+                self._discard_guards(intent, intent_path)
             return self._rewind_intent_result(intent, replayed=True)
 
     def recover_rewind_intents(self, *, get_head, compare_and_set_head) -> list[dict]:
@@ -1177,6 +1306,13 @@ class CheckpointStore:
                     get_head=get_head,
                     compare_and_set_head=compare_and_set_head,
                 ))
+            elif (
+                value.get("status") in {"committed", "rolled_back"}
+                and value.get("actions")
+                and not value.get("guards_discarded")
+            ):
+                with self._workspace_lock([action["path"] for action in value["actions"]]):
+                    self._discard_guards(value, path)
         return results
 
     def recover_history_intents(self) -> list[dict]:
@@ -1360,10 +1496,13 @@ class CheckpointStore:
                     intent["error_code"] = "RECOVERY_REQUIRED"
                 intent["error"] = str(exc)
                 manifest.save(intent_path, intent)
+                if not recovery_required:
+                    self._discard_guards(intent, intent_path)
                 return self._intent_result(intent)
             try:
                 intent["status"] = "committed"
                 manifest.save(intent_path, intent)
+                self._discard_guards(intent, intent_path)
             except Exception as exc:
                 # The target was changed, but durable completion was not recorded.
                 intent["status"] = "recovery_required"
@@ -1645,6 +1784,8 @@ class CheckpointStore:
         custom_actions: list[dict] | None = None,
         forward_meta_update: dict | None = None,
         rollback_meta_update: dict | None = None,
+        action_planner=None,
+        intent_extra: dict | None = None,
     ) -> dict:
         key = idempotency_key or uuid.uuid4().hex
         with self._rewind_intent_lock(key):
@@ -1663,6 +1804,8 @@ class CheckpointStore:
                 custom_actions=custom_actions,
                 forward_meta_update=forward_meta_update,
                 rollback_meta_update=rollback_meta_update,
+                action_planner=action_planner,
+                intent_extra=intent_extra,
             )
 
     def _apply_rewind_operation_locked(
@@ -1682,8 +1825,15 @@ class CheckpointStore:
         custom_actions: list[dict] | None,
         forward_meta_update: dict | None,
         rollback_meta_update: dict | None,
+        action_planner,
+        intent_extra: dict | None,
     ) -> dict:
-        """Apply one folded file plan and move HEAD only after verification."""
+        """Apply one file plan and move HEAD only after verification.
+
+        ``action_planner`` returns the actions for the current disk state; it
+        runs once before the intent is written and again under the workspace
+        lock, so a change in between aborts as a stale plan.
+        """
         key = idempotency_key
         intent_path = self._rewind_intent_path(key)
         if intent_path.exists():
@@ -1717,16 +1867,19 @@ class CheckpointStore:
                     intent_path,
                     get_head=get_head,
                     compare_and_set_head=(
-                        lambda _intent, expected, target:
-                        compare_and_set_head(expected, target)
+                        lambda _intent, expected, target, rollback=False:
+                        compare_and_set_head(expected, target, rollback=rollback)
                     ),
                 )
 
-        plan = (
-            self._validate_custom_history_actions(custom_actions)
-            if custom_actions is not None
-            else self.plan_rewind_operation(turn_ids)
-        )
+        def current_file_plan() -> dict:
+            if action_planner is not None:
+                return self._validate_custom_history_actions(action_planner())
+            if custom_actions is not None:
+                return self._validate_custom_history_actions(custom_actions)
+            return self.plan_rewind_operation(turn_ids)
+
+        plan = current_file_plan()
         if plan.get("status") != "ready":
             return {
                 **plan,
@@ -1775,6 +1928,7 @@ class CheckpointStore:
             "conflicts": [],
             "unavailable": [],
             "error": None,
+            **(intent_extra or {}),
         }
         manifest.save(intent_path, intent)
         paths = [action["path"] for action in intent["actions"]]
@@ -1783,11 +1937,7 @@ class CheckpointStore:
                 intent.update({"status": "aborted", "error": "stale_head"})
                 manifest.save(intent_path, intent)
                 return self._rewind_intent_result(intent)
-            current_plan = (
-                self._validate_custom_history_actions(custom_actions)
-                if custom_actions is not None
-                else self.plan_rewind_operation(turn_ids)
-            )
+            current_plan = current_file_plan()
             current_payload = {
                 "turn_ids": turn_ids,
                 "expected_head_id": expected_head_id,
@@ -1860,11 +2010,12 @@ class CheckpointStore:
                         )
                 intent["status"] = "committed"
                 manifest.save(intent_path, intent)
+                self._discard_guards(intent, intent_path)
                 return self._rewind_intent_result(intent)
             except Exception as exc:
                 recovery_required = False
                 if head_moved and not compare_and_set_head(
-                    target_head_id, expected_head_id,
+                    target_head_id, expected_head_id, rollback=True,
                 ):
                     recovery_required = True
                 for action in reversed(touched):
@@ -1898,6 +2049,8 @@ class CheckpointStore:
                     intent["error_code"] = "RECOVERY_REQUIRED"
                 intent["error"] = str(exc)
                 manifest.save(intent_path, intent)
+                if not recovery_required:
+                    self._discard_guards(intent, intent_path)
                 return self._rewind_intent_result(intent)
 
     def restore_turn(self, turn_id: str) -> list[str]:

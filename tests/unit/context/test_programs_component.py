@@ -8,15 +8,12 @@ from openprogram.runtime.context import components
 
 
 @pytest.fixture(autouse=True)
-def _documentation_link():
+def _documentation_link(monkeypatch):
     """The Server's link resolves documentation pages to files; the block
-    names the authoring guide only through that port."""
+    names the authoring guide only through that port. The link that was
+    registered before (the Server's, once it is loaded) is back afterwards."""
     link = SimpleNamespace(document_file=lambda page: f"/installed/docs/{page}.html.md")
-    interface_link.register(link)
-    try:
-        yield
-    finally:
-        interface_link.unregister(link)
+    monkeypatch.setattr(interface_link, "_link", link)
 
 
 def _with_tools(names):

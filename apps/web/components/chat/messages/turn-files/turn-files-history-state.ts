@@ -7,7 +7,8 @@ export type TurnHistoryReason =
   | "inactive_branch"
   | "agent_running"
   | "run_active"
-  | "in_progress";
+  | "in_progress"
+  | "spans_turns";
 
 export interface TurnHistoryState {
   status: string;
@@ -15,6 +16,10 @@ export interface TurnHistoryState {
   reason?: string;
   error?: string;
 }
+
+/** What the card shows for a list holding more than one turn's files. The
+ *  server's answer is about the last turn only, so it is not asked. */
+export const SPANS_TURNS_STATE: TurnHistoryState = { status: "blocked", operation: null, reason: "spans_turns" };
 
 /** Notices keyed by reason; ``fallback`` covers states with no known reason. */
 export type TurnHistoryNotices = Partial<Record<TurnHistoryReason, string>> & { fallback: string };

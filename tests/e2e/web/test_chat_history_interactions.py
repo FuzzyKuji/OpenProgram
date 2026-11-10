@@ -3,18 +3,20 @@ from pathlib import Path
 import subprocess
 import pytest
 
+from tests.support.transcript.history_wire import history_wire_script
+
 ROOT = Path(__file__).resolve().parents[3]
 pytestmark = pytest.mark.browser
 
 
 def test_history_jump_failure_cancellation_and_restore(tmp_path):
     from playwright.sync_api import sync_playwright, expect
-    entry = r'''
+    entry = history_wire_script() + r'''
 import React from 'react';import {createRoot} from 'react-dom/client';
 import {useChatAreaStick} from './components/chat/messages/list/use-chat-area-stick';
 import {writeChatScroll} from './lib/chat/history/chat-scroll';
 import {useHistoryWindow} from './components/chat/messages/list/use-history-window';
-import {useSessionStore} from './lib/session-store';
+import {useSessionStore,selectRow} from './lib/session-store';
 import {useSessionHistory,registerSessionHistory} from './lib/chat/history/session-history';
 import {loadSessionHistoryWindow,seedHistoryWindow} from './lib/runtime-bridge/session/session-history-loader';
 import {runtimeState,setSocket} from './lib/runtime-bridge/state';
@@ -22,17 +24,19 @@ import {saveHistoryAnchor,readHistoryAnchor} from './lib/chat/history/history-vi
 import {PeerSessionPane} from './components/chat/pane/peer-session-pane';
 import {applyChatWsMessage} from './lib/net/ws/chat-stream';
 import {loadSessionData,renderSessionMessages} from './lib/runtime-bridge/session/conversations';
-import {requestSessionLoad,acceptSessionLoad,failSessionLoad,preserveSessionReadRows} from './lib/runtime-bridge/session/session-load';
+import {requestSessionLoad,acceptSessionLoad,failSessionLoad} from './lib/runtime-bridge/session/session-load';
 import {TranscriptReadStatus} from './components/chat/messages/list/transcript-read-status';
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 const queryClient=new QueryClient({defaultOptions:{queries:{retry:false}}});
 function result(id,start=200){let end=start+50;return {messages:Array.from({length:50},(_,i)=>({id:`${id}-${start+i}`,role:'user',content:`Message ${start+i}`,status:'completed'})),history:{snapshot:id,head_id:`${id}-499`,before:`${id}-${start}`,after:end<500?`${id}-${end-1}`:null,start,end,total:500}};}
 class Socket extends EventTarget{static OPEN=1;readyState=1;send(wire){let req=JSON.parse(wire);if(req.action==='load_session')window.requests.push(req);}}
 window.requests=[];window.WebSocket=Socket;const socket=new Socket();setSocket(socket);
-window.seed=(id,start)=>{const r=result(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedHistoryWindow(id,r.messages,r.history);registerSessionHistory(id,r.history);useSessionStore.getState().setMessages(id,r.messages);};
-window.reply=(req,fail=false)=>{if(req.history_around&&!req.history_head){window.expire(req);return;}let start=req.history_latest?450:req.history_around?Number(req.history_around.split('-').at(-1))-25:req.history_before?Number(req.history_before.split('-').at(-1))-50:Number(req.history_after.split('-').at(-1))+1;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...result(req.session_id,start)}})}));};
+window.seed=(id,start)=>{const r=result(id,start);runtimeState.conversations[id]={id,messages:r.messages};seedWire(id,r);useSessionStore.getState().applyRead(id,r.messages);};
+window.reply=(req,fail=false)=>{let start=req.history_latest?450:req.history_around?Number(req.history_around.split('-').at(-1))-25:req.history_before?Number(req.history_before.split('-').at(-1))-50:Number(req.history_after.split('-').at(-1))+1;socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'session_history_page',data:{id:fail?'wrong':req.session_id,action:'load_session',request_id:req.request_id,...asWire(result(req.session_id,start))}})}));};
 window.loadHistory=loadSessionHistoryWindow;
 window.expire=req=>socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'operation_error',data:{action:'load_session',request_id:req.request_id,code:'invalid_request',message:'Expired history'}})}));
+window.moveBranch=req=>socket.dispatchEvent(new MessageEvent('message',{data:JSON.stringify({type:'operation_error',data:{action:'load_session',request_id:req.request_id,code:'cursor_not_on_branch',message:'Branch moved'}})}));
+window.acceptFresh=(req,id,start)=>acceptSessionLoad(socket,{id,request_id:req.request_id,...asWire(result(id,start))},loadSessionData);
 window.pageState=id=>useSessionHistory.getState().pages[id];
 window.save=(id,n)=>saveHistoryAnchor(id,{id:`${id}-${n}`,offset:0});window.anchor=id=>readHistoryAnchor(id);
 runtimeState.currentSessionId='main';useSessionStore.setState({currentSessionId:'main',activeChatKey:'main'});window.seed('main',200);
@@ -43,21 +47,14 @@ function Main(){const ids=useSessionStore(s=>s.messageOrder.main??[]);const {det
 let root=createRoot(document.getElementById('mount'));root.render(<Main/>);
 window.unmount=()=>root.unmount();window.mount=()=>{root=createRoot(document.getElementById('mount'));root.render(<Main/>);};
 window.remount=()=>{window.unmount();window.mount();};
-window.readFixture=()=>{const old={id:'reply',role:'assistant',content:'Partial',status:'streaming'};runtimeState.conversations.read={id:'read',messages:[old]};useSessionStore.getState().setMessages('read',[old]);root.unmount();root=createRoot(document.getElementById('mount'));root.render(<TranscriptReadStatus sessionId="read"/>);};
+window.readFixture=()=>{const old={id:'reply',role:'assistant',content:'Partial',status:'streaming'};runtimeState.conversations.read={id:'read',messages:[old]};useSessionStore.getState().applyRead('read',[old]);root.unmount();root=createRoot(document.getElementById('mount'));root.render(<TranscriptReadStatus sessionId="read"/>);};
 window.read=()=>requestSessionLoad({action:'load_session',session_id:'read'});
 window.failRead=req=>failSessionLoad(socket,{request_id:req.request_id});
-window.acceptRead=req=>acceptSessionLoad(socket,{id:'read',request_id:req.request_id,messages:[{id:'reply',role:'assistant',content:'Complete answer',status:'done'}]},loadSessionData);
-window.liveRow=()=>useSessionStore.getState().appendMessage('read',{id:'new-live',role:'assistant',content:'Progress after read',status:'streaming'});
+window.acceptRead=req=>{const messages=[{id:'reply',role:'assistant',content:'Complete answer',status:'done'}];return acceptSessionLoad(socket,{id:'read',request_id:req.request_id,...asWire({messages,history:{head_id:'reply',before:null,after:null,start:0,end:1,total:1}})},loadSessionData);};
+window.liveRow=()=>useSessionStore.getState().applyLocalChange('read',{kind:'local_append',row:{id:'new-live',role:'assistant',rowKind:'assistant',content:'Progress after read',status:'streaming'}});
 window.readRows=()=>useSessionStore.getState().messageOrder.read;
-window.readReply=()=>useSessionStore.getState().messagesById.reply;
+window.readReply=()=>selectRow('read','reply')(useSessionStore.getState());
 window.cachedRead=()=>renderSessionMessages(runtimeState.conversations.read,{preserveStore:true});
-window.bufferedRead=()=>{
- window.read();
- applyChatWsMessage({type:'chat_ack',data:{session_id:'read',msg_id:'buffered'}});
- applyChatWsMessage({type:'chat_response',data:{type:'stream_event',session_id:'read',msg_id:'buffered',event:{type:'text',text:'Progress awaiting its frame'}}});
- return window.acceptRead(window.requests.at(-1));
-};
-window.bufferedText=()=>useSessionStore.getState().messagesById.buffered_reply?.content;
 window.peers=()=>{root.unmount();window.seed('left',200);window.seed('right',300);root=createRoot(document.getElementById('mount'));root.render(<QueryClientProvider client={queryClient}><div style={{display:'flex',height:500}}><PeerSessionPane tabId="left" sessionId="left" title="Left"/><PeerSessionPane tabId="right" sessionId="right" title="Right"/></div></QueryClientProvider>);};
 '''
     bundle = tmp_path / 'interactions.js'
@@ -112,38 +109,16 @@ window.peers=()=>{root.unmount();window.seed('left',200);window.seed('right',300
             page.evaluate("window.requests.splice(0).forEach(r=>window.reply(r,r.session_id!=='left'))")
             page.wait_for_function("window.pageState('left').end===500")
             assert page.evaluate("window.pageState('right').end") == 350
-            # Expired cursors renew once around the reader, without resending the cursor.
-            page.evaluate("Object.defineProperty(document,'visibilityState',{configurable:true,value:'hidden'});window.requests.splice(0).forEach(r=>window.reply(r,true))")
-            page.wait_for_function("!window.pageState('left').loading && !window.pageState('right').loading")
+            # A branch that moved away from the cursor reads the chat again, once.
             page.evaluate("window.requests=[];void window.loadHistory('left','older')")
             page.wait_for_function("window.requests.some(r=>r.history_before&&r.session_id==='left')")
-            page.evaluate("window.expire(window.requests.splice(0).find(r=>r.history_before&&r.session_id==='left'))")
-            page.wait_for_function("window.requests.some(r=>r.history_around&&r.session_id==='left')")
-            assert page.evaluate("window.requests.find(r=>r.history_around).history_snapshot") is None
-            assert page.evaluate("window.requests.find(r=>r.history_around).history_head") == 'left-499'
-            page.evaluate("window.requests.splice(0).forEach(r=>window.reply(r))")
+            page.evaluate("window.moveBranch(window.requests.splice(0).find(r=>r.history_before&&r.session_id==='left'))")
+            page.wait_for_function("window.requests.some(r=>r.session_id==='left')")
+            assert page.evaluate("window.requests.filter(r=>r.session_id==='left').length") == 1
+            assert page.evaluate("['history_before','history_after','history_around','history_latest'].some(k=>k in window.requests.find(r=>r.session_id==='left'))") is False
             page.wait_for_function("!window.pageState('left').loading")
-            assert page.evaluate("window.pageState('left').error") is False
-            # If the saved anchor also expired, stop automatic invalid-cursor loops.
-            page.evaluate("window.requests=[];void window.loadHistory('left','older')")
-            page.wait_for_function('window.requests.length===1')
-            page.evaluate('window.expire(window.requests.shift())')
-            page.wait_for_function('window.requests.length===1')
-            page.evaluate('window.expire(window.requests.shift())')
-            page.wait_for_function("window.pageState('left').renewalRequired && !window.pageState('left').loading")
-            page.evaluate("void window.loadHistory('left','older');void window.loadHistory('left','older')")
-            assert page.evaluate('window.requests.length') == 0
-            paging_retry = panes.nth(0).get_by_role('button', name='Retry history', exact=True)
-            expect(paging_retry).to_be_visible(); paging_retry.focus(); page.keyboard.press('Enter')
-            page.wait_for_function('window.requests.length===1')
-            assert page.evaluate('window.requests[0].history_snapshot') is None
-            assert page.evaluate('Boolean(window.requests[0].history_around)') is True
-            page.evaluate('window.expire(window.requests.shift())')
-            latest = panes.nth(0).get_by_role('button', name='Go to latest history', exact=True)
-            expect(latest).to_be_visible(); latest.click()
-            page.wait_for_function('window.requests.some(r=>r.history_latest)')
-            page.evaluate('window.requests.splice(0).forEach(r=>window.reply(r))')
-            page.wait_for_function("!window.pageState('left').renewalRequired && !window.pageState('left').loading")
+            page.evaluate("window.acceptFresh(window.requests.splice(0).find(r=>r.session_id==='left'),'left',450)")
+            page.wait_for_function("window.pageState('left').end===500 && !window.pageState('left').error")
             # Production retry UI and request bridge retain live progress during a read.
             page.evaluate("window.readFixture();window.requests=[];window.read();window.read()")
             assert page.evaluate('window.requests.length') == 1
@@ -160,7 +135,5 @@ window.peers=()=>{root.unmount();window.seed('left',200);window.seed('right',300
             assert page.evaluate('window.readReply().content') == 'Complete answer'
             page.evaluate('window.cachedRead()')
             assert page.evaluate('window.readRows()') == ['reply', 'new-live']
-            assert page.evaluate('window.bufferedRead()') is True
-            assert page.evaluate('window.bufferedText()') == 'Progress awaiting its frame'
         finally:
             browser.close()

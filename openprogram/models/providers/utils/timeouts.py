@@ -7,10 +7,10 @@ reference frameworks (see ``docs/design/providers/reliability/llm-fault-toleranc
   * **Bound connection establishment tightly** — a dead proxy/VPN should
     fail fast (connect/write/pool ~30 s), not hang.
   * **Be GENEROUS on the streaming body** — reasoning models pause for
-    minutes between tokens. OpenClaw uses a 30-min budget reset on *any*
-    byte (its undici ``bodyTimeout``); a tight read timeout false-positives
-    over a buffering proxy/VPN. So the body read is effectively governed by
-    the SSE idle budget, not a short httpx read.
+    minutes between tokens, and a tight read timeout false-positives over a
+    buffering proxy/VPN. The body read is governed by the SSE idle budget
+    (10 min with no byte at all, reset by any byte, keepalives included),
+    not a short httpx read.
   * **Keep a separate, generous "no real data" progress guard** (our extra
     over OpenClaw — catches a stream that only echoes pings) without a default
     total-duration ceiling.
@@ -40,9 +40,12 @@ CONNECT_TIMEOUT_S: float = _f("OPENPROGRAM_HTTPX_CONNECT_TIMEOUT_S", 30.0)
 WRITE_TIMEOUT_S: float = _f("OPENPROGRAM_HTTPX_WRITE_TIMEOUT_S", 30.0)
 POOL_TIMEOUT_S: float = _f("OPENPROGRAM_HTTPX_POOL_TIMEOUT_S", 30.0)
 
-# --- Streaming body budgets — generous, OpenClaw-aligned ---------------
-# "no bytes AT ALL" (any received line resets it) ≈ OpenClaw bodyTimeout.
-STREAM_IDLE_TIMEOUT_S: float = _f("OPENPROGRAM_SSE_IDLE_TIMEOUT_S", 1800.0)
+# --- Streaming body budgets — generous ---------------------------------
+# "no bytes AT ALL" (any received line resets it): a dead connection. Codex's
+# own client gives the same backends 5 min; 10 min keeps double that for a
+# buffering proxy and still notices a dead connection three times sooner than
+# the 30 min this used to be (a turn hung that long before its retry).
+STREAM_IDLE_TIMEOUT_S: float = _f("OPENPROGRAM_SSE_IDLE_TIMEOUT_S", 600.0)
 # "no real data event" (only parsed payloads reset it) — our extra guard.
 STREAM_DATA_STALL_TIMEOUT_S: float = _f("OPENPROGRAM_SSE_DATA_STALL_TIMEOUT_S", 900.0)
 # No default total-duration cap: a healthy stream may keep making progress.

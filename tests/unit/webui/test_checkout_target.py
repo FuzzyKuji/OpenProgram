@@ -9,7 +9,7 @@ caller is another call is function-internal.
 """
 from types import SimpleNamespace
 
-from openprogram.interfaces.server.context_git_routes import is_checkout_target
+from openprogram.interfaces.server.routes.chat_branches import is_checkout_target
 
 
 def _node(caller, predecessor):

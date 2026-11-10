@@ -50,6 +50,27 @@ export function SettingsPage({
   );
 }
 
+/** The title, description and action of a group of settings. */
+export function SettingsHeading({
+  title,
+  description,
+  action,
+}: {
+  title?: ReactNode;
+  description?: ReactNode;
+  action?: ReactNode;
+}) {
+  return (
+    <div className="flex items-end justify-between gap-4">
+      <div className="flex min-w-0 flex-col gap-1">
+        {title ? <h3 className="text-fs-md font-medium text-text-primary">{title}</h3> : null}
+        {description ? <p className="text-fs-base text-text-muted">{description}</p> : null}
+      </div>
+      {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
+    </div>
+  );
+}
+
 /** A titled group of rows on one Card; rows are divided by hairlines. */
 export function SettingsSection({
   title,
@@ -67,15 +88,7 @@ export function SettingsSection({
   return (
     <section className={cn("flex flex-col gap-3", className)}>
       {title || description || action ? (
-        <div className="flex items-end justify-between gap-4">
-          <div className="flex min-w-0 flex-col gap-1">
-            {title ? <h3 className="text-fs-md font-medium text-text-primary">{title}</h3> : null}
-            {description ? (
-              <p className="text-fs-base text-text-muted">{description}</p>
-            ) : null}
-          </div>
-          {action ? <div className="flex shrink-0 items-center gap-2">{action}</div> : null}
-        </div>
+        <SettingsHeading title={title} description={description} action={action} />
       ) : null}
       <Card className="gap-0 py-0">
         <CardContent className="divide-y divide-border">{children}</CardContent>
@@ -86,7 +99,8 @@ export function SettingsSection({
 
 /**
  * One setting: label (+ optional description) on the left, its control on
- * the right (a lone Select gets the docs' 12rem field width). `htmlFor` makes the label a real <label> for that control;
+ * the right, centred on the row's height. Every select and text field is the same 10rem wide and every
+ * button at least 8rem, so the controls of a page line up. `htmlFor` makes the label a real <label> for that control;
  * `stacked` puts a wide control (editor, grid, list) under the label.
  */
 export function SettingsRow({
@@ -121,13 +135,13 @@ export function SettingsRow({
     );
   }
   return (
-    <Field orientation="horizontal" className={cn("py-4", className)}>
+    <Field orientation="horizontal" className={cn("py-4 has-[>[data-slot=field-content]]:items-center", className)}>
       <FieldContent>
         {heading}
         {description ? <FieldDescription>{description}</FieldDescription> : null}
       </FieldContent>
       {children != null ? (
-        <div className="flex min-w-0 shrink-0 items-center justify-end gap-2 [&>[data-slot=select-trigger]]:w-48">
+        <div className="flex min-w-0 shrink-0 items-center justify-end gap-2 [&>[data-slot=button]]:min-w-32 [&>[data-slot=input]]:w-40 [&>[data-slot=select-trigger]]:w-40">
           {children}
         </div>
       ) : null}

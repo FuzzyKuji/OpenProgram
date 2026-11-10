@@ -42,6 +42,29 @@ export type ApplicationNote =
 
 type Translate = (en: string, zh: string) => string;
 
+const KEPT_VERSION_NOTE = /^Kept version (\S+); version (\S+) failed\.$/;
+
+/** A package whose new version failed while the previous one keeps serving.
+ *  `message` is the reason without its exception type or file location. */
+export function keptVersionFailure(entry: ProgramExplorerEntry, text: Translate) {
+  const matched = entry.load_state === "error" ? KEPT_VERSION_NOTE.exec(entry.load_note ?? "") : null;
+  if (!matched) return null;
+  const [, kept, failed] = matched;
+  const fullError = entry.load_error ?? "";
+  const reason = fullError.split("\n", 1)[0]
+    .replace(/\s+\([^()]*:\d+\)$/, "")
+    .replace(/^[A-Za-z_][\w.]*(?:Error|Exception|Warning|Exit|Interrupt):\s*/, "")
+    .replace(/[.。]$/, "");
+  return {
+    title: text(`Kept version ${kept}; version ${failed} failed.`, `保留了版本 ${kept}；版本 ${failed} 加载失败。`),
+    message: text(
+      `It could not load: ${reason}. This Program keeps working on version ${kept} until the error is fixed.`,
+      `它加载失败：${reason}。修好之前，这个 Program 继续用版本 ${kept} 工作。`,
+    ),
+    fullError,
+  };
+}
+
 /** Short label for the detail header, after the application's origin. */
 export function applicationNoteLabel(note: ApplicationNote | null | undefined, text: Translate): string {
   if (note?.kind === "ui_only") return text("UI only", "仅界面");

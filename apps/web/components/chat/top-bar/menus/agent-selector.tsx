@@ -215,7 +215,7 @@ function CapIcons({ caps }: { caps: string[] }) {
       {shown.map((c) => {
         const icon = CAP_ICON[c];
         return icon ? (
-          <span key={c} data-tip={c[0].toUpperCase() + c.slice(1)}>
+          <span key={c} className="flex" data-tip={c[0].toUpperCase() + c.slice(1)}>
             {icon}
           </span>
         ) : null;

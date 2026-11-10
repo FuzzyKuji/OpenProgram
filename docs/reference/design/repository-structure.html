@@ -1,248 +1,132 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Repository structure — OpenProgram</title>
-<style>
-  :root {
-    color-scheme: dark;
-    --bg: #0c111b;
-    --panel: #121a28;
-    --panel-2: #182235;
-    --line: #2a3952;
-    --text: #e7edf8;
-    --muted: #9ba9bd;
-    --blue: #79a9ff;
-    --green: #72d6a0;
-    --amber: #ffc66d;
-    --red: #ff8d96;
-  }
-  * { box-sizing: border-box; }
-  body {
-    margin: 0;
-    background: var(--bg);
-    color: var(--text);
-    font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  }
-  main { width: min(1120px, calc(100% - 32px)); margin: 0 auto; padding: 52px 0 80px; }
-  h1 { margin: 0; font-size: clamp(30px, 5vw, 48px); line-height: 1.12; }
-  h2 { margin: 44px 0 14px; font-size: 22px; }
-  h3 { margin: 0 0 8px; font-size: 16px; }
-  p { max-width: 84ch; }
-  .eyebrow { color: var(--blue); font-size: 12px; font-weight: 700; letter-spacing: .13em; text-transform: uppercase; }
-  .lead { color: var(--muted); font-size: 17px; }
-  .meta-strip {
-    display: grid;
-    grid-template-columns: repeat(4, minmax(0, 1fr));
-    gap: 1px;
-    margin: 24px 0 0;
-    overflow: hidden;
-    border: 1px solid var(--line);
-    border-radius: 12px;
-    background: var(--line);
-  }
-  .meta-strip div { padding: 13px 14px; background: var(--panel); }
-  .meta-strip dt { margin: 0 0 3px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
-  .meta-strip dd { margin: 0; font-size: 13px; }
-  .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 14px; }
-  main, .grid > *, .flow > *, .meta-strip > * { min-width: 0; }
-  p, li, dd, td { overflow-wrap: anywhere; }
-  .card, .flow, .table-wrap {
-    border: 1px solid var(--line);
-    border-radius: 14px;
-    background: var(--panel);
-  }
-  .card { padding: 18px; }
-  .card p, .card ul { margin-bottom: 0; color: var(--muted); }
-  .flow { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 1px; overflow: hidden; }
-  .flow div { padding: 18px; background: var(--panel); }
-  .flow strong, code { color: var(--blue); }
-  .table-wrap { overflow-x: auto; }
-  table { width: 100%; min-width: 760px; border-collapse: collapse; }
-  th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-size: 12px; letter-spacing: .05em; }
-  tr:last-child td { border-bottom: 0; }
-  code { font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  pre { max-width: 100%; margin: 12px 0; padding: 16px 18px; overflow-x: auto; border: 1px solid var(--line);
-    border-radius: 12px; background: #0a101a; color: var(--text);
-    font: 13px/1.55 ui-monospace, SFMono-Regular, Menlo, monospace; }
-  .state { display: inline-block; padding: 2px 8px; border-radius: 999px; font-size: 12px; font-weight: 700; }
-  .now { color: var(--green); background: color-mix(in srgb, var(--green) 12%, transparent); }
-  .later { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); }
-  .no { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); }
-  ul { padding-left: 20px; }
-  .note { border-left: 3px solid var(--blue); padding: 8px 0 8px 16px; color: var(--muted); }
-  a { color: var(--blue); }
-  @media (max-width: 760px) {
-    main { width: min(100% - 24px, 1120px); padding-top: 32px; }
-    .grid, .flow, .meta-strip { grid-template-columns: 1fr; }
-  }
-</style>
-</head>
-<body>
-<main>
-  <div class="eyebrow">OpenProgram · Engineering design</div>
-  <h1>Repository structure</h1>
-  <p class="lead">This page defines a core-first monorepo: the root <code>openprogram/</code> is the Agent core; Server, Web, Desktop, and CLI are runnable applications consuming it, all under <code>apps/</code>. Directories should express runtime boundaries and dependency direction while preserving product behavior and user-data compatibility.</p>
-  <dl class="meta-strip">
-    <div><dt>Status</dt><dd>Approved target · migration in progress</dd></div>
-    <div><dt>Audience</dt><dd>Maintainers and reviewers</dd></div>
-    <div><dt>Scope</dt><dd>Core, applications, build and release layout</dd></div>
-    <div><dt>Excluded</dt><dd>Product behavior and public API changes</dd></div>
-  </dl>
+<title>Repository structure</title>
+<meta name="description" content="The core-first monorepo: what each directory owns, how large files are split and what the layout must keep true.">
+<h1>Repository structure</h1>
 
-  <h2>1. Design principles</h2>
-  <div class="grid">
-    <section class="card">
-      <h3>Separate core and applications</h3>
-      <p><code>openprogram/</code> contains only core capabilities such as Agent, Context, Session, Provider, Program, Tool, Memory, and Runtime. All runnable entry points reside in <code>apps/</code>. Core business domains must not depend on applications. The core import package holds no compatibility namespace for application code: Server and CLI modules are imported by their own names, <code>openprogram.interfaces.server.*</code> and <code>openprogram.interfaces.cli.*</code>.</p>
-    </section>
-    <section class="card">
-      <h3>Split along verifiable boundaries</h3>
-      <p>Move code only when it has independent inputs, outputs, and test entry points. Introducing a mixin, manager, or facade solely because a file is long is not a valid decomposition.</p>
-    </section>
-    <section class="card">
-      <h3>Keep public interfaces stable</h3>
-      <p>Preserve existing CLI commands, HTTP/WS protocols, ports, user-data directories, and necessary Python import compatibility during migration. Move, verify, and commit each application independently.</p>
-    </section>
-    <section class="card">
-      <h3>Separate current design from implementation records</h3>
-      <p>This HTML describes the long-term structure. Adjacent implementation notes maintain code locations, compatibility boundaries, verification methods, and unfinished work. Use Git for historical commits and review records.</p>
-    </section>
-  </div>
-
-  <h2>2. Top-level responsibilities</h2>
-  <pre>OpenProgram/
+<pre translate="no" tabindex="0">OpenProgram/
   apps/
     web/         Next.js Web application
     desktop/     Electron desktop application
     cli/         Ink terminal client
-  openprogram/   OpenProgram Agent core, Python SDK, and the Python interfaces
-    interfaces/server/  FastAPI, HTTP, WebSocket, authentication, and static hosting
+  openprogram/   Agent core, Python SDK and the Python interfaces
+    interfaces/server/  FastAPI, HTTP, WebSocket, authentication, static hosting
     interfaces/cli/     Python CLI: parser, dispatch, Rich fallback, setup
   tests/         Python tests: layer / product domain
   docs/          User documentation and design records
-  scripts/       Executable or importable development, validation, and release tools
-  references/    Reference implementation snapshots and local comparison material
+  scripts/       Development, validation and release tools
+  references/    Reference implementation snapshots
   website/       Official website source
   pyproject.toml Single Python aggregate-project configuration
   uv.lock        Sole Python lockfile
   package.json   npm workspace entry
-  package-lock.json Sole npm workspace lockfile</pre>
-  <p><code>.github/</code>, <code>.codegraph/</code> and <code>.superpowers/</code> are repository infrastructure, not product runtime directories. The root retains only the two ecosystems’ entry files and lockfiles, project metadata, and entry documentation. Root <code>pyproject.toml</code> continues to define the single user-installable <code>openprogram</code> aggregate distribution, with the sole <code>uv.lock</code> managing the Python development environment. G2 does not create a memberless <code>[tool.uv.workspace]</code> or split Core, Server, and CLI into three public distributions. Root <code>package.json</code> declares npm workspaces for Web, Desktop, and Ink CLI, sharing the sole <code>package-lock.json</code>. These are source and build configuration files, not files in ordinary user installations.</p>
-  <p>Web pins React 18; Ink CLI pins React 19. npm’s default hoisting can make shared React peer and type dependencies affect another application. The private root package therefore declares exact React 18, <code>react-reconciler</code> 0.29, and type versions as dependency-layout constraints. CLI’s React 19 and <code>react-reconciler</code> 0.33 remain in its own workspace. CLI does not depend on third-party hook packages resolving React from the root. This constraint adds no product runtime behavior and does not unify the applications’ React major versions.</p>
-  <p>The core Python import package resides at the root <code>openprogram/</code>. It is the Agent Core / SDK shared by Server, CLI, and Harness, not an ordinary application. Since there is no second shared Python package, do not create <code>packages/</code>. Source ownership and release distribution are separate boundaries: retain one user-installable <code>openprogram</code> wheel that still includes <code>openprogram</code>, <code>openprogram.interfaces.server</code> and <code>openprogram.interfaces.cli</code>. Application-specific scripts live in <code>apps/&lt;name&gt;/scripts/</code>, cross-application development and verification commands in <code>scripts/</code>, and official runtime, installer, and release commands in <code>scripts/release/</code>.</p>
-  <p>The existing public URL continues to provide <code>scripts/install-release.sh</code>. This file handles compatibility distribution only: a complete checkout executes <code>scripts/release/install-release.sh</code>; when downloaded alone, it retrieves the official implementation from the same verified repository and immutable tag into a temporary file, then executes it.<code>scripts/install.sh</code>, <code>scripts/install.ps1</code>, <code>scripts/refresh-local-app.sh</code> and <code>scripts/promote_stable.sh</code> retain their paths; local refresh continues to reuse staging and version-verification helpers under <code>scripts/release/</code>.</p>
-  <p>The current checkout has completed release-script and Node-workspace organization: official release scripts are under <code>scripts/release/</code>; Web, Desktop, and Ink CLI are managed by root npm workspaces and share the sole <code>package-lock.json</code>; Python Core remains at root <code>openprogram/</code>. Root <code>pyproject.toml</code> continues to publish a single distribution containing Core, Server, and Python CLI: <code>openprogram</code> wheel.</p>
-  <p>OpenProgram does not distribute default skills with its installation; Programs provides built-in product workflows.<code>openprogram/extensions/skills/</code> only implements AgentSkills-compatible loading from remote caches, plugins, the user directory <code>~/.openprogram/skills/</code>, and the current project <code>&lt;cwd&gt;/skills/</code>. The repository does not create <code>skills_bundled/</code> or a second hidden copy.</p>
-  <p><code>tests/</code> Python cases use <code>tests/&lt;layer&gt;/&lt;product-domain&gt;/test_*.py</code>, selecting a layer based on the strongest actual dependency. Detailed boundaries are maintained by <a href="testing/test-system.html">Testing system</a> and repository contracts.</p>
+  package-lock.json  Sole npm workspace lockfile</pre>
 
-  <h3>Core and application packages</h3>
-  <p><code>openprogram/</code> top-level directories contain only independently explainable core product domains or stable protocol boundaries, such as <code>agent/</code>, <code>programs/</code>, <code>context/</code>, <code>memory/</code> and <code>providers/</code>. Sub-capabilities belong within their product domains. Context’s Git DAG resides in <code>context/git/</code>, no longer occupying a separate top-level <code>contextgit/</code> directory. FastAPI routes, WebSocket handlers, static frontend hosting, Electron, and UI code are not part of the core package.</p>
-  <p><code>openprogram/interfaces/server/</code> is the Python server application; its FastAPI routes, WebSocket actions, owner authentication, static hosting, and server-only helpers reside directly in it (<code>routes/</code>, <code>ws_actions/</code>, <code>server_runtime/</code> and top-level modules). They are imported as <code>openprogram.interfaces.server.*</code>, and <code>openprogram.interfaces.server.server</code> assembles the app, so every module has exactly one name and one copy of its state. <code>apps/cli/</code> holds only the Ink terminal client (<code>src/</code>, <code>tests/</code> and <code>package.json</code>); the Python parser, dispatcher, Rich fallback, and setup flow reside in <code>openprogram/interfaces/cli/</code>. Both Python interfaces are ordinary packages under <code>openprogram/</code>, found by package discovery, so wheels, editable installs and checkouts share one layout; <code>apps/</code> contains only the non-Python clients. The package <code>openprogram.interfaces.cli</code> re-exports <code>main</code> and <code>build_parser</code> from its <code>application.py</code>.</p>
-  <p>Tool configuration, favorites, and other profile state are user data written to <code>~/.openprogram[-profile]/</code>, not source or wheel seeds stored in <code>openprogram/</code>. Compatibility reads check only the legacy <code>openprogram/webui/</code> package location and copy once into profile state. They must not depend on Server module paths in <code>openprogram/interfaces/server/</code>.</p>
-  <p>The repository currently does not create <code>packages/</code>. Reconsider this directory only when a second shared package has an independent stable public entry and is consumed by at least two applications. Do not create empty packages for hypothetical protocol, UI, or configuration reuse.</p>
-  <p><code>__pycache__/</code>, <code>.DS_Store</code>, build artifacts, and Finder conflict copies are not repository structure. They remain Git-ignored and may be cleaned, but are not code-layering or acceptance evidence. User-installed <code>programs/packages/</code> checkouts are local product data and must not be removed during source reorganization.</p>
+<h2 id="principles">Principles</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Principle</th><th scope="col">Means</th></tr></thead>
+<tbody>
+<tr><th scope="row">Core and applications are separate</th><td>Core domains never depend on applications. The core holds no compatibility namespace: Server and CLI modules are imported as <code translate="no">openprogram.interfaces.server.*</code> and <code translate="no">openprogram.interfaces.cli.*</code>.</td></tr>
+<tr><th scope="row">Split along verifiable boundaries</th><td>Move code only when it has independent inputs, outputs and test entries. A mixin, manager or facade made only because a file is long is not a split.</td></tr>
+<tr><th scope="row">Public interfaces stay stable</th><td>CLI commands, HTTP/WS protocols, ports, user-data directories, necessary Python imports. Each application is moved, verified and committed on its own.</td></tr>
+<tr><th scope="row">Design is apart from implementation records</th><td>This page is the long-term structure; <a href="repository-structure-implementation.html">Repository structure implementation</a> holds locations, compatibility and verification. Git holds history.</td></tr>
+</tbody>
+</table>
 
-  <h2>3. Handling oversized files</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>File</th><th>Current state</th><th>Decision</th><th>Boundary</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><code>openprogram/interfaces/cli/</code></td>
-          <td>Holds the whole Python CLI application; the core package keeps no CLI compatibility package</td>
-          <td><span class="state yes">Migrated</span></td>
-          <td>Application implementation resides in <code>openprogram/interfaces/cli/</code>; editable installation, <code>uv run</code> and wheels all provide <code>python -m openprogram</code>, <code>python -m openprogram.interfaces.cli</code> and the <code>openprogram</code> console script, which run the same <code>main</code>.</td>
-        </tr>
-        <tr>
-          <td><code>apps/desktop/main.js</code></td>
-          <td>Windows, updates, WebViews, tab transfers, and menus coexist in nearly 4,000 lines</td>
-          <td><span class="state later">Implement in batches</span></td>
-          <td>Pure menu geometry has been extracted to <code>menu-geometry.js</code>, pure worker-recovery state to <code>worker-recovery-state.js</code>, and transfer-payload validation to <code>tab-transfer-validation.js</code>. Move HTTP probing, process/window lifecycles, native WebView ownership changes, tab-transfer coordination, and menu hosting only after each has execution-level acceptance.</td>
-        </tr>
-        <tr>
-          <td><code>apps/web/lib/desktop/desktop-bridge.ts</code></td>
-          <td>Types, view state, and tab transfers coexist in nearly 2,000 lines</td>
-          <td><span class="state later">Implement in batches</span></td>
-          <td>Public WebTab and Desktop-service types have been extracted to <code>desktop-bridge-types.ts</code>, preload-facing transfer contracts to <code>desktop-transfer-types.ts</code>, and re-exported from the original file. Aggregate bridge, view state, journal persistence, and tab-transfer coordination remain until independently executable verification boundaries are identified.</td>
-        </tr>
-        <tr>
-          <td><code>runtime.py</code>, <code>runner.py</code>, <code>resource_governance.py</code></td>
-          <td>Long file with concentrated core state-machine logic and invariants</td>
-          <td><span class="state no">Do not split by length</span></td>
-          <td>Split only for independently verifiable responsibilities or duplicate implementations; introduce no mixin layer.</td>
-        </tr>
-        <tr>
-          <td>Large Web / Desktop check scripts</td>
-          <td>Some scripts combine fixtures, scenario execution, and multiple structural assertions; the longest exceed 3,000 lines</td>
-          <td><span class="state later">Later batches</span></td>
-          <td>Extract shared fixtures and independently executable scenarios first. Retain original command entry points; introduce no test framework merely to shorten files.</td>
-        </tr>
-      </tbody>
-    </table>
-  </div>
+<h2 id="packages">Python core and packaging</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Core top level</th><td>Only independently explainable domains: <code translate="no">runtime/</code>, <code translate="no">programs/</code>, <code translate="no">models/</code>, <code translate="no">state/</code>, <code translate="no">host/</code>, <code translate="no">extensions/</code>, <code translate="no">operations/</code>, <code translate="no">interfaces/</code>. Sub-capabilities live in their domain, such as Context's Git DAG in <code translate="no">runtime/context/git/</code>.</td></tr>
+<tr><th scope="row">Server</th><td><code translate="no">routes/</code>, <code translate="no">ws_actions/</code>, <code translate="no">server_runtime/</code> and top-level modules; <code translate="no">openprogram.interfaces.server.server</code> assembles the app. Every module has one name and one copy of its state.</td></tr>
+<tr><th scope="row">CLI</th><td><code translate="no">apps/cli/</code> holds only the Ink client (<code translate="no">src/</code>, <code translate="no">tests/</code>, <code translate="no">package.json</code>). <code translate="no">openprogram.interfaces.cli</code> re-exports <code translate="no">main</code> and <code translate="no">build_parser</code> from <code translate="no">application.py</code>.</td></tr>
+<tr><th scope="row">Distribution</th><td>One user-installable <code translate="no">openprogram</code> wheel with core, Server and Python CLI, found by package discovery, so wheels, editable installs and checkouts share one layout. No memberless <code translate="no">[tool.uv.workspace]</code>, no three public distributions.</td></tr>
+<tr><th scope="row"><code translate="no">packages/</code></th><td>Not created. Reconsider only when a second shared package has a stable public entry and at least two consumers.</td></tr>
+<tr><th scope="row">Profile state</th><td>Tool configuration, favorites and the like are written to <code translate="no">~/.openprogram[-profile]/</code>, never stored as source or wheel seeds. Compatibility reads check only the legacy <code translate="no" data-claim="example">openprogram/webui/</code> location, copy once into profile state and never depend on Server module paths.</td></tr>
+<tr><th scope="row">Skills</th><td>None shipped; Programs provides built-in workflows. <code translate="no">openprogram/extensions/skills/</code> only loads AgentSkills-compatible skills from remote caches, plugins, <code translate="no">~/.openprogram/skills/</code> and <code translate="no">&lt;cwd&gt;/skills/</code>. No <code translate="no">skills_bundled/</code> or hidden copy.</td></tr>
+<tr><th scope="row">Tests</th><td><code translate="no">tests/&lt;layer&gt;/&lt;product-domain&gt;/test_*.py</code>, layer chosen by the strongest actual dependency; see <a href="testing/test-system.html">Testing system</a>.</td></tr>
+<tr><th scope="row">Not structure</th><td><code translate="no">__pycache__/</code>, <code translate="no">.DS_Store</code>, build artifacts and Finder conflict copies stay ignored. User-installed <code translate="no">programs/packages/</code> checkouts are product data and survive reorganization.</td></tr>
+</tbody>
+</table>
 
-  <h2>4. Documentation information architecture</h2>
-  <div class="grid">
-    <section class="card">
-      <h3>User documentation</h3>
-      <p><code>start/</code>, <code>install/</code>, <code>capabilities/</code>, <code>interfaces/</code>, <code>models/</code>, <code>integrations/</code>, <code>server/</code>, <code>reference/</code>. Included in public navigation and search.</p>
-    </section>
-    <section class="card">
-      <h3>Current design</h3>
-      <p><code>reference/design/</code>. Present currently effective designs by product domain. Group UI documents into foundations, conversation editing, browser tabs, settings/catalog, and workspace.</p>
-    </section>
-    <section class="card">
-      <h3>Implementation records</h3>
-      <p>Implementation notes adjacent to design pages and <code>reference/design/plans/</code> describe current implementation boundaries, verification requirements, and remaining work. Maintain implementation status together at the end; do not duplicate design bodies or accumulate historical commit/review logs.</p>
-    </section>
-    <section class="card">
-      <h3>One home for engineering records</h3>
-      <p>Engineering records live only under <code>docs/reference/design/</code>, one document per topic. Tool-generated execution plans and task ledgers are not kept in <code>docs/</code>; their lasting design content is folded into the topic's design page. Plans still referenced by current designs under <code>reference/design/plans/</code> remain published in a separate Plans group.</p>
-    </section>
-  </div>
-  <p class="note">Root <code>README.md</code> explains the complete product; <code>openprogram/README.md</code> explains the core SDK; <code>openprogram/interfaces/server/README.md</code>, <code>apps/web/README.md</code>, <code>apps/desktop/README.md</code> and <code>apps/cli/README.md</code> explain each runnable entry. Entry READMEs describe only current responsibilities, dependency directions, and verification commands.</p>
+<h2 id="node-and-scripts">Node workspaces and scripts</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">React versions</th><td>Web pins React 18, Ink CLI React 19. npm hoisting can leak shared peers, so the private root package declares exact React 18, <code translate="no">react-reconciler</code> 0.29 and type versions as layout constraints. CLI's React 19 and <code translate="no">react-reconciler</code> 0.33 stay in its workspace; it uses no third-party hook package that resolves React from the root.</td></tr>
+<tr><th scope="row">Script homes</th><td><code translate="no">apps/&lt;name&gt;/scripts/</code> for one application, <code translate="no">scripts/</code> for cross-application development and verification, <code translate="no">scripts/release/</code> for runtime, installer and release.</td></tr>
+<tr><th scope="row">Public installer</th><td><code translate="no">scripts/install-release.sh</code> is a compatibility entry. In a full checkout it runs <code translate="no">scripts/release/install-release.sh</code>; downloaded alone, it fetches that file from the same verified repository and immutable tag into a temporary file, then runs it.</td></tr>
+<tr><th scope="row">Fixed paths</th><td><code translate="no">scripts/install.sh</code>, <code translate="no">scripts/install.ps1</code>, <code translate="no">scripts/refresh-local-app.sh</code>, <code translate="no">scripts/promote_stable.sh</code>. Local refresh reuses staging and version helpers from <code translate="no">scripts/release/</code>.</td></tr>
+<tr><th scope="row">Root files</th><td>Only the two ecosystems' entry files and lockfiles, project metadata and entry documentation. <code translate="no">.github/</code> is repository infrastructure.</td></tr>
+</tbody>
+</table>
 
-  <h2>5. Adopted and rejected choices</h2>
-  <div class="table-wrap">
-    <table>
-      <thead><tr><th>Choice</th><th>Conclusion</th><th>Reason</th></tr></thead>
-      <tbody>
-        <tr><td>Root <code>openprogram/</code> core + <code>apps/</code> runnable entries</td><td><span class="state now">Adopted</span></td><td>The core remains a top-level project entry, while Server, Web, Desktop, and CLI application boundaries are visible under <code>apps/</code>.</td></tr>
-        <tr><td>Move-only application migration</td><td><span class="state now">Adopted</span></td><td>Move paths and repair builds, imports, and scripts first, then separately split large internal files to avoid concurrent behavior changes.</td></tr>
-        <tr><td>Organize documents through navigation groups</td><td><span class="state now">Adopted</span></td><td>Avoid breaking old links through bulk file moves.</td></tr>
-        <tr><td>Rename <code>openprogram/</code> to backend</td><td><span class="state no">Rejected</span></td><td>OpenProgram is the Agent core and SDK; Server is just one application entry.</td></tr>
-        <tr><td>Keep Server implementation in <code>openprogram/webui/</code></td><td><span class="state no">Rejected</span></td><td>That directory mixes server code, old static UI, build artifacts, and Web naming, obscuring actual responsibilities.</td></tr>
-        <tr><td>Automatically split files by a fixed line count</td><td><span class="state no">Rejected</span></td><td>Line count does not establish independent responsibilities and tends to produce forwarding-only modules.</td></tr>
-        <tr><td>Introduce a dependency-injection framework for decomposition</td><td><span class="state no">Rejected</span></td><td>Existing module functions and explicit parameters suffice to preserve boundaries.</td></tr>
-        <tr><td>Move all applications in one commit</td><td><span class="state no">Rejected</span></td><td>Migrate and verify applications separately. Their final state belongs under <code>apps/</code>, but not through one unreviewable commit.</td></tr>
-      </tbody>
-    </table>
-  </div>
+<h2 id="large-files">Large files</h2>
+<table class="stack">
+<thead><tr><th scope="col">File</th><th scope="col">State</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">apps/desktop/main.js</code></th><td>Composition root, about 2,000 lines; pure parts are in <code translate="no">main/windows/menu-geometry.js</code>, <code translate="no">main/worker/worker-recovery-state.js</code>, <code translate="no">main/web-views/tab-transfer-validation.js</code></td><td>Move HTTP probing, process and window lifecycles, native WebView ownership, transfer coordination and menu hosting only with execution-level acceptance</td></tr>
+<tr><th scope="row"><code translate="no">apps/web/lib/desktop/desktop-bridge.ts</code></th><td>A small aggregate; state, restoration, transfers, menus, events and surfaces are in <code translate="no">bridge/</code>; types in <code translate="no">desktop-bridge-types.ts</code> and <code translate="no">desktop-transfer-types.ts</code></td><td>Keep the aggregate entry</td></tr>
+<tr><th scope="row">Runtime state-machine modules</th><td>Concentrated invariants</td><td>Do not split by length; split only for independently verifiable responsibilities or duplicates. No mixin layer.</td></tr>
+<tr><th scope="row">Large Web and Desktop check scripts</th><td>Fixtures, scenarios and structural assertions together</td><td>Extract shared fixtures and independent scenarios first; keep command entries; no test framework just to shorten files</td></tr>
+</tbody>
+</table>
 
-  <h2>6. Acceptance contract</h2>
-  <ul>
-    <li><code>openprogram/</code> contains no FastAPI routes, WebSocket handlers, frontend source, Electron source, or persisted frontend build artifacts.</li>
-    <li><code>openprogram/interfaces/server</code>, <code>apps/web</code>, <code>apps/desktop</code> and <code>apps/cli</code> each have independent entries, READMEs, test commands, and build commands.</li>
-    <li><code>openprogram.interfaces.cli.main</code> and <code>openprogram.interfaces.cli.build_parser</code> stay importable, preserving the complete command tree, console script, and TUI behavior.</li>
-    <li>The default port remains <code>18100</code>; one Worker serves API, WebSocket, and Web static files, without restoring the old dual-port Next.js Server.</li>
-    <li>Browser and Electron continue loading the same Web application; Electron-only capabilities are exposed only through preload/IPC.</li>
-    <li>Agent Harness can directly import <code>openprogram</code> without depending on Server, Web, or Desktop.</li>
-    <li>The old static UI and unused old dual-port implementations are removed, and the core package holds no Server or CLI compatibility namespace.</li>
-    <li>Frontend build artifacts enter only ignored build/staging directories and final distributions, not long-lived core source.</li>
-    <li>Mutable profile state is excluded from the source tree and wheel. Old package-local JSON is read only as upgrade compatibility input and is not tracked in new versions.</li>
-    <li>Every folder under <code>docs/</code> except build output and static-only folders is published, engineering records sit under <code>docs/reference/design/</code>, and every public link is valid.</li>
-    <li>Design navigation groups by product capability; source file paths stay unchanged.</li>
-    <li>Git-tracked top-level directories must be declared in the structure contract. Development scripts do not reside at root; source-checkout module entries without implementation must be listed separately by the contract.</li>
-    <li>Current READMEs, skills, and installation instructions must not reference deleted source-root paths.</li>
-    <li>The root no longer retains legacy <code>web/</code>, <code>desktop/</code> and <code>cli/</code> workspaces; current source resides in the corresponding <code>apps/</code> subdirectories.</li>
-    <li>Top-level Python-package directory READMEs stay synchronized with <code>__init__.py</code> docstrings.</li>
-    <li>Commit each structural batch independently; pass directly affected tests before specification and quality re-review.</li>
-  </ul>
+<h2 id="documentation">Documentation</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Kind</th><th scope="col">Where</th></tr></thead>
+<tbody>
+<tr><th scope="row">User documentation</th><td><code translate="no">start/ install/ capabilities/ interfaces/ models/ integrations/ server/ reference/</code>; public navigation and search</td></tr>
+<tr><th scope="row">Current design</th><td><code translate="no">reference/design/</code>, by product domain; UI documents group into foundations, conversation editing, browser tabs, settings/catalog and workspace</td></tr>
+<tr><th scope="row">Implementation records</th><td>Beside the design page and in <code translate="no">reference/design/plans/</code>: boundaries, verification, remaining work. Status together at the end; no copied design or commit logs.</td></tr>
+<tr><th scope="row">One home</th><td>Engineering records live only under <code translate="no">docs/reference/design/</code>, one per topic. Tool-generated plans and ledgers stay out of <code translate="no">docs/</code>; lasting content folds into the topic page. Plans current designs still reference are published in a Plans group.</td></tr>
+<tr><th scope="row">READMEs</th><td>Root: the product. <code translate="no">openprogram/README.md</code>: the core SDK. <code translate="no">openprogram/interfaces/server/</code>, <code translate="no">apps/web/</code>, <code translate="no">apps/desktop/</code>, <code translate="no">apps/cli/</code>: each entry's current responsibilities, dependency directions and verification commands.</td></tr>
+</tbody>
+</table>
 
-  <p class="note">See implementation status and reproducible commands in <a href="repository-structure-implementation.html">Repository structure implementation</a>.</p>
-</main>
-</body>
-</html>
+<h2 id="choices">Choices</h2>
+<table class="stack">
+<thead><tr><th scope="col">Choice</th><th scope="col">Result</th><th scope="col">Reason</th></tr></thead>
+<tbody>
+<tr><th scope="row">Root <code translate="no">openprogram/</code> core plus <code translate="no">apps/</code></th><td>Adopted</td><td>The core stays a top-level project entry; non-Python clients are visible under <code translate="no">apps/</code></td></tr>
+<tr><th scope="row">Move-only application migration</th><td>Adopted</td><td>Paths, builds, imports and scripts first; splitting later, to avoid concurrent behaviour changes</td></tr>
+<tr><th scope="row">Organize documents through navigation groups</th><td>Adopted</td><td>Bulk moves break old links</td></tr>
+<tr><th scope="row">Rename <code translate="no">openprogram/</code> to backend</th><td>Rejected</td><td>It is the Agent core and SDK; Server is one application entry</td></tr>
+<tr><th scope="row">Keep Server in <code translate="no" data-claim="example">openprogram/webui/</code></th><td>Rejected</td><td>Mixes server code, old static UI, build artifacts and Web naming</td></tr>
+<tr><th scope="row">Split by fixed line count</th><td>Rejected</td><td>Line count is not a responsibility and yields forwarding-only modules</td></tr>
+<tr><th scope="row">Dependency-injection framework</th><td>Rejected</td><td>Module functions and explicit parameters keep the boundaries</td></tr>
+<tr><th scope="row">Move all applications in one commit</th><td>Rejected</td><td>Not reviewable</td></tr>
+</tbody>
+</table>
+
+<h2 id="acceptance">What must stay true</h2>
+<h3>Layers</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Boundary</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Core package</th><td><code translate="no">openprogram/</code> outside <code translate="no">interfaces/</code> has no FastAPI routes or WebSocket handlers; no frontend or Electron source, no persisted frontend build artifacts.</td></tr>
+<tr><th scope="row">Interfaces</th><td><code translate="no">openprogram/interfaces/server</code>, <code translate="no">apps/web</code>, <code translate="no">apps/desktop</code> and <code translate="no">apps/cli</code> each have their own entry, README, test and build commands.</td></tr>
+<tr><th scope="row">CLI</th><td><code translate="no">openprogram.interfaces.cli.main</code> and <code translate="no">build_parser</code> stay importable, with the full command tree, console script and TUI.</td></tr>
+<tr><th scope="row">Port</th><td>Default port <code translate="no">18100</code>; one Worker serves API, WebSocket and Web static files, no dual-port Next.js Server.</td></tr>
+<tr><th scope="row">Web and Electron</th><td>Browser and Electron load the same Web application; Electron-only capabilities go through preload/IPC.</td></tr>
+<tr><th scope="row">Agent Harness</th><td>Agent Harness imports <code translate="no">openprogram</code> without Server, Web or Desktop.</td></tr>
+</tbody>
+</table>
+<h3>Build and state</h3>
+<ul>
+<li>No old static UI or old dual-port implementations; no Server or CLI compatibility namespace in the core.</li>
+<li>Frontend build artifacts enter only ignored build or staging directories and final distributions.</li>
+<li>Mutable profile state is outside the source tree and wheel; old package-local JSON is only upgrade input and is untracked.</li>
+</ul>
+<h3>Docs and repository</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Boundary</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Published docs</th><td>Every folder under <code translate="no">docs/</code> except build output and static-only folders is published; engineering records sit under <code translate="no">docs/reference/design/</code>; every public link is valid.</td></tr>
+<tr><th scope="row">Design navigation</th><td>Design navigation groups by product capability; source paths stay unchanged.</td></tr>
+<tr><th scope="row">Top-level directories</th><td>Git-tracked top-level directories are declared in the structure contract. Development scripts are not at the root; source-checkout module entries without implementation are listed by the contract.</td></tr>
+<tr><th scope="row">Source-root paths</th><td>READMEs, skills and install instructions name no deleted source-root paths; no root <code translate="no">web/</code>, <code translate="no">desktop/</code> or <code translate="no">cli/</code>.</td></tr>
+<tr><th scope="row">Package READMEs</th><td>Top-level Python package READMEs stay in sync with <code translate="no">__init__.py</code> docstrings.</td></tr>
+<tr><th scope="row">Structural batches</th><td>Each structural batch is committed alone and passes directly affected tests before specification and quality re-review.</td></tr>
+</tbody>
+</table>
+
+<p class="next"><a href="repository-structure-implementation.html">Repository structure implementation</a></p>

@@ -27,7 +27,6 @@ from openprogram.host._platform.filesystem import (
 )
 
 from . import shared as _shared
-from .shared import _resolve
 
 def _setting(name: str):
     """Read limits from the dependency-free shared configuration layer."""
@@ -226,48 +225,6 @@ def _snapshot_for_cursor(cursor: object) -> tuple[_QuerySnapshot | None, int]:
         return snapshot, offset
 
 
-def _directory_entries(target: str) -> list[dict]:
-    entries: list[dict] = []
-    with os.scandir(target) as it:
-        for entry in it:
-            try:
-                stat_result = entry.stat(follow_symlinks=False)
-                entries.append({
-                    "name": entry.name,
-                    "type": "dir" if entry.is_dir(follow_symlinks=False) else "file",
-                    "size": stat_result.st_size,
-                    "mtime": stat_result.st_mtime,
-                })
-            except OSError:
-                continue
-    entries.sort(key=lambda row: (
-        0 if row["type"] == "dir" else 1,
-        row["name"].casefold(),
-        row["name"],
-    ))
-    return entries
-
-
-def _directory_basis(target: str) -> tuple:
-    basis = []
-    with os.scandir(target) as it:
-        for entry in it:
-            try:
-                stat_result = entry.stat(follow_symlinks=False)
-                basis.append((
-                    entry.name,
-                    "dir" if entry.is_dir(follow_symlinks=False) else "file",
-                    stat_result.st_dev,
-                    stat_result.st_ino,
-                    stat_result.st_size,
-                    stat_result.st_mtime_ns,
-                    stat_result.st_mode,
-                ))
-            except OSError:
-                continue
-    return tuple(sorted(basis, key=lambda row: (row[0].casefold(), row[0])))
-
-
 def _project_info(project_id: str) -> tuple[str | None, str | None, str | None]:
     from openprogram.state.store.project import project_store as _projects
 
@@ -289,11 +246,6 @@ def _project_info(project_id: str) -> tuple[str | None, str | None, str | None]:
 
 def _query_ignored_path(path: str) -> bool:
     return any(part in _SEARCH_IGNORED_DIRS for part in path.split("/"))
-
-
-def _directory_flags() -> int:
-    return (os.O_RDONLY | getattr(os, "O_DIRECTORY", 0)
-            | getattr(os, "O_NOFOLLOW", 0))
 
 
 def _open_query_dir(project_id: str, path: str) -> int:
@@ -824,29 +776,3 @@ def _search_query(project_id: str, path: object, query: object,
                             code="LIMIT_EXCEEDED", message="snapshot is too large",
                             kind="search")
     return _query_page(snapshot, 0, size, "results")
-
-
-def _list_tree(project_id: str, path: str) -> dict:
-    target, error = _resolve(project_id, path)
-    if error:
-        return {"entries": [], "error": error}
-    if not os.path.isdir(target):
-        return {"entries": [], "error": f"not a directory: {path!r}"}
-    entries: list[dict] = []
-    try:
-        with os.scandir(target) as it:
-            for entry in it:
-                try:
-                    stat = entry.stat(follow_symlinks=False)
-                    entries.append({
-                        "name": entry.name,
-                        "type": "dir" if entry.is_dir() else "file",
-                        "size": stat.st_size,
-                        "mtime": stat.st_mtime,
-                    })
-                except OSError:
-                    continue  # 坏符号链接等：跳过该项，不整体失败
-    except OSError as e:
-        return {"entries": [], "error": f"{type(e).__name__}: {e}"}
-    entries.sort(key=lambda e: (0 if e["type"] == "dir" else 1, e["name"].lower()))
-    return {"entries": entries}

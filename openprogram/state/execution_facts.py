@@ -30,6 +30,7 @@ FACTS = frozenset({
     "current_job_resource_context",
     "current_job_operation_timeout",
     "record_current_job_activity",
+    "forget_session_runs",
 })
 
 
@@ -61,6 +62,13 @@ def turn_running(session_id: str) -> bool:
     """Whether a turn is in flight on ``session_id`` in this process."""
     provider = _provider("turn_running")
     return bool(provider(session_id)) if provider else False
+
+
+def forget_session_runs(session_id: str) -> None:
+    """Drop a deleted session's run rows from memory; nothing to drop if no runtime ran."""
+    provider = _provider("forget_session_runs")
+    if provider:
+        provider(session_id)
 
 
 def session_has_live_work(session_id: str) -> bool:

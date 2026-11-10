@@ -236,22 +236,19 @@ def test_runner_dispatch_submit_failure_terminalizes_published_job(
             session_id="p1", prompt="dispatch me", agent_id="main",
         )
         def admission_row():
-            return ledger.connection().execute(
-                "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
+            return ledger.run_tables().handle.first("job_admissions", job_id=job_id)
 
         assert wait_until(
             lambda: (
                 (row := admission_row()) is not None
-                and row[0] == "released"
+                and row["state"] == "released"
             ),
             timeout=30,
         )
         admission = admission_row()
 
         assert admission is not None
-        assert tuple(admission) == ("released", "error.dispatch_failed")
+        assert (admission["state"], admission["reason_code"]) == ("released", "error.dispatch_failed")
         final = runner.await_job(job_id, timeout=0.1)
         assert final is not None
         assert final.status == JobStatus.ERRORED
@@ -362,9 +359,7 @@ def test_runner_executes_three_live_jobs_for_one_session(
         # on Windows/Defender even though all three executor slots are live.
         assert wait_until(lambda: len(fake_worker[0]) >= 3, timeout=30)
         assert len(fake_worker[0]) == 3
-        assert ledger.connection().execute(
-            "SELECT COUNT(*) FROM job_admissions WHERE state = 'live'"
-        ).fetchone()[0] == 3
+        assert ledger.run_tables().handle.count("job_admissions", state="live") == 3
         from openprogram.runtime.execution import run_control as execution_run_control
         assert all(
             execution_run_control.current_token("p1", execution_id=job_id) is not None
@@ -449,7 +444,7 @@ def test_idle_activity_is_tracked_per_same_session_job(
     # store from ``store_fixture``.
     runner_mod.shutdown_runner()
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "executions.db",
     )
     with control_mod._default_control_services_lock:
@@ -587,12 +582,9 @@ def test_runner_job_coexists_with_mcp_foreground_token(
             session_id="p1", prompt="wait for MCP", agent_id="main",
         )
         assert fake_worker[3].wait(WORKER_START_TIMEOUT)
-        row = ledger.connection().execute(
-            "SELECT state, owner_instance_id FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
-        assert row[0] == "live"
-        assert row[1] is not None
+        row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert row["state"] == "live"
+        assert row["owner_instance_id"] is not None
         assert [call["session_id"] for call in fake_worker[0]] == ["p1"]
         assert execution_run_control.current_token("p1").event is mcp_event
         job_token = execution_run_control.current_token("p1", execution_id=job_id)
@@ -647,19 +639,13 @@ def test_runner_releases_claim_when_canonical_cancel_races_activation(
         allow_activation.set()
         assert wait_until(
             lambda: (
-                (row := ledger.connection().execute(
-                    "SELECT state FROM job_admissions WHERE job_id = ?",
-                    (job_id,),
-                ).fetchone()) is not None
-                and row[0] == "released"
+                (row := ledger.run_tables().handle.first("job_admissions", job_id=job_id)) is not None
+                and row["state"] == "released"
             ),
             timeout=30,
         )
-        row = ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()
-        assert tuple(row) == ("released", "cancel.user")
+        row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert (row["state"], row["reason_code"]) == ("released", "cancel.user")
         assert runner.get_job(job_id).status == JobStatus.CANCELLED
         assert fake_worker[0] == []
     finally:
@@ -702,10 +688,8 @@ def test_resource_saga_releases_terminal_canonical_execution(
             ),
             timeout=30,
         )
-        assert tuple(ledger.connection().execute(
-            "SELECT state, reason_code FROM job_admissions WHERE job_id = ?",
-            (job_id,),
-        ).fetchone()) == ("released", "completed")
+        row = ledger.run_tables().handle.first("job_admissions", job_id=job_id)
+        assert (row["state"], row["reason_code"]) == ("released", "completed")
     finally:
         fake_worker[1].set()
         runner.shutdown()

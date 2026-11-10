@@ -57,9 +57,9 @@ def _collect() -> list[dict]:
     items: list[dict] = []
 
     try:
-        from openprogram.runtime.execution.projections import list_running_execution_projections
+        from openprogram.runtime.execution.event_effects import list_running_executions
 
-        for projection in list_running_execution_projections():
+        for projection in list_running_executions():
             payload = projection.payload
             execution = payload.get("execution") or {}
             snapshot = payload.get("snapshot") or _canonical_snapshot(
@@ -80,11 +80,7 @@ def _collect() -> list[dict]:
                     "snapshot": snapshot,
                     "capabilities": snapshot.get("capabilities") or {},
                     "resource": snapshot.get("resource"),
-                    "event_cursor": payload.get("event_cursor") or {
-                        "execution_id": projection.execution_id,
-                        "next_sequence": projection.event_sequence + 1,
-                        "snapshot_status_version": snapshot.get("status_version"),
-                    },
+                    "event_cursor": payload["event_cursor"],
                 })
             items.append(item)
     except Exception:

@@ -184,7 +184,7 @@ def _bound_project_dir(session_id: str | None) -> list[Path]:
         proj = _projects.project_for_session(session_id)
         if proj is None:
             # The registry's session list is a best-effort reverse index
-            # and can miss a session; the session repo's own meta.json is
+            # and can miss a session; the session's own log is
             # the record of which project it belongs to.
             project_id = _meta_project_id(session_id)
             proj = _projects.get_project(project_id) if project_id else None
@@ -229,14 +229,11 @@ def _chats_roots(state: Path | None) -> list[Path]:
 
 
 def _meta_project_id(session_id: str) -> str:
-    """``project_id`` from the session repo's meta.json, read from disk
+    """``project_id`` from the session's log, read from disk
     without opening a SessionStore (see :func:`_session_repo_candidates`)."""
-    import json
+    from openprogram.state.store.session.session_log import SessionLog
     for repo in _session_repo_candidates(session_id):
-        try:
-            meta = json.loads((repo / "meta.json").read_text(encoding="utf-8"))
-        except (OSError, ValueError):
-            continue
+        meta = SessionLog(repo).read_meta()
         value = meta.get("project_id") if isinstance(meta, dict) else None
         if isinstance(value, str) and value:
             return value
@@ -290,9 +287,7 @@ def _session_repo_candidates(session_id: str) -> list[Path]:
             if resolved in seen:
                 continue
             seen.add(resolved)
-            if (resolved / ".git").is_dir() and (
-                (resolved / "history").is_dir() or (resolved / "meta.json").is_file()
-            ):
+            if (resolved / "main.jsonl").is_file() or (resolved / "agents").is_dir():
                 valid.append(resolved)
         except (OSError, ValueError):
             continue

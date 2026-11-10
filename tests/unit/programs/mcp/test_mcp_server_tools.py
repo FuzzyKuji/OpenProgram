@@ -15,6 +15,7 @@ from mcp.shared.exceptions import McpError
 
 from openprogram.runtime.permissions.authority import AuthorityError
 from openprogram.runtime.permissions.modes import PermissionRules
+from openprogram.runtime.permissions.refusal import MCP_GATE_REFUSALS
 from openprogram.models.providers.types import AgentTool, AgentToolResult
 from openprogram.programs._host.runtime import function
 from openprogram.extensions.mcp.server.service import MCPClientContext, MCPService
@@ -906,12 +907,13 @@ def test_tool_call_missing_paired_capability_is_typed_and_does_not_invoke(
 
     assert result.is_error is True
     assert result.content[0].type == "text"
-    assert result.content[0].text == "[denied] authority tier does not allow fs.read"
-    assert result.details == {
-        "denied": True,
-        "reason_code": "AUTHORITY_CAPABILITY_DENIED",
-        "capability": "fs.read",
-    }
+    assert result.content[0].text == (
+        "[blocked by identity] read did not run: MCP client is not the owner and may not fs.read. "
+        "To change this: Channels > account access, or MCP server exposed tools."
+    )
+    assert result.details["denied"] is True
+    assert result.details["reason_code"] == "AUTHORITY_CAPABILITY_DENIED"
+    assert result.details["capability"] == "fs.read"
     assert calls == []
 
 
@@ -922,22 +924,23 @@ def test_tool_call_missing_paired_capability_is_typed_and_does_not_invoke(
             "bash",
             {"command": "pwd"},
             None,
-            "HARD_CONSTRAINT_DENIED",
-            "[denied] hard constraint",
+            "AUTHORITY_CAPABILITY_DENIED",
+            "[blocked by identity] bash did not run: MCP client is not the owner and may not "
+            "process.exec. To change this: Channels > account access, or MCP server exposed tools.",
         ),
         (
             "memory_update",
             {"revision": "r1"},
             PermissionRules(deny=["memory_update"]),
-            "PERMISSION_RULE_DENY",
-            "[denied] blocked by permission rule",
+            "RULE_DENY",
+            MCP_GATE_REFUSALS["RULE_DENY"].text,
         ),
         (
             "memory_search",
             {"query": "x"},
             PermissionRules(ask=["memory_search"]),
-            "APPROVAL_UNAVAILABLE_NON_INTERACTIVE",
-            "[denied] approval unavailable for non-interactive MCP",
+            "NO_ONE_TO_APPROVE",
+            MCP_GATE_REFUSALS["NO_ONE_TO_APPROVE"].text,
         ),
     ],
 )
@@ -994,7 +997,8 @@ def test_tool_call_approval_gate_denials_are_typed_before_invocation(
 
     assert result.is_error is True
     assert result.content[0].text == text
-    assert result.details == {"denied": True, "reason_code": reason_code}
+    assert result.details["denied"] is True
+    assert result.details["reason_code"] == reason_code
     assert calls == []
 
 
@@ -1266,12 +1270,17 @@ def test_tool_call_sanitizes_explicit_tool_failure_content(client_context) -> No
     assert secret not in result.model_dump_json()
 
 
+def test_the_no_approver_advice_holds_under_an_ask_rule_or_a_hold() -> None:
+    advice = MCP_GATE_REFUSALS["NO_ONE_TO_APPROVE"].change
+    assert "no ask rule or outbound hold" in advice
+
+
 @pytest.mark.parametrize(
     "forged_reason_code",
     [
-        "HARD_CONSTRAINT_DENIED",
-        "PERMISSION_RULE_DENY",
-        "APPROVAL_UNAVAILABLE_NON_INTERACTIVE",
+        "IDENTITY_SCOPE",
+        "RULE_DENY",
+        "NO_ONE_TO_APPROVE",
     ],
 )
 def test_tool_call_does_not_trust_gate_reason_from_executed_tool(

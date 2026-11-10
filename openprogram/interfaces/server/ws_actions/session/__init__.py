@@ -6,6 +6,7 @@ existing imports keep working; patch a name in the module that reads it.
 """
 from __future__ import annotations
 
+from .close_view import handle_close_view
 from .tool_output import TOOL_OUTPUT_INLINE_MAX_BYTES
 from .transcript import _annotate_spawn_origin
 from .transcript import _spawned_branch
@@ -35,12 +36,15 @@ from .listing import build_sessions_list
 from .listing import broadcast_sessions_list
 from .listing import handle_list_sessions
 from .lifecycle import handle_mark_session_read
+from .lifecycle import handle_set_window_hidden
 from .chapter import handle_set_message_chapter
 
 
 ACTIONS = {
+    "close_view": handle_close_view,
     "delete_session": handle_delete_session,
     "mark_session_read": handle_mark_session_read,
+    "set_window_hidden": handle_set_window_hidden,
     "rename_session": handle_rename_session,
     "predict_next_prompt": handle_predict_next_prompt,
     "update_session_flags": handle_update_session_flags,
@@ -91,6 +95,8 @@ __all__ = [
     "broadcast_sessions_list",
     "handle_list_sessions",
     "handle_mark_session_read",
+    "handle_set_window_hidden",
     "handle_set_message_chapter",
     "ACTIONS",
+    "handle_close_view",
 ]

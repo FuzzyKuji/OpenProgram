@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import time
 from typing import TYPE_CHECKING, Any
 
 from openprogram.models.providers.shared.openai_responses import (
@@ -49,16 +48,8 @@ def stream_azure_openai_responses(
 
         deployment_name = _resolve_deployment_name(model, opts)
 
-        from openprogram.models.providers.types import AssistantMessage, Usage
-        output = AssistantMessage(
-            content=[],
-            api="azure-openai-responses",
-            provider=model.provider,
-            model=model.id,
-            usage=Usage(),
-            stop_reason="stop",
-            timestamp=int(time.time() * 1000),
-        )
+        from openprogram.models.providers.types import AssistantMessage
+        output = AssistantMessage.empty(model, api="azure-openai-responses")
 
         try:
             from openprogram.models.providers.settings.env_api_keys import resolve_provider_key

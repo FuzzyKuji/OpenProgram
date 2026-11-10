@@ -24,7 +24,7 @@ def _approval(chars: str = "", **_):
 
 
 @function(name="write_stdin", description=DESCRIPTION, max_result_chars=30_000, persist_full=True,
-          toolset=["core"], unsafe_in=["wechat", "telegram", "plan"],
+          toolset=["core"], unsafe_in=["plan"],
           requires_approval=_approval, path_params={}, url_params=[])
 def write_stdin(session_id: str, chars: str = "", yield_time_ms: int | None = None):
     """Write to, interrupt or wait on one command session.

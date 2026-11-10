@@ -1,0 +1,304 @@
+<title>Agent 协作</title>
+<meta name="description" content="Agent 如何创建、寻址、发消息和归档分支，结果如何返回，以及适用哪些限额。">
+<h1>Agent 协作</h1>
+
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 214" role="img" aria-label="发起方调用 agent 或 send_message。调用被准入为 Job，目标忙时进入收件箱排队。目标分支运行一轮。前台调用以工具结果返回，否则以完成通知返回。">
+  <defs><marker id="col-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="40">发起方</text>
+  <text class="t-cmd" x="0" y="66">agent</text>
+  <text class="t-cmd" x="0" y="86">send_message</text>
+  <line class="ln" x1="112" y1="33" x2="188" y2="33" marker-end="url(#col-a)"/>
+  <text class="t-big" x="200" y="40">准入 Job</text>
+  <text class="t-soft" x="200" y="66">在此检查限额</text>
+  <text class="t-soft" x="200" y="86">目标忙：进收件箱</text>
+  <line class="ln" x1="326" y1="33" x2="402" y2="33" marker-end="url(#col-a)"/>
+  <text class="t-big" x="414" y="40">分支轮次</text>
+  <text class="t-soft" x="414" y="66">独立上下文</text>
+  <text class="t-soft" x="414" y="86">和工具循环</text>
+  <path class="ln" d="M460 104V150H40V106" marker-end="url(#col-a)"/>
+  <text class="t-soft mid" x="250" y="176">前台：工具结果</text>
+  <text class="t-soft mid" x="250" y="198">后台：发起方对话中的完成通知</text>
+</svg>
+<ol class="flow fig-narrow">
+<li><strong>发起方</strong><small><code translate="no">agent</code> 或 <code translate="no">send_message</code></small></li>
+<li><strong>准入 Job</strong><small>在此检查限额；目标忙时进收件箱</small></li>
+<li><strong>分支轮次</strong><small>独立上下文和工具循环</small></li>
+<li class="flow-end"><strong>回到发起方</strong><small>前台：工具结果。后台：完成通知。</small></li>
+</ol>
+</figure>
+
+<p>保存的 AgentSpec 是可复用配置（<a href="../agent-configuration/agent-configuration-ui.zh.html">Agent 配置</a>）。运行时分支是对话状态，可运行多个 Job；创建分支不创建 AgentSpec。隔离代码改动见<a href="../execution/agent-worktree.zh.html">worktree 工具</a>。其他 Agent 的做法见<a href="agent-collab-comparison.zh.html">对比</a>。</p>
+
+<h2 id="tools">工具</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">领域与工具</th><th scope="col">作用</th></tr></thead>
+<tbody>
+<tr><th scope="row">计划：<code translate="no">todo_create</code>、<code translate="no">todo_update</code>、<code translate="no">todo_list</code></th><td>记录打算做的事；不启动任何东西</td></tr>
+<tr><th scope="row">执行：<code translate="no">list_jobs</code>、<code translate="no">job_output</code></th><td>观察已接受的工作，从排队到终态</td></tr>
+<tr><th scope="row">对话：<code translate="no">agent</code>、<code translate="no">list_agents</code>、<code translate="no">archive_agent</code></th><td>创建、继续、寻址和归档分支</td></tr>
+<tr><th scope="row">通信：<code translate="no">send_message</code>、<code translate="no">read_conversation</code></th><td>投递内容；读取历史</td></tr>
+</tbody>
+</table>
+<p class="note">模型侧没有停止工具。UI 和 API 通过 <code translate="no">execution.command</code> 信封取消：<code translate="no">action="execution.cancel"</code>、<code translate="no">command_id</code>、<code translate="no">execution_id</code>、<code translate="no">expected_version</code>、空 <code translate="no">payload</code>（<a href="../execution/control.zh.html">执行控制</a>）。后台调用返回 <code translate="no">execution_id</code>，等于 <code translate="no">Job.id</code>，也就是 <code translate="no">job_output(job_id=...)</code> 的参数。</p>
+
+<table class="stack">
+<thead><tr><th scope="col">调用</th><th scope="col">分支</th><th scope="col">执行</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent(prompt=...)</code></th><td>新建，起点由 <code translate="no">start_from</code> 决定</td><td>准入 Job。前台返回回复；<code translate="no">run_in_background=True</code> 返回 <code translate="no">execution_id</code>。</td></tr>
+<tr><th scope="row"><code translate="no">agent(prompt=..., start_from="SID:MSG", description="review")</code></th><td>一次调用从该节点分叉并命名</td><td>同上</td></tr>
+<tr><th scope="row"><code translate="no">agent(prompt=..., to="review")</code></th><td>已有；不新建 attach 指针</td><td>准入 Job，运行或排队，返回 <code translate="no">execution_id</code></td></tr>
+<tr><th scope="row"><code translate="no">send_message(message=..., to=...)</code></th><td>已有</td><td>直接投递创建 Job 并返回 <code translate="no">delivery_id</code>。目标忙时先得到收件箱回执，回执不等于准入。</td></tr>
+<tr><th scope="row"><code translate="no">send_message(to=..., message="", notify_when_idle=True)</code></th><td>无</td><td>不投递：目标空闲时立即返回最新回复，否则登记一次空闲监听</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>参数及规则</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">项</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent</code> 签名</th><td><code translate="no">prompt</code>、<code translate="no">description=""</code>、<code translate="no">agent_id=""</code>、<code translate="no">start_from="inherit"</code>、<code translate="no">run_in_background=False</code>、<code translate="no">to=""</code>、<code translate="no">archive_when_done=False</code></td></tr>
+<tr><th scope="row"><code translate="no">send_message</code> 签名</th><td><code translate="no">message</code>、<code translate="no">to</code>、<code translate="no">agent_id=""</code>、<code translate="no">notify_when_idle=False</code></td></tr>
+<tr><th scope="row"><code translate="no">start_from</code></th><td><code translate="no">inherit</code>（默认）：发起方历史。<code translate="no">clean</code>：新根。<code translate="no">SID:MSG</code>：该前驱。可以从已归档来源分叉，因为分叉不向其投递。</td></tr>
+<tr><th scope="row">带 <code translate="no">to</code> 时</th><td><code translate="no">start_from="clean"</code>、<code translate="no">"SID:MSG"</code> 和 <code translate="no">archive_when_done=True</code> 被拒绝；目标保留自己的历史</td></tr>
+<tr><th scope="row">何时派生</th><td>基础指令（<code translate="no">runtime/context/guides/base.md</code>）禁止派生，除非用户、AGENTS.md 或技能明确要求子 agent、委派或并行，与 Codex 的默认一致。单个任务由收到它的 agent 自己完成。</td></tr>
+<tr><th scope="row"><code translate="no">description</code></th><td>给新分支命名</td></tr>
+<tr><th scope="row"><code translate="no">agent_id</code></th><td>选择保存的配置，不是分支；不能扩大发起方权限</td></tr>
+<tr><th scope="row">上下文</th><td><code translate="no">clean</code> 不带对话消息；其他模式只带所选且有权读取的历史。都不移除系统策略，也不隔离文件系统。</td></tr>
+<tr><th scope="row">地址</th><td><code translate="no">"SID:HEAD"</code> 或无歧义的分支名，解析到分支当前末端。名称有歧义时报错并列出候选；目标不存在时报错，绝不新建。</td></tr>
+<tr><th scope="row">直接投递给自己</th><td>拒绝</td></tr>
+<tr><th scope="row">引用其他分支</th><td>写进 <code translate="no">message</code>：直接引用结论，或写出分支让目标用 <code translate="no">read_conversation</code> 读取</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="branches">分支</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">主题</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">list_agents(scope, limit, agent_id, source)</code></th><td><code translate="no">session</code>（默认）：本会话分支。<code translate="no">all</code>：所有会话，最近活跃在前，无预览。<code translate="no">archived</code>：本会话已归档分支。</td></tr>
+<tr><th scope="row">每行内容</th><td>会话：id、标题、agent、忙或空闲。分支：名称、<code translate="no">to="SID:HEAD"</code>、轮数、大小（<code translate="no">— 3 turns, ~2k chars</code> 或 <code translate="no">&lt;1k chars</code>）、末端预览。</td></tr>
+<tr><th scope="row">创建时命名</th><td>取 <code translate="no">description</code>，否则取 prompt 前约 24 个字符</td></tr>
+<tr><th scope="row">重命名</th><td>第 1、6、16、40 轮由后台 LLM 重新命名；子代理分支和手动分叉走同一路径（<a href="../operations/branch-naming.zh.html">分支命名</a>）</td></tr>
+<tr><th scope="row">派生名</th><td>终身可作地址：重命名或结束后 <code translate="no">to="scout"</code> 仍到达当前末端，<code translate="no">list_agents</code> 标记为 <code translate="no">(agent «scout»)</code></td></tr>
+</tbody>
+</table>
+
+<h3 id="archiving">归档</h3>
+<p>向分支写入 <code translate="no">archived: true</code>，对同一存储的所有调用方生效。历史保留。没有取消归档；复用历史请新调用 <code translate="no">agent(start_from="SID:MSG", ...)</code>。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">对已归档分支</th><th scope="col">结果</th></tr></thead>
+<tbody>
+<tr><th scope="row">普通 <code translate="no">list_agents</code></th><td>隐藏</td></tr>
+<tr><th scope="row"><code translate="no">scope="archived"</code></th><td>显示，包括已合并的 head，解析到它自己的分支</td></tr>
+<tr><th scope="row">新的 <code translate="no">send_message</code> 或 <code translate="no">agent(to=...)</code></th><td>拒绝</td></tr>
+<tr><th scope="row">运行中的执行</th><td>继续</td></tr>
+<tr><th scope="row">已接受未开始的投递</th><td>启动前重新检查；以明确原因拒绝</td></tr>
+<tr><th scope="row"><code translate="no">read_conversation</code>、历史分叉</th><td>由历史可见性决定；归档不授予权限</td></tr>
+</tbody>
+</table>
+<details>
+<summary>归档入口</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">入口</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">archive_agent(to, reason="")</code></th><td>幂等。任何持有该工具的本地会话都可使用，不检查创建者：这是共享的本地信任边界。</td></tr>
+<tr><th scope="row"><code translate="no">agent(archive_when_done=True)</code></th><td>只能用于创建分支的调用。同步：工具写入。异步：终态钩子写入。</td></tr>
+<tr><th scope="row">先手动归档</th><td>不取消 Job，终态处理不重新打开分支，钩子不改动。同步写入仍可能刷新时间戳。</td></tr>
+<tr><th scope="row">持久化失败</th><td>单独报告；成功的结果仍是成功</td></tr>
+<tr><th scope="row">已合并分支</th><td>合并和归档是两件事：已合并分支可离开活跃末端列表而未归档</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="results">结果</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">阶段</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">入队</th><td>所有终态路径经过 <code translate="no">JobRunner._update_attach_card</code>：更新卡片、应用 <code translate="no">archive_when_done</code>、在投递会话的 <code translate="no">notices.json</code> 中排入一项。只含完成或出错的 <code translate="no">wait=False</code> Job。最近 500 个已结算 id 防止重复通知。</td></tr>
+<tr><th scope="row">结算</th><td>对终态 Job 调用 <code translate="no">job_output</code> 会结算其条目。空闲监听结算结束于该节点的 Job（<code translate="no">notices.consume_reply</code>）。</td></tr>
+<tr><th scope="row">投递</th><td><code translate="no">run_job_notices</code> 每 2 秒扫描。有非后台执行或派发它的 agent 仍在运行时，会话算忙；其他后台 agent 不算。所有待处理条目合成一个通知轮次。</td></tr>
+<tr><th scope="row">文本</th><td>自动生成，不是用户消息。每个 Job：agent、结果、Job id、任务。派生：报告已在上下文中。投递到已有分支：内联回复（上限 20,000 字符）和地址。</td></tr>
+<tr><th scope="row">失败</th><td>同样回报并带原因，由发起方模型决定。不会自动重新提交。</td></tr>
+<tr><th scope="row">位置</th><td>合成用户轮次（<code translate="no">source="job_followup"</code>），不设 <code translate="no">branch_from</code>，因此推进投递会话的 HEAD。<code translate="no">JobRunner._followup_lock</code> 按会话串行：<code translate="no">notice₁ → answer₁ → notice₂ → answer₂</code>。</td></tr>
+</tbody>
+</table>
+<p class="note">收件方用最终回复作答；再调用 <code translate="no">send_message</code> 会重复投递，回执中已说明。投递不保证目标模型遵从或回复。来自其他对话的消息会标明是另一个 agent 的输入，不是收件方的用户。</p>
+
+<details>
+<summary>attach 指针和跨会话派生</summary>
+<p>派生写入 <code translate="no">predecessor = caller_msg_id</code> 的 attach 指针；子分支不会并入发起方。<code translate="no">send_message</code> 和 <code translate="no">agent(to=...)</code> 不写指针，回复保持内联。</p>
+<p>发起方上下文得到的是报告而非全文：任务、最终回复和 <code translate="no">read_conversation(session_id, head_id)</code>。同步派生（<code translate="no">delivery="tool_result"</code>）只加地址。合并（<code translate="no">is_base</code>、<code translate="no">merge_temp</code>）和手动 attach 保留完整展开（<a href="../../context/overview.zh.html">上下文概览</a>）。</p>
+<p>S 中的调用节点 A 以 <code translate="no">start_from="T:M"</code> 派生时在 T 中运行。Job 记录 <code translate="no">parent_session_id=T</code>、<code translate="no">parent_msg_id=M</code>、<code translate="no">caller_session_id=S</code>、<code translate="no">caller_msg_id=A</code>。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">操作</th><th scope="col">身份</th></tr></thead>
+<tbody>
+<tr><th scope="row">定位卡片</th><td>存储消息的来源 <code translate="no">session_id</code> 加指针 id</td></tr>
+<tr><th scope="row">加载结果</th><td><code translate="no">extra.attach.session_id</code> 和 <code translate="no">extra.attach.head_id</code>；绝不在来源 DAG 中查找</td></tr>
+<tr><th scope="row">同会话边</th><td>仅当来源和目标会话相同</td></tr>
+<tr><th scope="row">跨会话</th><td>外部附件卡片，保留来源位置和目标引用</td></tr>
+<tr><th scope="row">标记</th><td>来源节点 <code translate="no">spawn_out</code>。目标首个 <code translate="no">agent_spawn</code> 节点：<code translate="no">caller=&lt;来源节点&gt;</code>、<code translate="no">metadata.spawned_from_session</code>，投影为 <code translate="no">spawn_remote</code>。</td></tr>
+</tbody>
+</table>
+<p>创建和结束 attach 都不移动 S 或 T 的所选 HEAD。身份不一致时拒绝。见 <a href="../dag/rendering.zh.html">DAG attach 渲染</a>。</p>
+</details>
+
+<h2 id="busy-targets">目标忙</h2>
+<p>发给运行中分支的消息不打断、不丢弃，排队。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">情况</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">跨会话</th><td><code translate="no">run_control.is_turn_running(target)</code> 为真即忙。<code translate="no">scope="session"</code>。</td></tr>
+<tr><th scope="row">同会话</th><td>未完成 Job 的 <code translate="no">target_branch_head_id</code>、<code translate="no">head_id</code> 或 <code translate="no">parent_msg_id</code> 是末端即忙（<code translate="no">inbox.branch_busy</code>）。<code translate="no">scope="branch"</code>，之后继续该分支末端。</td></tr>
+<tr><th scope="row">存入</th><td><code translate="no">&lt;session-repo&gt;/inbox.json</code>：正文、发送方 <code translate="no">SID:HEAD</code>、发送方 agent、链消息数、入队时间</td></tr>
+<tr><th scope="row">取出</th><td>轮次结束时（成功或出错，<code translate="no">_drain_send_message_inbox</code>）和 2 秒扫描，后者兜住取消或崩溃的轮次</td></tr>
+<tr><th scope="row">顺序</th><td>提交后才删除：崩溃可能重投，不会丢失</td></tr>
+<tr><th scope="row">预算</th><td>排队的一跳与直接投递同样消耗消息</td></tr>
+<tr><th scope="row">已满</th><td>50 条；丢弃最旧的，并给其发送方留系统通知</td></tr>
+<tr><th scope="row">重复</th><td>同一发送方 60 秒内对仍在排队的相同文本被拒绝，并告知发送方</td></tr>
+</tbody>
+</table>
+
+<h2 id="limits">限额</h2>
+<table class="stack">
+<thead><tr><th scope="col">设置</th><th scope="col">默认</th><th scope="col">计数</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">agent.max_spawn_depth</code></th><td>0（关闭）</td><td>链上的代数；只有新建分支才加一</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_messages</code></th><td>0（关闭）</td><td>链上的消息：派生、投递、派发和返回结果。投递传递发送方计数 + 1。</td></tr>
+<tr><th scope="row"><code translate="no">agent.max_spawn_fanout</code></th><td>0（关闭）</td><td>每个发起方 <code translate="no">(session, turn)</code> 新建的分支数</td></tr>
+</tbody>
+</table>
+<p class="note">这些限制拓扑，不是 token、权限或准入。拓扑的 <code translate="no">0</code> 表示不限；资源限额不同，<code translate="no">null</code> 表示继承，数值必须为正。设置时取值的依据见<a href="agent-collab-comparison.zh.html#plan">对比</a>。token、费用和运行时长见<a href="../reliability/agent-resource-governance.zh.html">资源治理</a>。</p>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">用尽时</th><th scope="col">结果</th></tr></thead>
+<tbody>
+<tr><th scope="row">新建分支，三项任一</th><td>拒绝并说明原因；不产生分支或 Job</td></tr>
+<tr><th scope="row"><code translate="no">agent(to=B)</code> 或 <code translate="no">send_message(to=B)</code>，消息用尽</th><td>拒绝；深度和扇出单独用尽不阻止</td></tr>
+<tr><th scope="row">消息用尽时的工具列表</th><td>移除 <code translate="no">agent</code>；<code translate="no">send_message</code> 保留但拒绝</td></tr>
+<tr><th scope="row">已接受的 Job、当前轮次、本地工具</th><td>不取消</td></tr>
+<tr><th scope="row"><code translate="no">job_output</code>、快照、<code translate="no">execution.cancel</code></th><td>在正常授权下可用；不消耗额度</td></tr>
+</tbody>
+</table>
+<details>
+<summary>计数如何变化</summary>
+<ul>
+<li>派生消耗一条消息、一代和一个扇出名额。派发到已有分支只消耗消息，但仍准入 Job。</li>
+<li>通知轮次原样绑定完成 Job 的 <code translate="no">chain_messages</code>（多个 Job 共用通知时取最大值），并恢复 <code translate="no">caller_chain_generations</code>。读取结果不消耗。</li>
+<li>之后独立的用户轮次开始新的拓扑上下文。</li>
+</ul>
+</details>
+
+<h3 id="resources">执行资源</h3>
+<table class="stack fixed">
+<thead><tr><th scope="col">限额</th><th scope="col">到达边界时</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">max_live_per_session</code>、<code translate="no">OPENPROGRAM_JOB_WORKERS</code>（默认 4）</th><td>已准入 Job 排队等待</td></tr>
+<tr><th scope="row"><code translate="no">max_queued_per_session</code></th><td><code translate="no">quota.queue_full</code>，通常可重试；不创建 Job</td></tr>
+<tr><th scope="row"><code translate="no">max_jobs_per_session</code></th><td><code translate="no">quota.jobs_exhausted</code>；终态 Job 不退还</td></tr>
+<tr><th scope="row">token、费用、运行时长、空闲</th><td>按资源治理的预留和取消规则</td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead><tr><th scope="col">准入</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">计入</th><td><code translate="no">Job.parent_session_id</code>，即实际运行的会话：S→T 记在 T</td></tr>
+<tr><th scope="row">经过准入</th><td>所有 <code translate="no">agent</code> 调用，包括前台（<code translate="no">spawn_job(wait=True)</code>），以及 <code translate="no">send_message</code> 触发的轮次</td></tr>
+<tr><th scope="row">目标忙时</th><td><code translate="no">agent(to=...)</code> 在收件箱等待前已持有 Job；消息可能只有回执</td></tr>
+<tr><th scope="row">排队 Job</th><td>启动时不再计数</td></tr>
+<tr><th scope="row">拓扑限额为 0</th><td>不关闭这些检查</td></tr>
+</tbody>
+</table>
+
+<h2 id="cancellation">取消</h2>
+<ul>
+<li>沿 <code translate="no">parent_job_id</code> 传播：阻止未开始的后代，请求取消活动后代，确认退出前保持停止中。</li>
+<li>撤回排队工作不停止目标上的其他执行，并留下明确的投递结果。会话级 Stop 范围更大。</li>
+<li>终态 Job 仍可查询；取消是幂等的。取消请求不代表已退出（<a href="../reliability/agent-resource-governance.zh.html">资源治理</a>）。</li>
+</ul>
+
+<h2 id="visibility">实时显示与权限</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">主题</th><th scope="col">行为</th></tr></thead>
+<tbody>
+<tr><th scope="row">实时更新</th><td>投递和回复到达时双方更新，无需刷新（<a href="../../proactive/event-layer.zh.html">事件层</a>）</td></tr>
+<tr><th scope="row">Agent 流量</th><td>显示为行，不是用户气泡。发送方：工具行（“Sent to …”）。通知：每个完成的 agent 一行，来自 <code translate="no">notice_items</code>；展开显示回复或任务。接收方：一行以发送方命名，读取头部 <code translate="no">[message|task from SID:HEAD (sender)]</code>。</td></tr>
+<tr><th scope="row">发送方名称</th><td>后台 agent 的 Job 发送时用其名称，否则为主对话；跨对话时用标题</td></tr>
+<tr><th scope="row">记录</th><td><code translate="no">~/.openprogram/projects/&lt;project-id&gt;/chats/&lt;sid&gt;/events.jsonl</code></td></tr>
+<tr><th scope="row">无人值守</th><td>拒绝副作用的策略在 <code translate="no">send_message</code> 和子代理执行前拦下；<code translate="no">permission_mode=bypass</code> 不解除</td></tr>
+<tr><th scope="row"><code translate="no">job_output</code> 访问</th><td>执行会话、调用会话或其祖先（最多走 64 层，防环）。没有会话上下文时不拒绝，也不做身份认证。</td></tr>
+<tr><th scope="row">执行控制</th><td>另有检查：所有者、项目和会话成员关系、动作授权、<code translate="no">runtime.control</code>。知道 id 不授予权限。</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>结果大小</summary>
+<p>通用规整器把字符串限制在 30,000 字符（上下文紧张时更少），保留首尾，并可把完整 UTF-8 文本写到 <code translate="no">&lt;state_dir&gt;/tool_results/</code>，文件名不透明且独占，扩展名 <code translate="no">.txt</code>。只有写入成功才报告路径。</p>
+<p>目标契约：<code translate="no">job_output</code> 和通知使用同一有界摘录，规范结果留在存储中；完整文本产物记录执行 id、所属会话和项目、媒体类型、字节长度和哈希，按结果的可见性读取，并随其执行保留。</p>
+</details>
+
+<details>
+<summary>有意不做</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">不做</th><th scope="col">原因</th></tr></thead>
+<tbody>
+<tr><th scope="row">额外的 parent id 字段</th><td><code translate="no">(session_id, head_id)</code> 加 caller 和 predecessor 已构成树</td></tr>
+<tr><th scope="row">id 前缀分类</th><td>id 和名称足够</td></tr>
+<tr><th scope="row">重试或熔断策略</th><td>由发起方模型决定</td></tr>
+<tr><th scope="row">聚合操作符</th><td>由目标模型读取并综合</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>公共入口验收</summary>
+<p>每项都要通过公共工具观察到。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">用例</th><th scope="col">可观察结果</th></tr></thead>
+<tbody>
+<tr><th scope="row">名称和身份</th><td>注册 <code translate="no">list_jobs</code>、<code translate="no">job_output</code>；前台和后台都准入 Job；取消带版本</td></tr>
+<tr><th scope="row">分叉并运行</th><td>一次调用在 M 创建分支并运行；<code translate="no">to</code> 不创建</td></tr>
+<tr><th scope="row">全局归档</th><td>A 归档 B 后 C 的列表不含 B；归档视图保留；投递失败</td></tr>
+<tr><th scope="row">完成时归档</th><td>任意顺序下保留首次时间戳和手动原因；归档不取消</td></tr>
+<tr><th scope="row">拓扑用尽</th><td>同限额表</td></tr>
+<tr><th scope="row">资源交互</th><td>记在目标；错误不同；不重复计数；同步运行也经准入</td></tr>
+<tr><th scope="row">attach 位置</th><td>卡片在 S，按 (T, H) 查找；AttachCard 和执行条都选中确切 head</td></tr>
+<tr><th scope="row">历史隐私</th><td>拒绝的读取不暴露内容或元数据；允许的正常工作</td></tr>
+<tr><th scope="row">完整结果</th><td>结构化结果有上限；授权重读；无虚假路径；保留策略只清理合格产物</td></tr>
+<tr><th scope="row">完成通知</th><td>公共入口只发一次通知；空结果、重试、出错和取消不产生无尽轮次</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>代码</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">领域</th><th scope="col">位置</th></tr></thead>
+<tbody>
+<tr><th scope="row">Agent 工具</th><td><code translate="no">openprogram/programs/tools/agents/agent/agent/agent.py</code></td></tr>
+<tr><th scope="row">准入</th><td><code translate="no">openprogram/runtime/conversation/sub_agent_run.py</code></td></tr>
+<tr><th scope="row">消息、归档</th><td><code translate="no">openprogram/programs/tools/agents/send_message/</code></td></tr>
+<tr><th scope="row">Job 输出</th><td><code translate="no">openprogram/programs/tools/agents/agent/job_output/job_output.py</code></td></tr>
+<tr><th scope="row">历史读取</th><td><code translate="no">openprogram/programs/tools/knowledge/read_conversation.py</code></td></tr>
+<tr><th scope="row">执行授权</th><td><code translate="no">openprogram/runtime/execution/authorization.py</code></td></tr>
+<tr><th scope="row">完成</th><td><code translate="no">openprogram/runtime/jobs/runner/progress.py</code>、<code translate="no">dispatch.py</code>、<code translate="no">borrowed.py</code>、<code translate="no">openprogram/runtime/jobs/notices.py</code></td></tr>
+<tr><th scope="row">收件箱</th><td><code translate="no">openprogram/runtime/conversation/inbox.py</code></td></tr>
+<tr><th scope="row">结果持久化</th><td><code translate="no">openprogram/programs/_host/execution.py</code></td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">领域</th><th scope="col">剩余</th></tr></thead>
+<tbody>
+<tr><th scope="row">完成通知</th><td>已实现并有单元覆盖；还需在运行中的 worker 上通过公共工具做端到端验收</td></tr>
+<tr><th scope="row">轮次中投递</th><td>消息等待轮次结束。向运行中执行转向需要执行命令路径支持非用户操作者。</td></tr>
+<tr><th scope="row">历史可见性</th><td><code translate="no">read_conversation</code> 读取本地存储，无目标级所有者或项目检查：工具门控是宽泛的本地边界，不是按 Agent 的隐私。共享授权需覆盖 <code translate="no">read_conversation</code>、<code translate="no">start_from</code>、所选上下文、attach 展开和产物，且不泄露存在性。</td></tr>
+<tr><th scope="row">内部分支</th><td>没有在会话选择器中隐藏内部分支的展示标记。它只影响 UI，不是授权。</td></tr>
+<tr><th scope="row">跨会话 attach</th><td>同会话 AttachCard 选中 head；跨会话打开 T 但不选 H，执行条可以</td></tr>
+<tr><th scope="row">结果截断</th><td><code translate="no">job_output</code> 返回 <code translate="no">AgentToolResult</code>，规整器不设上限地透传。通知上限 20,000。保存的文件没有产物记录、保留策略或目标 ACL。</td></tr>
+<tr><th scope="row">停止时清收件箱</th><td>只有 Web 停止路径（<code translate="no">stop_session_work</code>）清理，CLI 停止不清理</td></tr>
+</tbody>
+</table>

@@ -5,7 +5,7 @@
  * module only answers "should we create a main window, or reuse one?"
  * so launch, Dock activate, and second-instance cannot open two mains.
  *
- * Spec: docs/reference/design/ui/desktop/window-lifecycle.md
+ * Spec: docs/reference/design/ui/desktop/window-lifecycle.html
  */
 
 function windowIsLive(win) {

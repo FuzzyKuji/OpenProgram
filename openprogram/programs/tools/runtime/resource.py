@@ -2,7 +2,7 @@
 from openprogram.programs._host.runtime import function
 
 
-@function(name="resource", toolset=["core"], unsafe_in=["wechat", "telegram", "plan"],
+@function(name="resource", toolset=["core"], unsafe_in=["plan"],
           requires_approval=True, path_params={}, url_params=[], max_result_chars=32_000)
 def resource(action: str = "describe", provider: str = "", arguments: dict | None = None):
     """Use one resource provider through its declared operations.

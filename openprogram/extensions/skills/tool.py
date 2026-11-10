@@ -19,7 +19,8 @@ from .loader import get_skill, resolve
 
 
 def _log_path() -> Path:
-    return Path.home() / ".openprogram" / "skills" / "invoke_log.jsonl"
+    from openprogram.state.paths import get_state_dir
+    return get_state_dir() / "skills" / "invoke_log.jsonl"
 
 
 def _append_log(entry: dict) -> None:

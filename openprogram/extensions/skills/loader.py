@@ -87,7 +87,8 @@ def unregister_plugin_skills(name: str) -> None:
 # --- source directories ---------------------------------------------------
 
 def user_dir() -> Path:
-    return Path.home() / ".openprogram" / "skills"
+    from openprogram.state.paths import get_state_dir
+    return get_state_dir() / "skills"
 
 
 def project_dir(cwd: str | os.PathLike | None = None) -> Path:
@@ -95,7 +96,8 @@ def project_dir(cwd: str | os.PathLike | None = None) -> Path:
 
 
 def remote_cache_dir() -> Path:
-    return Path.home() / ".openprogram" / "cache" / "skills"
+    from openprogram.state.paths import get_state_dir
+    return get_state_dir() / "cache" / "skills"
 
 
 def _source_dirs(cwd: str | os.PathLike | None = None) -> list[tuple[str, Path]]:

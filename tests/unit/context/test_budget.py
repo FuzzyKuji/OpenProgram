@@ -63,9 +63,6 @@ def test_default_engine_budgets_only_provider_resident_tools(monkeypatch):
 
     context_engine = DefaultContextEngine(
         usage_tracker=SimpleNamespace(get=lambda _session_id: UsageState()),
-        references=SimpleNamespace(build=lambda _history: SimpleNamespace(
-            cited_tool_use_ids=set(),
-        )),
     )
     monkeypatch.setattr(context_engine, "_build_messages_from_dag", lambda **_kwargs: [])
     monkeypatch.setattr(engine_module, "real_context_window", lambda _model: 100_000)

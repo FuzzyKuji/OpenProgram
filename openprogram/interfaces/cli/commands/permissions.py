@@ -13,14 +13,14 @@ _DECISIONS = {'deny', 'ask', 'allow', 'unmatched'}
 
 def explain_rules(rules, tool_name: str, args: dict) -> dict:
     """Diagnose existing enforcement without changing its implementation."""
-    from openprogram.runtime.permissions.policy import _match_rule
+    from openprogram.runtime.permissions.policy import match_rule
     matches = []
     for decision in ('deny', 'ask', 'allow'):
         for raw in getattr(rules, decision):
             single = PermissionRules(**{decision: [raw]})
-            if _match_rule(single, tool_name, args) == decision:
+            if match_rule(single, tool_name, args)[0] == decision:
                 matches.append({'decision': decision, 'rule': raw})
-    winning = _match_rule(rules, tool_name, args)
+    winning, _rule = match_rule(rules, tool_name, args)
     return {'scope': 'permission_rules', 'tool': tool_name,
             'decision': winning or 'unmatched', 'matches': matches}
 

@@ -186,15 +186,6 @@ def _event_overlaps_window(
     return False
 
 
-def event_matches_time_window(
-    event: MemoryEvent,
-    date_from: str | None = None,
-    date_to: str | None = None,
-) -> bool:
-    """Return whether any dated evidence overlaps the optional query window."""
-    return _event_overlaps_window(event, _query_time_window(date_from, date_to))
-
-
 def parse_topic_file(path: Path, topics_root: Path) -> list[MemoryEvent]:
     """Parse legacy line records and current paragraph-block Topic files."""
     relative = path.relative_to(topics_root).as_posix()

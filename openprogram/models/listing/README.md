@@ -59,6 +59,7 @@ The optional touch-points, only when something can't be derived:
 
 - **`credentials.py`** — Unified provider-credential validation
 - **`listing.py`** — Catalog listing
+- **`probe_log.py`** — The requests OpenProgram sends a provider on its own behalf
 - **`provider_models.py`** — models.dev enrichment for the live browse path
 - **`setup_hints.py`** — Provider-specific setup instructions surfaced in the web UI's
 - **`test_provider.py`** — Connectivity probe

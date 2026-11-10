@@ -3,11 +3,6 @@
    list never drags the detail column, and vice versa. The page
    body itself doesn't scroll (overflow: hidden); each column owns
    its own overflow:auto. */
-.pageBodyTwoPane {
-  padding: 0;
-  gap: 0;
-  overflow: hidden;
-}
 .authPoolTitle {
   font-weight: 600;
   color: var(--text-bright);
@@ -84,7 +79,24 @@
   min-width: 0;
   box-sizing: border-box;
 }
-.providerListItems > .providersGroupLabel { margin-top: 20px; }
+.providerListItems > .loadError {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 8px;
+  padding: 0 8px;
+}
+
+.loadErrorText {
+  margin: 0;
+  font-size: var(--fs-sm);
+  line-height: 1.4;
+  color: var(--accent-red);
+  overflow-wrap: anywhere;
+}
+
+.providersGroupLabel { margin-top: 20px; }
 /* First group label sits directly under the sticky header — keep
    the gap tight (8px) so the "Enabled" label visually attaches to
    the search box above. Later group breaks ("Not enabled") get the

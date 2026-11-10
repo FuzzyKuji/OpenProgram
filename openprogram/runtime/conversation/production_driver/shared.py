@@ -78,7 +78,6 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
-AGENT_LEASE_SECONDS = 30.0
 
 
 class AgentDriverError(RuntimeError):
@@ -163,19 +162,19 @@ AGENT_SAFE_POINT_KINDS = (
 )
 
 
-FINISH_RETRY_LIMIT = 8
-
-
-FINISH_RETRY_MAX_DELAY = 1.0
-
-
-FINISH_REPAIR_RETRY_TIMER_DELAY = 30.0
-
-
 _PAYLOAD_KINDS = frozenset({"chat", "forced_tool"})
 
 
 _PAYLOAD_ENVELOPE_KEYS = frozenset({"version", "kind", "request", "tool_name", "tool_input", "anchor_msg_id", "work_dir", "agent_id", "source", "provider", "model", "response_format", "surface_context_snapshot"})
+
+# Request fields added after the previous release, with their defaults. That
+# release refuses a stored request naming a field it does not know, and it
+# reads stored requests again to resume, continue or notify, so a field that
+# only repeats its default is left out and the stored turn stays readable there.
+_ADDED_REQUEST_DEFAULTS = {
+    "last_round_text": "", "resumes_message_id": None, "automation": None,
+    "recall_query": None, "detached": False,
+}
 
 
 def _json_payload(value: Any) -> str:
@@ -217,6 +216,9 @@ def normalize_agent_turn_payload(payload: Mapping[str, Any]) -> dict[str, Any]:
         request_fields = frozenset(field.name for field in fields(TurnRequest))
         if set(request) - request_fields:
             raise AgentDriverError("invalid_input", "chat input has unknown request fields")
+        for name, default in _ADDED_REQUEST_DEFAULTS.items():
+            if name in request and request[name] == default and type(request[name]) is type(default):
+                del request[name]
         for required in ("user_text", "agent_id", "source"):
             if not isinstance(request.get(required), str) or not request[required]:
                 raise AgentDriverError(
@@ -442,7 +444,6 @@ class CanonicalAgentEntry:
             admission.execution_id,
             expected_version=admission.status_version,
             owner_id=f"agent-entry-{uuid.uuid4().hex}",
-            ttl_seconds=AGENT_LEASE_SECONDS,
         )
         active, running = self.control.attempts.activate(
             attempt.attempt_id,
@@ -546,6 +547,21 @@ class CanonicalAgentAdapter:
         assistant_message_id: str | None = None,
         config_snapshot_ref: str,
     ) -> CanonicalAgentAdmission:
+        # A resumed checkpoint is fenced against the message anchors of the
+        # immutable input, so every admitted turn records them. A transport
+        # without its own message id (a channel, the scheduler, a spawned
+        # agent) gets the one the turn runtime would mint, fixed here
+        # before the input is frozen; the reply id follows the runtime's
+        # ``<user_msg_id>_reply`` rule. Without them an interrupted turn
+        # could never continue from its checkpoint.
+        request_msg_id = getattr(request, "user_msg_id", None)
+        if user_message_id is None and assistant_message_id is None and hasattr(request, "user_msg_id"):
+            if not request_msg_id:
+                request_msg_id = uuid.uuid4().hex[:12]
+                request.user_msg_id = request_msg_id
+            user_message_id = request_msg_id
+        if assistant_message_id is None and user_message_id and user_message_id == request_msg_id:
+            assistant_message_id = f"{user_message_id}_reply"
         return self.admit_payload(
             session_id=request.session_id,
             payload=self.payload_for(request),
@@ -601,9 +617,10 @@ class CanonicalAgentAdapter:
         *,
         reason_code: str,
         target: ExecutionStatus = ExecutionStatus.FAILED,
+        failure_text: str | None = None,
     ) -> None:
         self.driver.fail_admission(
-            admission, reason_code=reason_code, target=target,
+            admission, reason_code=reason_code, target=target, failure_text=failure_text,
         )
 
 

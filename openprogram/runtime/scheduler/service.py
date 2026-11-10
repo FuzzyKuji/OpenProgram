@@ -30,6 +30,15 @@ def _parse_run_at(value: str) -> str:
     return parsed.isoformat()
 
 
+def _run_minute(run_at: Any) -> datetime | None:
+    """The moment a one-time task runs, to the minute: the editor shows no seconds
+    and sends the time back in UTC, so the same time can be written differently."""
+    try:
+        return datetime.fromisoformat(str(run_at).replace("Z", "+00:00")).replace(second=0, microsecond=0)
+    except ValueError:
+        return None
+
+
 def _validate_schedule(task_type: str, cron: str | None, run_at: str | None) -> tuple[str | None, str | None]:
     if task_type == "webhook":
         if cron or run_at:
@@ -273,8 +282,14 @@ def update_task(
             updated.pop("cwd", None)
             entries[index] = updated
             cron_tool._save(path, entries)
-            return updated
-    raise KeyError(task_id)
+            break
+        else:
+            raise KeyError(task_id)
+    if updated.get("type") == "once" and _run_minute(updated.get("run_at")) != _run_minute(current.get("run_at")):
+        from openprogram.programs.tools.jobs.cron import worker
+
+        worker.forget_firing(task_id)
+    return updated
 
 
 def delete_task(task_id: str) -> bool:

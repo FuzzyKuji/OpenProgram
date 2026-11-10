@@ -116,6 +116,13 @@ BOUNDARY_MANIFEST = (
         call_counts=(("socket.create_connection", 1),),
     ),
     BoundaryExclusion(
+        path="operations/self_update/trial/sandbox.py",
+        boundary_owner="owner-control-plane",
+        reason="the Linux trial relay joins a fixed loopback port to a Unix socket inside the trial's directory",
+        kinds=frozenset({"socket.connect", "socket.create_connection"}),
+        call_counts=(("socket.connect", 1), ("socket.create_connection", 1)),
+    ),
+    BoundaryExclusion(
         path="host/security/safe_http.py",
         boundary_owner="runtime-http-managed-transport",
         reason="the peer-constrained transport implementation owns these httpcore pools",
@@ -149,15 +156,9 @@ BOUNDARY_MANIFEST = (
         ),
     ),
     BoundaryExclusion(
-        path="interfaces/cli/commands/mcp.py",
+        path="interfaces/cli/worker_client.py",
         boundary_owner="owner-control-plane",
-        reason="owner CLI calls the authenticated OpenProgram backend",
-        kinds=frozenset({"urllib.request.build_opener"}),
-    ),
-    BoundaryExclusion(
-        path="interfaces/cli/commands/execution.py",
-        boundary_owner="owner-control-plane",
-        reason="owner CLI cancels executions on the authenticated OpenProgram backend",
+        reason="owner CLI commands (mcp, execution) call the authenticated OpenProgram backend",
         kinds=frozenset({"urllib.request.build_opener"}),
     ),
     BoundaryExclusion(
@@ -184,6 +185,13 @@ BOUNDARY_MANIFEST = (
         reason="`openprogram dev` probes the local instances' /healthz on a fixed numeric 127.0.0.1 port",
         kinds=frozenset({"urllib.request.urlopen"}),
         call_counts=(("urllib.request.urlopen", 1),),
+    ),
+    BoundaryExclusion(
+        path="operations/worker/runner.py",
+        boundary_owner="owner-control-plane",
+        reason="the worker probes its own /healthz on a fixed numeric 127.0.0.1 port, with no proxy",
+        kinds=frozenset({"urllib.request.build_opener"}),
+        call_counts=(("urllib.request.build_opener", 1),),
     ),
     BoundaryExclusion(
         path="extensions/mcp/server/service.py",

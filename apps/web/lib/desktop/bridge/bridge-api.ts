@@ -39,6 +39,15 @@ export interface DesktopBridge {
   captureRegion?(rect: { x: number; y: number; width: number; height: number }, options?: { full?: boolean }): Promise<string | null>;
   webTab: DesktopWebTabApi;
   tabTransfer: DesktopTabTransferApi;
+  /** Keeps reporting the cursor (page CSS px) while a right or middle button
+   *  stays down, past the window's edge too. macOS only; returns the stop. */
+  pointerFollow?: {
+    start(
+      held: number,
+      onCursor: (point: { x: number; y: number }) => void,
+      onReleased: () => void,
+    ): () => void;
+  };
   /** Top-layer ⋮ menu overlay. Absent in shells older than this build. */
   mainMenu?: DesktopMainMenuApi;
   contextMenu?: DesktopNativeMenuApi;

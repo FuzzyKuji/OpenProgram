@@ -1,5 +1,6 @@
 "use client";
 
+import { settingsSend } from "@/lib/settings/settings-request";
 import { useState } from "react";
 
 import styles from "./channels.module.css";
@@ -8,14 +9,80 @@ import { PlusIcon } from "@/components/animated-icons";
 import { useTranslation } from "@/lib/i18n";
 import { AddAccountDialog } from "./add-account-dialog";
 import { PLATFORMS, PLATFORM_LABEL } from "./types";
-import type { ChannelAccount, StatusMap } from "./types";
+import type { ChannelAccount, ChannelHealthStatus, StatusMap } from "./types";
 import { confirmAction } from "@/components/ui/confirm-dialog";
-import { showToast } from "@/lib/format-utils/toast";
 
 interface Props {
   accounts: ChannelAccount[];
   statuses: StatusMap;
   onChange: () => void | Promise<void>;
+}
+
+function describeStatus(
+  status: ChannelHealthStatus | undefined,
+  text: (english: string, chinese: string) => string,
+): { dot: string; label: string; hint?: string; needsSignIn?: boolean } {
+  switch (status?.state) {
+    case "alive":
+      return { dot: styles.dotGreen, label: text("Running", "运行中") };
+    case "off":
+      return { dot: styles.dotGray, label: text("Turned off", "已关闭") };
+    case "no_token":
+      return {
+        dot: styles.dotGray,
+        label: text("Not signed in", "未登录"),
+        hint: text("Run this to sign in:", "运行这条命令登录："),
+        needsSignIn: true,
+      };
+    case "signed_out":
+      return {
+        dot: styles.dotRed,
+        label: text("Signed out", "已退出登录"),
+        hint: text(
+          "Its token or login stopped working, so messages no longer arrive. Run this to sign in again:",
+          "它的 token 或登录已失效，收不到消息了。运行这条命令重新登录：",
+        ),
+        needsSignIn: true,
+      };
+    case "failed":
+      return {
+        dot: styles.dotRed,
+        label: text("Stopped by an error", "因错误停止"),
+        hint: text(
+          "Messages no longer arrive. Restart OpenProgram to try again.",
+          "收不到消息了。重启 OpenProgram 再试一次。",
+        ),
+      };
+    case "reconnecting":
+      return {
+        dot: styles.dotRed,
+        label: text("Reconnecting", "正在重连"),
+        hint: text(
+          "It hit an error and keeps trying by itself. Messages may not arrive until it connects.",
+          "它遇到错误，正在自动重试。连上之前可能收不到消息。",
+        ),
+      };
+    case "stale":
+      return {
+        dot: styles.dotRed,
+        label: text("Not responding", "没有响应"),
+        hint: text(
+          "Messages may not arrive. Restart OpenProgram to reconnect.",
+          "可能收不到消息。重启 OpenProgram 重新连接。",
+        ),
+      };
+    case "unknown":
+      return {
+        dot: styles.dotGray,
+        label: text("Not started yet", "尚未启动"),
+        hint: text(
+          "It starts within a few seconds while OpenProgram runs in the background.",
+          "OpenProgram 在后台运行时，几秒内就会启动。",
+        ),
+      };
+    default:
+      return { dot: styles.dotGray, label: text("Checking", "检查中") };
+  }
 }
 
 export function AccountsList({ accounts, statuses, onChange }: Props) {
@@ -33,16 +100,11 @@ export function AccountsList({ accounts, statuses, onChange }: Props) {
     const key = `${channel}:${account_id}`;
     setBusyKey(key);
     try {
-      const r = await fetch(
+      const deleted = await settingsSend(
         `/api/channels/accounts/${encodeURIComponent(channel)}/${encodeURIComponent(account_id)}`,
-        { method: "DELETE" },
+        { method: "DELETE", failure: text("Delete failed", "删除失败") },
       );
-      if (!r.ok) {
-        const d = await r.json().catch(() => null);
-        showToast(d?.detail || text("Delete failed", "删除失败"), { tone: "error" });
-      } else {
-        await onChange();
-      }
+      if (deleted !== null) await onChange();
     } finally {
       setBusyKey(null);
     }
@@ -93,36 +155,17 @@ export function AccountsList({ accounts, statuses, onChange }: Props) {
                   const key = `${a.channel}:${a.account_id}`;
                   const busy = busyKey === key;
                   const status = statuses[key];
-                  // Health dot:
-                  //   green  — adapter thread alive + heartbeat fresh
-                  //   red    — heartbeat stale / adapter crashed
-                  //   gray   — unknown (worker hasn't started this
-                  //            adapter, or account is disabled)
-                  const dotClass =
-                    status?.state === "alive" ? styles.dotGreen
-                    : status?.state === "stale" ? styles.dotRed
-                    : styles.dotGray;
-                  const dotTitle =
-                    status?.state === "alive" ? text("Adapter running", "适配器正在运行")
-                    : status?.state === "stale" ? text("Adapter heartbeat stale; likely crashed", "适配器心跳过期，可能已崩溃")
-                    : text("Adapter not started", "适配器未启动");
+                  const signIn = `openprogram channels accounts login ${a.channel} --id ${a.account_id}`;
+                  const shown = describeStatus(status, text);
                   return (
                     <tr key={key}>
                       <td>{PLATFORM_LABEL[a.channel] || a.channel}</td>
                       <td><code>{a.account_id}</code></td>
                       <td>
-                        <span
-                          className={`${styles.statusDot} ${dotClass}`}
-                          data-tip={dotTitle}
-                        />
-                        {a.configured ? (
-                          <span className={styles.badgeOk}>{text("configured", "已配置")}</span>
-                        ) : (
-                          <span className={styles.badgeWarn}>{text("missing token", "缺少 token")}</span>
-                        )}
-                        {!a.enabled && (
-                          <span className={styles.badgeMuted}> {text("disabled", "已禁用")}</span>
-                        )}
+                        <span className={`${styles.statusDot} ${shown.dot}`} />
+                        {shown.label}
+                        {shown.hint && <div className={styles.statusHint}>{shown.hint}</div>}
+                        {shown.needsSignIn && <div className={styles.statusHint}><code>{signIn}</code></div>}
                       </td>
                       <td>
                         <Button

@@ -184,6 +184,10 @@ function FavoriteRow({
   return (
     <Reorder.Item
       value={f}
+      // Rows slide to their new place but are never scaled to a new size:
+      // the default animates a width change too, which stretched the text
+      // while the sidebar was dragged wider or narrower.
+      layout="position"
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
       // The component renders <li> by default. Tweak to remove

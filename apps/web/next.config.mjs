@@ -4,7 +4,7 @@ import { fileURLToPath } from "node:url";
 const nextConfig = {
   // Static export: `next build` emits plain HTML/JS/CSS into apps/web/out/,
   // served by the Python worker (single-port architecture — see
-  // docs/reference/design/cli/single-port.md). No rewrites, no baked
+  // docs/reference/design/cli/single-port.html). No rewrites, no baked
   // backend port: the app talks to its own origin (/api, /ws) at runtime.
   output: "export",
   // Required for `output: "export"` on Next 15 (no Image Optimization server).

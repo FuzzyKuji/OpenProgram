@@ -13,14 +13,15 @@ from openprogram.runtime.execution.model import ExecutionStatus
 
 
 class _Store:
-    def __init__(self, executions):
+    def __init__(self, executions, source="web"):
         self._executions = executions
+        self._source = source
 
     def list_nonterminal(self, *, session_id):
         return [e for e in self._executions if e.session_id == session_id]
 
     def get_agent_turn_input(self, _execution_id):
-        return {"kind": "chat", "request": {"source": "web", "interaction": None}}
+        return {"kind": "chat", "request": {"source": self._source, "interaction": None}}
 
     def get_execution_input(self, _execution_id):
         return types.SimpleNamespace(user_message_id="m1")
@@ -57,3 +58,16 @@ def test_running_turn_is_foreground():
     execution = _execution(ExecutionStatus.RUNNING)
 
     assert foreground_task_snapshot(_Store([execution]), execution)["status"] == "running"
+
+
+@pytest.mark.parametrize("source", ["telegram", "wechat"])
+def test_chat_app_turn_paused_at_a_wait_keeps_the_conversation(source):
+    execution = _execution(ExecutionStatus.PAUSED, "wait_open")
+
+    assert foreground_task_snapshot(_Store([execution], source), execution)["msg_id"] == "m1"
+
+
+def test_background_source_is_not_foreground():
+    execution = _execution(ExecutionStatus.RUNNING)
+
+    assert foreground_task_snapshot(_Store([execution], "scheduler"), execution) is None

@@ -21,6 +21,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type RefObject } from "re
 import { useSessionStore } from "@/lib/session-store";
 import { useSessionScope } from "@/lib/session-store/session-scope";
 import { HoverTip } from "@/components/ui/tooltip";
+import { FillIcon } from "@/components/ui/fill-icon";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { translateText } from "@/lib/i18n";
 import { ContextBreakdownPanel } from "./context-breakdown-panel";
@@ -104,7 +105,7 @@ export function ContextBadge({ sessionId }: ContextBadgeProps) {
     }
     if (!readContextBreakdownCache(sid, headId ?? null)
         || readContextBreakdownCache(sid, headId ?? null)?.tools == null) {
-      warmContextBreakdown(sid, headId ?? null);
+      warmContextBreakdown(sid, headId ?? null, { focus: true });
     }
   }, [sid, headId, ringUsed, ringWindow, ringBasis]);
 
@@ -215,6 +216,9 @@ export function ContextBadge({ sessionId }: ContextBadgeProps) {
         }}
         aria-label="Context usage"
       >
+        {/* The ring already fills its 16 px box (CSS sizes the svg); the
+            box grows to 18 px on hover like every composer icon. */}
+        <FillIcon crop={false}>
         <svg width="12" height="12" viewBox="0 0 12 12">
           <circle
             cx="6"
@@ -238,6 +242,7 @@ export function ContextBadge({ sessionId }: ContextBadgeProps) {
             transform="rotate(-90 6 6)"
           />
         </svg>
+        </FillIcon>
       </button>
       </PopoverTrigger>
       </HoverTip>

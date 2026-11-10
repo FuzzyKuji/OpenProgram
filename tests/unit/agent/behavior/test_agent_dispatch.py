@@ -11,7 +11,7 @@ at run_agent_turn_async, same technique as test_send_message.py):
   * drain: tracked entries deliver with the task header and reuse the
     task id; withdrawn entries are dropped without delivering
 
-See docs/reference/design/runtime/collaboration/agent-collaboration.md.
+See docs/reference/design/runtime/collaboration/agent-collaboration.html.
 """
 from __future__ import annotations
 
@@ -226,16 +226,19 @@ def test_to_ignores_run_in_background(parent_turn):
     assert "[job dispatched]" in out  # still the async dispatch path
 
 
-def test_to_message_budget_guard(parent_turn):
+def test_to_message_budget_guard(parent_turn, monkeypatch):
     from openprogram.programs.tools.agents.send_message.send_message.depth import (
-        set_chain_messages, _chain_messages, MAX_MESSAGES,
+        set_chain_messages, _chain_messages,
     )
-    tok = set_chain_messages(MAX_MESSAGES)
+    from openprogram.runtime.permissions.refusal import Refused
+    monkeypatch.setattr("openprogram.state.config.read_config", lambda: {"agent": {"max_messages": 8}})
+    tok = set_chain_messages(8)
     try:
-        out = _agent_impl("deeper", to="p1:a0")
+        with pytest.raises(Refused) as refused:
+            _agent_impl("deeper", to="p1:a0")
     finally:
         _chain_messages.reset(tok)
-    assert "[agent refused]" in out and "messages" in out
+    assert refused.value.text.startswith("[blocked by setting]") and "messages" in refused.value.text
 
 
 # --- to= dispatch, busy target → pending task + inbox entry ---

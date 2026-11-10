@@ -1,5 +1,7 @@
 "use client";
 
+import { settingsSend } from "@/lib/settings/settings-request";
+
 /**
  * LLM Providers settings — port of /js/shared/settings-providers.js (521 lines).
  *
@@ -27,8 +29,9 @@ import { RoutingOverview } from "./routing-overview";
 import { ProviderItem } from "./provider-item";
 import { AddCustomProvider } from "./add-custom-provider";
 import type { Provider } from "./types";
-import pageStyles from "../settings-page.module.css";
+import { SettingsPage } from "../settings-ui";
 import styles from "./provider-pane.module.css";
+import { Button } from "@/components/ui/button";
 import { SearchInput } from "@/components/ui/search-input";
 import { cachedFetch, invalidate, readCachedSettings } from "@/lib/prefs/settings-cache";
 import { refreshAgentChip } from "./types";
@@ -64,19 +67,22 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
   // detail column drift up/down while the user was just trying to
   // scroll the provider list, which read as a bug.
 
+  // Why the last read of the list failed. A failed read keeps the list
+  // already shown and says so, rather than showing no providers at all.
+  const [loadError, setLoadError] = useState<string | null>(null);
+
   const reload = useCallback(async () => {
-    let list: Provider[] = [];
     try {
       // ``cachedFetch`` shares in-flight promises and keeps successful
       // responses for 30s, so tab-switching back here within that
       // window is instant. Mutations call ``invalidate()`` below to
       // force the next read to hit the network.
       const d = await cachedFetch<{ providers?: Provider[] }>("/api/providers/list");
-      list = d.providers || [];
-    } catch {
-      /* empty */
+      setProviders(d.providers || []);
+      setLoadError(null);
+    } catch (err) {
+      setLoadError(err instanceof Error && err.message ? err.message : String(err));
     }
-    setProviders(list);
   }, []);
 
   useEffect(() => {
@@ -118,15 +124,10 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
   }
 
   async function toggleProvider(id: string, en: boolean) {
-    try {
-      await fetch(`/api/providers/${encodeURIComponent(id)}/toggle`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ enabled: en }),
-      });
-    } catch {
-      /* ignore */
-    }
+    await settingsSend(`/api/providers/${encodeURIComponent(id)}/toggle`, {
+      body: { enabled: en },
+      failure: text("Could not change this provider. Try again.", "无法更改这个 Provider，请重试。"),
+    });
     invalidate("/api/providers/list");
     reload();
     // Disabling/enabling a provider changes which models the chat picker
@@ -140,17 +141,14 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
   }
 
   return (
-    <div className={pageStyles.page}>
-      <div className={pageStyles.pageHeader}>
-        <h2 className={pageStyles.pageTitle}>{t("settings.tab.providers")}</h2>
-        <p className={pageStyles.pageMeta}>
-          {text(
-            "Enable an LLM backend, paste an API key (or rely on local OAuth / subscription), and pick which models the chat composer exposes.",
-            "启用大模型后端，填写 API key（或使用本地 OAuth / 订阅），并选择聊天输入框可用的模型。",
-          )}
-        </p>
-      </div>
-      <div className={`${pageStyles.pageBody} ${styles.pageBodyTwoPane}`}>
+    <SettingsPage
+      title={t("settings.tab.providers")}
+      description={text(
+        "Enable an LLM backend, paste an API key (or rely on local OAuth / subscription), and pick which models the chat composer exposes.",
+        "启用大模型后端，填写 API key（或使用本地 OAuth / 订阅），并选择聊天输入框可用的模型。",
+      )}
+      bodyClassName="gap-0 overflow-hidden p-0"
+    >
         <div className={styles.providersLayout}>
           <div className={styles.providersSidebar} ref={sidebarRef}>
             <div className="p-[0_0_8px]">
@@ -180,6 +178,24 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
             <span className={styles.overviewIcon}><Waypoints size={14} strokeWidth={1.75} aria-hidden /></span>
             <span className={styles.providerLabel}>{text("Overview", "总览")}</span>
           </button>
+          {loadError ? (
+            <div className={styles.loadError} role="alert">
+              <p className={styles.loadErrorText}>
+                {text("Couldn't load the provider list: ", "无法读取 Provider 列表：")}
+                {loadError}
+              </p>
+              <Button
+                variant="elevated"
+                size="sm"
+                onClick={() => {
+                  invalidate("/api/providers/list");
+                  void reload();
+                }}
+              >
+                {text("Retry", "重试")}
+              </Button>
+            </div>
+          ) : null}
           {enabled.filter(matches).length > 0 && (
             <>
               <div className={styles.providersGroupLabel}>{text("Enabled", "已启用")}</div>
@@ -231,7 +247,6 @@ export function ProvidersSection({ initialProviderId }: { initialProviderId?: st
             )}
           </div>
         </div>
-      </div>
-    </div>
+    </SettingsPage>
   );
 }

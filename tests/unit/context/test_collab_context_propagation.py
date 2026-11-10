@@ -7,7 +7,7 @@ reply back to its dispatcher (which starts empty). What the follow-up
 turn sees decides whether the message budget can ever be spent and
 whether jobs spawned from it stay inside the cascade.
 
-Design: docs/reference/design/runtime/collaboration/agent-collaboration.md §5.1, §5.3.
+Design: docs/reference/design/runtime/collaboration/agent-collaboration.html §5.1, §5.3.
 """
 from __future__ import annotations
 
@@ -179,7 +179,7 @@ def test_followup_can_create_the_next_wave_of_agents(tmp_db, monkeypatch):
               caller_chain_generations=0),
         monkeypatch, inside=_spawn_again,
     )
-    assert "[agent refused]" not in seen["inside"]
+    assert "[blocked by setting]" not in seen["inside"]
     assert "(second wave)" in seen["inside"]
 
 

@@ -80,3 +80,13 @@ def test_programs_is_the_one_command_group_for_programs():
     assert entry.operation is None and entry.arg == ["text=hi"]
     assert parser.parse_args(["programs", "disable", "example.pdf-editor"]).id == "example.pdf-editor"
     assert parser.parse_args(["programs", "status", "run-1"]).run_id == "run-1"
+
+
+def test_dev_deploy_builds_the_dev_branch_unless_a_ref_is_named():
+    from openprogram.interfaces.cli.parser import build_parser
+    from openprogram.operations.worker import dev_instance
+
+    parser = build_parser()
+    # ``main`` is the published line; deploying it would serve the last release.
+    assert parser.parse_args(["dev", "deploy"]).ref == dev_instance.DEV_BRANCH
+    assert parser.parse_args(["dev", "deploy", "abc123"]).ref == "abc123"

@@ -17,6 +17,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 
 import { useSessionStore } from "@/lib/session-store";
+import { refillItemIds, takeRefillFiles, takeRetractRefills, useRewindStore } from "@/lib/chat/rewind/rewind-store";
 import { desktopBridge } from "@/lib/desktop/desktop-bridge";
 import { localSourcePath } from "@/lib/chat/send/attachment-marker";
 import {
@@ -484,7 +485,7 @@ export function useComposerAttachments(
   // Images go to the image strip, text files to inline tiles, binary
   // to placeholder tiles. Nothing is rejected — everything dropped
   // shows up so the user always sees feedback.
-  const processDroppedFiles = useCallback(async (files: File[], entries = new Map<File, DroppedEntry>()) => {
+  const processDroppedFiles = useCallback(async (files: File[], entries = new Map<File, DroppedEntry>(), refillId?: number) => {
     if (files.length === 0) return;
     const ownerKey = activeChatKeyRef.current;
     const current = (ownerKey
@@ -510,6 +511,7 @@ export function useComposerAttachments(
       sourcePath: localSourcePath(f, desktopBridge()),
       loading: true,
       order,
+      ...(refillId === undefined ? {} : { refillId }),
     }));
     const docPlaceholders: PendingDoc[] = planned.docs.map(({ file: f, order }) => ({
       id: `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
@@ -524,6 +526,7 @@ export function useComposerAttachments(
       sizeBytes: f.size,
       loading: true,
       order,
+      ...(refillId === undefined ? {} : { refillId }),
     }));
     addImagesForOwner(ownerKey, imagePlaceholders);
     addDocsForOwner(ownerKey, docPlaceholders);
@@ -808,6 +811,26 @@ export function useComposerAttachments(
       },
     };
   }, [noteAttachmentRemoval, publishAttachments]);
+
+  // A rewind hands its message's attachments to this conversation's composer,
+  // and its Undo or the next rewind takes those same items back out. The
+  // session's own record is read because items added in this commit are not
+  // in the rendered lists yet.
+  const refillFiles = useRewindStore((state) => (activeChatKey ? state.refillFiles[activeChatKey] : undefined));
+  const retractRefills = useRewindStore((state) => (activeChatKey ? state.retractRefills[activeChatKey] : undefined));
+  useEffect(() => {
+    if (!activeChatKey || !refillFiles) return;
+    for (const group of takeRefillFiles(activeChatKey) ?? []) {
+      void processDroppedFiles(group.files, new Map(), group.refillId);
+    }
+  }, [activeChatKey, refillFiles, processDroppedFiles]);
+  useEffect(() => {
+    if (!activeChatKey || !retractRefills) return;
+    const refills = takeRetractRefills(activeChatKey) ?? [];
+    const held = attachmentsByChatRef.current.get(activeChatKey);
+    refillItemIds(held?.images ?? pendingImagesRef.current, refills).forEach(removeImage);
+    refillItemIds(held?.docs ?? pendingDocsRef.current, refills).forEach(removeDoc);
+  }, [activeChatKey, retractRefills, removeImage, removeDoc]);
 
   return {
     pendingImages,

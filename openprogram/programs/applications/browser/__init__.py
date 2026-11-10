@@ -35,7 +35,7 @@ PROGRAM_ENTRIES = [_web_use.web_use]
 ENTRY_OPTIONS = {
     "web_use": {
         "toolset": ("browser",),
-        "unsafe_in": ("wechat", "telegram", "plan"),
+        "unsafe_in": ("plan",),
         "requires_approval": _web_use._web_use_requires_approval,
         "defer": True,
         "timeout": 120,

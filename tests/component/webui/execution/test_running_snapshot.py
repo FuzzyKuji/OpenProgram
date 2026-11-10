@@ -40,22 +40,25 @@ def test_collect_includes_running_tool_calls():
 
 
 def test_collect_includes_canonical_ui_projection(monkeypatch):
-    from openprogram.runtime.execution.projections import ExecutionProjectionRecord
+    from openprogram.runtime.execution.event_effects import RunningExecution
 
-    projection = ExecutionProjectionRecord(
-        projection_kind="ui",
-        event_sequence=7,
+    projection = RunningExecution(
         execution_id="exec-canonical",
         session_id="session-canonical",
         status="running",
         payload={
             "execution": {"created_at": 123.0},
             "ui": {"label": "workflow.run"},
+            "event_cursor": {
+                "execution_id": "exec-canonical",
+                "next_sequence": 8,
+                "snapshot_status_version": 7,
+            },
         },
-        created_at=123.0,
+        updated_at=123.0,
     )
     monkeypatch.setattr(
-        "openprogram.runtime.execution.projections.list_running_execution_projections",
+        "openprogram.runtime.execution.event_effects.list_running_executions",
         lambda: [projection],
     )
     snapshot = {

@@ -23,7 +23,6 @@ from __future__ import annotations
 import json
 import threading
 import time
-from pathlib import Path
 from typing import Any, Optional
 import logging
 
@@ -48,14 +47,14 @@ def current_session_id() -> Optional[str]:
         return None
 
 
-def todos_path(session_id: str) -> Optional[Path]:
+def todos_path(session_id: str):
     """Path to the session's todos.json, or None when the session repo
     doesn't exist."""
     from openprogram.runtime.context.session_db import default_db
-    sdir = default_db()._session_dir(session_id)  # noqa: SLF001 — same as inbox.py
-    if not sdir.exists():
+    sessions = default_db()
+    if not sessions._session_dir(session_id).exists():  # noqa: SLF001 — same as inbox.py
         return None
-    return sdir / "todos.json"
+    return sessions.state_file(session_id, "todos.json")
 
 
 def _read(session_id: str) -> dict[str, Any]:
@@ -89,12 +88,7 @@ def save(session_id: str, todos: list[dict[str, Any]], plans: Optional[list[dict
     if plans is None:
         plans = load_plans(session_id)
     payload = {"version": 2, "todos": todos, "plans": plans}
-    tmp = path.with_suffix(".json.tmp")
-    tmp.write_text(
-        json.dumps(payload, ensure_ascii=False, indent=2),
-        encoding="utf-8",
-    )
-    tmp.replace(path)
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 def next_id(todos: list[dict[str, Any]]) -> str:

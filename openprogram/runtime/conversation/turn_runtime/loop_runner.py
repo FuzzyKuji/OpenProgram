@@ -1,8 +1,8 @@
 """Agent-loop run stage — pipeline step 4 (dispatcher-split).
 
 ``run_loop_blocking`` builds the AgentContext (profile → tools → system
-prompt → model), routes history through the context engine (snip +
-auto-compact), kicks off ``agent_loop`` and drains its EventStream to
+prompt → model), routes history through the context engine
+(auto-compact), kicks off ``agent_loop`` and drains its EventStream to
 completion inside a fresh asyncio loop.
 
 Re-exported by ``__init__.py`` as ``_run_loop_blocking`` — the seam
@@ -47,8 +47,7 @@ from openprogram.runtime.conversation.model_tools import (
 from openprogram.runtime.conversation.turn_runtime.runtime_attach import _wrap_agentic_runtime_block
 from openprogram.runtime.conversation.checkpoint import runtime_contract_snapshot
 from openprogram.models.providers.utils.http_client import shutdown_loop_clients as _shutdown_loop_clients
-from openprogram.runtime.execution.agent_checkpoint import validate_runtime_contract
-from openprogram.runtime.conversation.checkpoint import provider_context_from_effect
+from openprogram.runtime.execution.runtime_contract import validate_runtime_contract
 
 if TYPE_CHECKING:
     from openprogram.runtime.conversation.turn_runtime.types import EventCallback
@@ -302,6 +301,44 @@ def _retain_saved_contract_tools(tools, saved_runtime_contract: Mapping | None):
     return [live[name] for name in names if name in live]
 
 
+def _prompt_channel(req) -> str:
+    """The channel the system prompt is written for.
+
+    A turn sent from the App to a chat bound to a channel conversation (its
+    session names a ``channel``) has its replies delivered to that channel
+    as text, so it is not written for the App: the App's drawing guide
+    (```visual blocks) is left out of its prompt.
+    """
+    source = req.source or ""
+    if source != "web":
+        return source
+    try:
+        from openprogram.runtime.context.session_db import default_db
+        session = default_db().get_session(req.session_id) or {}
+    except Exception:  # noqa: BLE001 - no store means no binding
+        return source
+    return "" if str(session.get("channel") or "").strip() else source
+
+
+
+def _chat_delivery(req) -> str | None:
+    """Who reads this turn's reply: a channel name, "" for the App alone, or
+    None when the turn is not a message to the user at all (a verifier, a
+    sub-agent, a self-update step)."""
+    source = req.source or ""
+    if req.goal_verification or req.spawned_from_session or source == "agent_spawn" or source.startswith("self_update_"):
+        return None
+    from openprogram.programs.tools.interaction.chat_send import CHANNEL_SOURCES
+    if source in CHANNEL_SOURCES:
+        return source
+    from openprogram.runtime.conversation import bound_reply
+    try:
+        target = bound_reply.reply_target(req.session_id)
+    except Exception:  # noqa: BLE001 - no store means no binding
+        return ""
+    return target.channel if target is not None else ""
+
+
 def resolve_agent_runtime(
     req: "TurnRequest", *, assistant_msg_id: Optional[str] = None,
     on_event: Optional["EventCallback"] = None,
@@ -315,19 +352,31 @@ def resolve_agent_runtime(
         deepcopy(req.profile_snapshot) if req.profile_snapshot is not None
         else _dispatcher._load_agent_profile(req.agent_id)
     )
+    # Plan's hiding is per provider call (lifecycle.wrap_live_permission), not
+    # here: a turn whose mode changes keeps the tools the new mode allows.
     tools = _resolve_tools(agent_profile, req.tools_override, source=req.source)
     from openprogram.state.memory.policy import allowed as _memory_allowed
     from openprogram.programs.tools.knowledge.memory import MEMORY_TOOL_NAMES
     tools = [tool for tool in tools or [] if tool.name not in MEMORY_TOOL_NAMES or _memory_allowed(write=tool.name == "memory_update")]
-    # Reports and handoffs belong to conversations whose Agent is always-on;
-    # a sub-agent's turn there does not hand work over.
-    always_on_only = {"always_on_report", "handoff"}
+    # Reports, self-scheduled wakes, report preferences and handoffs belong
+    # to conversations whose Agent is always-on; a sub-agent's turn there
+    # does not hand work over (a background check-in, also off the head, may).
+    from openprogram.runtime.permissions.identity import SCHEDULER_SPEAKER, outside_text
+    always_on_only = {"always_on_report", "always_on_schedule", "always_on_preference", "handoff"}
     if any(tool.name in always_on_only for tool in tools):
         from openprogram.runtime.conversation.always_on import agent_for_session
         if agent_for_session(req.session_id) is None:
             tools = [tool for tool in tools if tool.name not in always_on_only]
-        elif not req.advance_head or req.spawned_from_session:
+        elif (not req.advance_head and not req.background) or req.spawned_from_session:
             tools = [tool for tool in tools if tool.name != "handoff"]
+        # A scheduled run reports with its reply; it runs in its own process,
+        # where a report would reach neither the page nor the channels.
+        if req.speaker_id == SCHEDULER_SPEAKER:
+            tools = [tool for tool in tools if tool.name != "always_on_report"]
+        # A preference binds every later check-in and scheduled run, so only
+        # the owner's own turn writes one, never work a page or a message drives.
+        if req.speaker_id == SCHEDULER_SPEAKER or req.spawned_from_session or outside_text(req):
+            tools = [tool for tool in tools if tool.name != "always_on_preference"]
     # chat_send posts into the chat a channel turn came from; no other
     # source has one.
     from openprogram.programs.tools.interaction.chat_send import CHANNEL_SOURCES
@@ -425,7 +474,8 @@ def resolve_agent_runtime(
     # rebuilding them is neither necessary nor the context we will execute.
     recordable_prompt = saved_system_prompt if saved_system_prompt is not None else build_system_prompt(
         agent_profile, tools=tools,
-        channel=req.source,
+        channel=_prompt_channel(req),
+        chat_delivery=_chat_delivery(req),
         additional_working_dirs=getattr(req, "additional_working_dirs", None),
         plan_mode=req.permission_mode == "plan" or _plan_mode.is_plan_mode(req.session_id),
     )
@@ -436,13 +486,15 @@ def resolve_agent_runtime(
         else:
             from openprogram.programs.tools.planning.goal.chat import instructions
             system_prompt += instructions(req.session_id)
+        from openprogram.runtime.conversation.rewind_marks import take_rewind_note
+        system_prompt += take_rewind_note(req.session_id)
     # This call's sections (L2): the open browser Pages, when the browser
     # application is loaded.
     from openprogram.runtime.context.components import build_turn_sections
     surface_prompt = build_turn_sections(
         agent_profile,
         {"surface_context": req.surface_context, "web_use_enabled": web_use_enabled},
-        channel=req.source, tools=tools,
+        channel=_prompt_channel(req), tools=tools,
     )
     if surface_prompt and saved_system_prompt is None:
         system_prompt = f"{system_prompt}\n\n{surface_prompt}"
@@ -472,7 +524,7 @@ def with_current_location(snapshot: dict, session_id: str) -> dict:
 
 
 def _continuation_agent_context(req, continuation, *, db, model, tools, runtime_contract):
-    """Rebuild a resumed turn's AgentContext from its checkpoint, without the context engine."""
+    """Rebuild a resumed turn's AgentContext from its journal, without the context engine."""
     from openprogram.runtime.agent.loop.types import AgentContext
 
     # Resume is not a new user turn.  Re-running the context engine would
@@ -492,28 +544,26 @@ def _continuation_agent_context(req, continuation, *, db, model, tools, runtime_
     from openprogram.state.store.session.session_node_writer import SessionNodeWriter
 
     graph = SessionNodeWriter(db, req.session_id).load()
-    anchor = getattr(req, "_steering_tail_id", None) or continuation.state.payload["turn"]["user_message_id"]
+    anchor = continuation.user_message_id
     if anchor not in graph.nodes:
         raise ValueError("Agent checkpoint user anchor is not in the session graph")
-    # provider.before persists the exact provider message list in its
-    # committed effect. Reuse it on restart so tool results from earlier
-    # decisions in the same turn are retained. Runtime steering is then
-    # appended by agent_loop's existing queue handling.
-    from openprogram.runtime.execution.store import default_store as default_execution_store
-
-    context_messages = provider_context_from_effect(
-        continuation, continuation.execution_store or default_execution_store()
+    # The history ends at the turn's user message. What the turn did after it
+    # (earlier decisions, their results, steering) comes from the journal.
+    # A clean run started from its own message, and resumes from it.
+    read_ids = (
+        [anchor] if req.history_override == []
+        else render_context(graph, head_id=anchor, frame_entry_seq=-1)
     )
-    if context_messages is None:
-        context_messages = render_dag_messages(
-            graph,
-            render_context(graph, head_id=anchor, frame_entry_seq=-1),
-        )
+    context_messages = [
+        *render_dag_messages(graph, read_ids),
+        *continuation.prior_messages(),
+    ]
     return AgentContext(
         system_prompt=durable_prompt,
         messages=context_messages,
         tools=tools,
         memory_prefetch="",
+        run_note=req.run_note,
         runtime_contract=runtime_contract,
     )
 
@@ -525,8 +575,9 @@ def _auto_compact_new_turn(
     """Compact the session into a durable summary node when the new turn is over budget."""
     # Auto-compact FIRST: the durable fix. It writes a summary node
     # into the DAG, so the shrink survives this turn (panel, next
-    # turns, reload). Snip runs only as a fallback below.
-    if req.history_override is None and context_engine.should_auto_compact(prep):
+    # turns, reload). A background
+    # turn reads a bounded tail instead: the conversation is the owner's.
+    if req.history_override is None and not req.background and context_engine.should_auto_compact(prep):
         try:
             loop = asyncio.new_event_loop()
             try:
@@ -565,44 +616,6 @@ def _auto_compact_new_turn(
     return history, prep
 
 
-def _snip_new_turn(
-    context_engine, req, *, db, on_event, agent_profile, model, tools,
-    system_prompt, session, history, prep,
-):
-    """Drop the oldest turns when the new turn is still over budget after compaction."""
-    # Snip fallback: compact failed, was skipped (<4 messages), or the
-    # summary alone didn't free enough. This is only for a new turn.
-    if req.history_override is None and context_engine.should_auto_compact(prep):
-        try:
-            from openprogram.runtime.context.snip import snip
-            from openprogram.runtime.context.tokens import count_tokens
-            snipped, n_snipped = snip(
-                prep.history_dicts,
-                token_counter=lambda msgs: count_tokens(msgs, model),
-                context_window=prep.context_window,
-            )
-            if n_snipped > 0:
-                history = snipped
-                prep = context_engine.prepare(
-                    agent=agent_profile,
-                    session=db.get_session(req.session_id) or session,
-                    history=history,
-                    model=model,
-                    tools=tools,
-                    system_prompt=system_prompt,
-                )
-                on_event({"type": "chat_response",
-                          "data": {"type": "snip",
-                                   "session_id": req.session_id,
-                                   "turns_removed": n_snipped}})
-        except Exception:
-            _log.warning(
-                "history snip failed for session %s",
-                req.session_id, exc_info=True,
-            )
-    return history, prep
-
-
 def _recalled_memory_prefetch(db, req, *, assistant_msg_id, history) -> str:
     """Read the memory recalled for this turn from its user node."""
     # Memory recalled for a new turn. ``process_user_turn`` stamped it on
@@ -637,9 +650,15 @@ def _new_turn_agent_context(
     record_system_prompt(db, req.session_id, recordable_system_prompt)
     session = db.get_session(req.session_id) or {}
     from openprogram.runtime.context import Context
+    from openprogram.runtime.context.tail import BACKGROUND_TAIL_TOKENS
     request_context = Context.current()
     if request_context is not None:
         history = request_context.filter_history(history)
+    # Only the turns that need them pass these, so a registered engine that
+    # predates them keeps serving every ordinary turn.
+    bounded = {"tail_tokens": BACKGROUND_TAIL_TOKENS} if req.background else {}
+    if req.history_override == []:
+        bounded["clean_history"] = True
     prep = _ctx_engine.prepare(
         agent=agent_profile,
         session=session,
@@ -647,13 +666,13 @@ def _new_turn_agent_context(
         model=model,
         tools=tools,
         system_prompt=system_prompt,
+        **bounded,
     )
     budget = dict(
         db=db, on_event=on_event, agent_profile=agent_profile, model=model,
         tools=tools, system_prompt=system_prompt, session=session,
     )
     history, prep = _auto_compact_new_turn(_ctx_engine, req, history=history, prep=prep, **budget)
-    history, prep = _snip_new_turn(_ctx_engine, req, history=history, prep=prep, **budget)
     return AgentContext(
         system_prompt=system_prompt,
         messages=prep.agent_messages,
@@ -661,6 +680,7 @@ def _new_turn_agent_context(
         memory_prefetch=_recalled_memory_prefetch(
             db, req, assistant_msg_id=assistant_msg_id, history=history,
         ),
+        run_note=req.run_note,
         runtime_contract=runtime_contract,
     )
 
@@ -671,7 +691,7 @@ def _restore_continuation_runtime(continuation, runtime_contract) -> None:
     from openprogram.runtime.execution import default_store
     validate_runtime_contract(continuation.resolved_snapshot, runtime_contract, durable_function_names=retained_function_names(default_store(), continuation.checkpoint.execution_id))
     from openprogram.programs._host.runtime import mark_deferred_loaded
-    mark_deferred_loaded(list(continuation.state.payload.get("loaded_deferred_tools", [])))
+    mark_deferred_loaded(continuation.loaded_deferred_tools)
 
 
 def _steering_source(req, *, model, db, assistant_msg_id, execution_context):
@@ -738,6 +758,7 @@ def _steering_source(req, *, model, db, assistant_msg_id, execution_context):
             "steering": True,
             "command_id": command_id,
             "agent_id": req.agent_id,
+            "origin": "person",
         }
         from openprogram.state.memory.policy import stamp
         metadata.update(stamp(req))
@@ -752,6 +773,9 @@ def _steering_source(req, *, model, db, assistant_msg_id, execution_context):
                 if callable(persist) and isinstance(command_id, str)
                 else contextlib.nullcontext()
             )
+            message = UserMessage(content=[TextContent(text=text), *_steer_images(payload)],
+                                  timestamp=int(timestamp * 1000))
+            record_steer = (execution_context or {}).get("record_steer")
             with delivery:
                 writer = SessionNodeWriter(db, req.session_id, advance_head=False)
                 # Replay the idempotent append even when the memory index has
@@ -767,6 +791,8 @@ def _steering_source(req, *, model, db, assistant_msg_id, execution_context):
                 writer.update(assistant_msg_id, predecessor=message_id)
                 if not db.has_persisted_ancestor(req.session_id, message_id, assistant_msg_id):
                     raise RuntimeError("steering message is not persisted in the assistant branch")
+                if callable(record_steer) and isinstance(command_id, str):
+                    record_steer(command_id, message_id, message.model_dump(mode="json"))
         except Exception as exc:
             if isinstance(durable_steer_consumed_ids, set) and isinstance(command_id, str):
                 durable_steer_consumed_ids.discard(command_id)
@@ -785,8 +811,6 @@ def _steering_source(req, *, model, db, assistant_msg_id, execution_context):
             )
             return []
         req._steering_tail_id = message_id
-        message = UserMessage(content=[TextContent(text=text), *_steer_images(payload)],
-                              timestamp=int(timestamp * 1000))
         # The producer can run ahead of the event consumer. Publish only when
         # its message_start reaches the ordered event stream, after prior output.
         delivered_steers[id(message)] = {
@@ -875,7 +899,7 @@ def _permission_context_transform(req, continuation):
                 f"[Runtime permission setting, owner-confirmed version {version}] "
                 f"The current permission mode is {current.permission_mode}. "
                 "Use this current mode instead of earlier mode descriptions. "
-                "Authority, explicit rules, mandatory approvals, and Sandbox still apply."
+                "Limits on who you are, the owner's rules, and Sandbox when it is on still apply."
             ))], timestamp=0,
         )]
 
@@ -1086,6 +1110,7 @@ def _record_turn_end(ev, tally: _TurnTally, *, req, on_event, ordered_blocks_out
     text = _extract_text(msg)
     if text:
         tally.final_text_parts.append(text)
+        req.last_round_text = text
     usage = _extract_usage(msg)
     if usage.get("service_tiers"):
         tally.usage_total.setdefault("service_tiers", []).extend(usage["service_tiers"])

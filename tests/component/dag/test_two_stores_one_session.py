@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from openprogram.state.store.session.git_session import GitSession
+from openprogram.state.store.session.session_log import SessionLog
 
 
 def test_our_write_does_not_hide_an_earlier_foreign_write(tmp_path: Path) -> None:
@@ -11,7 +11,7 @@ def test_our_write_does_not_hide_an_earlier_foreign_write(tmp_path: Path) -> Non
     made its store skip the placeholder forever, and the resume after an
     approval failed with "continuation assistant placeholder is missing".
     """
-    first, second = GitSession(tmp_path / "s1"), GitSession(tmp_path / "s1")
+    first, second = SessionLog(tmp_path / "s1"), SessionLog(tmp_path / "s1")
     first.write_history(0, "user", "u1", {"id": "u1"})
     first.mark_synced()
     second.mark_synced()
@@ -23,7 +23,7 @@ def test_our_write_does_not_hide_an_earlier_foreign_write(tmp_path: Path) -> Non
 
 
 def test_our_own_write_keeps_the_index_synced(tmp_path: Path) -> None:
-    session = GitSession(tmp_path / "s1")
+    session = SessionLog(tmp_path / "s1")
     session.write_history(0, "user", "u1", {"id": "u1"})
     session.mark_synced()
     session.write_history(1, "llm", "reply", {"id": "reply"})

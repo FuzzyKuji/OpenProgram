@@ -237,30 +237,35 @@ def _wrap_agentic_runtime_block(
                 work_dir = current_worktree_path()
 
                 def _run_subprocess():
-                    from openprogram.runtime.conversation import plan_mode
                     from openprogram.runtime.permissions.lifecycle import current_permission_request
 
+                    from openprogram.runtime.permissions.identity import detached_from_window
+
                     effective_req = current_permission_request(req)
-                    if plan_mode.is_plan_mode(req.session_id):
-                        effective_req.permission_mode = "plan"
+                    detached = detached_from_window(req)
                     surface_snapshot = req.surface_context
                     captured_surface = None
                     if surface_snapshot is None:
                         from openprogram.runtime.conversation import surface_context
-                        from openprogram.runtime.permissions.policy import permission_decision
+                        from openprogram.runtime.permissions.policy import permission_decision, surface_grant_applies
                         from openprogram.programs import get_agent_tool
 
                         web_tool = get_agent_tool("web_use")
+                        list_pages = {"command": "list_pages"}
                         decision = permission_decision(
-                            web_tool, effective_req, {"command": "list_pages"},
+                            web_tool, effective_req, list_pages,
                         ) if web_tool is not None else None
-                        if decision is not None and decision[:2] == ("allow", "SURFACE_GRANT"):
+                        if (decision is not None and decision.outcome == "allow"
+                                and surface_grant_applies("web_use", effective_req, list_pages)):
                             try:
                                 captured_surface = surface_context.capture_pages()
                             except RuntimeError:
                                 # An unavailable inventory cannot create a Page grant.
                                 pass
-                            surface_snapshot = captured_surface
+                            surface_snapshot = (
+                                surface_context.without_primary_page(captured_surface)
+                                if detached and captured_surface else captured_surface
+                            )
                     # The agent gets its budget as max_seconds so it stops
                     # itself and returns its history; the process is killed
                     # only if it overruns the budget plus a grace period.
@@ -295,6 +300,7 @@ def _wrap_agentic_runtime_block(
                                 _permission_rules_snapshot(effective_req.permission_rules)
                             ),
                             surface_context_snapshot=surface_snapshot,
+                            detached=detached,
                             permission_mode_snapshot=effective_req.permission_mode,
                             render_range=req.render_range,
                             timeout_seconds=limits.timeout_seconds,
@@ -491,7 +497,7 @@ def _wrap_agentic_runtime_block(
 
         # The Agent method ran in a spawn()'d subprocess (see
         # process_runner.py). That child wrote every nested code /
-        # tool / LLM Call directly to the session's git history via
+        # tool / LLM Call directly to the session's log history via
         # its OWN SessionStore. The parent worker's cached
         # SessionMemoryIndex never observed those writes, so any
         # subsequent build_branches_payload / get_messages would

@@ -36,7 +36,7 @@ def _ready(profile: Path, monkeypatch) -> None:
             assertions=("Behavior works",),
         )
     )
-    store.transition("su_maintenance", UpdatePhase.STAGING)
+    store.transition("su_maintenance", UpdatePhase.BUILDING)
     store.transition("su_maintenance", UpdatePhase.READY)
 
 
@@ -79,6 +79,7 @@ def test_dispatcher_rejects_new_turn_without_persisting_it(tmp_path, monkeypatch
     assert result.failed is True
     assert result.error_reason == "SELF_UPDATE_MAINTENANCE"
     assert events[-1]["data"]["reason_code"] == "SELF_UPDATE_MAINTENANCE"
+    assert "did not run" in result.error and "approved update" not in result.error
 
 
 def test_maintenance_symlink_fails_closed(tmp_path, monkeypatch) -> None:

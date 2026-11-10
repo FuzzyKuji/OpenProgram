@@ -451,7 +451,7 @@ def test_terminal_maintenance_uses_only_saved_controller(tmp_path, monkeypatch, 
         return 0, "loaded"
     monkeypatch.setattr(launcher, "_launchctl", launchctl)
     launch_supervisor("su_launch")
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY):
         store.transition("su_launch", phase)
     store._write_json(store.root / "maintenance.json", dict(schema=1, update_id="su_launch", entered_at=time.time()))
     if outcome != "aborted":

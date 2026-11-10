@@ -14,11 +14,19 @@ def head(store, session_id: str) -> str | None:
     return (store.get_session(session_id) or {}).get("head_id")
 
 
-def cas_for_intent(store, session_id: str, intent: dict, expected, target) -> bool:
+def cas_for_intent(
+    store, session_id: str, intent: dict, expected, target, *, rollback: bool = False,
+) -> bool:
+    """Move HEAD for a rewind journal entry.
+
+    ``rollback`` names the direction, which the heads alone cannot tell when a
+    code-only rewind keeps HEAD where it is.
+    """
     source_branch_id = intent.get("source_branch_id")
     target_branch_id = intent.get("target_branch_id")
     forward = (
-        expected == intent.get("expected_head_id")
+        not rollback
+        and expected == intent.get("expected_head_id")
         and target == intent.get("target_head_id")
     )
     update = None
@@ -53,8 +61,8 @@ def recover_session_rewinds(session_id: str, *, store=None) -> list[dict]:
         journal = CheckpointStore(store._session_dir(session_id))
         recovered = journal.recover_rewind_intents(
             get_head=lambda: head(store, session_id),
-            compare_and_set_head=lambda intent, expected, target: cas_for_intent(
-                store, session_id, intent, expected, target,
+            compare_and_set_head=lambda intent, expected, target, rollback=False: cas_for_intent(
+                store, session_id, intent, expected, target, rollback=rollback,
             ),
         )
         return recovered + journal.recover_history_intents()

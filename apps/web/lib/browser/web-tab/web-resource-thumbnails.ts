@@ -64,7 +64,7 @@ async function shrink(dataUrl: string): Promise<string | null> {
 export function refreshWebResourceThumbnail(tabId: string, operationId: string | null, force = false): void {
   const current = useWebResourceThumbnails.getState().shots[tabId];
   if (!force && current && current.operationId === operationId) return;
-  const capture = desktopBridge()?.webTab.capture;
+  const capture = desktopBridge()?.webTab?.capture;
   if (!capture || inFlight.has(tabId)) return;
   inFlight.add(tabId);
   // "presentation" is the page as laid out in its own tab, also when the

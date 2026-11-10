@@ -71,7 +71,7 @@ def test_a_conversation_with_turns_moves_with_its_recovery_tree(env, tmp_path):
 
     assert result == {"from_project_id": a.id, "project_id": b.id, "moved": True}
     after = env.root_path / b.id / "chats" / "s1"
-    assert not before.exists() and (after / "meta.json").is_file()
+    assert not before.exists() and (after / "main.jsonl").is_file()
     assert env._session_dir("s1") == after
     assert (after.parent / ".file-recovery" / "s1" / "t1" / "x.txt").read_text(encoding="utf-8") == "undo"
     assert P.project_for_session("s1").id == b.id

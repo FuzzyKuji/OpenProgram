@@ -189,10 +189,8 @@ def run_cli_chat(oneshot: str | None = None,
             sys.exit(1)
     model = getattr(rt, "model", "?")
 
-    from openprogram.runtime.agent_registry import manager as _A
-    agent = _A.get_default()
-    if agent is None:
-        agent = _A.create("main", make_default=True)
+    from openprogram.runtime.agent_registry.builtin_agents import ensure_default_agent
+    agent = ensure_default_agent()
 
     # Rich REPL fallback / oneshot path. For the chat REPL, the banner
     # below already shows agent + session — no need for a separate

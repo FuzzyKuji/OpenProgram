@@ -1,4 +1,4 @@
-"""Rendered chat retains execution groups across public stream/history updates."""
+"""Rendered chat retains execution groups across published updates, the end of the turn and a read."""
 from pathlib import Path
 import subprocess
 
@@ -16,34 +16,34 @@ def test_chat_stream_snapshot_and_terminal_tree_keep_execution_groups(tmp_path, 
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {AssistantBubble} from './components/chat/messages/bubbles/assistant-bubble';
-import {useSessionStore} from './lib/session-store';
-import {applyChatWsMessage} from './lib/net/ws/chat-stream';
+import {useSessionStore,selectRow} from './lib/session-store';
 import {convToChatMsgs} from './lib/chat/transcript/conv-mapper';
 import {wsHandleChatResponse} from './lib/runtime-bridge/session/chat-handlers';
 import {runtimeState,setSocket} from './lib/runtime-bridge/state';
+import {publishedTurn} from './tests/_support/published-turn.mjs';
 const sid='fixture-chat',uid='turn',rid='turn_reply';
 window.requests=[];
 class Socket extends EventTarget {readyState=1;send(s){window.requests.push(JSON.parse(s));}}
 setSocket(new Socket());runtimeState.currentSessionId=sid;runtimeState.conversations[sid]={id:sid,messages:[]};
 useSessionStore.setState({currentSessionId:sid,activeChatKey:sid});
-window.send=event=>applyChatWsMessage({type:'chat_response',data:{type:'stream_event',session_id:sid,msg_id:uid,event}});
-window.tree=(path,status='running')=>{
- const data={type:'tree_update',session_id:sid,msg_id:rid,function:'web_use',tree:{path,name:'web_use',status,children:[{path:path+'-child',name:path+' child',status:'completed',output:path+' output'}]}};
- applyChatWsMessage({type:'chat_response',data});wsHandleChatResponse(data);
-};
+const turn=publishedTurn(sid,{id:uid,role:'user',rowKind:'user',content:'Use the web twice',status:'done'});
+turn.startReply();
+window.send=event=>turn.event(event);
+// A function's call tree is published on the reply, beside the block that called it.
+window.tree=(path,block,status='running')=>turn.callRoot({path,name:'web_use',status,blockId:block,children:[{path:path+'-child',name:path+' child',status:'completed',output:path+' output'}]});
 window.send({type:'tool_use',tool:'web_use',tool_call_id:'a',input:'{}'});
-window.tree('first');
+window.tree('first','a');
 window.send({type:'tool_result',tool:'web_use',tool_call_id:'a',result:'first result'});
 window.send({type:'text',text:'Between the two calls.'});
 window.send({type:'tool_use',tool:'web_use',tool_call_id:'b',input:'{}'});
-window.tree('second');
-window.stale=()=>useSessionStore.getState().setMessages(sid,convToChatMsgs([{id:rid,role:'assistant',status:'running',content:'Earlier snapshot',blocks:[{type:'tool',tool:'web_use',tool_call_id:'a',input:'{}'}]}]));
+window.tree('second','b');
 window.treeStatus=()=>wsHandleChatResponse({type:'status',session_id:sid,msg_id:uid,context_tree:{name:'root',children:[{name:'web_use',output:'legacy tree'}]}});
-window.finish=type=>applyChatWsMessage({type:'chat_response',data:{type,session_id:sid,msg_id:uid,content:type==='error'?'Fixture error':'Done'}});
-window.legacy=()=>useSessionStore.getState().updateMessage(sid,rid,{runtimeChildren:[{id:'legacy-runtime',role:'assistant',display:'runtime',function:'custom_agent',status:'done',content:'Legacy result'}]});
-window.snapshot=()=>structuredClone(useSessionStore.getState().messagesById[rid]);
-window.reload=()=>{const m=window.snapshot();useSessionStore.getState().setMessages(sid,convToChatMsgs([{id:rid,role:'assistant',status:m.status==='done'?'completed':m.status,content:m.content,blocks:m.blocks}]));};
-function App(){const msg=useSessionStore(s=>s.messagesById[rid]);return msg?<AssistantBubble msg={msg}/>:<div>Missing reply</div>;}
+const settled={result:'done',error:'error',cancelled:'cancelled'};
+window.finish=type=>{turn.frame({type,content:type==='error'?'Fixture error':'Done'});turn.publishReply({status:settled[type]});};
+window.legacy=()=>{const s=useSessionStore.getState();s.applyRead(sid,(s.messageOrder[sid]??[]).map(id=>id===rid?{...s.rowsByView[sid][id],runtimeChildren:[{id:'legacy-runtime',role:'assistant',display:'runtime',function:'custom_agent',status:'done',content:'Legacy result'}]}:s.rowsByView[sid][id]));};
+window.snapshot=()=>structuredClone(selectRow(sid,rid)(useSessionStore.getState()));
+window.reload=()=>{const m=window.snapshot();useSessionStore.getState().applyRead(sid,convToChatMsgs([{id:rid,role:'assistant',status:m.status==='done'?'completed':m.status,content:m.content,blocks:m.blocks}]));};
+function App(){const msg=useSessionStore(s=>selectRow(sid,rid)(s));return msg?<AssistantBubble msg={msg}/>:<div>Missing reply</div>;}
 createRoot(document.getElementById('mount')).render(<App/>);
 '''
     bundle = tmp_path / 'chat.js'
@@ -73,7 +73,7 @@ createRoot(document.getElementById('mount')).render(<App/>);
             page.locator('.tl').nth(1).locator('.tl-step-head').first.click()
             expect(page.locator('.tl').nth(0)).to_contain_text('first child')
             expect(page.locator('.tl').nth(1)).to_contain_text('second child')
-            for action in ['window.stale()', 'window.treeStatus()', f"window.finish('{terminal}')", "window.tree('second','completed')", 'window.stale()', 'window.reload()']:
+            for action in ['window.treeStatus()', f"window.finish('{terminal}')", "window.tree('second','b','completed')", 'window.reload()']:
                 page.evaluate(action)
                 expect(groups).to_have_count(2)
                 expect(groups.nth(0)).to_have_attribute('aria-expanded', 'true')

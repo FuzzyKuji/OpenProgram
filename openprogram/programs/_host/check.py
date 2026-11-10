@@ -4,7 +4,9 @@ A Python package is imported in a separate process, its
 ``PROGRAM_ENTRIES`` are checked against the entry contract, and its
 ``tests/`` run under pytest, inside the OS sandbox when one is available
 (no network, no writes to the package). When everything passes, the change
-is committed to the package's own Git repository, which makes it callable.
+is committed to the package's own Git repository and the commit is recorded
+in ``refs/openprogram/checked``. That ref is what makes it callable; a plain
+``git commit`` is not loaded.
 
 An application directory (``application.json``) is validated as the loader
 would mount it: the manifest, the package tree and, for a Python backend,
@@ -106,10 +108,10 @@ def _run_tests(directory: Path) -> dict:
         env = dict(os.environ)
         sandboxed = sys.platform in {"darwin", "linux"} and not sandbox.unavailable_reason()
         if sandboxed:
-            policy = sandbox._with_hard_floor(sandbox.SandboxPolicy(
+            policy = sandbox.SandboxPolicy(
                 deny_write=(*sandbox.DEFAULT_DENY_WRITE, str(directory), str(directory / "**")),
                 network=False,
-            ))
+            )
             argv, shell = sandbox.wrap_command(
                 command, str(instance), policy, private_tmp=True, allow_subprocesses=True,
                 read_only_roots=(_SOURCE_ROOT, str(directory.parent), sys.prefix, sys.base_prefix),
@@ -175,11 +177,11 @@ def check_program(directory: str | os.PathLike, *, message: str = "", commit: bo
     """Validate a Program directory; test and (on success) commit its package.
 
     The report names the ``kinds`` found (``package``, ``application``).
-    A package is probed, tested and committed; an application is
-    validated. Raises :class:`CheckFailed` with the report on any problem.
+    A package is probed, tested, committed and recorded as checked; an
+    application is validated. Raises :class:`CheckFailed` with the report on any problem.
     """
     from openprogram.state.program_directory import program_kinds
-    from openprogram.programs._host.packages import name_problem
+    from openprogram.programs._host.packages import GIT_MISSING, git_available, name_problem, record_checked
 
     path = Path(directory).expanduser().resolve()
     kinds = program_kinds(path)
@@ -214,7 +216,15 @@ def check_program(directory: str | os.PathLike, *, message: str = "", commit: bo
     else:
         report["tests"] = {"ran": False, "passed": True, "output": "No tests in tests/."}
     if commit:
+        if not git_available():
+            report["problems"] = [GIT_MISSING]
+            raise CheckFailed(GIT_MISSING, report)
         report["revision"], report["committed"] = _commit(path, message or "Update program")
+        try:
+            record_checked(path, report["revision"])
+        except (OSError, RuntimeError, subprocess.SubprocessError) as exc:
+            report["problems"] = [f"Cannot record the checked commit: {exc}"]
+            raise CheckFailed(report["problems"][0], report) from None
     report["ok"] = True
     return report
 

@@ -239,7 +239,10 @@ class ProvidersOperations:
 
             session_model = get_model(provider_id, model_id)
             if session_model is None:
-                raise ValueError(f"Unknown model override {requested_model!r}")
+                from openprogram.models.providers.catalog.suggestions import unknown_model_message
+
+                raise ValueError(unknown_model_message(provider_id, model_id).replace(
+                    "Unknown model", "Unknown model override", 1))
         return session_model
 
 

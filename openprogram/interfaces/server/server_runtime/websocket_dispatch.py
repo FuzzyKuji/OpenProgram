@@ -183,6 +183,9 @@ async def _websocket_handler(ws):
         from openprogram.interfaces.server.ws_actions.webtab import release_connection
 
         release_connection(ws)
+        from openprogram.interfaces.server.transcript import publisher
+
+        publisher.release(ws)
         with state._ws_lock:
             try:
                 state._ws_connections.remove(ws)
@@ -307,9 +310,9 @@ async def _handle_ws_command(ws, cmd: dict):
 
         raise OperationError("invalid_request", scope="system")
     state._validate_file_request(cmd, action)
-    if action in ("list_sessions", "load_session") and cmd.get("history_version") in (1, 2):
-        ws._history_protocol = 1
-        ws._bounded_history = cmd.get("history_version") == 2
+    # The web reads turns (history protocol 3); every other client gets plain rows.
+    if action in ("list_sessions", "load_session") and cmd.get("history_version") == 3:
+        ws._history_protocol = 3
     _log.debug("ws command received: action=%s", action)
 
     h = state.WS_ACTIONS.get(action)

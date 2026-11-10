@@ -1,169 +1,153 @@
-<style>
-.doc-intro { border-left: 3px solid var(--acc); padding: 4px 0 4px 18px; margin: 18px 0 28px; }
-.doc-flow { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 24px 0; }
-.doc-flow > div { padding: 16px; background: var(--bg-code); border-radius: 8px; min-width: 0; }
-.doc-flow strong { display: block; color: var(--tx); }
-.doc-flow p { margin: 8px 0 0; font-size: 14px; }
-.doc-scroll { max-width: 100%; overflow-x: auto; }
-.doc-scroll:focus-visible, summary:focus-visible { outline: 2px solid var(--acc); outline-offset: 3px; }
-code { overflow-wrap: anywhere; }
-details { padding: 12px 0; border-bottom: 1px solid var(--bd); }
-summary { cursor: pointer; font-weight: 600; }
-@media (max-width: 680px) { .doc-flow { grid-template-columns: 1fr; } }
-</style>
-<h1 id="repository-structure-implementation">仓库结构实现</h1>
-<div class="doc-intro"><p>供修改目录归属、公开 import 或打包的贡献者阅读。范围是仓库结构；本页不证明发布完成。</p></div>
-<div class="doc-flow" aria-label="实现归属">
-<div><strong>公开入口</strong><p>CLI 命令、HTTP/WebSocket 路由、Web 与 Desktop。</p></div>
-<div><strong>规范实现</strong><p>Web、Desktop 与 Ink 终端客户端位于 <code>apps/</code>；共享 Agent 核心与 Python Server、CLI 位于 <code>openprogram/</code>。</p></div>
-<div><strong>兼容性与验证</strong><p>保留公开 import，验证布局，并在 checkout 外验证打包。</p></div>
-</div>
-<p>本 <a href="repository-structure.zh.html">仓库结构设计</a> 定义归属与依赖边界。本页把这些边界映射到源码位置、兼容要求和验证。迁移顺序与既往审查输出可查 Git 历史，不代表当前验收结果。</p>
-<h2 id="implementation-map">实现映射<a class="header-anchor" href="#implementation-map">#</a></h2>
-<div class="doc-scroll" role="region" tabindex="0" aria-label="实现表"><table>
-<thead>
-<tr>
-<th>职责</th>
-<th>源码位置</th>
-<th>边界</th>
-</tr>
-</thead>
+<title>仓库结构实现</title>
+<meta name="description" content="各职责在哪里，核心如何通过端口访问接口层，布局改动如何验证。">
+<h1>仓库结构实现</h1>
+
+<h2 id="implementation-map">实现地图</h2>
+<table class="stack">
+<thead><tr><th scope="col">职责</th><th scope="col">位置</th><th scope="col">边界</th></tr></thead>
 <tbody>
-<tr>
-<td>Agent 核心与 SDK</td>
-<td><code>openprogram/</code></td>
-<td>共享运行时代码；Python Server 与 CLI 应用是其 <code>interfaces/server/</code> 和 <code>interfaces/cli/</code> package。</td>
-</tr>
-<tr>
-<td>HTTP 与 WebSocket 服务端</td>
-<td><code>openprogram/interfaces/server/</code></td>
-<td><code>server.py</code> 组装应用；与它同级的模块和子包负责传输处理器及辅助函数。</td>
-</tr>
-<tr>
-<td>Web 应用</td>
-<td><code>apps/web/</code></td>
-<td>前端源码；生成资产被整理后用于服务和打包。</td>
-</tr>
-<tr>
-<td>桌面应用</td>
-<td><code>apps/desktop/</code></td>
-<td>Electron 生命周期、原生集成、内置浏览器与打包。</td>
-</tr>
-<tr>
-<td>Python CLI 应用</td>
-<td><code>openprogram/interfaces/cli/</code></td>
-<td>该包负责 parser、命令、交互执行与设置。</td>
-</tr>
-<tr>
-<td>Ink 终端界面</td>
-<td><code>apps/cli/</code></td>
-<td>Node workspace 与终端界面构建。</td>
-</tr>
-<tr>
-<td>发布组装</td>
-<td><code>scripts/release/</code></td>
-<td>运行时构建、资产整理与发布验证。</td>
-</tr>
-<tr>
-<td>仓库维护</td>
-<td><code>scripts/</code></td>
-<td>文档构建器、DAG 检查与维护命令。</td>
-</tr>
+<tr><th scope="row">Agent 核心与 SDK</th><td><code translate="no">openprogram/</code></td><td>共享运行时代码</td></tr>
+<tr><th scope="row">HTTP 和 WebSocket 服务器</th><td><code translate="no">openprogram/interfaces/server/</code></td><td><code translate="no">server.py</code> 组装；旁边的模块负责传输处理和工具；路由（含 Agent 配置）按产品领域归入 <code translate="no">routes/</code></td></tr>
+<tr><th scope="row">Web 应用</th><td><code translate="no">apps/web/</code></td><td>源码；生成资源暂存后用于服务和打包</td></tr>
+<tr><th scope="row">桌面应用</th><td><code translate="no">apps/desktop/</code></td><td>Electron 生命周期、原生集成、内嵌浏览器、打包</td></tr>
+<tr><th scope="row">Python CLI</th><td><code translate="no">openprogram/interfaces/cli/</code></td><td>解析器、命令、交互执行、设置</td></tr>
+<tr><th scope="row">Ink 终端 UI</th><td><code translate="no">apps/cli/</code></td><td>Node 工作区和终端 UI 构建</td></tr>
+<tr><th scope="row">发布组装</th><td><code translate="no">scripts/release/</code></td><td>运行时构建、资源暂存、发布验证</td></tr>
+<tr><th scope="row">仓库维护</th><td><code translate="no">scripts/</code></td><td>文档构建、DAG 检查、维护命令</td></tr>
 </tbody>
-</table></div>
-<p>来源： <a href="https://github.com/FuzzyKuji/OpenProgram/tree/main/apps">应用 workspace</a>,
-<a href="https://github.com/FuzzyKuji/OpenProgram/tree/main/openprogram">核心</a>以及
-<a href="https://github.com/FuzzyKuji/OpenProgram/tree/main/scripts">维护脚本</a>.</p>
-<h2 id="compatibility-and-remaining-ownership">兼容性与剩余归属<a class="header-anchor" href="#compatibility-and-remaining-ownership">#</a></h2>
-<p>core package 内没有应用的兼容命名空间。所有导入方（包括测试和脚本）都写真实模块名：
-<code>openprogram.interfaces.server.server</code>、<code>openprogram.interfaces.server.*</code> 与
-<code>openprogram.interfaces.cli.*</code>。<code>openprogram</code> console script、<code>python -m openprogram</code>
-与 <code>python -m openprogram.interfaces.cli</code> 都运行 <code>openprogram.interfaces.cli.application.main</code>；
-<code>python -m openprogram.interfaces.server</code> 在前台启动 Server。editable install 与 wheel 都映射这三个顶层包，
-这些入口都不需要 <code>PYTHONPATH</code>。</p>
-<p>包括 Agent profiles 在内的路由实现位于
-<code>openprogram/interfaces/server/routes/</code> 并按产品域分组。</p>
-<p>core 从不 import 任何界面。core 代码需要只有界面才有的东西时，调用 core 里的一个端口；界面加载时把自己注册到端口上。没有注册时，端口的回答与没有客户端连接时相同：</p>
+</table>
+
+<h2 id="compatibility-and-remaining-ownership">入口与兼容</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">入口</th><th scope="col">运行</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram</code>、<code translate="no">python -m openprogram</code>、<code translate="no">python -m openprogram.interfaces.cli</code></th><td><code translate="no">openprogram.interfaces.cli.application.main</code></td></tr>
+<tr><th scope="row"><code translate="no">python -m openprogram.interfaces.server</code></th><td>前台 Server</td></tr>
+</tbody>
+</table>
+<p class="note">所有导入方（含测试和脚本）都写真实模块名。可编辑安装和 wheel 都不需要 <code translate="no">PYTHONPATH</code>。</p>
+
+<h3 id="ports">核心到接口层的端口</h3>
+<p>核心绝不导入接口层，只调用接口层加载时注册的端口。</p>
+<table class="stack">
+<thead><tr><th scope="col">端口</th><th scope="col">承载</th><th scope="col">由谁注册；未注册时</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram/host/resources/desktop_link.py</code></th><td>桌面窗口和 Page：绑定、解析、捕获、关闭，向一个确切连接发送命令</td><td><code translate="no">ws_actions/webtab.py</code>。agentic 子进程在同一端口安装父进程桥，不加载 Server 就能转发 Page 请求。未注册：视同没有客户端连接。</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/runtime/interface_link.py</code></th><td>客户端通知（目标、待办、未完工作、标题、分支列表、原生窗口和执行流帧、上下文环）、Server 的内存会话、需要更新它的 HEAD 移动、会话迁移的忙碌检查、随附的文档页</td><td><code translate="no">server_runtime/interface_link.py</code>，由 <code translate="no">server.py</code> 注册。未注册：视同没有客户端连接。</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/runtime/channel_link.py</code></th><td>向频道会话发送（提醒、常驻报告）、常驻投递读取的账号和对端绑定、<code translate="no">chat_send</code> 投入的运行中频道轮次</td><td><code translate="no">interfaces/channels/link_registration.py</code>，导入 <code translate="no">openprogram.interfaces.channels</code> 时注册。未注册：抛出 <code translate="no">ChannelsUnavailable</code>，记录为发送失败。</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/runtime/speech_link.py</code></th><td>computer-use 录音的语音转文字</td><td><code translate="no">interfaces/speech/link_registration.py</code>，导入 <code translate="no">openprogram.interfaces.speech</code> 时注册。未注册：抛出 <code translate="no">SpeechUnavailable</code>（一种 <code translate="no">TranscriptionError</code>），工具报告为未转写。</td></tr>
+</tbody>
+</table>
+<p class="note">Worker runner 在作业调度器启动前导入频道和语音包，Server 在加载时导入，CLI 轮次在进程内运行工具前导入。</p>
+<p>只有组合根导入接口层：<code translate="no">openprogram/__main__.py</code> 运行 CLI；<code translate="no">openprogram/operations/worker/runner.py</code> 启动 Server、其运行时和前端。<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/tests/contracts/repository/test_core_interface_imports.py">核心接口导入契约</a>扫描每个模块，包括函数内导入和字符串导入。</p>
+
+<details>
+<summary>放在核心、由 Server 导入的逻辑</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">逻辑</th><th scope="col">位置</th></tr></thead>
+<tbody>
+<tr><th scope="row">会话图</th><td><code translate="no">openprogram/state/store/session/graph/</code></td></tr>
+<tr><th scope="row">执行 DAG 投影、实时进度</th><td><code translate="no">openprogram/runtime/execution/dag.py</code></td></tr>
+<tr><th scope="row"><code translate="no">/spawn</code>、<code translate="no">/merge</code></th><td><code translate="no">openprogram/runtime/conversation/turn_runtime/slash_actions.py</code></td></tr>
+<tr><th scope="row">运行控制提交</th><td><code translate="no">openprogram/runtime/execution/control/submission.py</code></td></tr>
+<tr><th scope="row">模型列表</th><td><code translate="no">openprogram/models/listing/</code></td></tr>
+<tr><th scope="row">凭据掩码</th><td><code translate="no">openprogram/host/security/credential_mask.py</code></td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>安装器、依赖与已安装 App</summary>
 <ul>
-<li><code>openprogram/host/resources/desktop_link.py</code> —— 桌面窗口及其 Page：绑定、解析、截图与关闭 Page，以及向某一条确切连接发送命令。Server 的 <code>ws_actions/webtab.py</code> 把自己注册上去。agentic 子进程在同一个端口上装上父进程桥，子进程不加载 Server 就能把 Page 请求转给父 worker。</li>
-<li><code>openprogram/runtime/interface_link.py</code> —— 客户端通知（goal、todo、open work、标题、分支列表、原生窗口与执行流帧、上下文环）、Server 持有的内存会话、需要同步更新它的 HEAD 移动、会话迁移需要的忙碌检查，以及 Server 随带的文档页。<code>server_runtime/interface_link.py</code> 实现它，<code>server.py</code> 注册它。</li>
-<li><code>openprogram/runtime/channel_link.py</code> —— 聊天渠道：向某个渠道会话发消息（提醒、always-on 报告）、always-on 投递读取的账号与 peer 绑定，以及 <code>chat_send</code> 发言所在的正在运行的渠道轮次。<code>interfaces/channels/link_registration.py</code> 实现它，在 import <code>openprogram.interfaces.channels</code> 时注册。没有注册时每个操作都抛出 <code>ChannelsUnavailable</code>，发送失败的调用方本来就会记录它。</li>
-<li><code>openprogram/runtime/speech_link.py</code> —— computer-use 工具录音的语音转文字。<code>interfaces/speech/link_registration.py</code> 实现它，在 import <code>openprogram.interfaces.speech</code> 时注册。没有注册时转写抛出 <code>SpeechUnavailable</code>，它是 <code>TranscriptionError</code>，工具据此报告未转写。</li>
+<li><code translate="no">scripts/install-release.sh</code> 仍是公开安装入口，实现在 <code translate="no">scripts/release/</code>。</li>
+<li>根 npm 工作区和 lock 协调 Web、Desktop 和 CLI。不要假设某个应用下有单独的 lock 或安装。</li>
+<li>依赖补丁让应用清单、根 lock 和已安装版本保持一致。集成重复依赖分支时保留两边祖先，不重复版本改动。</li>
+<li>lock 保留已安装使用方需要的传递条目（含可选依赖图）。安装器成功退出不代表使用方能加载，所以冷安装要配公开使用方导入检查，合并后的源码在发布前运行共享验证清单。</li>
+<li>默认运行时使用端口 <code translate="no">18100</code> 和 <code translate="no">~/.openprogram</code>。布局改动要同时保持打包、已安装导入和源码检出执行。</li>
 </ul>
-<p>worker runner 在任务调度器启动前 import 渠道与语音包，Server 加载时 import 它们，CLI 轮次在进程内运行工具前 import 它们。</p>
-<p>core 以前从 Server 借用的逻辑都在 core 里，由 Server 反过来 import：会话图（<code>openprogram/state/store/session/graph/</code>）、执行 DAG 投影与实时进度（<code>openprogram/runtime/execution/dag.py</code>）、<code>/spawn</code> 与 <code>/merge</code> 斜杠动作（<code>openprogram/runtime/conversation/turn_runtime/slash_actions.py</code>）、运行控制提交（<code>openprogram/runtime/execution/control/submission.py</code>）、模型列表（<code>openprogram/models/listing/</code>）以及凭证掩码（<code>openprogram/host/security/credential_mask.py</code>）。</p>
-<p>只有组合根 import 界面：<code>openprogram/__main__.py</code> 运行 CLI，<code>openprogram/operations/worker/runner.py</code> 启动 Server、它的运行时与前端。<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/tests/contracts/repository/test_core_interface_imports.py">core 界面 import 合同</a>扫描 <code>openprogram/</code> 下的每个模块，包括函数内 import 和字符串 import。</p>
-<p><code>scripts/install-release.sh</code> 仍为公开安装入口，其实现位于 <code>scripts/release/</code>。根 npm workspace 与 lockfile 协调 Web、Desktop 和 CLI 依赖。使用方不能假定每个应用下都有独立 lockfile 或单独依赖安装。依赖补丁保持应用清单、根 workspace 锁文件和实际安装版本一致。同一依赖的重复更新分支都保留提交 ancestry，版本变更只应用一次。锁文件保留安装后消费者仍需的传递依赖条目，包括可选包依赖图；安装器成功退出本身不能证明消费者可以加载。干净安装后同时检查公开消费者的实际导入。合并后的源代码在发布前执行统一的验证清单。</p>
-<p>默认本地运行时使用端口 <code>18100</code> 和 <code>~/.openprogram</code>。已安装 App 验收使用 <code>/Applications/OpenProgram.app</code>；仓库布局变更必须同时保留打包、已安装 import 和源码 checkout 执行。</p>
-<h2 id="verification">验证<a class="header-anchor" href="#verification">#</a></h2>
-<p>本 <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/tests/contracts/repository/test_repository_layout.py">仓库合同</a>
-检查目录归属、应用位置与兼容要求。在仓库根目录运行既有合同：</p>
-<pre><code class="language-sh">uv<span class="w"> </span>run<span class="w"> </span>--locked<span class="w"> </span>--extra<span class="w"> </span>dev<span class="w"> </span>python<span class="w"> </span>-m<span class="w"> </span>pytest<span class="w"> </span>-q<span class="w"> </span>tests/contracts/repository/test_repository_layout.py
-</code></pre>
-<p>布局合同本身不验证运行行为。实现变更还需操作受影响的公开 CLI 或 HTTP/WebSocket 入口，构建 wheel 并在 checkout 外检查 import，以及验证受影响应用的打包。使用 <a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/.github/CONTRIBUTING.md">贡献者检查</a>
-和 <a href="testing/test-system.zh.html">测试系统设计</a> 选择必要门禁。</p>
-<p>文档修改后先构建再检查链接；检查器读取
-<code>docs/_site/</code>，而不是 Markdown 源码：</p>
-<pre><code class="language-sh">python<span class="w"> </span>-m<span class="w"> </span>scripts.docs_site.build
-python<span class="w"> </span>-m<span class="w"> </span>scripts.docs_site.checklinks
-</code></pre>
+</details>
+
+<h2 id="verification">验证</h2>
+<pre translate="no" tabindex="0">uv run --locked --extra dev python -m pytest -q tests/contracts/repository/test_repository_layout.py</pre>
+<p>该<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/tests/contracts/repository/test_repository_layout.py">契约</a>检查目录归属、应用位置和兼容，不检查运行时行为。实现改动还要运行受影响的公开 CLI 或 HTTP/WebSocket 入口，构建 wheel 并在检出外检查导入，验证受影响的打包。<a href="https://github.com/FuzzyKuji/OpenProgram/blob/main/.github/CONTRIBUTING.md">贡献者检查</a>和<a href="testing/test-system.zh.html">测试体系设计</a>决定要跑哪些门禁。</p>
+<p>文档改动要先构建，因为检查器读 <code translate="no">docs/_site/</code>：</p>
+<pre translate="no" tabindex="0">python -m scripts.docs_site.build
+python -m scripts.docs_site.checklinks</pre>
+
 <h2 id="module-organization">模块组织与文件操作安全</h2>
-<p>功能模块同时拥有自己的类型、状态和私有辅助函数。目录大小是审查信号，不是任意增加层次的理由。Web 浏览器、标签页、桌面、执行和文件职责有明确模块。服务端文件操作和轮次文件历史使用不同包。认证集中账号与登录编排；自更新集中验证、修复与交付。测试保留执行层级并增加功能目录，发现机制包含嵌套测试。</p>
-<p>大型源码文件按可独立测试的职责拆分，公开入口保持稳定。不为满足行数限制而引入通配转发、重复实现或动态源码执行。原生终端渲染和职责一致的路由集合与混合用途工具目录分别审查。</p>
-<h3>文件操作合同</h3>
-<ul><li>剪贴板条目标识来源项目。在显式跨项目传输操作存在之前，不支持跨项目粘贴。</li><li>变更作用于选中的目录项，绝不隐式重命名或删除符号链接目标；不安全路径失败时两个条目都不变。</li><li>在支持时提供可恢复删除。导出未保存草稿不代表授权删除唯一确认保留的副本；浏览器下载未确认时保留本地草稿。</li><li>刷新文件使用不变的查询重复当前搜索，并保留请求代次隔离。</li></ul>
-<h3>验收</h3>
-<p>公开 WebSocket 回归测试覆盖符号链接。挂载式 Web 测试覆盖项目剪贴板归属、当前搜索刷新和草稿保留。模块移动保留收集到的测试身份及已安装 import。源码与测试清单记录目录计数和大型文件职责。发布前运行全部贡献者 Python 层级、Web 测试/typecheck/check/build、受影响 CLI/Desktop 检查、文档链接与 wheel import 验收。规格和质量审查独立进行。</p>
-<h3>模块职责</h3>
-<p>执行控制在同一服务实例上区分激活、取消、等待、分支操作、恢复和安全点。执行存储区分记录、命令、事件、状态 blob、投影和结束修复，同时保留一个 store 及其事务边界。任务执行、资源管理、Agent 生产执行、Workflow runtime 和 session 存储采用相同方式：操作模块共享归属实例和规范模块状态。</p>
-<p>Desktop main 组合窗口与 IPC 注册，并使用传输、原生视图、布局、菜单、下载和浮层模块。package manifest 显式包含嵌套模块，刷新脚本保留相对路径。Web Desktop bridge 按状态、恢复、传输、菜单、事件和界面分组；文件树操作和查询辅助函数保留既有请求生命周期。服务端运行操作共享规范 Server 状态。自更新验证绑定执行命令限制的已打包 WebSocket 分发模块，并接受旧包布局以支持回滚。</p>
-<p>功能目录替代扁平的 Web 库、脚本和测试、Python 认证/更新模块、Server 路由及混合测试目录。大型测试与检查文件保留全部场景、共享 fixture 归属和确定性发现。子进程验收属于 integration 测试层。</p>
-<p>文件长度仍是审查信号。生成的 Yoga binding 和 vendored Ink renderer 保留上游组织方式。独立 provider adapter 保持同级文件。Desktop main 保留应用组合职责；一致的 checkpoint 事务、安全 HTTP 策略及其他单领域模块不因任意行数限制而拆分。清单记录剩余大型文件，不宣称全部解决。</p>
-<p>模块组织和文件操作变更通过独立规格及质量审查。验收包含固定四个 worker 的连续三次完整 Python 测试，Web/CLI 测试与类型检查、Desktop 检查、应用构建、文档链接、浏览器交互测试和 checkout 外已安装 wheel import。测试清理访问规范 SessionStore cache；原生恢复验收在明确期限内等待实际启动/关闭完成。可选外部 Office-pack 验收仍取决于是否提供该包。</p>
-<div class="doc-scroll" role="region" tabindex="0" aria-label="直接代码文件数"><table>
-<thead><tr><th>目录</th><th>变更前</th><th>当前直接代码文件</th></tr></thead>
-<tbody><tr><td>apps/web/lib</td><td>45</td><td>7</td></tr>
-<tr><td>apps/web/tests</td><td>105</td><td>4</td></tr>
-<tr><td>openprogram/operations/self_update</td><td>32</td><td>3</td></tr>
-<tr><td>Server 路由</td><td>36</td><td>5</td></tr>
-<tr><td>tests/component/webui</td><td>57</td><td>1</td></tr>
-<tr><td>tests/unit/providers</td><td>54</td><td>1</td></tr></tbody></table></div>
-<p>这些计数涵盖直接 Python、JavaScript 和 TypeScript 源码文件。功能子目录保留实现与测试；移动文件不减少行为覆盖。原收集测试身份全部保留，并增加四个回归场景。</p>
-<h2 id="implementation-status">实现状态<a class="header-anchor" href="#implementation-status">#</a></h2>
-<div class="doc-scroll" role="region" tabindex="0" aria-label="实现表"><table>
-<thead>
-<tr>
-<th>领域</th>
-<th>状态</th>
-<th>剩余验收或工作</th>
-</tr>
-</thead>
+<p>功能模块自带类型、状态和私有工具。目录大小是评审信号，不是分层的理由。大文件在可独立测试的职责处拆分；公开入口不变；不为行数引入通配转发、重复实现或动态执行源码。</p>
+
+<h3 id="file-operation-contract">文件操作契约</h3>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">操作</th><th scope="col">规则</th></tr></thead>
 <tbody>
-<tr>
-<td>应用根目录、CLI 归属与维护脚本</td>
-<td>已验证</td>
-<td>Workspace 检查和已安装 wheel 验收覆盖应用归属及公开 import。</td>
-</tr>
-<tr>
-<td>Server 归属</td>
-<td>已验证</td>
-<td>分组路由、打包资产和 Server 操作通过共享回归清单。</td>
-</tr>
-<tr>
-<td>Desktop 与 Web 拆分</td>
-<td>已验证</td>
-<td>原生视图归属、bridge 状态、传输协调、文件操作和嵌套打包保留可执行覆盖。</td>
-</tr>
-<tr>
-<td>文档结构</td>
-<td>设计页仍位于 <code>reference/design/</code></td>
-<td>每个主题保留一个当前文档；既往迁移和审查记录使用 Git 历史。</td>
-</tr>
-<tr>
-<td>发布与已安装 App</td>
-<td>按目标分别验收</td>
-<td>本地整合后通过仓库刷新脚本更新默认 App。已安装 App 检查和远程发布与源码回归结果分开。</td>
-</tr>
+<tr><th scope="row">剪贴板</th><td>条目标明来源项目；在有显式传输操作前不能跨项目粘贴</td></tr>
+<tr><th scope="row">变更</th><td>作用于选中的条目。绝不隐式重命名或删除符号链接目标；不安全路径直接失败，两个条目都不变</td></tr>
+<tr><th scope="row">删除</th><td>在支持处可恢复。导出未保存草稿不等于授权删除唯一确认的副本；浏览器下载未确认时保留本地草稿</td></tr>
+<tr><th scope="row">刷新</th><td>用不变的查询重复当前搜索，保持请求代隔离</td></tr>
 </tbody>
-</table></div>
-<p>长文件并不自动成为待重构项。进一步拆分需要独立职责及相关行为覆盖。</p>
+</table>
+<p class="note">公开 WebSocket 回归测试覆盖符号链接；挂载的 Web 测试覆盖剪贴板归属、活动搜索刷新和草稿保留。</p>
+
+<details>
+<summary>模块职责</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">领域</th><th scope="col">拆分</th></tr></thead>
+<tbody>
+<tr><th scope="row">执行控制</th><td>激活、取消、等待、分支操作、恢复、安全点，共用一个服务实例</td></tr>
+<tr><th scope="row">执行存储</th><td>记录、命令、事件、状态 blob、投影、收尾修复，保持一个存储及其事务</td></tr>
+<tr><th scope="row">作业、资源治理、Agent 生产执行、工作流运行时、会话存储</th><td>操作模块共享所属实例和规范模块状态</td></tr>
+<tr><th scope="row">Desktop main</th><td>组合窗口和 IPC 注册，以及传输、原生视图、布局、菜单、下载、覆盖层模块。清单包含嵌套模块，刷新脚本保留相对路径</td></tr>
+<tr><th scope="row">Web Desktop 桥</th><td>状态、恢复、传输、菜单、事件、表面；文件树操作和查询工具保持请求生命周期</td></tr>
+<tr><th scope="row">Server 运行时</th><td>操作共享规范 Server 状态</td></tr>
+<tr><th scope="row">自更新验证</th><td>绑定强制其命令限制的打包 WebSocket 调度模块；接受旧包布局以便回滚</td></tr>
+<tr><th scope="row">Server 文件</th><td>文件操作和轮次文件历史是两个包</td></tr>
+<tr><th scope="row">认证、自更新</th><td>认证归集账号和登录编排；自更新归集验证、修复和交付</td></tr>
+<tr><th scope="row">测试</th><td>保留执行层，增加功能目录；发现包含嵌套测试。大型检查文件保留全部场景、公共夹具和确定性发现。子进程验收属集成层。移动保持已收集的测试身份和已安装导入</td></tr>
+<tr><th scope="row">保持完整</th><td>生成的 Yoga 绑定、vendored Ink 渲染器、并列的 Provider 适配器、Desktop main 组合、原生终端渲染、内聚的路由集合、检查点事务、安全 HTTP 策略</td></tr>
+</tbody>
+</table>
+<p>每个目录的直接代码文件数（Python、JavaScript、TypeScript）；其余在功能子目录。</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">目录</th><th scope="col">直接代码文件</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">apps/web/lib</code></th><td>7</td></tr>
+<tr><th scope="row"><code translate="no">apps/web/tests</code></th><td>0</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/operations/self_update</code></th><td>3</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/interfaces/server/routes</code></th><td>7</td></tr>
+<tr><th scope="row"><code translate="no">tests/component/webui</code></th><td>4</td></tr>
+<tr><th scope="row"><code translate="no">tests/unit/providers</code></th><td>5</td></tr>
+</tbody>
+</table>
+</details>
+
+<details>
+<summary>结构改动的发布验收</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">要求</th></tr></thead>
+<tbody>
+<tr><th scope="row">评审</th><td>独立的规格和质量评审</td></tr>
+<tr><th scope="row">Python</th><td>连续三次四 worker 完整运行</td></tr>
+<tr><th scope="row">Web 和 CLI</th><td>测试及类型检查</td></tr>
+<tr><th scope="row">Desktop 和应用</th><td>Desktop 检查；应用构建</td></tr>
+<tr><th scope="row">文档和浏览器</th><td>文档链接；浏览器交互测试</td></tr>
+<tr><th scope="row">打包</th><td>检出外的已安装 wheel 导入</td></tr>
+<tr><th scope="row">测试清理</th><td>使用规范的 SessionStore 缓存</td></tr>
+<tr><th scope="row">原生恢复</th><td>在明确期限内等待实际启动和关闭完成</td></tr>
+<tr><th scope="row">外部 Office 包</th><td>仅在提供该包时进行</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<table class="stack">
+<thead><tr><th scope="col">领域</th><th scope="col">状态</th><th scope="col">覆盖或剩余</th></tr></thead>
+<tbody>
+<tr><th scope="row">应用根、CLI 归属、维护脚本</th><td>已验证</td><td>工作区检查和已安装 wheel 验收</td></tr>
+<tr><th scope="row">Server 归属</th><td>已验证</td><td>共享回归清单中的分组路由、打包资源和 Server 操作</td></tr>
+<tr><th scope="row">Desktop 和 Web 拆分</th><td>已验证</td><td>原生视图归属、桥状态、传输协调、文件操作和嵌套打包保持可执行覆盖</td></tr>
+<tr><th scope="row">文档结构</th><td>在 <code translate="no">reference/design/</code> 下</td><td>一个主题一个当前归属</td></tr>
+<tr><th scope="row">发布和已安装 App</th><td>按目标</td><td>已安装 App 检查和远端发布与源码回归结果分开</td></tr>
+</tbody>
+</table>
+<p class="note">长文件不自动算待办。继续拆分需要单独的职责和行为覆盖。</p>

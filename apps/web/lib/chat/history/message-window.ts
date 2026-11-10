@@ -1,3 +1,4 @@
+import { isLive } from "../transcript/row-status.ts";
 /** Measure-then-recycle window for long transcripts.
  *
  *  Scroll restore is a raw pixel `scrollTop` (`chatScrollByKey`). Off-screen
@@ -286,14 +287,7 @@ export function collectAlwaysLive(
     const m = lookup(id);
     if (!m) continue;
     if (m.kind === "compaction" && m.slot === "card") always.add(id);
-    if (
-      m.status === "streaming"
-      || m.status === "pending"
-      || m.status === "running"
-      || m.status === "cancelling"
-    ) {
-      always.add(id);
-    }
+    if (isLive(m.status)) always.add(id);
   }
   if (ids.length) always.add(ids[ids.length - 1]!);
   return always;

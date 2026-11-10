@@ -1,0 +1,53 @@
+<title>Auth storage</title>
+<meta name="description" content="Provider credentials live in one store under ~/.openprogram, with one login registry for CLI, web and TUI.">
+<h1>Auth storage</h1>
+<p><code translate="no">AuthStore</code> (<code translate="no">models/auth/store.py</code>): <code translate="no">~/.openprogram/auth/&lt;provider_id&gt;/&lt;account_id&gt;.json</code>, atomic write, cross-process lock, reload when the file changes underneath. <code translate="no">CredentialProvider</code> serves what is on disk and never re-discovers; import is an explicit step.</p>
+<table class="stack">
+<thead><tr><th scope="col">Provider</th><th scope="col">Login method</th><th scope="col">Storage</th><th scope="col">Refresh</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openai-codex</code></th><td><code translate="no">pkce_oauth</code>, or a copy of <code translate="no">~/.codex/auth.json</code></td><td>copy</td><td>OpenProgram, mirrored to <code translate="no">~/.codex</code></td></tr>
+<tr><th scope="row"><code translate="no">github-copilot</code></th><td><code translate="no">device_code</code></td><td>copy</td><td>OpenProgram</td></tr>
+<tr><th scope="row"><code translate="no">xai-subscription</code></th><td><code translate="no">pkce_oauth</code>, <code translate="no">import_from_cli</code> (<code translate="no">~/.grok/auth.json</code>), <code translate="no">paste_token</code></td><td>store</td><td>per method</td></tr>
+<tr><th scope="row"><code translate="no">anthropic</code></th><td><code translate="no">api_key</code></td><td>copy</td><td>none. Subscription credentials are refused.</td></tr>
+<tr><th scope="row"><code translate="no">gemini-subscription</code></th><td><code translate="no">import_from_cli</code> (<code translate="no">~/.gemini/oauth_creds.json</code>)</td><td>delegated pointer</td><td>external CLI; <code translate="no">gemini auth login</code> when stale</td></tr>
+<tr><th scope="row">other key providers</th><td><code translate="no">api_key</code></td><td>copy</td><td>none</td></tr>
+</tbody>
+</table>
+<p class="note">Bedrock and Vertex use the cloud SDK's own chain. <code translate="no">qwen</code> has a credential source but no runtime, so no login is offered. <code translate="no">claude-code</code> and related ids are unsupported.</p>
+<h2>Credential kinds</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col"><code translate="no">kind</code></th><th scope="col">Secret storage</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">api_key</code></th><td>copy of the key</td></tr>
+<tr><th scope="row"><code translate="no">oauth</code>, <code translate="no">device_code</code></th><td>copy: access, refresh, <code translate="no">expires_at_ms</code>, client id, token endpoint</td></tr>
+<tr><th scope="row"><code translate="no">cli_delegated</code></th><td>pointer only: <code translate="no">store_path</code> and key paths, re-read each use</td></tr>
+<tr><th scope="row"><code translate="no">credential_process</code></th><td>argv run on demand</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">methods/cli_import.py</code> has <code translate="no">mode="link"</code> (default) and <code translate="no">mode="copy"</code>, which builds a writable store-owned <code translate="no">oauth</code> credential.</p>
+<h2>Login registry</h2>
+<p><code translate="no">auth/login/login_method_registry.py</code> is the one <code translate="no">provider → [method]</code> table; the first entry is the default, and the CLI, web and TUI all render it. Handlers are in <code translate="no">auth/methods/</code> and <code translate="no">auth/login/</code>. Google's Code-Assist OAuth embeds a client secret OpenProgram cannot ship, so that provider stays delegated; Anthropic has no published third-party OAuth client.</p>
+<h2 id="unreadable">Unreadable is not empty</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Step</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Write (<code translate="no">credentials/io._atomic_write</code>)</th><td>Keeps the replaced file as <code translate="no">&lt;file&gt;.bak</code> when it is valid JSON (<code translate="no">state/last_good.keep_previous</code>)</td></tr>
+<tr><th scope="row">Read of invalid JSON (<code translate="no">last_good.load_json</code>)</th><td>Copies the bytes once to <code translate="no">&lt;file&gt;.bad-&lt;UTC time&gt;-&lt;digest&gt;</code>, answers the valid <code translate="no">.bak</code>, else nothing</td></tr>
+<tr><th scope="row">Users</th><td><code translate="no">read_config</code>, <code translate="no">update_config</code>, the auth store</td></tr>
+<tr><th scope="row">Backups (<code translate="no">operations/backup.py</code>)</th><td>Leave out <code translate="no">.bak</code> and <code translate="no">.bad-</code> copies, so redaction cannot be bypassed</td></tr>
+</tbody>
+</table>
+<p class="note">Follows magpie's lastgood (yetone/magpie, MIT).</p>
+<details><summary>Peers</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Project</th><th scope="col">Design</th></tr></thead>
+<tbody>
+<tr><th scope="row">opencode</th><td>Own PKCE and <code translate="no">auth.json</code>, no adoption. <code translate="no">provider → AuthHook</code> with <code translate="no">method:"auto"</code> or <code translate="no">"code"</code>; on-demand single-flight refresh. Anthropic and Google are API key only.</td></tr>
+<tr><th scope="row">openclaw</th><td><code translate="no">auth-profiles.json</code> by <code translate="no">&lt;provider&gt;:&lt;label&gt;</code>; rotation state in a sibling file; <code translate="no">oauth</code>, <code translate="no">api_key</code>, <code translate="no">token</code>; refresh under a cross-process lock that re-reads inside the lock (the part worth copying); one handler picks browser or paste. Reads other CLIs' files directly, which this design does not.</td></tr>
+</tbody>
+</table>
+</details>
+<details><summary>Implementation status</summary>
+<p>Not in place: copying the Gemini subscription token into the store as the default import.</p>
+</details>
+<p class="next"><a href="unified-account-management.html">Accounts and rotation</a></p>

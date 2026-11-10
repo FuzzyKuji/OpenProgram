@@ -68,6 +68,21 @@ def ttl_for_retention(provider_id: str, retention: str | None) -> str | None:
     return (spec.get("retention_ttl_map") or {}).get(retention or "short")
 
 
+def with_lifetime_setting(retention: str | None) -> str:
+    """``retention`` as the user's Prompt cache lifetime setting
+    (``models.prompt_cache_ttl``) has it: a plain cache (``"short"``, or
+    none asked for) lives an hour when the setting is ``1h``. A caller's
+    ``"none"`` or ``"long"`` stands. Explicit-mode providers apply it."""
+    retention = retention or "short"
+    if retention != "short":
+        return retention
+    try:
+        from openprogram.state.settings import setting_value
+        return "long" if setting_value("models.prompt_cache_ttl") == "1h" else "short"
+    except Exception:
+        return "short"
+
+
 def cache_key_param(provider_id: str) -> str | None:
     """The request param name for auto-mode prefix-cache keys (e.g.
     ``prompt_cache_key``), or None when the provider takes no key."""
@@ -80,6 +95,7 @@ def invalidate_cache() -> None:
 
 
 __all__ = [
+    "with_lifetime_setting",
     "get_cache_spec",
     "cache_mode",
     "ttl_for_retention",

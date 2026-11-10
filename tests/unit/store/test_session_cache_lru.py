@@ -142,7 +142,7 @@ def test_read_snapshot_cannot_hide_a_later_atomic_write(tmp_path, monkeypatch, c
     writer.update_node("s", "n0", metadata={"status": "cancelling"})
     writer.update_session("s", title="before")
     writer_index = writer._sessions["s"][1]
-    original = SessionMemoryIndex.rebuild_from_paths
+    original = SessionMemoryIndex.rebuild
     published = False
 
     def rebuild_then_publish(index, *args, **kwargs):
@@ -156,7 +156,7 @@ def test_read_snapshot_cannot_hide_a_later_atomic_write(tmp_path, monkeypatch, c
                 writer.update_session("s", title="after")
         return result
 
-    monkeypatch.setattr(SessionMemoryIndex, "rebuild_from_paths", rebuild_then_publish)
+    monkeypatch.setattr(SessionMemoryIndex, "rebuild", rebuild_then_publish)
     reader.get_nodes("s")
     assert published
     if field == "history":

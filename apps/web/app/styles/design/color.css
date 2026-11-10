@@ -139,6 +139,12 @@
   --pane-divider-active: #fff;
   --pane-divider-ring-near: rgb(0 0 0 / .12);
   --pane-divider-ring-far: rgb(0 0 0 / .18);
+  /* A row lifted on hover where the panel is the input surface itself:
+     tinted a step toward the text colour to show its edge. */
+  --row-raised-bg: color-mix(in srgb, var(--text-primary) 4%, var(--bg-input));
+  /* The short grip on a split's divider and on a sidebar's handle. */
+  --pane-divider-hover: light-dark(color-mix(in oklch, var(--text-muted) 32%, var(--pane-divider-hover-mix)), var(--pane-divider-hover-dark));
+  --pane-divider-active-ring: 0 0 0 .5px light-dark(var(--pane-divider-ring-near), transparent), 0 1px 3px light-dark(var(--pane-divider-ring-far), transparent);
 
   /* The scrim behind an enlarged message attachment
      (chat/messages/user-attachments.css). */

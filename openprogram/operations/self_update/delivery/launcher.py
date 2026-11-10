@@ -1,4 +1,8 @@
-"""Submit one trusted, one-shot self-update supervisor through launchd."""
+"""The macOS controller adapter, and the ``legacy_app`` supervisor launch.
+
+``submit_controller`` is the launchd side of :mod:`.controller`; the rest
+submits the one-shot supervisor that the ``legacy_app`` backend still uses.
+"""
 
 from __future__ import annotations
 
@@ -13,7 +17,7 @@ import time
 
 from openprogram.operations.self_update.store import SelfUpdateStore
 from openprogram.operations.self_update.types import TERMINAL_PHASES, UpdatePhase
-from openprogram.state.store.session.git_session import atomic_write_text
+from openprogram.state.store.session.atomic_file import atomic_write_text
 
 
 class LaunchError(RuntimeError):
@@ -172,6 +176,10 @@ def _submit_supervisor(
 
 def launch_supervisor(update_id: str, *, resume: bool = False) -> LaunchResult:
     """Launch once, or resume only the originally saved trusted controller."""
+    from openprogram.operations.worker.runner import trial_mode
+
+    if trial_mode():  # A trial's self-test sweep must never reach the service manager.
+        return LaunchResult(f"ai.openprogram.self-update.{update_id}", False, False)
     store = SelfUpdateStore()
     record = store.load(update_id)
     if record.request.update_id != update_id:
@@ -213,4 +221,28 @@ def launch_supervisor(update_id: str, *, resume: bool = False) -> LaunchResult:
     return result
 
 
-__all__ = ["LaunchError", "LaunchResult", "launch_supervisor"]
+def submit_controller(label: str, argv: list[str], env: dict[str, str], log: Path) -> None:
+    """Run a versions-backend controller under launchd, restarted on abnormal exit."""
+    import plistlib
+
+    definition = log.with_name("controller.plist")
+    with open(definition, "wb") as stream:
+        plistlib.dump({
+            "Label": label, "ProgramArguments": argv, "EnvironmentVariables": env,
+            "RunAtLoad": True, "KeepAlive": {"SuccessfulExit": False},
+            "StandardOutPath": str(log), "StandardErrorPath": str(log),
+        }, stream)
+    domain = f"gui/{os.getuid()}"
+    if _launchctl("print", f"{domain}/{label}")[0] == 0:
+        rc, message = _launchctl("kickstart", f"{domain}/{label}")
+    else:
+        rc, message = _launchctl("bootstrap", domain, str(definition))
+    if rc != 0:
+        raise LaunchError(f"launchctl failed ({rc}): {message}")
+
+
+def retire_controller(label: str) -> None:
+    _launchctl("bootout", f"gui/{os.getuid()}/{label}")
+
+
+__all__ = ["LaunchError", "LaunchResult", "launch_supervisor", "retire_controller", "submit_controller"]

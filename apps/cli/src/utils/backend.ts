@@ -7,7 +7,7 @@
  * the TUI hits whatever port the user actually launched on — no second
  * config. Falls back to the same default the WS client uses (18100, the
  * single port since the frontend moved onto the backend — see
- * docs/reference/design/cli/single-port.md).
+ * docs/reference/design/cli/single-port.html).
  */
 
 export function backendBase(): string {

@@ -145,7 +145,6 @@ const {
   handleRunningTaskClear,
   wsHandleChatAck,
   wsHandleChatResponse,
-  settleFunctionReloadAfterSessionLoad,
 } = await import(
   "../../lib/runtime-bridge/session/chat-handlers.ts"
 );
@@ -227,6 +226,12 @@ function releaseChatReservation(sessionKey) {
 const exact =
   'gui_agent(task="Verify title", surface="browser", max_steps=3, max_seconds=90)';
 
+function bodyWithoutRequestId(raw) {
+  const { client_request_id: requestId, ...body } = JSON.parse(raw);
+  assert.equal(typeof requestId, "string");
+  return body;
+}
+
 test("Goal form dispatches only its objective", async () => {
   const goal = {
     name: "goal",
@@ -268,7 +273,7 @@ test("an exact registered function expression dispatches as a function", async (
   assert.equal(pendingUserText.getPendingUserText(sessionKey), undefined);
   assert.equal(httpCalls.length, 1);
   assert.equal(httpCalls[0].url, "/api/function/gui_agent");
-  assert.deepEqual(JSON.parse(httpCalls[0].init.body), {
+  assert.deepEqual(bodyWithoutRequestId(httpCalls[0].init.body), {
     kwargs: {
       task: "Verify title",
       surface: "browser",
@@ -313,53 +318,6 @@ test("a successful response without a session id rolls back the direct run", asy
     ),
     false,
   );
-});
-
-test("a function completion never reloads a session left in the background", () => {
-  const sessionKey = "function-background-after-dispatch";
-  const previousRuntimeSession = runtimeState.currentSessionId;
-  resetObservations();
-  runtimeState.currentSessionId = "different-session";
-  runtimeState.__reloadOnTaskClear.clear();
-  runtimeState.__reloadOnTaskClear.add(sessionKey);
-
-  assert.equal(handleRunningTaskClear(sessionKey, { force: true }), true);
-  assert.equal(runtimeState.__reloadOnTaskClear.size, 0);
-  assert.deepEqual(wsFrames, []);
-
-  runtimeState.currentSessionId = previousRuntimeSession;
-});
-
-test("only a terminal head clears a late completion reload", () => {
-  const sessionKey = "function-clear-before-http-response";
-  runtimeState.__reloadOnTaskClear.clear();
-  runtimeState.__reloadOnTaskClear.add(sessionKey);
-
-  settleFunctionReloadAfterSessionLoad(sessionKey, "running");
-  assert.equal(runtimeState.__reloadOnTaskClear.has(sessionKey), true);
-  settleFunctionReloadAfterSessionLoad(sessionKey, "completed");
-  assert.equal(runtimeState.__reloadOnTaskClear.has(sessionKey), false);
-});
-
-test("function completion reloads are tracked independently per session", () => {
-  const previousRuntimeSession = runtimeState.currentSessionId;
-  resetObservations();
-  runtimeState.__reloadOnTaskClear.clear();
-  runtimeState.__reloadOnTaskClear.add("function-session-a");
-  runtimeState.__reloadOnTaskClear.add("function-session-b");
-  runtimeState.currentSessionId = "function-session-a";
-
-  handleRunningTaskClear("function-session-a", { force: true });
-
-  assert.equal(typeof wsFrames[0]?.request_id, "string");
-  assert.deepEqual(wsFrames.map(({ request_id, ...frame }) => frame), [{
-    action: "load_session",
-    session_id: "function-session-a",
-  }]);
-  assert.equal(runtimeState.__reloadOnTaskClear.has("function-session-a"), false);
-  assert.equal(runtimeState.__reloadOnTaskClear.has("function-session-b"), true);
-  runtimeState.__reloadOnTaskClear.clear();
-  runtimeState.currentSessionId = previousRuntimeSession;
 });
 
 test("explanatory text remains a chat message", async () => {
@@ -449,13 +407,10 @@ test("a bound function call does not mark or navigate the focused session", asyn
   const focusedSession = "focused-A";
   const boundSession = "bound-B";
   const previousRuntimeSession = runtimeState.currentSessionId;
-  const previousReloads = [...runtimeState.__reloadOnTaskClear];
   const store = useSessionStore.getState();
   store.setRunningTaskFor(focusedSession, null);
   store.setRunningTaskFor(boundSession, null);
   runtimeState.currentSessionId = focusedSession;
-  runtimeState.__reloadOnTaskClear.clear();
-  runtimeState.__reloadOnTaskClear.add(focusedSession);
   resetObservations();
   nextHttpResponse = {
     ok: true,
@@ -479,13 +434,8 @@ test("a bound function call does not mark or navigate the focused session", asyn
     dispatchFrames.some((frame) => frame.action === "load_session"),
     false,
   );
-  assert.deepEqual([...runtimeState.__reloadOnTaskClear], [focusedSession]);
   releaseChatReservation(boundSession);
   runtimeState.currentSessionId = previousRuntimeSession;
-  runtimeState.__reloadOnTaskClear.clear();
-  for (const sessionId of previousReloads) {
-    runtimeState.__reloadOnTaskClear.add(sessionId);
-  }
 });
 
 test("a failed bound function call rolls back only its own session", async () => {
@@ -535,7 +485,7 @@ test("a successful function response binds channel and project before navigation
     draftSession,
   );
 
-  assert.deepEqual(JSON.parse(httpCalls[0].init.body), {
+  assert.deepEqual(bodyWithoutRequestId(httpCalls[0].init.body), {
     kwargs: {
       task: "Verify title",
       surface: "browser",
@@ -563,14 +513,8 @@ test("a successful function response binds channel and project before navigation
     },
   ]);
   assert.deepEqual(activatedSessions, [createdSession]);
-  assert.equal(runtimeState.__reloadOnTaskClear.has(createdSession), true);
   assert.equal(handleRunningTaskClear(createdSession, { force: true }), true);
-  assert.equal(typeof wsFrames[0]?.request_id, "string");
-  assert.deepEqual(wsFrames.map(({ request_id, ...frame }) => frame), [{
-    action: "load_session",
-    session_id: createdSession,
-  }]);
-  assert.equal(runtimeState.__reloadOnTaskClear.has(createdSession), false);
+  assert.deepEqual(wsFrames.filter((frame) => frame.action === "load_session"), []);
   assert.equal(
     useSessionStore.getState().pendingProjectsByChat[draftSession],
     undefined,

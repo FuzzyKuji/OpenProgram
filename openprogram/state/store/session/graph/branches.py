@@ -218,7 +218,7 @@ def _attach_embed_stats(
     try:
         from openprogram.state.store.session.context_commit.store import load_commit
         # Same-session lookup is O(1) (direct file read). Don't fall
-        # back to a global scan — that walks every session repo on
+        # back to a global scan — that walks every session log on
         # disk and freezes the UI when many sessions exist. The
         # frontend just renders the legacy preview when stats can't
         # be resolved cheaply.
@@ -311,6 +311,9 @@ def build_branches_payload(session_id: str | None) -> dict:
                     # A sub-agent's conversation kept in this session: its
                     # tip is addressable, but it is not a branch the user made.
                     "sub_agent": mid in spawned,
+                    # A scheduled task's branch: other agents can read it,
+                    # its runs show on the task's page, not in branch lists.
+                    "scheduled_task": bool(row.get("scheduled_task_id")),
                 })
         except Exception as e:
             _log.warning("[list_branches] %s: %s", session_id, e)

@@ -1,6 +1,6 @@
 """Durable hand-off between canonical executions and resource admissions.
 
-ExecutionStore and ResourceGovernor intentionally keep separate SQLite files.
+The run tables and the usage ledger are separate stores.
 This module records an intent in the execution authority first and consumes it
 later in the governor authority; it never presents the pair as one transaction.
 """

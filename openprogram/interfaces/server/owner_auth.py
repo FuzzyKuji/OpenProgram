@@ -46,6 +46,7 @@ _PUBLIC_FRONTEND_ROUTES = frozenset(
     {
         "",
         "/",
+        "/agents",
         "/chat",
         "/chats",
         "/desktop-transfer-acceptance",
@@ -53,6 +54,7 @@ _PUBLIC_FRONTEND_ROUTES = frozenset(
         "/history",
         "/mcp",
         "/memory",
+        "/pending",
         "/plugin",
         "/plugins",
         "/programs",

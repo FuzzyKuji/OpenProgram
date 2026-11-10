@@ -213,11 +213,13 @@ def program_rows() -> list[dict]:
 
 def _cmd_list(*, as_json: bool = False) -> int:
     """Print every Program with its kind, owner, load state and directory."""
+    from openprogram.programs._host.registry import load_errors
     from openprogram.state.program_directory import programs_root
 
     rows = program_rows()
     if as_json:
-        print(json.dumps({"root": str(programs_root()), "programs": rows}, ensure_ascii=False, sort_keys=True))
+        print(json.dumps({"root": str(programs_root()), "programs": rows, "load_errors": load_errors()},
+                         ensure_ascii=False, sort_keys=True))
         return 0
     order = {"tool": 0, "application": 1, "package": 2, "harness": 3}
     titles = {"tool": "Tools", "application": "Applications", "package": "Packages", "harness": "Harnesses"}
@@ -309,15 +311,6 @@ def _cmd_check(directory: str, *, message: str = "", as_json: bool = False) -> i
 # install / uninstall / enable / disable
 # ---------------------------------------------------------------------------
 
-def _refuse_in_packaged_runtime(action: str) -> None:
-    if os.environ.get("OPENPROGRAM_IMMUTABLE_RUNTIME") == "1":
-        print(
-            f"Program {action} is disabled in the packaged desktop runtime. "
-            "Use a supported CLI/server installation for Program management."
-        )
-        sys.exit(1)
-
-
 def _looks_like_git_ref(name: str) -> bool:
     """A git source: a URL (https/ssh/git/file) or GitHub ``owner/repo``."""
     if name.startswith(("http://", "https://", "git@", "ssh://", "file://")):
@@ -334,12 +327,26 @@ def _normalize_git_ref(ref: str) -> str:
 
 
 def _install_dependencies(dest: str, label: str, *, upgrade: bool = False) -> None:
-    """Install a harness's own declared dependencies from its clone."""
+    """Install a harness's own declared dependencies from its clone.
+
+    A managed install must stay as it was built, so they go to a per-user directory.
+    """
     import subprocess
+    from openprogram.operations.self_update.github_release.detect import InstallMethod, detect_install_method
+
+    pip = [sys.executable, "-m", "pip", "install"]
+    if detect_install_method() is InstallMethod.MANAGED_RELEASE:
+        from openprogram.programs._host.sources import dependency_directory
+
+        directory = dependency_directory()
+        directory.mkdir(parents=True, exist_ok=True)
+        # Without --upgrade, pip skips anything already in the target directory.
+        pip += ["--target", str(directory), "--upgrade"]
+        upgrade = False
     if os.path.isfile(os.path.join(dest, "pyproject.toml")) or os.path.isfile(os.path.join(dest, "setup.py")):
-        command = [sys.executable, "-m", "pip", "install", *(["--upgrade"] if upgrade else []), dest]
+        command = [*pip, *(["--upgrade"] if upgrade else []), dest]
     elif os.path.isfile(os.path.join(dest, "requirements.txt")):
-        command = [sys.executable, "-m", "pip", "install", "-r", os.path.join(dest, "requirements.txt")]
+        command = [*pip, "-r", os.path.join(dest, "requirements.txt")]
     else:
         return
     if subprocess.call(command) != 0:
@@ -429,7 +436,7 @@ def _install_git(ref: str, *, upgrade: bool = False, replace: bool = False, trus
         from openprogram.programs._host.packages import name_problem
         problem = name_problem(name, dest)
         print(f"[!] {name}: {problem}" if problem else
-              f"[ok] {name}: package; it loads while its checkout is clean and committed.")
+              f"[ok] {name}: package; it loads once `openprogram programs check` has passed.")
     if "application" in kinds:
         try:
             result = _record_application(str(dest), replace=replace or upgrade, trust=trust)
@@ -463,12 +470,10 @@ def _cmd_install(source: str, *, upgrade: bool = False, replace: bool = False, t
                 print(f"[x] {local} is not a Git repository. Commit it first, or move it into "
                       f"{programs_root()} and run `openprogram programs check`.")
                 sys.exit(1)
-            _refuse_in_packaged_runtime("installation")
             _install_git(str(local.resolve()), upgrade=upgrade, replace=replace, trust=trust)
             return
         print(f"[x] {local} holds neither __init__.py nor application.json.")
         sys.exit(1)
-    _refuse_in_packaged_runtime("installation")
     if _looks_like_git_ref(source):
         _install_git(source, upgrade=upgrade, replace=replace, trust=trust)
         return
@@ -506,7 +511,6 @@ def _cmd_uninstall(name: str) -> None:
         applications.request("/api/applications/" + quote(name, safe=""), method="DELETE")
         print(f"[ok] application {name} unregistered; its data is kept.")
         return
-    _refuse_in_packaged_runtime("removal")
     directory = programs_root() / name
     if name and "/" not in name and not name.startswith(".") and (directory.is_dir() or directory.is_symlink()):
         for record in catalog.records():

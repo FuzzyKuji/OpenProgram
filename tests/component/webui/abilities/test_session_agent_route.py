@@ -34,6 +34,9 @@ def _client(tmp_path, monkeypatch, *, running=False):
             folder.mkdir(parents=True, exist_ok=True)
             return folder
 
+        def state_file(self, sid, name):
+            return self._session_dir(sid) / name
+
     db = Db()
     pins, frames = [], []
     live = {"c1": {"id": "c1", "agent_id": "main", "runtime": None}}

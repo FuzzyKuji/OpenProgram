@@ -2,7 +2,7 @@
 
 The session's Search switch (and an explicit ``web_search=True`` runtime
 kwarg) is an *intent*. Per request it resolves against the API provider the
-request goes to (docs/reference/design/providers/web-search.md):
+request goes to (docs/reference/design/providers/web-search.html):
 
 * the provider advertises ``supports_web_search`` → the request option
   ``web_search=True`` is set and the local ``web_search`` function tool is
@@ -17,7 +17,7 @@ dict dumps and needs nothing new from the models package.
 from __future__ import annotations
 
 import json
-from typing import Any, Iterable
+from typing import Any
 
 LOCAL_TOOL_NAME = "web_search"
 SERVER_TOOL_BLOCK = "serverToolUse"
@@ -185,7 +185,3 @@ def text_end_citations(event: Any) -> list[dict]:
     if isinstance(index, int) and 0 <= index < len(content):
         return text_citations(content[index])
     return []
-
-
-def server_tool_blocks(content: Iterable[Any] | None) -> list:
-    return [block for block in content or [] if is_server_tool_block(block)]

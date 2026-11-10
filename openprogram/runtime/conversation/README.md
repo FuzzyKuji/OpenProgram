@@ -17,8 +17,9 @@ the running turn reach it, and claims the core's cancellation check
 
 ## Files in this directory
 
+- **`bound_reply.py`** — Deliver a bound chat's assistant replies to its channel conversation
 - **`chat.py`** — Conversation policy on the public Agent execution contract
-- **`checkpoint.py`** — Resumable Agent loop input built on the durable Agent checkpoint
+- **`checkpoint.py`** — Resuming an Agent turn from its journal
 - **`context_registration.py`** — What the conversation package adds to the context the model sees
 - **`engine_registration.py`** — The conversation engine's implementation of the call core's engine link
 - **`event_parsing.py`** — Agent-event → chat envelope translation + usage extraction
@@ -37,12 +38,14 @@ the running turn reach it, and claims the core's cancellation check
 - **`process_runner.py`** — Run a turn's Agent method tools in an isolated subprocess
 - **`restart_turn.py`** — Continue an interrupted chat as a new turn after a worker restart
 - **`revert.py`** — Safe single-turn Undo/Revert and Redo/Reapply
-- **`rewind.py`** — Plan and apply transactional multi-turn rewind operations
+- **`rewind.py`** — Plan and apply rewinds in three modes: code and conversation, conversation, code
+- **`rewind_marks.py`** — What a rewind leaves behind: Undo and Redo marks and the note to the model
 - **`session_config.py`** — Per-session run configuration shared by TUI, web, and channels
 - **`session_context.py`** — Unified per-turn session context
 - **`session_model.py`** — Single source of truth for which chat model a session runs
 - **`sub_agent_run.py`** — Run an agent turn that can be inherited (sibling branch) or clean
 - **`surface_context.py`** — Turn-scoped awareness of a visible OpenProgram desktop surface
+- **`topics.py`** — Sort a conversation's messages into topics, for Activity's time chart
 - **`turn_lifecycle.py`** — Assistant-turn lifecycle helpers
 - **`turn_request_context.py`** — The TurnRequest in force, plus the owner's original input
 - **`workdir.py`** — Default chat-runtime workdir resolution

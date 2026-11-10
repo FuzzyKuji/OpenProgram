@@ -2,7 +2,11 @@
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const vm = require("node:vm");
-const { applyNativeTitleBarChrome, registerNativeTitleBarIpc } = require("../main/windows/window-chrome");
+const {
+  applyNativeTitleBarChrome,
+  browserWindowChromeOptions,
+  registerNativeTitleBarIpc,
+} = require("../main/windows/window-chrome");
 
 const positions = [];
 const win = {
@@ -76,6 +80,14 @@ applyNativeTitleBarChrome({ isDestroyed: () => true }, "darwin", {});
 applyNativeTitleBarChrome({ webContents: { isDestroyed: () => true } }, "darwin", {});
 assert.deepEqual(positions, []);
 
+assert.deepEqual(browserWindowChromeOptions("linux", { text: "#aaa" }), { autoHideMenuBar: true });
+const menuRow = [];
+applyNativeTitleBarChrome({
+  isDestroyed: () => false,
+  setMenuBarVisibility: (visible) => menuRow.push(visible),
+}, "linux", { text: "#aaa" });
+assert.deepEqual(menuRow, [false], "Linux spends no permanent row on the application menu");
+
 const main = fs.readFileSync(require.resolve("../main"), "utf8");
 assert.match(main, /registerNativeTitleBarIpc\(\{ ipcMain, BrowserWindow,/);
 for (const event of ["did-finish-load", "leave-full-screen"]) {
@@ -83,4 +95,4 @@ for (const event of ["did-finish-load", "leave-full-screen"]) {
 }
 const css = fs.readFileSync(require.resolve("../../web/components/center-tabs/strip/tab-strip.module.css"), "utf8");
 assert.match(css, /\.strip\s*\{[^}]*height: 40px;/);
-console.log("macOS native window chrome: geometry, preload resize, sender ownership and lifecycle checks passed");
+console.log("native window chrome: Linux menu row, macOS geometry, preload resize, sender ownership and lifecycle checks passed");

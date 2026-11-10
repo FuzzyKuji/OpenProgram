@@ -28,7 +28,7 @@ def _approval(**_):
 
 
 @function(name="terminal_use", description=DESCRIPTION, toolset=["core"],
-          unsafe_in=["wechat", "telegram", "plan"], requires_approval=_approval,
+          unsafe_in=["plan"], requires_approval=_approval,
           max_result_chars=32_000, path_params={}, url_params=[])
 def terminal_use(action: str, terminal_id: str = "", generation: str = "", binding_id: str = "",
                  data: str = "", cursor: int = 0, expected_input_revision: int | None = None,

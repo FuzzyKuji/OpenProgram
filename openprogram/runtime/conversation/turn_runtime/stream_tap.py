@@ -20,6 +20,47 @@ if TYPE_CHECKING:
 _log = logging.getLogger(__name__)
 
 
+def utf16_length(text: str) -> int:
+    """Length in UTF-16 units, the unit a browser's string offsets use."""
+    return len(text.encode("utf-16-le", "surrogatepass")) // 2
+
+
+def block_item_id(blocks: list[dict], index: int) -> str:
+    """The stable id of a text or thinking block.
+
+    ``<type>:<n>`` counts runs of that type; a later block in the same run
+    is ``<type>:<n>.<k>``, so a block the tap merged keeps its id when the
+    final write segments it.
+    """
+    kind = blocks[index].get("type")
+    run = -1
+    position = 0
+    for i in range(index + 1):
+        if blocks[i].get("type") != kind:
+            continue
+        if i == 0 or blocks[i - 1].get("type") != kind:
+            run += 1
+            position = 0
+        else:
+            position += 1
+    return f"{kind}:{run}.{position}" if position else f"{kind}:{run}"
+
+
+def naming_reply_row(on_event: "EventCallback", session_id: str, user_msg_id: str, reply_row_id: str) -> "EventCallback":
+    """Stamp the reply's row id on every frame of this turn that lacks one.
+
+    A client looks up the reply a result, error or retry frame answers by
+    this ``row_id``; it never builds the id from ``msg_id`` itself.
+    """
+    def emit(env: dict) -> None:
+        data = env.get("data") if env.get("type") == "chat_response" else None
+        if (isinstance(data, dict) and "row_id" not in data and data.get("msg_id") == user_msg_id
+                and data.get("session_id") in (None, session_id) and data.get("type") != "user_message"):
+            env = {**env, "data": {**data, "row_id": reply_row_id}}
+        on_event(env)
+    return emit
+
+
 @dataclass
 class StreamTap:
     callback: Callable[[dict], None]
@@ -28,6 +69,17 @@ class StreamTap:
 
     def __call__(self, env: dict) -> None:
         self.callback(env)
+
+
+def final_blocks(tap: StreamTap, ordered: list[dict], cancel_event) -> list[dict]:
+    """The blocks a reply's terminal write keeps.
+
+    A Stop keeps the partial text the tap received. Otherwise the loop's
+    ordered blocks win, and the tap's trace stands in when it has none.
+    """
+    if cancel_event is not None and cancel_event.is_set():
+        return tap.blocks
+    return ordered or tap.blocks
 
 
 def make_stream_tap(
@@ -75,19 +127,22 @@ def make_stream_tap(
 
     from openprogram.state.memory.policy import stamp as _memory_stamp
 
-    def flush() -> None:
+    def flush(*, quiet: bool = False) -> None:
         nonlocal dirty
         if not dirty or not placeholder_inserted:
             return
         try:
-            writer.update(
-                assistant_msg_id,
-                output="".join(b["text"] for b in blocks if b["type"] == "text"),
-                metadata={**_memory_stamp(req), "extra": json.dumps({
+            fields = {
+                "output": "".join(b["text"] for b in blocks if b["type"] == "text"),
+                "metadata": {**_memory_stamp(req), "extra": json.dumps({
                     **(extra if isinstance(extra, dict) else {}),
                     "blocks": blocks, "stream_seq": stream_seq,
                 }, default=str)},
-            )
+            }
+            if quiet:
+                store.update_stream_progress(req.session_id, assistant_msg_id, **fields)
+            else:
+                writer.update(assistant_msg_id, **fields)
             dirty = False
         except Exception:
             _log.warning("failed to persist chat progress for session %s", req.session_id, exc_info=True)
@@ -108,7 +163,13 @@ def make_stream_tap(
                 and _owns(payload)):
             stream_seq += 1
             payload["seq"] = stream_seq
+        # A frame sent before a read is reflected in that read, so the row
+        # is written first. A failed write still emits; the offset shows it.
+        _persist(env)
         on_event(env)
+
+    def _persist(env: dict) -> None:
+        nonlocal dirty
         if not placeholder_inserted:
             return
         try:
@@ -132,9 +193,17 @@ def make_stream_tap(
                 if etype in {"thinking", "text"}:
                     delta = evt.get("text") or ""
                     if blocks and blocks[-1].get("type") == etype:
+                        offset = utf16_length(blocks[-1]["text"])
                         blocks[-1]["text"] += delta
                     else:
+                        offset = 0
                         blocks.append({"type": etype, "text": delta})
+                    payload.update(
+                        row_id=assistant_msg_id,
+                        item_id=block_item_id(blocks, len(blocks) - 1),
+                        item_index=len(blocks) - 1,
+                        offset=offset,
+                    )
                 elif etype == "tool_use":
                     tid = evt.get("tool_call_id")
                     if not tid or not any(b.get("type") == "tool" and b.get("tool_call_id") == tid for b in blocks):
@@ -173,11 +242,12 @@ def make_stream_tap(
                                 "outcome": evt.get("outcome"),
                             })
                 dirty = True
-                flush()
+                flush(quiet=etype in {"thinking", "text"})
             if etype == "text_end" and evt.get("citations"):
-                for block in reversed(blocks):
-                    if block.get("type") == "text":
-                        block["citations"] = list(evt["citations"])
+                for index in range(len(blocks) - 1, -1, -1):
+                    if blocks[index].get("type") == "text":
+                        blocks[index]["citations"] = list(evt["citations"])
+                        payload.update(row_id=assistant_msg_id, item_id=block_item_id(blocks, index))
                         dirty = True
                         flush()
                         break

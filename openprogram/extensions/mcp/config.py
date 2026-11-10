@@ -444,14 +444,6 @@ def save_configs_revision(
     return result.revision
 
 
-def _read_raw(path: Path) -> dict:
-    try:
-        raw = json.loads(path.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001 — missing / corrupt → start fresh
-        return {}
-    return raw if isinstance(raw, dict) else {}
-
-
 def _decode_raw_bytes(raw: bytes | None) -> dict:
     if raw is None:
         return {}

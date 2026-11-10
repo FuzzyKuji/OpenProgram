@@ -337,8 +337,8 @@ async def handle_attach_branch(ws, cmd: dict) -> None:
               "target_head_msg_id": "...",       # source (embedded)
               "anchor_head_msg_id": "..."        # where to anchor; default = active head
               "label": "..."                     (optional override)}
-        out: broadcast: ``session_reload`` so all tailing clients
-                       refresh and see the new attach card.
+        out: open transcripts of the anchor session get the new attach
+             card from the transcript publisher.
     """
     import json as _json
     import time
@@ -522,14 +522,7 @@ async def handle_attach_branch(ws, cmd: dict) -> None:
         # Write the pointer onto the ANCHOR session (where the card is
         # supposed to appear), not necessarily the source session.
         head_before = anchor_sess.get("head_id")
-        db.append_message(anchor_session_id, attach_msg)
-        if head_before:
-            try:
-                db.set_head(anchor_session_id, head_before)
-            except Exception:
-                # The attach row landed; only the head restore failed.
-                _log.warning(
-                    "head not restored after attach in session %s", anchor_session_id, exc_info=True)
+        db.append_message(anchor_session_id, attach_msg, advance_head=False)
         try:
             db.commit_turn(
                 anchor_session_id,
@@ -556,9 +549,8 @@ async def handle_attach_branch(ws, cmd: dict) -> None:
         # Re-pin the pre-attach head through _set_active_head to re-read
         # the branch into the mirror and drop the stale cache — without
         # this, _save_session later writes the pre-attach message list
-        # back and the card vanishes until a refresh. When there was no
-        # pre-attach head, append_message already placed HEAD, so only
-        # the cache/mirror needs re-reading.
+        # back and the card vanishes until a refresh. With no pre-attach head
+        # only the cache/mirror needs re-reading.
         if head_before:
             _s._set_active_head(anchor_session_id, head_before)
         else:
@@ -567,22 +559,7 @@ async def handle_attach_branch(ws, cmd: dict) -> None:
     except Exception as e:  # noqa: BLE001
         error = f"{type(e).__name__}: {e}"
 
-    if ok:
-        try:
-            # Reload the anchor session (where the card lands). If
-            # source != anchor, the source session is unchanged.
-            _s._broadcast(json.dumps({
-                "type": "session_reload",
-                "data": {
-                    "session_id": anchor_session_id,
-                    "reason": "attach",
-                },
-            }, default=str))
-        except Exception:
-            # Peers reload the anchor session on their next load.
-            _log.warning(
-                "attach refresh not broadcast for session %s", anchor_session_id, exc_info=True)
-    else:
+    if not ok:
         # Defect 6: this frame used to be the ONLY signal and nothing
         # consumed it, so a failed attach was completely silent. Log
         # server-side too so failures are diagnosable from the worker

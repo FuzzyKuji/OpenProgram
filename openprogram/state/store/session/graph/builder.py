@@ -62,7 +62,7 @@ def build_session_graph(
     from openprogram.state.program_facts import annotate_messages
     full_msgs = annotate_messages(session_id, full_msgs)
 
-    # Named branches: {branch_anchor_id: human name}. meta.json's
+    # Named branches: {branch_anchor_id: human name}. The session's
     # `branches` dict is keyed by the branch anchor node id (the branch's
     # first-turn reply); stamp the name onto that node so the DAG can
     # label which branch is which. Includes merged branches (unlike
@@ -112,7 +112,7 @@ def build_session_graph(
     try:
         pair = db._open(session_id)  # noqa: SLF001
         if pair is not None:
-            _git, _idx = pair
+            _session_log, _idx = pair
             for anchor, info in (_idx.meta.get("branches") or {}).items():
                 name = (info or {}).get("name") if isinstance(info, dict) else info
                 if isinstance(name, str) and name.strip():

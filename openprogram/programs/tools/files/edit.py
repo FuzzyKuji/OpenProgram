@@ -32,7 +32,7 @@ _DESCRIPTION = (
     accept_edits_safe=True,   # acceptEdits 档下自动放行（改文件——acceptEdits 自动批）
     description=_DESCRIPTION,
     toolset=["core"],
-    unsafe_in=["wechat", "telegram", "plan"],
+    unsafe_in=["plan"],
     path_params={"file_path": "write"},
 )
 def edit(file_path: str,
@@ -66,7 +66,8 @@ def edit(file_path: str,
     from openprogram.host.sandbox import validate_write_path
     violation = validate_write_path(file_path)
     if violation:
-        return f"Error: sandbox policy: {violation}"
+        from openprogram.runtime.permissions import refusal
+        raise refusal.sandbox("edit", violation)
     if not os.path.exists(file_path):
         return f"Error: file not found: {file_path}"
     if old_string == new_string:

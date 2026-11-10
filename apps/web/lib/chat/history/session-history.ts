@@ -1,10 +1,18 @@
 import { create } from 'zustand';
 
+/** The read protocol this client speaks: whole turns and a numbered window. */
+export const HISTORY_PROTOCOL = 3;
+
 export interface HistoryPage {
   head_id: string | null; before: string | null; after?: string | null;
-  snapshot?: string; start?: number; end?: number; total?: number;
+  revision?: number; start?: number; end?: number; total?: number;
 }
-export interface HistoryState extends HistoryPage { generation: number; loading: boolean; error: boolean; renewalRequired?: boolean }
+
+/** Whether this view came from a read: rows without a window are leftovers. */
+export function holdsHistoryWindow(page: HistoryPage | undefined): boolean {
+  return page?.revision !== undefined;
+}
+export interface HistoryState extends HistoryPage { generation: number; loading: boolean; error: boolean }
 let generation = 0;
 export const useSessionHistory = create<{ pages: Record<string, HistoryState> }>(() => ({ pages: {} }));
 export function registerSessionHistory(id: string, history?: HistoryPage) {

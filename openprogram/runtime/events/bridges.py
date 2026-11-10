@@ -1,7 +1,7 @@
 """
 B 类系统事件桥：把子系统已有的信号翻译成统一 Event 进总线。
 
-设计（docs/reference/design/proactive/event-layer.md）：B 类源不改源头逻辑，
+设计（docs/reference/design/proactive/event-layer.html）：B 类源不改源头逻辑，
 只架单向桥。auth 自带规范的 ``subscribe/_emit``，所以它走真正的"桥"
 （订阅→翻译→emit）；context / channels / memory / webui watcher 是
 自家代码，直接在源头加 ``emit_safe`` tap，不经过本模块。

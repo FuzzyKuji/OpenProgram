@@ -143,3 +143,26 @@ def test_web_auth_url_does_not_disclose_token_to_an_unowned_port(
     assert captured.err == (
         "error: active Web server is not owned by this profile\n"
     )
+
+
+def test_web_start_that_never_binds_says_how_to_open_the_page_signed_in(monkeypatch, capsys):
+    # A slow first start must not end in a page opened without its sign-in
+    # link: that page loads with every list empty.
+    from openprogram.interfaces.cli.commands import web
+
+    opened: list[str] = []
+    monkeypatch.setattr(web, "_port_in_use", lambda _port: False)
+    monkeypatch.setattr("openprogram.operations.worker.spawn_detached", lambda: 0)
+    waits: list[float] = []
+    monkeypatch.setattr("openprogram.interfaces.cli.ink._wait_until_listening", lambda port, timeout: waits.append(timeout) or False)
+    monkeypatch.setattr("openprogram.host._platform.environment.tui_worker_ready_timeout_seconds", lambda: 120.0)
+    monkeypatch.setattr("openprogram.host._platform.environment.open_browser_url", lambda url: opened.append(url) or True)
+
+    web._cmd_web(18100, True)
+
+    assert opened == []
+    out = capsys.readouterr().out
+    assert "still starting on port 18100" in out
+    assert "Run `openprogram web` again" in out
+    # As long as the TUI waits: a first Windows start runs under Defender's scan.
+    assert waits == [120.0]

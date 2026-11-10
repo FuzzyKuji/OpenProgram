@@ -120,13 +120,6 @@ def test_background_agent_reports_back_once_with_only_its_report(store, monkeypa
     assert notices._load(path)[0] == []
 
     # The caller's context carries the report, not the child's transcript.
-    from openprogram.runtime.context.commit.generator import generate_commit
-    attach = next(m for m in store.get_messages("p1") if m["id"] == attach_id)
-    commit = generate_commit(
-        store=store, session_id="p1", parent_commit=None, new_nodes=[attach],
-        head_node_id="a1", budget_total=200_000, budget_summarize_threshold=160_000,
-    )
-    (item,) = commit.items
-    assert item.reason == "attached_report"
-    assert "the log is clean" in item.rendered and "TOOL NOISE" not in item.rendered
-    assert 'read_conversation(session_id="p1", head_id="child_head")' in item.rendered
+    from openprogram.runtime.context.persistence import rendered_history
+    seen_text = repr(rendered_history(store, "p1", head_id=attach_id))
+    assert "the log is clean" in seen_text and "TOOL NOISE" not in seen_text

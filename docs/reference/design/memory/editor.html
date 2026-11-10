@@ -1,11 +1,58 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><title>Reading, editing and history</title>
-<style>body{font:16px system-ui;max-width:1000px;margin:48px auto;padding:24px;background:#171719;color:#eee;line-height:1.6}section{border:1px solid #444;border-radius:12px;padding:24px;margin:20px 0}button{background:#333;color:#fff;padding:10px;border:1px solid #555;border-radius:6px}pre{white-space:pre-wrap}.add{color:#94d4a5}.remove{color:#efa5a5}a{color:#acd4ff}</style>
+<title>Reading, editing and history</title>
+<meta name="description" content="How Memory topics and Core open, save without a button, keep Git history and restore a version.">
+<meta name="covers" content="apps/web/components/memory/ openprogram/state/memory/management/">
 <h1>Reading, editing and history</h1>
-<p>Opening a topic or Core source record displays rendered Markdown. Edit switches to source text. Edits are persisted locally immediately and sent through a serialized file writer immediately. Git history checkpoints group manual edits into five-minute intervals.</p>
-<section><h2>Topic title</h2><button>Preview</button> <button>Edit</button> <button>History</button> <p>Rendered memory content, with existing footnotes and links.</p></section>
-<section><h2>History</h2><p>Newest first, with local date and time, commit message, and a selectable revision. Load older entries on demand. Select a revision to see added and removed lines relative to its parent.</p><pre class="remove">− Previous paragraph</pre><pre class="add">+ Updated paragraph</pre><p>Select a revision and choose Restore this version to restore that document. Restoring records the current state first and creates a new commit; existing history is retained. Keyboard undo and redo remain available across automatic saves. A server-owned task checks durable pending deadlines every 15 seconds; edits are checkpointed after five minutes even if the page closes. Restarts resume pending deadlines.</p></section>
-<h2>Existing implementation and references</h2><p>The editor defaults to source and requires Save. Staged writes already validate references, rebuild derived views and commit Git history; history is not exposed. Preserve that transaction and Markdown rendering.</p>
-<table><tr><th>Reference</th><th>Adopted behavior</th><th>Boundary</th></tr><tr><td><a href="https://hackmd.io/@hackmd-blog/hackmd-versions-api-2026">HackMD versions</a></td><td>Version list and visible differences</td><td>No collaborative editing or named versions</td></tr><tr><td><a href="https://obsidian.md/help/sync/version-history">Obsidian history</a></td><td>Automatic persistence and accessible history</td><td>Local Git; no sync service</td></tr></table>
-<h2>Data and failure handling</h2><p>Owner-authorized Memory endpoints read bounded Git history restricted to topic Markdown. Compare submitted base content under the existing write lock to reject stale edits. Return canonical saved text because normalization may alter source. Show only errors and Git warnings inline; no saving or saved indicators. Preserve drafts locally across navigation and reload; serialize saves per file. Never mark newer typing as saved by an older response.</p>
-<h2>Acceptance</h2><p>Topics and Core open in preview; no Save button. Typing automatically persists, survives switching files, and creates a visible Git entry. Undo reverses individual edits; History restores a chosen version. History supports older pages and parent diffs. Rejected/conflicting saves preserve drafts and show an error. Path and revision inputs cannot escape Memory. Existing source validation and rendering remain intact.</p>
-<h2>Source links and sidebar</h2><p>Archive hides a session without expiry or capacity deletion. Deleted original sessions have unavailable links, labelled Original session deleted; no additional source copy is made for deletion. Existing Memory source storage is checked before exposing content. Memory navigation and refresh controls reuse the primary sidebar row and icon-button styles.</p><h2>Implementation status</h2><p>Implemented and independently reviewed. Route tests cover deferred Git commits, restoration and deleted-source access; controller tests cover serialized writes and undo/redo. Archive tests cover retention across restart. Full checks and default-App visual verification are release gates.</p></html>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Action</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Open</th><td>A topic or Core source record shows rendered Markdown, with its footnotes and links. Controls: Preview, Edit, History.</td></tr>
+<tr><th scope="row">Edit</th><td>Source text. No Save button.</td></tr>
+<tr><th scope="row">Save</th><td>Each edit goes straight to local draft storage and through a writer serialized per file. A reply never marks newer typing as saved.</td></tr>
+<tr><th scope="row">Undo, redo</th><td>Individual edits, across automatic saves</td></tr>
+<tr><th scope="row">History</th><td>Newest first, 50 at a time, with local date and time and commit message. Older entries load on demand.</td></tr>
+<tr><th scope="row">Select a revision</th><td>Lines added and removed against its parent</td></tr>
+<tr><th scope="row">Restore this version</th><td>Commits the current state, then a new commit with the chosen document. History is kept.</td></tr>
+</tbody>
+</table>
+
+<h2 id="checkpoints">Git checkpoints</h2>
+<p>Manual edits are grouped into five-minute checkpoints. The first edit commits <code translate="no">memory: before manual editing</code> and records a durable deadline, so the pre-edit state survives even if it was written outside the UI. A server-owned task checks the deadline every 15 seconds and commits <code translate="no">memory: manual editing checkpoint</code>, also when the page has closed. Restarts resume pending deadlines.</p>
+
+<h2 id="data-and-failure-handling">Data and failure handling</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Write path</th><td>Staged write: validates references, rebuilds derived views, commits Git history, renders Markdown as before. Source validation is unchanged.</td></tr>
+<tr><th scope="row">Stale edit</th><td>Submitted <code translate="no">base_content</code> is compared under the write lock; a mismatch is rejected and the draft kept with an error.</td></tr>
+<tr><th scope="row">Normalization</th><td>The reply returns canonical saved text, because normalization may alter source.</td></tr>
+<tr><th scope="row">Status shown</th><td>Errors and Git warnings inline only; no saving or saved indicator.</td></tr>
+<tr><th scope="row">Navigation, reload</th><td>Drafts survive locally.</td></tr>
+<tr><th scope="row">Access</th><td>Owner-authorized endpoints read bounded Git history restricted to topic Markdown. Path and revision inputs cannot escape Memory; a revision must be a full commit id.</td></tr>
+</tbody>
+</table>
+
+<h2 id="source-links-and-sidebar">Source links and sidebar</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Archived session</th><td>Hidden, with no expiry or capacity deletion</td></tr>
+<tr><th scope="row">Deleted session</th><td>Its links are unavailable and labelled Original session deleted; no extra source copy is made. The memory remains.</td></tr>
+<tr><th scope="row">Source content</th><td>Existing Memory source storage is checked before exposing it.</td></tr>
+<tr><th scope="row">Memory navigation, refresh</th><td>Reuse the primary sidebar row and icon-button styles.</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>References</summary>
+<table class="stack">
+<thead><tr><th scope="col">Reference</th><th scope="col">Adopted</th><th scope="col">Boundary</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://hackmd.io/@hackmd-blog/hackmd-versions-api-2026">HackMD versions</a></th><td>Version list and visible differences</td><td>No collaborative editing or named versions</td></tr>
+<tr><th scope="row"><a href="https://obsidian.md/help/sync/version-history">Obsidian history</a></th><td>Automatic persistence and accessible history</td><td>Local Git; no sync service</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="implementation-status">Implementation status</h2>
+<p>Implemented. Route tests cover deferred Git commits, restoration and deleted-source access; controller tests cover serialized writes and undo and redo; archive tests cover retention across restart.</p>

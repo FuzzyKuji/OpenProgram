@@ -88,7 +88,7 @@ def test_no_option_and_no_registered_default_sends_none(monkeypatch):
 def fifty_tool_calls():
     """The runtime registered its producer and this run made 50 tool calls."""
     import openprogram.runtime  # noqa: F401 - registers the default producer
-    from openprogram.runtime.context import cache_aware_microcompact
+    from openprogram.runtime.context.compaction import cache_aware_microcompact
 
     cache_aware_microcompact.reset()
     cache_aware_microcompact.increment_tool_calls(cache_aware_microcompact.INITIAL_TRIGGER)
@@ -104,7 +104,7 @@ def test_a_request_without_the_option_uses_the_runtime_producer(monkeypatch, fif
 def test_a_summary_request_on_a_1m_model_carries_the_context_edits(monkeypatch, fifty_tool_calls):
     """Compaction summaries build their own options without cache_edits; the
     body still carries context_management, as every Anthropic request did."""
-    from openprogram.runtime.context.bounded_summary import summarize_text
+    from openprogram.runtime.context.compaction.bounded_summary import summarize_text
 
     params = {}
 

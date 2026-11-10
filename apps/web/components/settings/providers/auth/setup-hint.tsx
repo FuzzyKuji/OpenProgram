@@ -69,7 +69,6 @@ function CommandRow({ text }: { text: string }) {
         className="absolute top-1 right-1"
         onClick={copy}
         aria-label={copied ? "Copied" : "Copy command"}
-        title={copied ? "Copied" : "Copy"}
       >
         {copied ? "✓ Copied" : "Copy"}
       </Button>

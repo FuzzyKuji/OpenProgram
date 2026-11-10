@@ -117,8 +117,10 @@ async def run(mode, folder, policy, store, control):
             if time.monotonic() > deadline:
                 raise TimeoutError(str(execution.to_dict()))
             await asyncio.sleep(0.01)
-    incompatible = [event.payload.get("reason", "") for event in store.list_events(execution.execution_id)
-                    if event.kind == "function.incompatible"]
+    log = store.function_log(execution.execution_id)
+    log.nodes("")  # read what the subprocess appended
+    incompatible = [value.get("reason", "") for (kind, _key), value in log._saved.items()
+                    if kind == "function.incompatible"]
     print(json.dumps({"status": execution.status.value, "incompatible": incompatible}))
 
 
@@ -135,6 +137,7 @@ def _commit(package, version):
     env = {**os.environ, **_GIT_ENV}
     subprocess.run(["git", "-C", str(package), "add", "-A"], check=True, env=env)
     subprocess.run(["git", "-C", str(package), "commit", "-qm", version], check=True, env=env)
+    subprocess.run(["git", "-C", str(package), "update-ref", "refs/openprogram/checked", "HEAD"], check=True, env=env)
 
 
 @pytest.fixture

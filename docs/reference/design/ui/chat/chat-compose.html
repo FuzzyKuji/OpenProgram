@@ -1,1 +1,49 @@
-<!doctype html><html lang="en"><meta charset="utf-8"><title>Chat quotes and message editing</title><style>body{max-width:850px;margin:48px auto;font:16px/1.6 system-ui}code{background:#eee}</style><h1>Chat quotes and message editing</h1><p>Release the pointer after selecting message text to reveal the Add to chat action above the selection. The toolbar stays hidden during dragging, hides on a new pointer press or cancelled selection, and also supports completed keyboard selections. Add to chat appends the selection to the current draft. Selecting text is the only way to quote: the message action row has no Quote action. The selection toolbar uses a compact 28 px action with 3 px outer padding, 8 px corner radius, a subtle border and shadow, a rounded action target, and an opaque theme-aware popover background. Hover and pressed states mix solid theme colors, never replace the background with a translucent overlay. Keyboard focus has a visible outline. Quotes append Markdown blockquotes to that conversation's draft and focus its composer. Existing drafts and attachments remain intact; sending is explicit.</p><p>Historical user messages open an inline composer with the same text field, file mention picker, attachment processing and preview strip as the bottom composer. Existing attachments can be removed; images and documents can be picked, pasted or dropped. URLs remain editable text. Cancel discards only the edit. Save and resend creates a sibling branch through the existing edit route. Errors retain the edit and show a retryable message.</p><p>References: the user-supplied Codex selection screenshot establishes the selection action; no external product parity is claimed. Separate side-chat windows are outside this change.</p><h2>Chat action icons</h2><p>The selection action uses the shared animated-icons components. The <a href="https://github.com/pqoqubbw/icons/tree/main/icons">upstream catalog</a> has no Quote component, so QuoteIcon follows the existing Monitor and Pin fallback: the official Lucide glyph, the shared imperative start/stop interface, and the existing CopyIcon spring and translation. No SVG path or new motion style is authored. The whole button drives animation on pointer hover and keyboard focus; leaving or blurring resets it when neither interaction remains. Disabled controls and reduced-motion users receive static icons. Existing sizes, colors, surfaces, draft updates and session ownership remain unchanged.</p><p>Bounded plan: add the shared QuoteIcon and a chat action animation hook; connect the selection toolbar; verify the real components in the quote/edit browser test under normal and reduced motion, then run chat UI, accessibility, TypeScript and documentation link checks. Runtime, composer semantics, backend APIs and unrelated surfaces are excluded. Independent specification and quality review precede any integration; this source patch does not update the installed App.</p><h2>Implementation and acceptance</h2><p>Per-pane session ownership is explicit. Uploaded bytes use the existing bounded attachment persistence and image dispatch path. Retained image copies are read through the authorized raw-file API; retained legacy attachment blocks stay lossless. No automatic submission and no new permission modes.</p><p>Gate: focused browser interaction tests for quote draft preservation and split ownership, inline attachment editing and failure retention; REST edit attachment validation and dispatch tests; TypeScript check; documentation links; production build during the standard local refresh. Independent specification and quality review precede integration.</p><p>Icon consistency status: source changes and the two normal/reduced-motion browser cases are verified. TypeScript, chat UI and documentation links pass. The global accessibility check remains blocked by the unchanged canvas-controls role-button keyboard handler failure, reproduced at the task base. Independent specification and quality reviews pass. Integration and the production build remain pending; the installed App is unchanged.</p><p>Existing quote/edit status: specification and quality reviews pass. Six REST attachment cases, the split-pane browser interaction test (including retained and pasted images), thirteen existing attachment cases, the local attachment path contract, TypeScript and documentation links pass. Production packaging uses the standard local App refresh.</p></html>
+<title>Chat quotes and message editing</title>
+<meta name="description" content="How selected text becomes a quote in the draft, and how a sent user message is edited and resent.">
+<h1>Chat quotes and message editing</h1>
+
+<h2 id="quotes">Quote a selection</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Shows</th><td><strong>Add to chat</strong> above the selection, after the pointer is released or a keyboard selection completes</td></tr>
+<tr><th scope="row">Hides</th><td>During dragging, on a new pointer press, on a cancelled selection</td></tr>
+<tr><th scope="row">Result</th><td>Appends a Markdown blockquote to that conversation's draft and focuses its composer. Drafts and attachments stay; sending is explicit</td></tr>
+<tr><th scope="row">Only route</th><td>The message action row has no Quote action</td></tr>
+<tr><th scope="row">Owner</th><td>Each pane names its own session, so a quote lands in the pane it came from. Separate side-chat windows are out of scope</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Toolbar look and icon</summary>
+<ul>
+<li>One compact action, 3 px outer padding, 8 px corners, subtle border and shadow, opaque theme-aware popover background.</li>
+<li>Hover and pressed states mix solid theme colours, never a translucent overlay. Keyboard focus has a visible outline.</li>
+<li><code translate="no">QuoteIcon</code> is in the shared animated-icons set. The upstream <a href="https://github.com/pqoqubbw/icons/tree/main/icons">catalog</a> has no Quote, so it uses the official Lucide glyph with the shared start/stop interface and the <code translate="no">CopyIcon</code> spring and translation.</li>
+<li>The whole button drives the animation on hover and keyboard focus; it resets when neither remains. Disabled controls and reduced motion get a static icon.</li>
+</ul>
+</details>
+
+<h2 id="editing">Edit a sent message</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Editor</th><td>Inline, with the bottom composer's text field, file mention picker, attachment processing and preview strip</td></tr>
+<tr><th scope="row">Attachments</th><td>Existing ones can be removed; images and documents can be picked, pasted or dropped. URLs stay editable text</td></tr>
+<tr><th scope="row"><strong>Cancel</strong></th><td>Discards only the edit</td></tr>
+<tr><th scope="row"><strong>Save and resend</strong></th><td>Creates a sibling branch through <code translate="no">POST /api/chat/edit</code></td></tr>
+<tr><th scope="row">Failure</th><td>Keeps the edit and shows a retryable message</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Storage and permissions</summary>
+<ul>
+<li>Uploaded bytes use the bounded attachment persistence and image dispatch path. Retained image copies are read through the authorized raw-file API; retained legacy attachment blocks stay lossless.</li>
+<li>No automatic submission and no new permission modes.</li>
+</ul>
+</details>
+
+<h2 id="status">Implementation status</h2>
+<p>Implemented. Browser tests cover quote draft preservation, split-pane ownership, inline attachment editing, failure retention and the icon under normal and reduced motion; REST tests cover edit attachment validation and dispatch.</p>
+<p class="note">The selection action follows a user-supplied Codex screenshot; no parity with another product is claimed.</p>

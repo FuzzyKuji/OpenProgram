@@ -129,8 +129,8 @@ def _add_maintenance_commands(sub):
     p_dev_status.add_argument("--json", action="store_true", help="Emit JSON")
     p_dev_deploy = dev_sub.add_parser("deploy",
         help="Build a commit into the development instance and restart its worker")
-    p_dev_deploy.add_argument("ref", nargs="?", default="main",
-        help="Commit or branch to deploy (default: main)")
+    p_dev_deploy.add_argument("ref", nargs="?", default="dev",
+        help="Commit or branch to deploy (default: dev)")
     dev_sub.add_parser("open",
         help="Open the development instance in the default browser, signed in")
     dev_sub.add_parser("copy-models",
@@ -141,11 +141,27 @@ def _add_maintenance_commands(sub):
         help="Print a sign-in link for the development instance; a deploy "
              "restarts its worker and makes earlier links and browser "
              "sign-ins expire")
-    p_dev_promote = dev_sub.add_parser("promote",
-        help="Fast-forward the stable branch to the commit the development "
-             "instance serves, back up the stable profile, and refresh the App")
+    dev_promote_help = (
+        "Fast-forward the stable branch to the commit the development "
+        "instance serves, back up the stable profile, and refresh the App; "
+        "first waits up to 10 minutes for stable to finish running work, "
+        "and refuses, naming that work, if it does not")
+    p_dev_promote = dev_sub.add_parser("promote", help=dev_promote_help, description=dev_promote_help)
     p_dev_promote.add_argument("revision", nargs="?", default=None,
         help="Must be the commit the development instance serves (default: that commit)")
+    p_versions = sub.add_parser("versions",
+        help="List the versions this install keeps, or go back to one; runs outside every version")
+    versions_sub = p_versions.add_subparsers(dest="versions_verb", metavar="verb", required=True)
+    versions_sub.add_parser("list",
+        help="List retained versions with their commit, date and which is current, last good or previous good")
+    p_versions_use = versions_sub.add_parser("use",
+        help="Stop the worker, switch to a retained version and start it")
+    p_versions_use.add_argument("version", help="Version id from `openprogram versions list`")
+    p_versions_restore = versions_sub.add_parser("restore-data",
+        help="Restore a data snapshot taken before a destructive migration, with the worker stopped")
+    p_versions_restore.add_argument("backup", help="Backup name, starting with pre-switch-")
+    versions_sub.add_parser("rebuild-pointer",
+        help="Rebuild a lost version pointer from the newest version on the local line")
     p_self_update = sub.add_parser("self-update", help="Inspect or explicitly recover a conversational App update")
     self_update_sub = p_self_update.add_subparsers(dest="self_update_verb", required=True)
     p_self_status = self_update_sub.add_parser("status", help="Read update maintenance and owner recovery status")
@@ -433,9 +449,9 @@ def _add_diagnostic_commands(sub):
         help="Serve the Agent Client Protocol on stdio, for editors like Zed")
     p_acp.add_argument("--agent", default="main",
                        help="Agent id to run sessions as (default: main)")
-    p_acp.add_argument("--permission", default="ask",
+    p_acp.add_argument("--permission", default=None,
                        choices=["ask", "acceptEdits", "plan", "auto", "bypass"],
-                       help="Permission mode for tool calls (default: ask)")
+                       help="Permission mode for tool calls (default: bypass)")
 
 
 def _add_trash_and_backup_commands(sub):
@@ -852,6 +868,9 @@ def _add_service_commands(sub):
     p_upgrade.add_argument("--channel", metavar="NAME",
         help="Release line to follow (default: stable). Source checkouts "
              "persist it as the `update.channel` setting.")
+    p_upgrade.add_argument("--from", dest="release_directory", metavar="DIR",
+        help="Version-store installs: apply the release files in this directory "
+             "(version archive, repo.bundle, SHA256SUMS and the signed manifest).")
     p_upgrade.add_argument("--dry-run", action="store_true",
         help="Print planned steps without changing checkout, worker, or "
              "upgrade state. A source checkout still persists an explicit "
@@ -901,6 +920,44 @@ def _add_environments_command(sub):
     p_env_test.add_argument("id", help="Environment id")
 
 
+def _add_group_users_command(accounts_sub):
+    """Add ``channels accounts group-users``: who the Agent answers in groups."""
+    channel_choices = ["telegram", "discord", "slack"]
+    p_group_users = accounts_sub.add_parser("group-users",
+        help="Choose who the Agent answers in group chats (telegram, discord, "
+             "slack). A bound contact always has full access. Add others by "
+             "platform user id, with full access (runs as you, with every "
+             "tool) or chat access (replies and memory only). Anyone not "
+             "listed gets no reaction at all. Applies to the next message.")
+    verbs = p_group_users.add_subparsers(dest="group_users_verb", metavar="verb")
+
+    def add_common(parser, *, group_required=False):
+        parser.add_argument("channel", help="Channel id", choices=channel_choices)
+        parser.add_argument("--id", default="default",
+            help="Account id (default: 'default')")
+        parser.add_argument("--group", required=group_required, default=None,
+            help="Group id (Telegram chat id, Discord channel id, Slack "
+                 "channel id). A group with lists of its own ignores the "
+                 "account's lists. Omit for the account's lists.")
+
+    p_list = verbs.add_parser("list", help="Show who has access")
+    add_common(p_list)
+    p_add = verbs.add_parser("add",
+        help="Give a user access, or change the access they have")
+    add_common(p_add)
+    p_add.add_argument("user_id",
+        help="Stable platform user id (numeric on Telegram and Discord, "
+             "U... on Slack), never a username or display name")
+    p_add.add_argument("--access", required=True, choices=["full", "chat"],
+        help="full: runs as you with every tool. chat: replies and memory only")
+    p_remove = verbs.add_parser("remove", help="Take a user off the lists")
+    add_common(p_remove)
+    p_remove.add_argument("user_id", help="Stable platform user id")
+    p_reset = verbs.add_parser("reset",
+        help="Drop a group's own lists so the account's lists apply to it again")
+    add_common(p_reset, group_required=True)
+
+
 def _add_channels_command(sub):
     """Add the ``channels`` group with its accounts, access and bindings."""
     # ---- channels ---------------------------------------------------------
@@ -943,15 +1000,17 @@ def _add_channels_command(sub):
              "to the next message), group_sessions=shared|per-user "
              "(telegram; restart the worker to apply), "
              "sender_access=owner|paired (all channels; owner, the "
-             "default, gives approved senders the local owner's tools and "
-             "approvals and sandboxes group sessions, paired limits them "
-             "to replies and memory).")
+             "default, gives bound contacts and a group's full-access "
+             "users the local owner's tools and approvals, paired limits "
+             "everyone on the account to replies and memory). Who may talk "
+             "in a group is set with `group-users`.")
     p_chacct_set.add_argument("channel", help="Channel id",
         choices=["wechat", "telegram", "discord", "slack"])
     p_chacct_set.add_argument("key", help="Setting key (see channel docs)")
     p_chacct_set.add_argument("value", help="Setting value")
     p_chacct_set.add_argument("--id", default="default",
         help="Account id (default: 'default')")
+    _add_group_users_command(p_chacct_sub)
 
     # ---- channels access ------------------------------------------------
     p_chaccess = channels_sub.add_parser("access",

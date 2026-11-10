@@ -14,14 +14,8 @@ from typing import Any
 
 def _ensure_default_agent():
     """Return the default agent, creating an empty ``main`` if none exists."""
-    from openprogram.runtime.agent_registry import manager as _agents
-    spec = _agents.get_default()
-    if spec is not None:
-        return spec
-    from openprogram.runtime.agent_registry.builtin_agents import create_builtin_agents
-    spec = _agents.create("main", name="Main", make_default=True)
-    create_builtin_agents()
-    return spec
+    from openprogram.runtime.agent_registry.builtin_agents import ensure_default_agent
+    return ensure_default_agent()
 
 
 def run_providers_section() -> int:

@@ -55,6 +55,9 @@ def _persist(db, snapshot, kind, node_id):
             "update_id", "attempt", "phase", "candidate_revision", "last_verified_runtime",
             "verifier_verdict", "diagnosis", "source_repair_result", "iteration",
         )}
+        for key in ("dev_stable", "versions"):
+            if key in snapshot:
+                summary[key] = snapshot[key]
         node = existing or Call(
             id=node_id, role="code", name="self_update_result",
             created_at=snapshot["updated_at"], caller=origin.id, predecessor=origin.id,
@@ -103,7 +106,6 @@ def deliver_pending() -> int:
     if not _exists(store):
         return 0
     delivered = 0
-    sessions = set()
     with store._locked(read_only=True):
         for record in _records(store):
             if not is_terminal(record.state.phase):
@@ -117,11 +119,6 @@ def deliver_pending() -> int:
                 continue
             if count:
                 delivered += count
-                sessions.add(record.request.session_id)
             if delivered >= MAX_DELIVERIES:
                 break
-    if sessions:
-        from openprogram.runtime.jobs.runner import _broadcast_session_reload
-        for session_id in sessions:
-            _broadcast_session_reload(session_id, reason="self_update_result")
     return delivered

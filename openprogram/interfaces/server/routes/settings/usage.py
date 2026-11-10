@@ -4,6 +4,9 @@ Endpoints:
   GET /api/usage/summary          overall totals + per-model breakdown
   GET /api/usage/trend?bucket=day  time-series (day or hour buckets)
   GET /api/usage/by-kind           per call_kind breakdown
+  GET /api/usage/tuning?days=30    the compaction share and cache lifetime
+                                   that would have cost the user's own
+                                   calls the least (runtime/context/tuning.py)
 
 All queries support ``since`` / ``until`` epoch-seconds query params.
 """
@@ -19,6 +22,15 @@ def _ledger():
 
 
 def register(app):
+    # Sync (``def``): the replay reads a month of calls; FastAPI runs it in
+    # its threadpool instead of on the event loop.
+    @app.get("/api/usage/tuning")
+    def api_usage_tuning(days: float = QParam(30.0)):
+        if not 1 <= days <= 90:
+            return JSONResponse(content={"error": "days must be in [1, 90]"}, status_code=400)
+        from openprogram.runtime.context.tuning import tune
+        return JSONResponse(content=tune(days=days, ledger=_ledger()).to_dict())
+
     @app.get("/api/usage/summary")
     async def api_usage_summary(
         since: float | None = QParam(None),
@@ -50,7 +62,7 @@ def register(app):
 
         kind_rows = []
         for r in by_kind:
-            kind = r.keys.get("call_kind") or "unknown"
+            kind = r.keys.get("call_kind") or "direct"
             label = r.keys.get("call_label") or ""
             display = f"{kind}:{label}" if label else kind
             kind_rows.append({
@@ -154,7 +166,7 @@ def register(app):
         # Grouped: build {category: {bucket_idx: row}} then emit per-category series.
         cats: dict[str, dict[int, object]] = {}
         for r in rows:
-            cat = r.keys.get(group) or "unknown"
+            cat = r.keys.get(group) or ""
             b_idx = int(r.keys.get(bucket) or 0)
             cats.setdefault(cat, {})[b_idx] = r
 

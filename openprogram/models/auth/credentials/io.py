@@ -135,6 +135,11 @@ def _atomic_write(
             raise PrivateAtomicWriteError(
                 "fsync", target, committed=False, cause=exc
             ) from exc
+        # The file being replaced stays as its last good copy (<file>.bak),
+        # so a later unreadable file is never read as empty.
+        from openprogram.state.last_good import keep_previous
+
+        keep_previous(target)
         try:
             os.replace(temporary, target)
         except OSError as exc:

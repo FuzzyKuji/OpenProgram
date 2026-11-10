@@ -38,7 +38,6 @@ from openprogram.runtime.context.tokens import (
 from openprogram.runtime.context.types import (
     BudgetAllocation,
     CompactResult,
-    ReferenceMap,
     TurnPrep,
     UsageState,
 )
@@ -55,7 +54,6 @@ __all__ = [
     "workflow_source",
     "ContextEngine",
     "DefaultContextEngine",
-    "ReferenceMap",
     "TurnPrep",
     "UsageState",
     "default_engine",

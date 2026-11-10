@@ -243,3 +243,42 @@ def test_unresolvable_app_access_does_not_create_permanent_wait(monkeypatch, sta
 def test_pages_vm_and_app_listing_skip_system_access_manifest(monkeypatch, args):
     monkeypatch.setattr(system_access.platform, 'system', lambda: 'Darwin')
     assert system_access.access_manifest_for_tool('computer_use_agent', args) is None
+
+
+def test_desktop_grants_found_once_are_not_probed_again_under_the_same_record(monkeypatch):
+    monkeypatch.setattr(system_access.platform, 'system', lambda: 'Darwin')
+    probes, accessibility = [], ['not_granted']
+
+    def probe():
+        probes.append(accessibility[0])
+        return {
+            'identity': {'executable': sys.executable},
+            'capabilities': {
+                'screen_recording': {'status': 'granted', 'detail': 'fresh'},
+                'accessibility': {'status': accessibility[0], 'detail': 'fresh'},
+            },
+        }
+
+    monkeypatch.setattr(system_access, '_native_probe', probe)
+    call = {'target': 'app', 'action': 'click', 'args': {'app': 'Notes', 'element_index': 1}}
+    found = set()
+
+    # While a grant is missing every call probes, so the grant is seen as soon as it is given.
+    assert system_access.access_manifest_for_tool('computer_use_agent', call, found)['kind'] == 'system_access'
+    assert system_access.access_manifest_for_tool('computer_use_agent', call, found)['kind'] == 'system_access'
+    assert len(probes) == 2 and not found
+
+    accessibility[0] = 'granted'
+    assert system_access.access_manifest_for_tool('computer_use_agent', call, found) is None
+    assert len(probes) == 3 and found == {'computer_use:desktop'}
+
+    # Found: the later steps under this record start no process.
+    for _ in range(3):
+        assert system_access.access_manifest_for_tool('computer_use_agent', call, found) is None
+        assert system_access.required_access_state('computer_use_agent', call, found)['state'] == 'ready'
+    assert len(probes) == 3
+
+    # Another record (the next turn) and a caller that keeps none probe for themselves.
+    assert system_access.access_manifest_for_tool('computer_use_agent', call, set()) is None
+    assert system_access.access_manifest_for_tool('computer_use_agent', call) is None
+    assert len(probes) == 5

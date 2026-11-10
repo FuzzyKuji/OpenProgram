@@ -1,5 +1,6 @@
 "use client";
 
+import { jsonFetch } from "@/lib/net/fetch-client";
 import { useEffect, useState } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -34,15 +35,10 @@ export function SearchConnectivity({
     setBusy(true);
     setResult({ kind: "ok", text: "…" });
     try {
-      const r = await fetch(
+      const d = await jsonFetch<{ ok?: boolean; latency_ms?: number; result_count?: number; error?: string }>(
         `/api/search-providers/${encodeURIComponent(providerId)}/test`,
-        {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({}),
-        },
+        { method: "POST", body: JSON.stringify({}) },
       );
-      const d = await r.json();
       if (d.ok) {
         setResult({
           kind: "ok",
@@ -72,7 +68,11 @@ export function SearchConnectivity({
       </div>
       <div className={`${styles.detailRow} flex gap-[10px] items-center`}>
         <span className={styles.modelCountSummary} style={{ flex: 1 }}>
-          {needsKey
+          {disabled
+            ? needsKey
+              ? text("Add an API key above first.", "请先在上方添加 API key。")
+              : text("This backend is not available yet.", "这个后端暂不可用。")
+            : needsKey
             ? text("Runs a tiny live query to validate the API key.", "运行一个小型实时查询来验证 API key。")
             : text("Runs a tiny live query to confirm this backend responds.", "运行一个小型实时查询，确认该后端可用。")}
         </span>
@@ -91,11 +91,6 @@ export function SearchConnectivity({
         <Button
           onClick={test}
           disabled={busy || disabled}
-          title={disabled
-            ? needsKey
-              ? text("Configure the API key first", "请先配置 API key")
-              : text("Backend not available yet", "后端暂不可用")
-            : undefined}
         >
           {text("Check", "检查")}
         </Button>

@@ -1,142 +1,109 @@
-<!DOCTYPE html>
-<html lang="zh-CN">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram · Composer 控制栏响应式设计</title>
-<style>
-  :root { color-scheme:dark; --bg:#11141a; --panel:#181d26; --line:#303a4a;
-    --text:#dce3ec; --muted:#96a1b1; --blue:#72a8ff; --green:#55d69c;
-    --amber:#f0c562; --mono:ui-monospace,SFMono-Regular,Menlo,monospace }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
-    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif }
-  main { max-width:1040px; margin:auto; padding:42px 28px 80px }
-  h1 { margin:0 0 8px; font-size:29px } h2 { margin:38px 0 12px; padding-top:15px;
-    border-top:1px solid var(--line); font-size:20px } h3 { margin:0 0 6px; font-size:15px }
-  p { margin:8px 0 } code { padding:1px 5px; border:1px solid #2b3544;
-    border-radius:5px; background:#0d1015; font-family:var(--mono); font-size:.91em }
-  a { color:var(--blue) } .sub { color:var(--muted) } .lead,.card,.table-wrap,.demo {
-    border:1px solid var(--line); border-radius:11px; background:var(--panel) }
-  .lead { margin-top:20px; padding:15px 17px; border-left:4px solid var(--blue) }
-  .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px }
-  .card { padding:14px 15px } ul,ol { margin:6px 0; padding-left:20px }
-  .table-wrap { max-width:100%; overflow:auto; overscroll-behavior-x:contain }
-  table { width:100%; border-collapse:collapse }
-  th,td { padding:9px 11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
-  th { color:#cbd5e3 } tr:last-child td { border-bottom:0 }
-  .demo { display:grid; grid-template-columns:1fr auto; gap:8px; margin-top:12px; padding:14px; max-width:100%; overflow-x:auto; overscroll-behavior-x:contain }
-  .cluster { display:flex; align-items:center; gap:8px; min-width:0 }
-  .cluster:last-child { justify-content:flex-end; gap:12px }
-  .control { display:inline-flex; align-items:center; gap:5px; height:24px; padding:0 6px;
-    border-radius:5px; background:#232a35; white-space:nowrap }
-  .icon { display:inline-grid; place-items:center; width:16px; height:16px; color:var(--blue) }
-  .compact .label { display:none } .compact .control { width:24px; padding:0; justify-content:center }
-  .table-wrap:focus-visible,.demo:focus-visible { outline:2px solid var(--blue); outline-offset:3px }
-  .ok { color:var(--green) } .pending { color:var(--amber) }
-  @media(max-width:760px) { main { padding:28px 20px 60px } .grid { grid-template-columns:1fr } .demo { grid-template-columns:1fr }
-    code { overflow-wrap:anywhere }
-    .cluster:last-child { justify-content:flex-start } }
-</style>
-</head>
-<body><main>
-  <h1>Composer 控制栏响应式设计</h1>
-  <p class="sub">范围：聊天输入框上方的 environment chips，以及下方的 permission、more、active tools、chat model、execution model、effort 和 context 控件。</p>
-  <div class="lead">两排控制栏分别按自身可用宽度响应。底排沿用既有设置；上排分四级收缩：先全部完整显示；再把长名字截到约 12 个字加省略号，Local chip 只留图标；再收起 git 分支名，只留分支图标和改动 badge；最后隐藏全部文字（状态、surface、项目、目录以及 DAG 的 Fit、缩放百分比和 Legend），改动 badge 缩成左绿右红的小圆点。空间恢复后逐级展开。每一级使用同一段过渡动画，菜单、当前值、键盘操作、tooltip 和 accessible name 保持不变。</div>
+<title>输入框响应式控件</title>
+<meta name="description" content="输入框环境行和控制行如何收缩、它们的表面样式，以及上下文弹层的缓存。">
+<h1>输入框响应式控件</h1>
 
-  <h2>当前实现与缺口</h2>
-  <p><code>.composer-bottom-row</code> 同样不用固定断点：它需要的宽度取决于开了哪些工具开关、模型名多长。<code>use-compact-controls-row.ts</code> 在整行旁边放一份隐藏副本，按内容最大宽度排版，并关掉 flex 收缩和过渡（<code>data-measuring</code>）。它累加副本各组宽度和间距，在绘制前移除副本，超过整行宽度就设置 <code>data-compact</code>。测量从不切换真实的这一行：行里的按钮对所有属性做过渡，刚退出 compact 的行仍会报出压缩后的宽度。尺寸变化、内容或 class 变化、网页字体加载完成时都会重新测量，权限、模型和思考档位的文字随之收成各自的图标。展开回去需要留出 12px 余量。<code>.envChips</code> 不再使用固定断点，因为聊天页和 DAG 页的控件数量不同，同一宽度下需要的空间也不同。它选出第一个能放进自身 <code>clientWidth</code> 的级别，所需宽度取最后一个胶囊的右边界，测量时把靠右胶囊的自动外边距清零（不能用 <code>scrollWidth</code>：那个自动外边距让内容永远铺满整行，收缩后就再也展不开）：先关掉过渡（<code>data-measuring</code>）把整行按每一级排一遍，再以动画切到选中的 <code>data-squeeze</code> 级别；第 3 级同时设置 <code>data-compact</code>，隐藏全部 label。回到更宽松的级别需要留出 12px 余量。单页和 split pane 运行完全相同的测量逻辑。</p>
-  <p>现有组件已经提供四类互异图标：Shield 表示权限，Message 表示 chat model，Terminal 表示 execution model，Biceps 表示 effort。所有触发器已经具备 Popover/Menu、tooltip 或 accessible name，因此不新增图标组件和菜单。effort 触发器点开思考力度选择卡；其标题行、点阵滑轨和"推荐"标注见 <a href="effort-picker.zh.html">effort-picker.zh.html</a>。</p>
+<p>每一行按自己测量到的宽度响应，没有固定断点：同样宽度下，聊天和 DAG 页面的控件不同。菜单、值、键盘、提示和无障碍名称都不变。</p>
 
-  <h2>组件边界</h2>
-  <p>Composer 按交互职责组织目录：输入编辑归入 <code>input/</code>，提交链路归入 <code>submit/</code>，模式分发归入 <code>modes/</code>，会话设置归入 <code>state/</code>，附件、粘贴、slash 与 controls 沿用各自现有目录。环境栏内部再区分整体布局与单个 chip；ProjectBadge、WorkingDirChips 和 GoalChip 保留在其共享业务模块。DAG HUD 由 DAG 模块负责，通过 EnvironmentRow 的通用尾部内容插槽接入，EnvironmentRow 不包含 DAG 名称、DOM id 或控制逻辑。</p>
-  <div class="table-wrap" role="region" aria-label="组件边界表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>目录或文件</th><th>唯一职责</th><th>不负责</th></tr></thead><tbody>
-    <tr><td><code>composer/environment-row/environment-row.tsx</code></td><td>组合环境栏子组件并渲染调用方提供的尾部内容。</td><td>不包含 DAG 名称、portal id、聊天提交或项目状态。</td></tr>
-    <tr><td><code>composer/environment-row/use-compact-environment-row.ts</code></td><td>测量环境栏实际宽度并维护 compact 属性。</td><td>不渲染组件、不定义视觉样式。</td></tr>
-    <tr><td><code>composer/environment-row/environment-row.module.css</code></td><td>环境栏布局、pill surface、四级收缩动画和 DAG slot 样式。</td><td>不包含输入框、底部 controls 或其他 Composer 模式。</td></tr>
-    <tr><td><code>composer/environment-row/chips/connection-status-chip.tsx</code>、<code>web-surface-chip.tsx</code></td><td>分别负责连接状态入口和当前网页 surface 入口。</td><td>不控制环境栏整体响应状态。</td></tr>
-    <tr><td><code>composer/input/</code></td><td>textarea、键盘事件与历史回调。</td><td>不发送消息或切换 Composer mode。</td></tr>
-    <tr><td><code>composer/attach/</code>、<code>paste/</code>、<code>modes/question/</code></td><td>组件实现与其专用 CSS Module 放在同一职责目录。</td><td>不把组件专用选择器留在根 <code>composer.module.css</code>。</td></tr>
-    <tr><td><code>composer/submit/</code></td><td>构造并提交聊天消息，维护提交副作用。</td><td>不渲染输入区。</td></tr>
-    <tr><td><code>composer/modes/composer-body.tsx</code></td><td>根据派生 mode 选择普通输入、函数表单或问题表单。</td><td>不拥有输入、附件或会话状态。</td></tr>
-    <tr><td><code>composer/state/use-composer-settings.ts</code></td><td>读取和更新当前 SessionScope 的 Composer 设置。</td><td>不提供全局 focused-session fallback。</td></tr>
-    <tr><td><code>composer/controls/use-*.ts</code></td><td>分别管理模型可用性、工具 profile、无人值守状态及既有控制项。</td><td>不在 Composer 根组件中直接请求或同步这些状态。</td></tr>
-    <tr><td><code>composer/index.tsx</code></td><td>传入 session、tools 和 toggle 参数，渲染一个 EnvironmentRow。</td><td>不持有环境栏 ref、observer 或内部 JSX。</td></tr>
-    <tr><td><code>scripts/chat/check-composer-environment-row.mjs</code></td><td>只检查环境栏组件边界和响应契约。</td><td>不累积其他聊天 UI 检查。</td></tr>
-  </tbody></table></div>
+<h2>环境行</h2>
+<table class="stack fixed">
+<thead><tr><th scope="col">级别</th><th scope="col">显示</th></tr></thead>
+<tbody>
+<tr><th scope="row">0</th><td>全部</td></tr>
+<tr><th scope="row">1</th><td>名称限制在约 12 个字符并加省略号；Local chip 只留图标</td></tr>
+<tr><th scope="row">2</th><td>隐藏分支名：分支图标和 diff 徽标</td></tr>
+<tr><th scope="row">3（<code translate="no">data-compact</code>）</th><td>隐藏所有标签（状态、界面、项目、目录、DAG Fit、缩放百分比、Legend）；diff 徽标变成半绿半红的圆点</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">use-compact-environment-row.ts</code> 关闭过渡（<code translate="no">data-measuring</code>）逐级布局，再动画到第一个放得下 <code translate="no">clientWidth</code> 的 <code translate="no">data-squeeze</code> 级别。它把 auto margin 归零后测最后一个 chip 的右边缘：这个 margin 让 <code translate="no">scrollWidth</code> 总是填满整行。回到更宽松的级别需要 12px 余量。分栏用同一逻辑。</p>
 
-  <h2>参考与选择</h2>
-  <div class="table-wrap" role="region" aria-label="参考与选择表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>参考</th><th>适用能力</th><th>采用方式</th></tr></thead><tbody>
-    <tr><td><a href="https://www.w3.org/TR/css-contain-3/">W3C CSS 包含第 3 级规范</a></td><td><code>@container</code> 根据组件容器尺寸控制后代样式，不依赖 viewport。</td><td class="ok">只保留给上下文圆环的文字和思考档位卡片的宽度；文字收起改为实测，因为这一栏需要的宽度不只取决于它自身的宽度。</td></tr>
-    <tr><td><a href="https://www.w3.org/WAI/ARIA/apg/practices/names-and-descriptions/">WAI 可访问名称</a></td><td>隐藏可见文字时，交互控件仍需保留可计算的名称。</td><td class="ok">沿用现有 tooltip、Popover trigger 和标签；视觉隐藏不删除 DOM 语义。</td></tr>
-    <tr><td>横向滚动</td><td>保留任意长度的文字，但会让部分设置入口离开当前可见范围。</td><td>保留为极窄宽度的后备；不作为主要响应方式。</td></tr>
-    <tr><td>换成两行</td><td>全部文字可见，但会改变 composer 高度并影响 transcript 底部预留。</td><td>拒绝；本任务保持单行。</td></tr>
-  </tbody></table></div>
+<h2>控制行</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">测量</th><td><code translate="no">use-compact-controls-row.ts</code> 在 <code translate="no">.composer-bottom-row</code> 旁放一份隐藏的 max-content 副本，累加各簇和间距，绘制前移除</td></tr>
+<tr><th scope="row">紧凑</th><td>超过宽度时设 <code translate="no">data-compact</code>：权限、模型和深度标签收成 Shield、Message、Terminal、Biceps 图标</td></tr>
+<tr><th scope="row">展开</th><td>需要 12px 余量</td></tr>
+<tr><th scope="row">重新测量时机</th><td>尺寸、内容或 class 变化，Web 字体加载</td></tr>
+<tr><th scope="row">为什么用副本</th><td>不切换真实的行：它的 Button 对所有属性做过渡，仍会报告紧凑宽度</td></tr>
+</tbody>
+</table>
 
-  <h2>目标显示</h2>
-  <div class="demo" role="region" aria-label="正常宽度示意横向滚动区域" data-scroll-region tabindex="0">
-    <div class="cluster"><span class="control"><span class="icon">◇</span><span class="label">Ask permissions</span></span><span class="control">＋</span></div>
-    <div class="cluster"><span class="control"><span class="icon">◯</span><span class="label">Chat model</span></span><span class="control"><span class="icon">〉_</span><span class="label">Execution model</span></span><span class="control"><span class="icon">⌁</span><span class="label">中</span></span><span class="control">◌</span></div>
-  </div>
-  <div class="demo compact" role="region" aria-label="窄宽度示意横向滚动区域" data-scroll-region tabindex="0">
-    <div class="cluster"><span class="control"><span class="icon">◇</span><span class="label">Ask permissions</span></span><span class="control">＋</span></div>
-    <div class="cluster"><span class="control"><span class="icon">◯</span><span class="label">Chat model</span></span><span class="control"><span class="icon">〉_</span><span class="label">Execution model</span></span><span class="control"><span class="icon">⌁</span><span class="label">中</span></span><span class="control">◌</span></div>
-  </div>
+<h2>规则</h2>
+<ul>
+<li>单行，不换行；不隐藏控件。输入框高度和 <code translate="no">splitRatio</code> 不变。</li>
+<li>标签不参与 flex 收缩。受限名称以省略号结尾。同一条过渡规则，不用 <code translate="no">display:none</code>。</li>
+<li>图标按钮保持大小、顺序和操作；聊天和执行用不同图标；深度图标颜色表示档位。</li>
+<li>原生 <code translate="no">ResizeObserver</code> 和 <code translate="no">MutationObserver</code>；不改模型、权限和深度状态。</li>
+</ul>
 
-  <h2>控制按钮 surface 层级</h2>
-  <p>上方 environment chips 使用填充与边缘层级，底部 controls 则只有 20px 高。底部 permission、more、active tools、chat model、execution model、effort 与 context 只复用主题级 <code>--chip-bg</code>，形成始终可见的浅色填充；常态 surface 不新增 border、内描边或外部阴影，避免压缩小控件的内部视觉空间。既有 hover 前景色和键盘 <code>focus-visible</code> 指示保持不变。</p>
-  <div class="table-wrap" role="region" aria-label="控制按钮 surface 表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>状态</th><th>表面</th><th>保持不变</th></tr></thead><tbody>
-    <tr><td>常态</td><td><code>background:var(--chip-bg)</code>；computed border 为 0、shadow 为 none</td><td>20px 高度、5px 圆角、图标与文字颜色</td></tr>
-    <tr><td>hover / open</td><td>在 <code>--chip-bg</code> 上混入 8% <code>--text-bright</code></td><td>原菜单、tooltip、动画、既有 hover 前景色与 effort 等级色</td></tr>
-    <tr><td>窄态</td><td>与常态同一 surface，不因文字视觉隐藏而改变</td><td>四个核心触发器仍为 20px 图标按钮</td></tr>
-  </tbody></table></div>
+<h2>底部控件表面</h2>
+<table class="stack">
+<thead><tr><th scope="col">状态</th><th scope="col">表面</th><th scope="col">不变</th></tr></thead>
+<tbody>
+<tr><th scope="row">静止</th><td><code translate="no">background:var(--chip-bg)</code>；边框 0，无阴影</td><td>20px 高、5px 圆角、图标和标签颜色</td></tr>
+<tr><th scope="row">悬停、打开</th><td>在 <code translate="no">--text-bright</code> 中混入 8% 的 <code translate="no">--chip-bg</code></td><td>菜单、提示、动画、深度颜色</td></tr>
+<tr><th scope="row">窄</th><td>与静止相同</td><td>按钮仍是 20px 图标按钮</td></tr>
+</tbody>
+</table>
+<p class="note"><code translate="no">focus-visible</code> 指示保留。</p>
 
-  <h2>Context 统计弹层的数据时序</h2>
-  <p><code>ContextBreakdownPanel</code> 在关闭时会卸载。若每次挂载都把已有结果清空并进入 <code>loading</code>，用户重复打开同一会话、同一 DAG 分支时会先看到一张只有“Loading…”的卡片，再看到统计内容。网络请求即使很短，这次整卡替换仍然可见。</p>
-  <div class="table-wrap" role="region" aria-label="Context 统计时序表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>场景</th><th>立即显示</th><th>后台行为</th></tr></thead><tbody>
-    <tr><td>同一会话、同一分支再次打开</td><td>上一次成功取得的完整统计</td><td>重新请求并原位更新，不进入整卡 loading</td></tr>
-    <tr><td>首次打开或缓存不存在</td><td>既有 loading 空态</td><td>请求当前统计，成功后写入缓存</td></tr>
-    <tr><td>切换会话或 DAG 分支</td><td>只读取新 <code>sessionId + headId</code> 对应的缓存</td><td>取消旧请求；旧响应不得覆盖当前面板</td></tr>
-    <tr><td>请求失败且已有缓存</td><td>继续保留缓存内容</td><td>本次刷新失败不得用错误页替换可用统计</td></tr>
-  </tbody></table></div>
-  <p>缓存只驻留当前前端进程，按最近使用顺序保留 32 个会话分支，不写入持久存储，不设置定时刷新，不新增依赖。同一 key 的并发刷新只允许最新请求更新缓存。服务端仍是统计数据的唯一来源；缓存只消除重复打开时的过渡画面。</p>
+<h2>上下文弹层</h2>
+<p><code translate="no">ContextBreakdownPanel</code> 关闭时卸载，因此用缓存避免重新打开时只显示 Loading 的卡片。</p>
+<table class="stack">
+<thead><tr><th scope="col">情况</th><th scope="col">立即显示</th><th scope="col">后台</th></tr></thead>
+<tbody>
+<tr><th scope="row">同一会话和分支</th><td>上次完整的统计</td><td>重新请求，原地更新</td></tr>
+<tr><th scope="row">首次打开，无缓存</th><td>加载状态</td><td>请求，成功后缓存</td></tr>
+<tr><th scope="row">其他会话或分支</th><td>该 <code translate="no">sessionId + headId</code> 的缓存</td><td>取消旧请求，不能覆盖</td></tr>
+<tr><th scope="row">刷新失败</th><td>缓存内容</td><td>不显示错误页</td></tr>
+</tbody>
+</table>
+<p class="note">只存在于前端进程，32 个分支，最近最少使用淘汰（<code translate="no">apps/web/lib/chat/context-breakdown-cache.ts</code>）。同一 key 并发刷新时最新的生效。</p>
 
-  <div class="grid">
-    <section class="card"><h3>收缩规则</h3><ol><li>environment chips 的 label 不参与 flex 收缩；被截短的名字以省略号结尾，不出现半截文字。</li><li>内容溢出时整行逐级收紧直到放得下：截短名字、收起分支名、隐藏文字并显示改动圆点；空间恢复后逐级展开。</li><li>各图标触发器保持尺寸、原顺序和操作能力。</li></ol></section>
-    <section class="card"><h3>交互与无障碍</h3><ul><li>点击图标打开原菜单。</li><li>chat 与 execution 使用不同图标。</li><li>effort 图标颜色继续反映当前级别。</li><li>focus、tooltip 和 accessible name 不随文字隐藏而消失。</li></ul></section>
-    <section class="card"><h3>边界</h3><ul><li>不改模型、权限和 effort 状态。</li><li>使用原生 ResizeObserver 与 MutationObserver，不新增依赖。</li><li>不换行、不隐藏整个控件。</li><li>不调整 composer 高度和 splitRatio。</li></ul></section>
-  </div>
+<details>
+<summary>组件边界</summary>
+<table class="stack">
+<thead><tr><th scope="col"><code translate="no">composer/</code> 下</th><th scope="col">负责</th><th scope="col">不负责</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">environment-row/environment-row.tsx</code></th><td>组合 chip，渲染调用方给的尾部内容</td><td>DAG 名称、portal id、提交、项目状态</td></tr>
+<tr><th scope="row"><code translate="no">environment-row/use-compact-environment-row.ts</code></th><td>测量并设置级别</td><td>渲染或样式</td></tr>
+<tr><th scope="row"><code translate="no">environment-row/environment-row.module.css</code></th><td>布局、胶囊、收缩动画、DAG 插槽</td><td>输入或底部控件</td></tr>
+<tr><th scope="row"><code translate="no">environment-row/chips/</code></th><td><code translate="no">channel-chip</code>、<code translate="no">environment-chip</code>、<code translate="no">web-surface-chip</code></td><td>整行的响应状态</td></tr>
+<tr><th scope="row"><code translate="no">input/</code></th><td>Textarea、键盘、历史回调</td><td>发送或切换模式</td></tr>
+<tr><th scope="row"><code translate="no">attach/</code>、<code translate="no">paste/</code>、<code translate="no">modes/question/</code></th><td>组件和它的 CSS Module 放一起</td><td>根模块里的选择器</td></tr>
+<tr><th scope="row"><code translate="no">submit/</code></th><td>构造和提交消息、副作用</td><td>渲染输入区</td></tr>
+<tr><th scope="row"><code translate="no">modes/composer-body.tsx</code></th><td>选择普通输入、函数表单或问题表单</td><td>持有输入、附件或会话状态</td></tr>
+<tr><th scope="row"><code translate="no">state/use-composer-settings.ts</code></th><td>当前 SessionScope 的设置</td><td>全局聚焦会话回退</td></tr>
+<tr><th scope="row"><code translate="no">controls/use-*.ts</code></th><td>模型可用性、工具配置、无人值守状态</td><td>在 Composer 根同步</td></tr>
+<tr><th scope="row"><code translate="no">index.tsx</code></th><td>传参，渲染一个 EnvironmentRow</td><td>持有 ref、observer 或行 JSX</td></tr>
+</tbody>
+</table>
+<p class="note">DAG 模块拥有自己的 HUD，通过 EnvironmentRow 的尾部插槽提供。ProjectBadge、WorkingDirChips、GoalChip 留在共享模块。检查：<code translate="no">apps/web/scripts/chat/check-composer-environment-row.mjs</code>。</p>
+</details>
 
-  <h2>实施 brief 与验收</h2>
-  <p>上排实现集中在 <code>apps/web/components/chat/composer/environment-row/</code>：组件、测量 hook、样式和两个专用 chip 按职责分文件。<code>composer/index.tsx</code> 只渲染 EnvironmentRow。Context 缓存批次限定为 <code>apps/web/components/chat/badges/context-badge.tsx</code>、<code>context-breakdown-panel.tsx</code> 和 <code>apps/web/lib/chat/context-breakdown-cache.ts</code>。独立检查由 <code>apps/web/scripts/chat/check-composer-environment-row.mjs</code> 提供，并纳入 <code>npm --prefix apps/web run check:chat-ui</code>。这些批次不修改 Popover、Menu、provider、session store 或提交逻辑。</p>
-  <ol>
-    <li>public-entry 检查必须证明 environment chips 由实际溢出逐级切换 <code>data-squeeze</code>，最后一级为 <code>data-compact</code>，不存在固定宽度特例或 label 的 <code>flex-shrink:1</code>。</li>
-    <li>状态、surface、项目、目录、Fit、缩放百分比和 Legend 必须共用同一动画规则；不得使用 <code>display:none</code> 或只收起其中一部分。</li>
-    <li>默认安装版在 split pane 中把 divider 向左拖到触发阈值后，右侧四个设置入口和左侧 permission/more 均可见、无重叠。</li>
-    <li>分别点击 permission、chat model、execution model 和 effort 图标，原菜单或面板正常展开。</li>
-    <li>把 pane 拉宽到完整内容可容纳后，所有文字一起恢复；重新选择 split、切换聊天/DAG 和刷新不改变该行为。</li>
-    <li>底部所有可见控制按钮在未 hover 时均有非透明的 <code>--chip-bg</code> surface，computed border 为 0 且 shadow 为 none；hover 或菜单展开时背景必须比常态更明显。键盘 <code>focus-visible</code> 指示不属于常态边框，继续保留。</li>
-    <li>Context 统计第一次成功加载后，关闭并重新打开同一会话、同一分支必须立即复用缓存；后台刷新完成后更新缓存和圆环统计。</li>
-    <li>Context 缓存必须按会话与分支隔离；快速切换时取消过期请求，失败刷新不得覆盖已有缓存。</li>
-  </ol>
+<details>
+<summary>方案对比</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方案</th><th scope="col">结果</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://www.w3.org/TR/css-contain-3/">容器查询</a></th><td>只用于上下文环标签和深度卡片宽度：行的需求不只取决于宽度</td></tr>
+<tr><th scope="row"><a href="https://www.w3.org/WAI/ARIA/apg/practices/names-and-descriptions/">无障碍名称</a></th><td>复用提示、触发器和标签；视觉隐藏保留 DOM 语义</td></tr>
+<tr><th scope="row">横向滚动</th><td>只作为极窄宽度的回退</td></tr>
+<tr><th scope="row">换成两行</th><td>否决：改变输入框高度和记录底部间距</td></tr>
+</tbody>
+</table>
+</details>
 
-  <h2>实现状态</h2>
-  <div class="table-wrap" role="region" aria-label="实现状态表格横向滚动区域" data-scroll-region tabindex="0"><table><thead><tr><th>项目</th><th>状态</th></tr></thead><tbody>
-    <tr><td>设计与任务边界</td><td class="ok">完成</td></tr>
-    <tr><td>公开入口 RED / GREEN</td><td class="ok">完成：静态入口先因缺少窄态 effort 图标失败，实施后通过；真实 App E2E 覆盖 700px 与 360px 两种容器宽度。</td></tr>
-    <tr><td>规格审查 / 质量审查</td><td class="ok">完成：规格审查与修复后的独立质量审查均通过。</td></tr>
-    <tr><td>完整检查与默认安装版可见验收</td><td class="ok">完成：Web 全量检查、TypeScript、构建、desktop webtab/transfer、单元测试和默认安装版 CDP 验收均通过。</td></tr>
-    <tr><td>底部控制按钮常态 surface</td><td class="ok">完成：常态仅使用 <code>--chip-bg</code> 填充，不增加边框或内描边；真实 App computed style 验证 border 为 0、shadow 为 none，hover/open 仅增强背景。</td></tr>
-    <tr><td>Composer 职责目录</td><td class="ok">完成：输入、提交、mode、session state、附件和环境 chips 分别归入职责目录；输入、粘贴、图片附件与问题面板使用同目录 CSS Module。EnvironmentRow 只接受通用尾部内容，不包含 DAG id 或控制逻辑。</td></tr>
-    <tr><td>Context 统计重复打开</td><td class="ok">已实现：缓存按会话与分支隔离；重复打开立即显示上次结果并后台刷新。<code>check:chat-ui</code> 可执行验证缓存隔离、迟到请求取消、同 key 反序响应、刷新失败保留、32 项容量淘汰，并约束面板按会话与分支 key 同步重建。</td></tr>
-  </tbody></table></div>
-  <p class="sub">可见验收使用实际 <code>/Applications/OpenProgram.app</code>、默认 <code>18100</code> 页面和 <code>9223</code> CDP。测试操作真实 permission、more、active tool、chat model、execution model、effort 与 context 触发器，确认常态无边框、hover/open 背景增强、窄态无重叠且菜单可打开，并在结束时关闭菜单、恢复焦点与原始页面样式。</p>
-<script>
-document.querySelectorAll('[data-scroll-region]').forEach(region=>region.addEventListener('keydown',event=>{
-  const step=Math.max(80,Math.round(region.clientWidth*.75));
-  if(event.key==='ArrowRight'){event.preventDefault();region.scrollLeft+=step}
-  else if(event.key==='ArrowLeft'){event.preventDefault();region.scrollLeft-=step}
-  else if(event.key==='Home'){event.preventDefault();region.scrollLeft=0}
-  else if(event.key==='End'){event.preventDefault();region.scrollLeft=region.scrollWidth}
-}));
-</script>
-</main></body></html>
+<details>
+<summary>验收</summary>
+<ol>
+<li>溢出时经 <code translate="no">data-squeeze</code> 收缩到 <code translate="no">data-compact</code>，没有固定宽度特例或标签 <code translate="no">flex-shrink:1</code>。</li>
+<li>所有标签共用一条动画规则。</li>
+<li>分栏拖过阈值后，右侧设置和左侧权限、更多都可见且不重叠。</li>
+<li>权限、聊天模型、执行模型和深度图标都能打开各自菜单。</li>
+<li>变宽后所有标签恢复；重新选分栏、切换聊天和 DAG、刷新后依然如此。</li>
+<li>底部控件静止时有不透明表面，边框 0，无阴影；悬停或打开时背景更强。</li>
+<li>重新打开的上下文统计来自缓存；后台完成后更新缓存和圆环。</li>
+<li>缓存按会话和分支隔离；过期请求取消；刷新失败保留缓存；32 项淘汰。</li>
+</ol>
+</details>

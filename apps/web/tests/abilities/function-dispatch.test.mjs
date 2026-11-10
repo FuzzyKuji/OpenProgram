@@ -20,7 +20,7 @@ globalThis.WebSocket = { OPEN: 1 };
 
 const { createElement } = await import("react");
 const { useFunctionDispatch } = await import("../../components/chat/composer/modes/fn-form/use-function-dispatch.ts");
-const { useSessionStore } = await import("../../lib/session-store/index.ts");
+const { selectRow, useSessionStore } = await import("../../lib/session-store/index.ts");
 const { useCenterTabs, sessionTabId } = await import("../../lib/tabs/center-tabs-store.ts");
 const { runtimeState } = await import("../../lib/runtime-bridge/state.ts");
 
@@ -95,6 +95,20 @@ describe("function dispatch", () => {
     assert.equal(body.project_id, "proj-1");
     assert.equal(body.window_id, "win-1");
     assert.equal(body.surface_ref.window_id, "win-1");
+    assert.equal(typeof body.client_request_id, "string");
+  });
+
+  test("the placeholder is a typed local row at the tail, named by the request's id", async () => {
+    let placeholder;
+    respond = () => {
+      const store = useSessionStore.getState();
+      placeholder = selectRow("local_fn", store.runningTasks.local_fn.msg_id)(store);
+      return Response.json({ session_id: "real-1" });
+    };
+    await dispatch();
+    assert.equal(placeholder.rowKind, "function_run");
+    assert.equal(placeholder.localAnchor, "tail");
+    assert.equal(placeholder.clientRequestId, requests[0].body.client_request_id);
   });
 
   test("the placeholder and the running task share one start time", async () => {
@@ -103,7 +117,7 @@ describe("function dispatch", () => {
     respond = () => {
       const store = useSessionStore.getState();
       task = store.runningTasks.local_fn;
-      placeholder = store.messagesById[task.msg_id];
+      placeholder = selectRow("local_fn", task.msg_id)(store);
       return Response.json({ session_id: "real-1" });
     };
     await dispatch();

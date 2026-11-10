@@ -16,7 +16,7 @@ def test_resumed_activation_streams_to_clients(tmp_path, monkeypatch):
     from openprogram.runtime.events import emit_ws_frame
     from openprogram.runtime.execution import store as execution_store_mod
 
-    monkeypatch.setattr("openprogram.state.paths.get_execution_db_path", lambda: tmp_path / "executions.db")
+    monkeypatch.setattr("openprogram.state.paths.get_run_state_path", lambda: tmp_path / "executions.db")
     execution_store_mod._store_for_path.cache_clear()
     with control_mod._default_control_services_lock:
         control_mod._default_control_services.clear()

@@ -38,6 +38,7 @@ _WIRE_FIELDS = frozenset({
 _MESSAGES = {
     "handler_error": "Action failed",
     "invalid_request": "Invalid request",
+    "cursor_not_on_branch": "That part of the conversation is no longer on this branch",
     "unknown_action": "Unknown action",
 }
 

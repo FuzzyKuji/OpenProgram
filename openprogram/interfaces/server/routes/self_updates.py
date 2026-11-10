@@ -19,6 +19,9 @@ from openprogram.operations.self_update.store import SelfUpdateStore
 from openprogram.operations.self_update.types import ConcurrentUpdateError, SelfUpdateError, UpdateNotFoundError
 
 
+from openprogram.runtime.permissions.refusal import Refused
+
+
 def require_owner(request: Request, session_id: str = "") -> None:
     from openprogram.programs.tools.system.self_update import _require_local_owner
 
@@ -27,7 +30,7 @@ def require_owner(request: Request, session_id: str = "") -> None:
         raise ProjectionAccessError("owner authentication required")
     try:
         _require_local_owner(SimpleNamespace(**authority, source="web", session_id=session_id))
-    except (ValueError, RuntimeError):
+    except (ValueError, RuntimeError, Refused):
         raise ProjectionAccessError("owner authentication required") from None
 
 
@@ -121,6 +124,20 @@ def register(app):
         except (SelfUpdateError, ValueError):
             return JSONResponse({"reason": "nothing_to_dispatch"}, status_code=409, headers=headers)
         return JSONResponse({"dispatched": dispatched}, status_code=200 if dispatched else 409, headers=headers)
+
+    @app.post("/api/self-updates/{update_id}/turn-check")
+    def api_self_update_turn_check(request: Request, update_id: str):
+        """Run one real Agent turn on this version for the switch controller."""
+        headers = {"Cache-Control": "no-store"}
+        try:
+            require_owner(request)
+        except ProjectionAccessError:
+            return JSONResponse({"reason": "owner_mismatch"}, status_code=403, headers=headers)
+        from openprogram.operations.self_update.control.turn_check import run_turn_check
+        try:
+            return JSONResponse(run_turn_check(update_id), headers=headers)
+        except (SelfUpdateError, ValueError) as exc:
+            return JSONResponse({"reason": "not_verifying", "error": str(exc)[:500]}, status_code=409, headers=headers)
 
     @app.get("/api/self-updates/{update_id}/evidence")
     def api_self_update_evidence(request: Request, update_id: str,

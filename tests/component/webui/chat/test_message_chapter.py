@@ -3,7 +3,7 @@
 ``set_message_chapter`` writes ``metadata.chapter`` on the user message
 node, broadcasts ``message_chapter_updated`` to every connection and
 refuses an assistant or unknown message; ``load_session`` carries the pin
-as the row's ``chapter`` field.
+as the row's ``chapterPinnedAt`` field.
 """
 from __future__ import annotations
 
@@ -61,10 +61,14 @@ def _metadata(store: SessionStore, node_id: str) -> dict:
 
 
 def _loaded_rows() -> dict[str, dict]:
+    from openprogram.interfaces.server.transcript import publisher
+
     ws = FakeWS()
+    ws._history_protocol = 3
     asyncio.run(ws_session.handle_load_session(ws, {"session_id": "s1"}))
+    publisher.release(ws)
     loaded = next(f for f in ws.frames if f["type"] == "session_loaded")
-    return {m["id"]: m for m in loaded["data"]["messages"]}
+    return {row["id"]: row for turn in loaded["data"]["turns"] for row in turn["rows"]}
 
 
 def test_the_action_is_registered():
@@ -102,8 +106,8 @@ def test_the_pin_survives_a_reload_in_the_history_payload(chat):
 
     rows = _loaded_rows()
 
-    assert rows["u2"]["chapter"]["pinned_at"] > 0
-    assert rows["u1"].get("chapter") is None
+    assert rows["u2"]["chapterPinnedAt"] > 0
+    assert rows["u1"].get("chapterPinnedAt") is None
 
 
 @pytest.mark.parametrize("cmd, code", [
@@ -122,18 +126,3 @@ def test_rejects_assistant_unknown_and_malformed_requests(chat, cmd, code):
     assert frames == []
     assert "chapter" not in _metadata(store, "a1")
 
-
-def test_open_history_snapshots_take_the_pin(chat, monkeypatch):
-    from openprogram.interfaces.server import server
-
-    ws = FakeWS()
-    ws._history_protocol = 1
-    asyncio.run(ws_session.handle_load_session(ws, {"session_id": "s1"}))
-    monkeypatch.setattr(server, "_ws_connections", [ws])
-
-    _set({"session_id": "s1", "message_id": "u1", "pinned": True})
-
-    snapshot = ws._history_snapshots["s1"]
-    messages, _history = snapshot.page()
-    row = next(m for m in messages if m["id"] == "u1")
-    assert row["chapter"]["pinned_at"] > 0

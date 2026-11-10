@@ -164,26 +164,38 @@ async def handle_retry_function(ws, cmd: dict):
         options["origin_window_id"] = origin_window_id
     if surface_ref:
         options["surface_ref"] = surface_ref
+    from .turn_request import client_request_id_of
+    request_id = client_request_id_of(cmd)
+    if request_id:
+        options["client_request_id"] = request_id
     result = run_agent_method_call(
         func_name, kwargs, session_id, **options,
     )
     if "error" in result:
         _fail(result["error"])
         return
-    await ws.send_text(json.dumps({
-        "type": "chat_ack",
-        # ``function_run`` tells the frontend this ack is a function
-        # dispatch whose top-level card was PRE-CREATED on disk at dispatch
-        # time (run_agent_method_call), so it can hydrate the transcript
-        # immediately instead of waiting for the first tree_update (~1.85s
-        # after the spawned child's import finishes). See wsHandleChatAck.
-        "data": {"session_id": result.get("session_id", session_id),
-                 "msg_id": result.get("msg_id", ""),
-                 "execution_id": (
-                     result.get("execution_id")
-                     or result.get("msg_id")
-                     or ""
-                 ),
-                 "retry_request_id": cmd.get("retry_request_id"),
-                 "function_run": True},
-    }))
+    from .turn import _join_and_read
+    ack_session = result.get("session_id", session_id)
+    first_read, end_parking = await _join_and_read(ws, ack_session)
+    ack_extra = {**first_read, **({"client_request_id": request_id} if request_id else {})}
+    try:
+        await ws.send_text(json.dumps({
+            "type": "chat_ack",
+            # ``function_run`` tells the frontend this ack is a function
+            # dispatch whose top-level card was PRE-CREATED on disk at dispatch
+            # time (run_agent_method_call), so it can hydrate the transcript
+            # immediately instead of waiting for the first tree_update (~1.85s
+            # after the spawned child's import finishes). See wsHandleChatAck.
+            "data": {**ack_extra,
+                     "session_id": ack_session,
+                     "msg_id": result.get("msg_id", ""),
+                     "execution_id": (
+                         result.get("execution_id")
+                         or result.get("msg_id")
+                         or ""
+                     ),
+                     "retry_request_id": cmd.get("retry_request_id"),
+                     "function_run": True},
+        }))
+    finally:
+        end_parking()

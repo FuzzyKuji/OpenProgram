@@ -1,4 +1,4 @@
-"""Recoverable legacy session migration into application-owned storage."""
+"""Recoverable move of working-folder sessions into application-owned storage."""
 from __future__ import annotations
 
 import hashlib
@@ -10,7 +10,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from openprogram.state.store.session.git_session import atomic_write_text, read_text_with_retry
+from openprogram.state.store.session.atomic_file import atomic_write_text, read_text_with_retry
 from openprogram.state.store.session.placement import (
     external_recovery_dir,
     is_deleted,
@@ -18,6 +18,7 @@ from openprogram.state.store.session.placement import (
     nested_session_dir,
     session_looks_present,
 )
+from openprogram.state.store.session.session_log import SessionLog
 from openprogram.state.store.session.session_lock import (
     registry_file_lock,
     session_interprocess_lock,
@@ -67,14 +68,6 @@ def _load_journal_unlocked(root: Path, *, strict: bool = False) -> dict[str, Any
             raise
         _log.warning("migration journal unreadable at %s", path)
     return {"version": 1, "sessions": {}}
-
-
-def save_journal(root: Path, journal: dict[str, Any]) -> None:
-    """Persist a complete journal for compatibility callers."""
-    with registry_file_lock(root, "migration-journal"):
-        path = journal_path(root)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        atomic_write_text(path, json.dumps(journal, indent=2, ensure_ascii=False, default=str))
 
 
 def update_journal_row(root: Path, session_id: str, row: dict[str, Any]) -> None:
@@ -486,11 +479,8 @@ def _migrate_locked(store, root, journal, row, source: Path, dest: Path) -> str:
 
 def _holds_session(path: Path, session_id: str) -> bool:
     """Whether ``path`` is a complete copy of this session, not a stranger."""
-    try:
-        meta = json.loads((Path(path) / "meta.json").read_text(encoding="utf-8"))
-    except (OSError, ValueError):
-        return False
-    return isinstance(meta, dict) and meta.get("id") == session_id
+    log = SessionLog(path)
+    return log.exists() and log.read_meta().get("id") == session_id
 
 
 def _mark_project(project_id: str | None, state: str, error: str = "") -> None:

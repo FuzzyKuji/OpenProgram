@@ -16,7 +16,8 @@ from openprogram.models.providers.utils.event_stream import EventStream
 from openprogram.models.providers.utils.validation import validate_tool_arguments
 
 from openprogram.runtime.events import emit_safe, get_event_bus, make_event
-from openprogram.runtime.events import ToolGateDenied, decide_tool_gate
+from openprogram.runtime.events import decide_tool_gate
+from openprogram.runtime.permissions import refusal
 from openprogram.runtime.agent.loop.types import (
     AgentEvent,
     AgentEventMessageEnd,
@@ -180,7 +181,7 @@ async def _execute_tool_calls(
             json.dumps(payload, sort_keys=True, ensure_ascii=False, default=str).encode("utf-8")
         ).hexdigest()[:24]
 
-    from openprogram.runtime.context.cache_aware_microcompact import increment_tool_calls
+    from openprogram.runtime.context.compaction.cache_aware_microcompact import increment_tool_calls
     increment_tool_calls(len(tool_calls))
 
     for index, tool_call in enumerate(tool_calls[start_index:], start=start_index):
@@ -289,7 +290,7 @@ async def _execute_tool_calls(
             if skipped_repeat:
                 raise _SkipExecute()
             if gate_denial is not None:
-                raise ToolGateDenied(f"Tool call blocked: {gate_denial}")
+                raise refusal.hook(tool_call.name, tool_call.arguments, gate_denial)
             if not tool:
                 raise ValueError(f"Tool {tool_call.name} not found")
 
@@ -356,6 +357,9 @@ async def _execute_tool_calls(
             break
         except _SkipExecute:
             pass
+        except refusal.Refused as refused:
+            from openprogram.runtime.agent.turn_request import get_turn_request
+            result = refused.result(mode=getattr(get_turn_request(), "permission_mode", None))
         except Exception as e:
             result = AgentToolResult(
                 content=[TextContent(type="text", text=str(e))],

@@ -1,13 +1,12 @@
-"""Git-backed storage: session memory, the project entity layer, and the
+"""Storage: session memory, the project entity layer, and the
 file revert/record machinery. See ``README.md`` in this directory for the
 full map; this docstring covers the original session-storage core.
 
 The directory holds three groups (README has the details):
 
-  1. **Session storage** — one git repo per conversation. The original
-     job of this package: ``session_store`` / ``git_session`` /
-     ``memory_index`` / ``session_node_writer`` / ``_msg_adapter`` /
-     ``search``. Replaces the old SQLite ``DagSessionDB`` + ``GraphStore``.
+  1. **Session storage** — one append-only log per conversation:
+     ``session_store`` / ``session_log`` / ``memory_index`` /
+     ``session_node_writer`` / ``_msg_adapter`` / ``search``.
   2. **Project entity layer + auto-commit** — ``project_store`` (the
      user's working dir as a git-backed Project, with safe auto-init and
      a reset/revert-of-a-commit primitive) and ``project_commit`` (wires
@@ -19,36 +18,24 @@ The directory holds three groups (README has the details):
 
 Public surface (re-exported for legacy import paths):
 
-    SessionStore        ─ main class, implements DagSessionDB-compatible
-                          22 public methods on top of git repos
+    SessionStore        ─ main class, the query and write API over logs
     default_store()     ─ process-wide singleton
-    GitSession          ─ per-session git repo wrapper (init / add /
-                          commit / log / checkout)
+    SessionLog          ─ one session's append-only records
     SessionMemoryIndex  ─ per-session in-memory DAG index, rebuilt
-                          from git on startup / cache miss
+                          from the log on startup / cache miss
 
-Storage layout: every session is its own git repo in its project's
-folder, ``~/.openprogram/projects/<project>/chats/<session_id>/`` (chats
-with no project belong to the home project, ``default``). Older chats
-recorded inside a project folder are found through
-``projects/.chats-locations.json``. Each repo has two top-level dirs:
+Storage layout: every session is a directory in its project's folder,
+``~/.openprogram/projects/<project>/chats/<session_id>/`` (chats with no
+project belong to the home project, ``default``). Older chats recorded
+inside a project folder are found through
+``projects/.chats-locations.json``. A session holds:
 
-    history/   append-only JSON files, one per DAG node, named
-               ``NNNN-{u|a|t|s|...}-<id>.json`` where NNNN is the
-               4-digit zero-padded seq. Never modified after write.
+    main.jsonl  the append-only log, written by the worker
+    agents/     one more log per other writing process
+    context/    per-commit ContextItem lists, one immutable file per turn
 
-    context/   the LLM view. ``commits/<id>.json`` carries per-commit
-               ContextItem lists, written one immutable file per turn
-               by ``context_commit.store.save_commit``. There is no
-               ``messages.json`` mirror — every read looks the commit up
-               by id / DAG ancestry, not via a shared mutable file.
-
-Plus ``meta.json`` at the repo root for session-level fields (title,
-agent_id, head_id, ...).
-
-Git is the source of truth. The in-memory index is a query cache,
-fully rebuildable from git on demand. See
-``docs/design/memory/git-as-entity-memory.md`` for the rationale.
+The log is the source of truth. The in-memory index is a query cache,
+rebuilt from the log on demand.
 """
 from contextvars import ContextVar
 from typing import Optional, TYPE_CHECKING
@@ -57,14 +44,13 @@ from typing import Optional, TYPE_CHECKING
 # see README). The top-level package re-exports the historical public
 # surface so ``from openprogram.state.store import SessionStore`` etc. keep
 # working unchanged after the physical regroup.
-from .session import GitSession, SessionMemoryIndex, SessionNodeWriter
+from .session import SessionLog, SessionMemoryIndex, SessionNodeWriter
 # Provenance read-layer — the LLM-free seam memory maps from
 # (docs/design/memory/entity-session-cache.md §5).
 from .session import (
     Provenance,
     iter_nodes_since,
     node_provenance,
-    session_commits,
     project_commits,
     session_project_id,
 )
@@ -112,7 +98,7 @@ def session_scope(store, session_id: str):
 
 
 __all__ = [
-    "GitSession",
+    "SessionLog",
     "SessionMemoryIndex",
     "SessionNodeWriter",
     "SessionStore",
@@ -123,7 +109,6 @@ __all__ = [
     "Provenance",
     "iter_nodes_since",
     "node_provenance",
-    "session_commits",
     "project_commits",
     "session_project_id",
 ]

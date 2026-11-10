@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Iterator
 
 from openprogram.state.store.project.layout import CHATS, DEFAULT_PROJECT_ID
-from openprogram.state.store.session.git_session import atomic_write_text, read_text_with_retry
+from openprogram.state.store.session.atomic_file import atomic_write_text
 
 #: The store's summary index and durable location map, at the store root.
 INDEX_FILE = ".chats-index.json"
@@ -50,7 +50,7 @@ def external_recovery_dir(session_dir: Path) -> Path:
 
 
 def quarantine_dir(root: Path) -> Path:
-    """Where startup cleanup moves history-less shells instead of deleting them."""
+    """Where startup cleanup moves log-less shells instead of deleting them."""
     return Path(root) / ".quarantine"
 
 
@@ -64,7 +64,7 @@ def delete_intent_path(root: Path, session_id: str) -> Path:
 
 def session_looks_present(path: Path) -> bool:
     path = Path(path)
-    return (path / "history").is_dir() or (path / "meta.json").is_file()
+    return (path / "main.jsonl").exists() or (path / "agents").is_dir()
 
 
 def is_deleted(root: Path, session_id: str) -> bool:
@@ -77,27 +77,28 @@ def record_delete_intent(root: Path, session_id: str, payload: dict) -> None:
     atomic_write_text(path, json.dumps(payload, indent=2, ensure_ascii=False, default=str))
 
 
-def clear_delete_intent(root: Path, session_id: str) -> None:
-    path = delete_intent_path(root, session_id)
-    try:
-        path.unlink()
-    except FileNotFoundError:
-        return
+def rooted_location(root: Path, recorded: str | Path) -> Path:
+    """Where a recorded location of ``root``'s location map is now.
 
-
-def load_delete_intent(root: Path, session_id: str) -> dict | None:
-    path = delete_intent_path(root, session_id)
-    if not path.is_file():
-        return None
-    try:
-        data = json.loads(read_text_with_retry(path))
-        return data if isinstance(data, dict) else {"session_id": session_id}
-    except (OSError, json.JSONDecodeError):
-        return {"session_id": session_id}
+    The map holds absolute paths. A conversation folder of a store,
+    ``…/<project>/chats/<session>``, recorded outside ``root`` was written
+    before this state directory was copied or moved, so it means the folder
+    of the same name under ``root``: a copy must never read or write the
+    conversations of the state it was copied from. A workdir copy
+    (``<project>/.openprogram/sessions/<session>``) stays where it is.
+    """
+    path = Path(recorded).expanduser()
+    root = Path(root)
+    if path.is_relative_to(root):
+        return path
+    parts = path.parts
+    if len(parts) >= 3 and parts[-2] == CHATS:
+        return nested_session_dir(root, parts[-3], parts[-1])
+    return path
 
 
 def iter_session_dirs(root: Path) -> Iterator[tuple[str, Path]]:
-    """Discover session repositories in every project's ``chats/``."""
+    """Discover session directories in every project's ``chats/``."""
     root = Path(root)
     if not root.is_dir():
         return
@@ -122,18 +123,6 @@ def target_dir_for_project(
     if project_id and not is_default:
         return nested_session_dir(root, project_id, session_id)
     return default_session_dir(root, session_id)
-
-
-def project_of_dir(root: Path, session_dir: Path) -> str | None:
-    """The project folder a session repository sits in, if it is in one."""
-    try:
-        rel = Path(session_dir).relative_to(Path(root))
-    except ValueError:
-        return None
-    parts = rel.parts
-    if len(parts) == 3 and parts[1] == CHATS:
-        return parts[0]
-    return None
 
 
 def resolve_existing_dir(

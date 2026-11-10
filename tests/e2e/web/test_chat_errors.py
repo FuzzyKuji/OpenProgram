@@ -15,23 +15,22 @@ import React from 'react';
 import {createRoot} from 'react-dom/client';
 import {QueryClient,QueryClientProvider} from '@tanstack/react-query';
 import {AssistantBubble} from './components/chat/messages/bubbles/assistant-bubble';
-import {useSessionStore} from './lib/session-store';
-import {applyChatWsMessage} from './lib/net/ws/chat-stream';
+import {useSessionStore,selectRow} from './lib/session-store';
 import {convToChatMsgs} from './lib/chat/transcript/conv-mapper';
+import {publishedTurn} from './tests/_support/published-turn.mjs';
 window.fetch=async()=>new Response('{}',{headers:{'content-type':'application/json'}});
 const sid='error-test',uid='turn',rid='turn_reply';
 useSessionStore.setState({currentSessionId:sid,activeChatKey:sid});
-window.frame=data=>applyChatWsMessage({type:'chat_response',data:{session_id:sid,msg_id:uid,...data}});
 window.load=raw=>{
  const rows=convToChatMsgs([raw]);
- useSessionStore.setState({messagesById:Object.fromEntries(rows.map(m=>[m.id,m])),messageOrder:{[sid]:rows.map(m=>m.id)}});
+ useSessionStore.getState().applyRead(sid,rows);
 };
 const history={id:rid,role:'assistant',status:'error',content:'Partial answer',error_detail:'[error] ConnectError: <img src=x onerror=alert(1)>',error_reason:'transport',error_retryable:true,blocks:[{type:'tool',tool:'bash',tool_call_id:'tool',input:'{}',result:'ok'},{type:'text',text:'Partial answer'}]};
 history.content=history.error_detail;
 window.historyPayload=history;
 if(sessionStorage.getItem('reload')) load(history);
-else applyChatWsMessage({type:'chat_ack',data:{session_id:sid,msg_id:uid}});
-function App(){const msg=useSessionStore(s=>s.messagesById[rid]);return msg?<AssistantBubble msg={msg}/>:null;}
+else {window.turn=publishedTurn(sid,{id:uid,role:'user',rowKind:'user',content:'go',status:'done'});turn.startReply();}
+function App(){const msg=useSessionStore(s=>selectRow(sid,rid)(s));return msg?<AssistantBubble msg={msg}/>:null;}
 createRoot(document.getElementById('root')).render(<QueryClientProvider client={new QueryClient()}><App/></QueryClientProvider>);
 '''
     bundle=tmp_path/'errors.js'
@@ -48,7 +47,9 @@ createRoot(document.getElementById('root')).render(<QueryClientProvider client={
                 page.add_style_tag(content=css)
                 page.add_script_tag(path=str(bundle))
             page.goto('http://errors.test/'); inject()
-            page.evaluate("frame({type:'stream_event',event:{type:'tool_use',tool:'bash',tool_call_id:'tool',input:'{}'}}); frame({type:'stream_event',event:{type:'tool_result',tool:'bash',tool_call_id:'tool',result:'ok'}}); frame({type:'stream_event',event:{type:'text',text:'Partial answer'}}); frame({type:'error',content:historyPayload.error_detail,reason:'transport',retryable:true})")
+            # Live: the reply's rows and text arrive as published, then the
+            # error frame, then the update that settles the row as failed.
+            page.evaluate("turn.event({type:'tool_use',tool:'bash',tool_call_id:'tool',input:'{}'}); turn.event({type:'tool_result',tool:'bash',tool_call_id:'tool',result:'ok'}); turn.event({type:'text',text:'Partial answer'}); turn.frame({type:'error',content:historyPayload.error_detail,reason:'transport',retryable:true}); turn.publishReply({status:'error',errorDetail:historyPayload.error_detail,errorReason:'transport',errorRetryable:true})")
             def check():
                 expect(page.locator('.chat-text')).to_have_text('Partial answer')
                 expect(page.locator('.turn-error')).to_have_count(1)

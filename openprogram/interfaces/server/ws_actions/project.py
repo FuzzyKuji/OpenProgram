@@ -37,6 +37,7 @@ these handlers only marshal requests and shape JSON.
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import json
 import os
@@ -594,10 +595,17 @@ async def handle_project_operation(ws, cmd: dict):
                 session_ids.extend(row["id"] for row in db.list_sessions(limit=100_000, include_archived=True)
                                    if row.get("id") and row["id"] not in claimed)
             for sid in session_ids:
-                if not db.get_session(sid):
+                row = db.get_session(sid)
+                if not row:
                     continue
+                was_archived = bool(row.get("archived"))
                 db.update_session(sid, archived=True)
                 archived.append(sid)
+                if not was_archived:
+                    from openprogram.runtime.conversation.always_on.runtime import archive_changed
+                    await asyncio.to_thread(archive_changed, sid, True)
+                from openprogram.programs.applications.browser.tabs import close_conversation_tabs_soon
+                close_conversation_tabs_soon(sid)
                 with server._sessions_lock:
                     if sid in server._sessions:
                         server._sessions[sid]["archived"] = True

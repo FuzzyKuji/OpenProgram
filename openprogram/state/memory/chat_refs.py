@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import re
 from datetime import datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 from urllib.parse import quote, unquote
 
 PROVIDER = "openprogram"
@@ -82,10 +82,13 @@ def is_runtime_turn(message: dict[str, Any]) -> bool:
     user-role rows so the model has something to answer, and the chat
     marks them ``display="runtime"``. The reply carries the same
     ``source`` as the trigger, so this covers both halves of the turn.
+    A posted always-on report is the runtime's too: it is routine output,
+    and what the owner says back to it is what memory learns from.
     """
     return (
         message.get("display") == "runtime"
         or message.get("source") in RUNTIME_SOURCES
+        or bool(message.get("always_on_report"))
     )
 
 
@@ -220,14 +223,3 @@ def render_excerpt(excerpt: dict[str, Any]) -> str:
         when = f" · {turn['at'][:16].replace('T', ' ')}" if turn.get("at") else ""
         lines.append(f"{mark}**{turn['speaker']}**{when}\n\n{turn['text']}")
     return "\n\n---\n\n".join(lines)
-
-
-def refs_in(texts: Iterable[str]) -> set[str]:
-    """Every chat reference linked from these Markdown texts."""
-    found: set[str] = set()
-    for text in texts:
-        for match in re.finditer(r"\]\(([^)\s]+)\)", text):
-            value = from_target(match.group(1))
-            if value is not None:
-                found.add(value)
-    return found

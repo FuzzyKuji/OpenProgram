@@ -236,11 +236,22 @@ def detach(*, channel: str, account_id: str, peer_kind: str,
     return removed
 
 
-def detach_session(session_id: str) -> int:
-    """Remove every alias pointing at ``session_id``."""
+def detach_session(session_id: str, *, channel: Optional[str] = None,
+                   account_id: Optional[str] = None) -> int:
+    """Remove every alias pointing at ``session_id``; with ``channel``
+    (and ``account_id``) only those of that channel account."""
+    def _drop(r: dict[str, Any]) -> bool:
+        if r["session_id"] != session_id:
+            return False
+        if channel is not None and r["channel"] != channel:
+            return False
+        if account_id is not None and r["account_id"] != account_id:
+            return False
+        return True
+
     with _lock:
         rows = _read()
-        kept = [r for r in rows if r["session_id"] != session_id]
+        kept = [r for r in rows if not _drop(r)]
         n = len(rows) - len(kept)
         if n:
             _write(kept)

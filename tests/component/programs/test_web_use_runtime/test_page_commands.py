@@ -927,7 +927,7 @@ def test_file_url_opens_only_a_readable_local_file(monkeypatch, tmp_path):
 
     monkeypatch.setattr(sandbox, "validate_read_path", lambda _path: "outside the workspace")
     denied = surface_context._local_file_url(page.as_uri())
-    assert denied["error"] == "sandbox policy: outside the workspace"
+    assert "outside the workspace" in denied["error"] and denied["error"].startswith("[blocked by sandbox]")
     assert surface_context._local_file_url("https://example.com") is None
 
 
@@ -1106,3 +1106,196 @@ def test_the_next_result_names_a_popup_the_page_opened(monkeypatch):
     assert second["opened_pages"] == [popup]
     assert "list_pages" in second["opened_pages_note"]
     assert "opened_pages" not in third
+
+
+def _bind_turn(monkeypatch, **fields):
+    from openprogram.runtime.agent import turn_request
+
+    request = turn_request.TurnRequest(
+        session_id="session-1", user_text="check the site", agent_id="main",
+        **{"source": "web", **fields},
+    )
+    token = turn_request.set_turn_request(request)
+    return lambda: turn_request.reset_turn_request(token)
+
+
+def _spy_on_page_capture(monkeypatch):
+    from openprogram.runtime.conversation import surface_context
+    from openprogram.programs.applications.browser.web_use import runtime as web_use_runtime
+
+    captures = []
+
+    class _Registry:
+        def execute(self, **kwargs):
+            return {"ok": True, "web_session_id": "cs_1", "frame_id": "frame-1"}
+
+        def list_pages(self, **kwargs):
+            return {"ok": True, "pages": [{
+                "page": "p1", "tab_id": "tab-1", "focused": True,
+                "page_context_token": "pct_listed",
+            }]}
+
+    monkeypatch.setattr(web_use_runtime, "get_registry", lambda: _Registry())
+    monkeypatch.setattr(surface_context, "current", lambda: None)
+    monkeypatch.setattr(
+        surface_context,
+        "capture_active",
+        lambda: captures.append("active") or {
+            "context_id": "ctx",
+            "primary_surface_key": "p1",
+            "surfaces": [{"surface_key": "p1", "binding_id": "b1", "page_key": "k1"}],
+        },
+    )
+    monkeypatch.setattr(
+        surface_context, "capture_pages_for_listing",
+        lambda *_args: captures.append("list") or {"context_id": "ctx"},
+    )
+    monkeypatch.setattr(surface_context, "resolve_binding", lambda _page="": "b1")
+    monkeypatch.setattr(surface_context, "resolve_page_key", lambda _page="": "k1")
+    monkeypatch.setattr(surface_context, "release_bindings", lambda _context: None)
+    return captures
+
+
+@pytest.mark.parametrize("turn", [
+    {"goal_trigger": True, "interaction": "interactive"},
+    {"automation": "handoff", "interaction": "interactive"},
+    {"source": "scheduler", "interaction": "non-interactive"},
+    # A check-in keeps the source "web"; only its interaction says so.
+    {"background": True, "interaction": "non-interactive"},
+    {"source": "telegram", "interaction": "non-interactive", "peer_kind": "direct"},
+    # A chat-app sender the owner treats as themselves is an interactive turn.
+    {"source": "telegram", "interaction": "interactive", "peer_kind": "direct"},
+    {"automation": "automatic_goal", "source": "agent_spawn", "interaction": "non-interactive"},
+    {"detached": True, "source": "agent_spawn", "interaction": "non-interactive"},
+])
+def test_detached_turn_does_not_take_the_page_in_front(monkeypatch, turn):
+    from openprogram.programs.applications.browser import web_use as module
+
+    captures = _spy_on_page_capture(monkeypatch)
+    release = _bind_turn(monkeypatch, **turn)
+    try:
+        result = module.web_use(command="observe", backend="playwright_mcp")
+    finally:
+        release()
+    assert result.is_error is True
+    assert result.json_data["reason_code"] == "page_required"
+    assert "arguments.url" in result.json_data["message"]
+    # Neither capture_active nor the focused-page lookup behind list_pages.
+    assert captures == []
+
+
+def test_detached_turn_can_still_name_a_listed_page(monkeypatch):
+    from openprogram.programs.applications.browser import web_use as module
+    from openprogram.runtime.conversation import surface_context
+
+    captures = _spy_on_page_capture(monkeypatch)
+    monkeypatch.setattr(
+        surface_context, "resolve_binding",
+        lambda _page="": (_ for _ in ()).throw(RuntimeError("not bound")),
+    )
+    release = _bind_turn(monkeypatch, source="scheduler", interaction="non-interactive")
+    try:
+        result = module.web_use(command="observe", backend="playwright_mcp", page="p1")
+    finally:
+        release()
+    assert result["ok"] is True
+    assert captures == ["list"]
+
+
+@pytest.mark.parametrize("turn", [
+    {"interaction": "interactive"},
+    {"interaction": None},
+    {"source": "agent_spawn", "interaction": "non-interactive"},
+    {"source": "mcp", "interaction": "non-interactive"},
+    # The runtime's own follow-ups of a person's chat are not detached.
+    {"source": "hook_continue", "interaction": "non-interactive"},
+    {"source": "merge_turn", "interaction": "non-interactive"},
+    {"source": "job_followup", "interaction": "non-interactive"},
+    {"source": "acp", "interaction": "interactive"},
+    # A Program's process in a person's chat: source web, the runtime speaking.
+    {"source": "web", "interaction": "non-interactive"},
+])
+def test_attended_turn_still_observes_the_page_in_front(monkeypatch, turn):
+    from openprogram.programs.applications.browser import web_use as module
+
+    captures = _spy_on_page_capture(monkeypatch)
+    release = _bind_turn(monkeypatch, **turn)
+    try:
+        result = module.web_use(command="observe", backend="playwright_mcp")
+    finally:
+        release()
+    assert result["ok"] is True
+    assert captures == ["active"]
+
+
+def _origin_window_only(monkeypatch):
+    """A turn that knows its window and has no Page: as a scheduled run has."""
+    from openprogram.runtime.conversation import surface_context
+
+    monkeypatch.setattr(surface_context, "current", lambda: {
+        "context_id": "ctx", "origin_window_id": "w1", "surfaces": [],
+    })
+    monkeypatch.setattr(
+        surface_context, "resolve_binding",
+        lambda _page="": (_ for _ in ()).throw(RuntimeError("no surface")),
+    )
+
+
+def test_scheduled_run_knowing_its_window_does_not_take_the_page_in_front(monkeypatch):
+    from openprogram.programs.applications.browser import web_use as module
+
+    captures = _spy_on_page_capture(monkeypatch)
+    _origin_window_only(monkeypatch)
+    release = _bind_turn(monkeypatch, source="scheduler", interaction="non-interactive")
+    try:
+        result = module.web_use(command="observe", backend="playwright_mcp")
+    finally:
+        release()
+    assert result.is_error is True
+    assert result.json_data["reason_code"] == "page_required"
+    assert captures == []
+
+
+def test_program_of_a_detached_turn_gets_every_page_and_none_picked(monkeypatch):
+    from openprogram.programs.applications.browser import web_use as module
+    from openprogram.runtime.conversation import surface_context
+
+    real_resolve = surface_context.resolve_binding
+    captures = _spy_on_page_capture(monkeypatch)
+    monkeypatch.setattr(surface_context, "resolve_binding", real_resolve)
+    snapshot = surface_context.without_primary_page({
+        "context_id": "ctx", "primary_surface_key": "p1", "alias_map": {},
+        "surfaces": [{"surface_key": "p1", "binding_id": "b1", "page_key": "k1", "capabilities": ["observe"]}],
+    })
+    monkeypatch.setattr(surface_context, "current", lambda: snapshot)
+    release = _bind_turn(monkeypatch, detached=True, interaction="non-interactive")
+    try:
+        result = module.web_use(command="observe", backend="playwright_mcp")
+    finally:
+        release()
+    assert result.is_error is True
+    assert result.json_data["reason_code"] == "page_required"
+    assert captures == []
+
+
+def test_attended_turn_knowing_its_window_still_observes_the_page_in_front(monkeypatch):
+    from openprogram.programs.applications.browser import web_use as module
+
+    captures = _spy_on_page_capture(monkeypatch)
+    _origin_window_only(monkeypatch)
+    release = _bind_turn(monkeypatch, interaction="interactive")
+    try:
+        result = module.web_use(command="observe", backend="playwright_mcp")
+    finally:
+        release()
+    assert result["ok"] is True
+    assert captures == ["list"]
+
+
+def test_observe_with_no_turn_still_observes_the_page_in_front(monkeypatch):
+    from openprogram.programs.applications.browser import web_use as module
+
+    captures = _spy_on_page_capture(monkeypatch)
+    result = module.web_use(command="observe", backend="playwright_mcp")
+    assert result["ok"] is True
+    assert captures == ["active"]

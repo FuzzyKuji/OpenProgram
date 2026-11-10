@@ -294,11 +294,10 @@ def _authorize(action: str) -> tuple[dict[str, Any], str | None]:
     if not authority or not has_capability(authority, capability):
         return {}, f"Error: authority tier does not allow {capability}."
     if action in {"create", "update", "delete"} and not (
-        authority["speaker_kind"] == "owner"
-        and authority["interaction"] == "interactive"
+        authority["authority_tier"] == "owner"
         and authority["principal_id"] == owner_principal_id()
     ):
-        return {}, "Error: schedule changes require the local interactive owner."
+        return {}, "Error: schedule changes are the owner's."
     return authority, None
 
 
@@ -325,17 +324,11 @@ def _build_execution_spec(
     wake: bool = False, origin: tuple[str, str] | None = None,
     watch: str | None = None,
 ) -> dict[str, Any]:
-    from openprogram.host import sandbox
-
-    policy = sandbox.resolve_policy(required=True)
-    assert policy is not None
     spec: dict[str, Any] = {
-        "version": 1,
+        "version": 2,
         "kind": kind,
         kind: body,
         "cwd": os.path.realpath(cwd),
-        "sandbox_policy": sandbox.policy_to_dict(policy),
-        "policy_hash": sandbox.policy_hash(policy),
         "memory_refs": list(memory_refs or []),
     }
     if watch:
@@ -361,8 +354,10 @@ def _build_execution_spec(
         spec.update({
             "session_id": session_id or f"cron-{entry_id}",
             "agent_id": agent_id,
-            "permission_mode": "ask",
         })
+    elif kind == "command":
+        # The conversation that set it, whose Sandbox switch applies at each fire.
+        spec["session_id"] = session_id
     elif kind == "reminder":
         # A reminder belongs to the conversation it was set in: it is shown
         # there, and a waking reminder starts its turn there.
@@ -376,11 +371,15 @@ def _build_execution_spec(
 
 def _verify_execution_spec(
     value: Any,
-) -> tuple[dict[str, Any] | None, Any | None, str | None]:
-    from openprogram.host import sandbox
+) -> tuple[dict[str, Any] | None, str | None]:
+    """A task's signed spec, or why it may not run.
 
+    Version 1 specs embed a sandbox policy; it is covered by the signature
+    like every other field and otherwise ignored. A version 1 spec set from
+    a chat channel no longer runs.
+    """
     if not isinstance(value, dict):
-        return None, None, "missing immutable execution spec"
+        return None, "missing immutable execution spec"
     signature = value.get("signature")
     expected_spec_hash = value.get("spec_hash")
     unsigned = {
@@ -389,61 +388,52 @@ def _verify_execution_spec(
     if not isinstance(expected_spec_hash, str) or not hmac.compare_digest(
         expected_spec_hash, _json_hash(unsigned)
     ):
-        return None, None, "execution spec hash mismatch"
+        return None, "execution spec hash mismatch"
     signed = {k: v for k, v in value.items() if k != "signature"}
     try:
         expected_signature = _signature(signed, create_key=False)
     except ValueError as exc:
-        return None, None, str(exc)
+        return None, str(exc)
     if not isinstance(signature, str) or not hmac.compare_digest(
         signature, expected_signature,
     ):
-        return None, None, "execution spec owner signature mismatch"
-    try:
-        policy = sandbox.policy_from_dict(value.get("sandbox_policy"))
-    except ValueError as exc:
-        return None, None, str(exc)
-    expected_policy_hash = value.get("policy_hash")
-    if not isinstance(expected_policy_hash, str) or not hmac.compare_digest(
-        expected_policy_hash, sandbox.policy_dict_hash(value.get("sandbox_policy"))
-    ):
-        return None, None, "sandbox policy hash mismatch"
+        return None, "execution spec owner signature mismatch"
     kind = value.get("kind")
     if kind not in EXECUTION_KINDS:
-        return None, None, "execution spec kind must be command, prompt, or reminder"
+        return None, "execution spec kind must be command, prompt, or reminder"
     if not isinstance(value.get(kind), str) or not value[kind].strip():
-        return None, None, f"execution spec {kind} is empty"
+        return None, f"execution spec {kind} is empty"
     if "watch" in value and not (isinstance(value["watch"], str) and value["watch"].strip()):
-        return None, None, "execution spec watch is empty"
+        return None, "execution spec watch is empty"
     cwd = value.get("cwd")
     if not isinstance(cwd, str) or not os.path.isabs(cwd):
-        return None, None, "execution spec cwd must be absolute"
+        return None, "execution spec cwd must be absolute"
     if not os.path.isdir(cwd):
-        return None, None, f"execution spec cwd does not exist: {cwd}"
+        return None, f"execution spec cwd does not exist: {cwd}"
     if kind == "prompt" and not all(
         isinstance(value.get(key), str) and value[key]
         for key in ("session_id", "agent_id")
     ):
-        return None, None, "prompt execution spec needs session_id and agent_id"
+        return None, "prompt execution spec needs session_id and agent_id"
     if kind == "reminder" and not (
         isinstance(value.get("session_id"), str)
         and isinstance(value.get("wake"), bool)
         and (value["session_id"] or not value["wake"])
     ):
-        return None, None, "reminder execution spec needs a session to wake"
+        return None, "reminder execution spec needs a session to wake"
     try:
         from openprogram.state.memory.references import normalize as normalize_memory_refs
 
         normalized_refs = normalize_memory_refs(value.get("memory_refs") or [])
     except ValueError as exc:
-        return None, None, str(exc)
+        return None, str(exc)
     if normalized_refs != (value.get("memory_refs") or []):
-        return None, None, "memory_refs are not canonical"
+        return None, "memory_refs are not canonical"
     if normalized_refs and kind != "prompt":
-        return None, None, "memory_refs require a prompt execution spec"
+        return None, "memory_refs require a prompt execution spec"
     job_authority = value.get("job_authority")
     if not isinstance(job_authority, dict):
-        return None, None, "missing immutable job authority"
+        return None, "missing immutable job authority"
     expected_authority_hash = job_authority.get("authority_hash")
     raw_authority = {
         key: item for key, item in job_authority.items()
@@ -452,19 +442,54 @@ def _verify_execution_spec(
     if not isinstance(expected_authority_hash, str) or not hmac.compare_digest(
         expected_authority_hash, _json_hash(raw_authority),
     ):
-        return None, None, "job authority hash mismatch"
+        return None, "job authority hash mismatch"
     if job_authority.get("authority_tier") != "owner" \
             or job_authority.get("kind") != kind:
-        return None, None, "job authority does not match execution kind"
+        return None, "job authority does not match execution kind"
     try:
-        from openprogram.runtime.permissions.authority import owner_principal_id
+        from openprogram.runtime.permissions.authority import LOCAL_OWNER_SPEAKER, owner_principal_id
 
         current_owner = owner_principal_id()
     except Exception as exc:
-        return None, None, f"owner identity unavailable: {exc}"
+        return None, f"owner identity unavailable: {exc}"
     if job_authority.get("principal_id") != current_owner:
-        return None, None, "job authority belongs to a different owner"
-    return value, policy, None
+        return None, "job authority belongs to a different owner"
+    if value.get("version") == 1 and (job_authority.get("creator") or {}).get("speaker_id") != LOCAL_OWNER_SPEAKER:
+        # Back then any approved chat sender counted as the owner. Nothing
+        # recorded whether this one still does, so the task does not run as one.
+        return None, ("this task was set from a chat before chat senders stopped counting as the owner; "
+                      "set it again from one of your own conversations")
+    return value, None
+
+
+def _refusals_path() -> str:
+    return os.path.join(os.path.dirname(_resolve_path()) or ".", "refusals.json")
+
+
+def read_refusals() -> dict[str, str]:
+    """Each task's latest refused run, by task id."""
+    try:
+        with open(_refusals_path(), encoding="utf-8") as stream:
+            found = json.load(stream)
+    except (OSError, ValueError):
+        return {}
+    return found if isinstance(found, dict) else {}
+
+
+def report_refusal(entry_id: str, text: str | None) -> None:
+    """Record why a task's run was refused; ``None`` clears it after a run that started."""
+    path = _refusals_path()
+    with _store_lock(path):
+        found = read_refusals()
+        if text is None and entry_id not in found:
+            return
+        if text is None:
+            del found[entry_id]
+        else:
+            found[entry_id] = text
+        os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
+        with open(path, "w", encoding="utf-8") as stream:
+            json.dump(found, stream, indent=2, ensure_ascii=False)
 
 
 def execute(
@@ -513,6 +538,7 @@ def execute(
         if not entries:
             return f"No scheduled tasks in `{path}`."
         lines = [f"Scheduled tasks in `{path}`:"]
+        refused = read_refusals()
         for e in entries:
             body = e.get("prompt") or e.get("command") or e.get("reminder") or ""
             kind = "$" if e.get("command") else "⏰" if e.get("reminder") else ">"
@@ -522,6 +548,8 @@ def execute(
             line = f"- `{e.get('id','?')}`  {e.get('type','recurring')}  {schedule}  {kind} {body[:80]}"
             if e.get("notes"):
                 line += f"   _({e['notes']})_"
+            if e.get("id") in refused:
+                line += f"   [last run refused: {refused[e['id']]}]"
             lines.append(line)
         return "\n".join(lines)
 

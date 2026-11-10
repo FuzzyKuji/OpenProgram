@@ -111,7 +111,6 @@ class TurnPrep:
     # Aging telemetry
     tool_results_redacted: int = 0
     tokens_freed_by_microcompact: int = 0
-    references_protected: int = 0
     summary_id: Optional[str] = None
 
     # Trace breadcrumbs for the compaction decision path
@@ -154,20 +153,3 @@ class CompactResult:
     error: Optional[str] = None
     fell_back_to_structural: bool = False  # LLM failed → kept tail only
     no_op: bool = False  # already folded / nothing to cover — not a success compact
-
-
-# ---------------------------------------------------------------------------
-# Reference tracking — which tool outputs are still cited downstream
-# ---------------------------------------------------------------------------
-
-@dataclass
-class ReferenceMap:
-    """Inverse index: tool_use_id → did any later assistant message
-    *quote* / *cite* / *re-reference* its result?
-
-    Built by ``ReferenceTracker.build()`` and consumed by ``Microcompactor``
-    to skip microcompact on results the model is still working with.
-    """
-    cited_tool_use_ids: set[str] = field(default_factory=set)
-    quoted_snippets_by_msg: dict[str, set[str]] = field(default_factory=dict)
-    last_built_at: float = 0.0

@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+from types import SimpleNamespace
+
 import pytest
 
 
 @pytest.mark.parametrize("source", ["web", "tui", "acp"])
 def test_chat_runtime_keeps_goal_tool_membership_on_approval_resume(monkeypatch, source):
     from openprogram.runtime.conversation import turn_runtime as dispatcher
-    from openprogram.runtime.execution.agent_checkpoint import validate_runtime_contract
+    from openprogram.runtime.execution.runtime_contract import validate_runtime_contract
     from openprogram.runtime.conversation.turn_runtime import loop_runner
     from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.models.providers.types import AgentTool
@@ -34,7 +36,7 @@ def test_chat_runtime_keeps_goal_tool_membership_on_approval_resume(monkeypatch,
 
 def test_chat_runtime_keeps_saved_tools_when_live_catalog_grows(monkeypatch):
     from openprogram.runtime.conversation import turn_runtime as dispatcher
-    from openprogram.runtime.execution.agent_checkpoint import validate_runtime_contract
+    from openprogram.runtime.execution.runtime_contract import validate_runtime_contract
     from openprogram.runtime.conversation.turn_runtime import loop_runner
     from openprogram.runtime.agent.turn_request import TurnRequest
     from openprogram.models.providers.types import AgentTool
@@ -86,6 +88,35 @@ def test_live_tool_visibility_preserves_execution_contract(monkeypatch):
     rules.deny = ["bash(rm *)"]
     assert tool._permission_visible()
     assert tool.name == "bash"
+
+
+def test_a_goal_started_from_the_controls_runs_in_the_conversations_mode(monkeypatch):
+    from openprogram.programs.tools.planning.goal import chat
+    from openprogram.runtime.conversation import production_driver, session_config
+    import openprogram.programs.tools.planning.goal as goals
+
+    seen = {}
+
+    class Stop(Exception):
+        pass
+
+    class Adapter:
+        def __init__(self, **_kwargs):
+            pass
+
+        def admit(self, request, **_kwargs):
+            seen["request"] = request
+            raise Stop
+
+    monkeypatch.setattr(goals, "load_goal", lambda _sid: {"status": "active", "text": "go", "id": "g"})
+    monkeypatch.setattr(goals, "_db", lambda: SimpleNamespace(get_session=lambda _sid: {"agent_id": "main"}))
+    monkeypatch.setattr(chat, "identity", lambda _goal: {"id": "g"})
+    monkeypatch.setattr(production_driver, "CanonicalAgentAdapter", Adapter)
+    monkeypatch.setattr(session_config, "conversation_permission",
+                        lambda _sid: {"permission_mode": "plan", "permission_rules": None})
+    with pytest.raises(Stop):
+        chat.start_from_controls("s")
+    assert seen["request"].permission_mode == "plan"
 
 
 @pytest.fixture

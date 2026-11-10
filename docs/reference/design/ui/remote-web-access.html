@@ -1,650 +1,438 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram remote Web access design</title>
-<style>
-  :root{
-    --bg:#0f171c;
-    --panel:#15232a;
-    --panel-2:#192c34;
-    --ink:#e7eee9;
-    --text:#b7c5c3;
-    --muted:#7f9595;
-    --line:#294049;
-    --cyan:#67c9c7;
-    --blue:#70a7e8;
-    --amber:#e8ad67;
-    --green:#8bcf9a;
-    --red:#ef7772;
-    --violet:#b89ae8;
-    --code:#0b1216;
+<title>Remote Web access</title>
+<meta name="description" content="How the single owner reaches the Web UI from another device: instance token, browser bootstrap, Host and Origin checks, reverse proxies and secret handling.">
+<h1>Remote Web access</h1>
+
+<p>Every HTTP, SSE and WebSocket request carries the per-start instance token, even on loopback. A valid token means the active profile's one owner. No relay, no accounts.</p>
+
+<h2 id="method">Access modes</h2>
+<table class="stack">
+<thead><tr><th scope="col">Mode</th><th scope="col">Bind</th><th scope="col">Browser reaches</th><th scope="col">Protection besides the token</th></tr></thead>
+<tbody>
+<tr><th scope="row">Same machine</th><td><code translate="no">127.0.0.1</code></td><td>Loopback URL</td><td>Host and Origin checks</td></tr>
+<tr><th scope="row">Trusted LAN or encrypted VPN</th><td>Explicit <code translate="no">web.host</code>, often <code translate="no">0.0.0.0</code></td><td>Direct address</td><td>Non-empty exact origins, Host checks, HTTPS or an encrypted network</td></tr>
+<tr><th scope="row">SSH tunnel</th><td><code translate="no">127.0.0.1</code></td><td>Local forwarded port</td><td>SSH encrypts transport</td></tr>
+<tr><th scope="row">Public owner domain</th><td><code translate="no">127.0.0.1</code> behind a same-host proxy</td><td>Owner-managed HTTPS URL</td><td>Exact origin and Host, trusted loopback proxy, HTTPS</td></tr>
+</tbody>
+</table>
+
+<h3 id="authority">Who a valid token is</h3>
+<dl class="pairs">
+<dt>Principal</dt><dd><code translate="no">owner/install/&lt;16hex&gt;</code> from <code translate="no">openprogram/runtime/permissions/authority.py</code>, with the owner tier's fixed capabilities</dd>
+<dt>Scope</dt><dd>The active profile or state directory: <code translate="no">owner.json</code> lives there, so each profile has its own owner</dd>
+<dt>Proves</dt><dd>Authorization as the owner, not which person is at the browser</dd>
+<dt>Channel speakers</dt><dd>Telegram, Discord and other channels keep speaker attribution and the restricted <code translate="no">paired</code> tier; a channel turn never makes someone the Web owner</dd>
+<dt>Stored</dt><dd>No Web user table, passwords, memberships, roles or per-project ACL</dd>
+</dl>
+
+<table class="stack fixed">
+<thead><tr><th scope="col">Excluded</th><th scope="col">Instead</th></tr></thead>
+<tbody>
+<tr><th scope="row">Web accounts, signup, invitations, user sessions</th><td>One owner principal per profile or state instance</td></tr>
+<tr><th scope="row">RBAC, groups, tenant or workspace roles, project permissions</th><td>The Web UI is one full-capability administrative interface</td></tr>
+<tr><th scope="row">OAuth, OIDC, SSO, identity-aware proxy, Tailscale identity</th><td>May add a control; never replace the token</td></tr>
+<tr><th scope="row">Built-in TLS, ACME, certificate storage and renewal</th><td>The owner runs nginx, Caddy, a VPN or SSH</td></tr>
+<tr><th scope="row">Public relay, hosted tunnel, rendezvous, pairing, share URL</th><td>No outbound registration for reachability</td></tr>
+<tr><th scope="row">Authentication off, <code translate="no">--insecure</code></th><td>Always on, including loopback</td></tr>
+<tr><th scope="row">Long-lived token in a query, <code translate="no">localStorage</code> or public HTML</th><td>Fragment bootstrap and HttpOnly cookie only</td></tr>
+<tr><th scope="row">Reading stored provider credentials as plaintext</th><td>Replace only</td></tr>
+</tbody>
+</table>
+
+<h2 id="current">Threats on loopback</h2>
+<table class="stack">
+<thead><tr><th scope="col">Caller</th><th scope="col">What it can do</th><th scope="col">Control</th></tr></thead>
+<tbody>
+<tr><th scope="row">Arbitrary Web page</th><td>Send some HTTP to localhost; WebSocket escapes the same-origin read rule</td><td>Token plus exact Origin and Host before any action</td></tr>
+<tr><th scope="row">DNS-rebinding page</th><td>Resolve a hostile name to loopback and present a foreign Host</td><td>Fail-closed Host validation</td></tr>
+<tr><th scope="row">Local process, other OS account</th><td>Omit <code translate="no">Origin</code>, as <code translate="no">curl</code> and native clients do</td><td>Bearer token; missing Origin conveys no trust</td></tr>
+<tr><th scope="row">LAN peer after external bind</th><td>Connect to every route and <code translate="no">/ws</code></td><td>Mandatory token, exact origins, Host validation, protected transport</td></tr>
+<tr><th scope="row">Reverse-proxy client</th><td>Present a public Host while the backend stays loopback</td><td>Explicit public origin, narrowly trusted loopback proxy</td></tr>
+</tbody>
+</table>
+
+<h3 id="invariants">Invariants</h3>
+<ul>
+<li>Before authentication: no protected state, session data, file bytes, secret metadata, SSE event or WebSocket frame leaves, and no action runs.</li>
+<li>A missing <code translate="no">Origin</code> never establishes trust. It is allowed only after valid Bearer authentication, or on a safe cookie request.</li>
+<li>The token complements Host and Origin checks; cookies keep CSRF controls.</li>
+<li>A non-loopback bind with incomplete origins fails before listening.</li>
+<li>No route returns a stored secret, or the token after initial entry.</li>
+</ul>
+
+<h2 id="design">Token and credentials</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Value</th><td><code translate="no">secrets.token_bytes(32)</code>, shown as 43 characters of unpadded base64url; new on every Web process start</td></tr>
+<tr><th scope="row">One process</th><td>Exclusive owner-only lock <code translate="no">&lt;state-dir&gt;/web.lock</code>; a second process fails without touching the first's token</td></tr>
+<tr><th scope="row">Files</th><td><code translate="no">web/token</code> written atomically before the listener is ready; <code translate="no">web/access.json</code> holds exactly <code translate="no">version</code>, <code translate="no">bind_host</code>, <code translate="no">port</code>, <code translate="no">effective_origins</code>, <code translate="no">token_fingerprint</code>; both owner-only, hardened by <code translate="no">restrict_to_user()</code></td></tr>
+<tr><th scope="row">Never from</th><td>Configuration, a command-line argument, an environment variable</td></tr>
+<tr><th scope="row">Never in</th><td>Server logs, exception messages, access logs, telemetry, Web responses. Logs carry only <code translate="no">sha256:&lt;first 12 hex of sha256(raw bytes)&gt;</code></td></tr>
+<tr><th scope="row">Compare</th><td>Decode to exactly 32 bytes, then <code translate="no">hmac.compare_digest</code></td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Startup failure and cleanup</summary>
+<ul>
+<li>The write follows the temp-file, <code translate="no">os.replace</code> and permission pattern of <code translate="no">openprogram/extensions/mcp/token_storage.py</code>.</li>
+<li>Startup fails if the lock cannot be taken or the token file cannot be created and read back safely.</li>
+<li><code translate="no">read_active_web_access()</code> returns <code translate="no">ActiveWebAccess</code> only for a valid snapshot whose fingerprint matches the live token file.</li>
+<li>On bind failure or shutdown, the process removes the token only while holding the lock with its own token in the file, and <code translate="no">access.json</code> only when the fingerprint is its own.</li>
+<li>Stale unlocked files are replaced atomically by the next process.</li>
+</ul>
+</details>
+
+<h3 id="credential-forms">Credential forms</h3>
+<table class="stack">
+<thead><tr><th scope="col">Client</th><th scope="col">Credential</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Browser HTTP, SSE, WebSocket</th><td>Cookie <code translate="no">openprogram_owner_&lt;16hex&gt;</code> = <code translate="no">base64url(HMAC-SHA256(raw_token, "openprogram-web-cookie-v1"))</code></td><td><code translate="no">HttpOnly</code>, <code translate="no">SameSite=Strict</code>, <code translate="no">Path=/</code>, no <code translate="no">Domain</code>, session lifetime; <code translate="no">Secure</code> when the effective scheme is HTTPS</td></tr>
+<tr><th scope="row">Native HTTP, SSE, WebSocket</th><td><code translate="no">Authorization: Bearer &lt;token&gt;</code></td><td>Header only; a token in a query is ignored</td></tr>
+</tbody>
+</table>
+<ul>
+<li>The profile-specific name keeps simultaneous profile servers from overwriting each other's cookie: cookies are not port-scoped.</li>
+<li>The cookie has no database row. It is recomputed from the token, so a restart invalidates it.</li>
+<li>Except on bootstrap, any <code translate="no">Authorization</code> header selects the Bearer path: a bad one returns <code translate="no">401</code> and never falls back to a valid cookie.</li>
+</ul>
+
+<h3 id="fragment-bootstrap">Browser sign-in</h3>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 318" role="img" aria-label="Sequence between CLI, browser and Web server. The CLI opens the root URL with the token in the fragment. The browser requests the page without the fragment and gets the public static shell. It reads the token into memory and clears the address with history.replaceState. It posts the token to the bootstrap endpoint in the body and receives 204 with an HttpOnly cookie. All later HTTP, SSE and WebSocket traffic uses the cookie.">
+  <defs><marker id="rw-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big mid" x="60" y="24">CLI</text>
+  <text class="t-big mid" x="330" y="24">Browser</text>
+  <text class="t-big mid" x="610" y="24">Web server</text>
+  <line class="ln-faint" x1="60" y1="36" x2="60" y2="308"/>
+  <line class="ln-faint" x1="330" y1="36" x2="330" y2="308"/>
+  <line class="ln-faint" x1="610" y1="36" x2="610" y2="308"/>
+  <text class="t-cmd mid" x="195" y="60">open /#token=…</text>
+  <line class="ln" x1="60" y1="70" x2="330" y2="70" marker-end="url(#rw-a)"/>
+  <text class="t-cmd mid" x="470" y="98">GET / (no fragment)</text>
+  <line class="ln" x1="330" y1="108" x2="610" y2="108" marker-end="url(#rw-a)"/>
+  <text class="t-soft mid" x="470" y="134">public static shell</text>
+  <line class="ln" x1="610" y1="144" x2="330" y2="144" marker-end="url(#rw-a)"/>
+  <text class="t-cmd" x="20" y="168">token into memory</text>
+  <text class="t-cmd" x="20" y="190">history.replaceState()</text>
+  <line class="ln-faint" x1="240" y1="178" x2="326" y2="178" marker-end="url(#rw-a)"/>
+  <text class="t-cmd mid" x="470" y="212">POST /api/auth/bootstrap</text>
+  <line class="ln-acc" x1="330" y1="222" x2="610" y2="222" marker-end="url(#rw-a)"/>
+  <text class="t-cmd mid" x="470" y="248">204 Set-Cookie: HttpOnly</text>
+  <line class="ln-acc" x1="610" y1="258" x2="330" y2="258" marker-end="url(#rw-a)"/>
+  <text class="t-soft mid" x="470" y="284">HTTP, SSE, WebSocket with the cookie</text>
+  <line class="ln" x1="330" y1="294" x2="610" y2="294" marker-end="url(#rw-a)"/>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>CLI</strong><small><code translate="no">open /#token=…</code></small></li>
+  <li><strong>Browser</strong><small><code translate="no">GET /</code> without the fragment; gets the public shell</small></li>
+  <li><strong>Browser</strong><small>token into memory, <code translate="no">history.replaceState()</code></small></li>
+  <li><strong>Browser</strong><small><code translate="no">POST /api/auth/bootstrap</code></small></li>
+  <li><strong>Web server</strong><small><code translate="no">204</code>, <code translate="no">Set-Cookie: HttpOnly</code></small></li>
+  <li class="flow-end"><strong>Browser</strong><small>HTTP, SSE, WebSocket with the cookie</small></li>
+</ol>
+</figure>
+<p class="note">The fragment never appears in an HTTP request, proxy log, Referer or route. <code translate="no">apps/web/lib/net/auth/owner-auth-bootstrap.ts</code> mounts the application only after the exchange and uses no Web Storage.</p>
+
+<details>
+<summary><code translate="no">POST /api/auth/bootstrap</code> contract</summary>
+<ul>
+<li><code translate="no">POST</code> only, with a valid exact Origin and valid Host.</li>
+<li><code translate="no">Content-Type: application/json</code>, body at most 256 bytes, exactly <code translate="no">{"token":"&lt;43-character base64url&gt;"}</code>. Unknown keys, duplicate keys, bad base64url and other lengths are rejected.</li>
+<li>Any <code translate="no">Authorization</code> header, a missing token or a wrong token: the same <code translate="no">401</code>.</li>
+<li>Success: <code translate="no">204</code> and the cookie. Always <code translate="no">Cache-Control: no-store</code>; the token is never in a response.</li>
+</ul>
+</details>
+
+<h3 id="auth-url">Sign-in link for another device</h3>
+<pre translate="no" tabindex="0">openprogram web auth-url --base-url https://agent.example.com</pre>
+<ol>
+<li>Compare worker PID and port files, <code translate="no">access.json</code> and the listening process: send a fresh nonce to <code translate="no">GET /api/auth/challenge</code> and check the HMAC proof locally. The token is never sent to the probed port.</li>
+<li>Read the live token file and print one fragment URL to the terminal, never to application logs.</li>
+</ol>
+<p class="note"><code translate="no">--base-url</code> must be an effective origin frozen in <code translate="no">access.json</code>, with no path, query, fragment or user information. HTTP passes only for exact <code translate="no">localhost</code> on a loopback listener or an IP in the ranges under <a href="#http-ranges">Plaintext HTTP</a>.</p>
+
+<h2 id="routes">Request handling</h2>
+<p>One ASGI middleware, <code translate="no">OwnerAuthMiddleware</code>, runs before route dispatch for HTTP and WebSocket. No application route interprets authentication itself.</p>
+<table class="stack">
+<thead><tr><th scope="col">Order</th><th scope="col">Check</th><th scope="col">On failure</th></tr></thead>
+<tbody>
+<tr><th scope="row">1</th><td>Immediate peer, effective scheme, one valid <code translate="no">Host</code>; <code translate="no">request_origin</code> must be effective. <code translate="no">Origin</code> and <code translate="no">Sec-Fetch-Site</code> when present.</td><td><code translate="no">403 request_origin_rejected</code></td></tr>
+<tr><th scope="row">2</th><td>Public, challenge and bootstrap routes answer here</td><td>Their own rule, below</td></tr>
+<tr><th scope="row">3</th><td>Bearer if an <code translate="no">Authorization</code> header exists, else cookie</td><td><code translate="no">401 authentication_required</code>, <code translate="no">WWW-Authenticate: Bearer realm="OpenProgram"</code></td></tr>
+<tr><th scope="row">4</th><td>Cookie on an unsafe method or WebSocket must have <code translate="no">Origin</code></td><td><code translate="no">403 request_origin_rejected</code></td></tr>
+<tr><th scope="row">5</th><td>Attach <code translate="no">owner_authority(principal)</code>, then route, SSE generator or <code translate="no">websocket.accept</code></td><td></td></tr>
+</tbody>
+</table>
+<p class="note">WebSocket failures are HTTP upgrade denials, never an accepted socket then a close frame. Malformed or revision-mismatched challenge: <code translate="no">400 invalid_challenge</code>. HTTP carrying <code translate="no">x-openprogram-ui-check</code>: <code translate="no">409 ui_verification_active</code>. Invalid non-loopback startup configuration: no listener.</p>
+
+<h3 id="public-routes">Reachable without the owner credential</h3>
+<table class="stack fixed">
+<thead><tr><th scope="col">Route</th><th scope="col">Guard or content</th></tr></thead>
+<tbody>
+<tr><th scope="row">Application shell, static assets</th><td><code translate="no">GET</code> and <code translate="no">HEAD</code>; no token, secret, session id or user data in the HTML</td></tr>
+<tr><th scope="row"><code translate="no">GET</code>/<code translate="no">HEAD /docs</code>, <code translate="no">/docs/**</code></th><td>Prebuilt site only: <code translate="no">docs/_site</code> in a checkout, <code translate="no">openprogram/interfaces/server/_frontend/docs</code> in a package (the wheel must include its <code translate="no">index.html</code>). No source scan or build on a request; staleness checks run only when a source worker registers routes.</td></tr>
+<tr><th scope="row"><code translate="no">POST /api/auth/bootstrap</code></th><td>Its own body-token check</td></tr>
+<tr><th scope="row"><code translate="no">GET /api/auth/challenge</code></th><td>Listener proof, below; grants nothing</td></tr>
+<tr><th scope="row"><code translate="no">GET /healthz</code></th><td>Only <code translate="no">{"status":"ok"}</code>; details are behind authentication at <code translate="no">/api/diagnostics</code></td></tr>
+<tr><th scope="row"><code translate="no">POST /hooks/&lt;id&gt;</code></th><td>Scheduler webhook, guarded by the task's own key</td></tr>
+<tr><th scope="row"><code translate="no">GET /application-assets/…</code></th><td>Sandboxed module imports with <code translate="no">Origin: null</code>; reads one immutable UI tree; Host still checked</td></tr>
+<tr><th scope="row">Office host</th><td>Served by the <code translate="no">office_editor</code> application while enabled; WebSocket refused</td></tr>
+</tbody>
+</table>
+<p class="note">All pass step 1, except the Office host, which <code translate="no">office_editor</code> checks. Everything else needs a credential: routes, raw files, providers, diagnostics, SSE, WebSocket.</p>
+
+<details>
+<summary>Listener challenge and session check</summary>
+<ul>
+<li>Input: <code translate="no">nonce</code> of 32 bytes as 43-character base64url, optional <code translate="no">revision</code> of 40 lowercase hex that must equal the served revision.</li>
+<li>Output: exactly <code translate="no">200 {"proof":"&lt;43-character base64url&gt;"}</code>, where the proof is <code translate="no">HMAC-SHA256(raw_token, "openprogram-web-challenge-v1\0" + nonce + "\0" + revision)</code>.</li>
+<li>No credential is sent, and no token or diagnostics are returned.</li>
+<li><code translate="no">GET /api/auth/session</code> after sign-in: <code translate="no">204</code> means the cookie matches the live worker. On <code translate="no">401</code> the desktop shell exchanges a fresh in-memory token and repeats bootstrap instead of reconnecting with a stale cookie.</li>
+</ul>
+</details>
+
+<details>
+<summary>Response headers</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Response</th><th scope="col">Headers</th></tr></thead>
+<tbody>
+<tr><th scope="row">Static shell</th><td><code translate="no">Content-Security-Policy</code> with <code translate="no">object-src 'none'</code>, <code translate="no">base-uri 'none'</code>, <code translate="no">frame-ancestors 'none'</code>, scripts from same origin plus generated hashes (no third-party scripts, no <code translate="no">unsafe-eval</code>); <code translate="no">X-Frame-Options: DENY</code>; <code translate="no">Referrer-Policy: no-referrer</code>; <code translate="no">X-Content-Type-Options: nosniff</code></td></tr>
+<tr><th scope="row"><code translate="no">/docs/*.raw.html</code></th><td>Same, but frameable by the same origin: <code translate="no">SAMEORIGIN</code>, <code translate="no">frame-ancestors 'self'</code></td></tr>
+<tr><th scope="row">Bootstrap, challenge, failures, protected API, credential status, SSE</th><td><code translate="no">Cache-Control: no-store</code></td></tr>
+<tr><th scope="row">Content-addressed static assets</th><td>Long-lived cache</td></tr>
+</tbody>
+</table>
+</details>
+
+<h3 id="origin-matrix">Origin by request form</h3>
+<table class="stack">
+<thead><tr><th scope="col">Request</th><th scope="col">Credential</th><th scope="col"><code translate="no">Origin</code></th></tr></thead>
+<tbody>
+<tr><th scope="row">Cookie, unsafe HTTP</th><td>Required</td><td>Must equal <code translate="no">request_origin</code>; missing rejected</td></tr>
+<tr><th scope="row">Cookie, WebSocket</th><td>Required before accept</td><td>Must equal <code translate="no">request_origin</code>; missing rejected</td></tr>
+<tr><th scope="row">Cookie, safe HTTP or SSE</th><td>Required</td><td>If present, must equal <code translate="no">request_origin</code>; navigation may omit it</td></tr>
+<tr><th scope="row">Bearer HTTP, SSE, WebSocket</th><td>Required (before accept on WebSocket)</td><td>May be omitted; if present, must be <code translate="no">request_origin</code> or, with a valid token, another effective origin</td></tr>
+<tr><th scope="row">Listener challenge</th><td>None; bounded nonce and revision</td><td>May be omitted; if present, must equal <code translate="no">request_origin</code></td></tr>
+<tr><th scope="row">Bootstrap</th><td>Token in the body</td><td>Must equal <code translate="no">request_origin</code></td></tr>
+</tbody>
+</table>
+<p class="note">The Bearer allowance exists because the Node TUI reaches loopback by IP while presenting the canonical origin. Safe methods are <code translate="no">GET</code>, <code translate="no">HEAD</code> and <code translate="no">OPTIONS</code>, and change no state. <code translate="no">Sec-Fetch-Site: cross-site</code> is always rejected. CORS headers control reading a response and are not authentication.</p>
+
+<details>
+<summary>How origins are computed</summary>
+<ul>
+<li><code translate="no">web.host</code> and <code translate="no">web.allowed_origins</code> come from the active profile's <code translate="no">&lt;state-dir&gt;/config.json</code>. <code translate="no">web.host</code> defaults to <code translate="no">127.0.0.1</code> and is needed only for direct LAN or VPN access.</li>
+<li>An entry is only <code translate="no">scheme://host[:port]</code>, <code translate="no">http</code> or <code translate="no">https</code>. Invalid: wildcards, paths, queries, fragments, user information, opaque origins, malformed IPv6, unspecified and multicast literals (so <code translate="no">0.0.0.0</code> and <code translate="no">::</code>).</li>
+<li>DNS names are IDNA- and case-normalized, IPv6 is bracketed, default ports are removed.</li>
+<li><code translate="no">effective_origins</code> = configured origins + on a loopback listener, <code translate="no">http://localhost:&lt;port&gt;</code> and the literal actually bound. A non-loopback listener gets no implicit origin. A request's <code translate="no">Host</code> is never promoted into the set.</li>
+<li><code translate="no">Host</code> must be one valid authority: duplicate, comma-joined, user-information, unspecified and multicast forms are rejected.</li>
+<li><code translate="no">request_origin</code> = scheme + parsed <code translate="no">Host</code>, with <code translate="no">ws</code> as <code translate="no">http</code> and <code translate="no">wss</code> as <code translate="no">https</code>. This one comparison covers exact origin and DNS rebinding.</li>
+</ul>
+</details>
+
+<h3 id="http-ranges">Plaintext HTTP</h3>
+<table class="stack fixed">
+<thead><tr><th scope="col">Accepted</th><th scope="col">Range</th></tr></thead>
+<tbody>
+<tr><th scope="row">DNS</th><td>Only exact <code translate="no">localhost</code> on a loopback listener</td></tr>
+<tr><th scope="row">IPv4</th><td><code translate="no">127.0.0.0/8</code>, <code translate="no">10.0.0.0/8</code>, <code translate="no">172.16.0.0/12</code>, <code translate="no">192.168.0.0/16</code>, <code translate="no">169.254.0.0/16</code>, <code translate="no">100.64.0.0/10</code></td></tr>
+<tr><th scope="row">IPv6</th><td><code translate="no">::1/128</code>, <code translate="no">fc00::/7</code>, <code translate="no">fe80::/10</code>; no zone identifiers</td></tr>
+</tbody>
+</table>
+<p class="note">Everything else needs HTTPS. An explicit list, not <code translate="no">is_private</code>: that property includes reserved addresses and excludes RFC 6598. Every non-loopback HTTP origin logs a startup warning, because an observer can read the credential. <code translate="no">100.64.0.0/10</code> is for encrypted overlays such as Tailscale; the address alone does not prove encryption, so the owner is responsible for that.</p>
+
+<h2 id="deployment">Deployment recipes</h2>
+<h3 id="ssh-tunnel">SSH tunnel</h3>
+<pre translate="no" tabindex="0">ssh -N -L 18100:127.0.0.1:18100 owner@remote-host
+# on the remote host, once the tunnel is up
+openprogram web auth-url --base-url http://127.0.0.1:18100</pre>
+<p class="note">A different local port needs that exact <code translate="no">http://localhost:&lt;port&gt;</code> or loopback-literal origin in <code translate="no">allowed_origins</code> first.</p>
+
+<h3 id="direct-lan">Direct LAN or VPN</h3>
+<pre translate="no" tabindex="0">{
+  "web": {
+    "host": "0.0.0.0",
+    "allowed_origins": ["http://192.168.1.20:18100"]
   }
-  *{box-sizing:border-box}
-  html{scroll-behavior:smooth}
-  body{
-    margin:0;
-    padding:38px 24px 90px;
-    overflow-x:hidden;
-    color:var(--text);
-    background:
-      linear-gradient(rgba(103,201,199,.035) 1px,transparent 1px),
-      linear-gradient(90deg,rgba(103,201,199,.035) 1px,transparent 1px),
-      var(--bg);
-    background-size:32px 32px;
-    font:14px/1.72 "Avenir Next","Segoe UI","PingFang SC",sans-serif;
-  }
-  .wrap{max-width:1180px;margin:0 auto}
-  a{color:var(--cyan);text-underline-offset:3px}
-  a:hover{color:var(--ink)}
-  a:focus-visible{outline:2px solid var(--amber);outline-offset:4px;border-radius:3px}
-  code,pre,.mono,.tag,.eyebrow,.num{
-    font-family:"IBM Plex Mono","SFMono-Regular",Menlo,Consolas,monospace;
-  }
-  code{padding:1px 5px;border-radius:4px;background:var(--code);color:var(--amber);font-size:.9em}
-  pre{
-    margin:10px 0 0;padding:15px 17px;overflow:auto;border:1px solid var(--line);
-    border-radius:8px;background:var(--code);color:#c8d8d5;font-size:12px;line-height:1.65;
-  }
-  h1,h2,h3,h4{color:var(--ink);font-weight:650}
-  h1{font:600 clamp(31px,5.2vw,66px)/1.02 "Iowan Old Style","Palatino Linotype",serif;letter-spacing:-.035em;margin:7px 0 18px;max-width:850px}
-  h2{font-size:22px;margin:0 0 7px;letter-spacing:-.015em}
-  h3{font-size:16px;margin:0 0 6px}
-  h4{font-size:14px;margin:0 0 5px}
-  p{margin:0 0 12px}
-  .hero{position:relative;padding:30px 0 26px;border-bottom:1px solid var(--line)}
-  .hero-grid{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr);gap:52px;align-items:end}
-  .hero-grid > *, .grid2 > *, .grid3 > *, .grid4 > *, .steps > *, .status-grid > *{min-width:0}
-  .eyebrow{font-size:10px;letter-spacing:.22em;color:var(--cyan);text-transform:uppercase}
-  .hero .lead{font-size:16px;line-height:1.78;max-width:760px;color:#bfcfcb}
-  .owner-card{border:1px solid var(--line);border-left:4px solid var(--cyan);background:rgba(21,35,42,.92);padding:18px 19px;border-radius:5px;overflow-wrap:anywhere}
-  .owner-card .label{font:10px/1.2 "IBM Plex Mono",Menlo,monospace;letter-spacing:.18em;color:var(--muted);margin-bottom:10px}
-  .owner-card .principal{font:14px/1.4 "IBM Plex Mono",Menlo,monospace;color:var(--ink);word-break:break-all}
-  .owner-card .scope{margin-top:12px;padding-top:11px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
-  .protocol{
-    display:grid;grid-template-columns:repeat(6,1fr);margin-top:27px;border:1px solid var(--line);
-    border-radius:7px;overflow:hidden;background:var(--panel);
-  }
-  .protocol div{position:relative;padding:11px 13px;border-right:1px solid var(--line)}
-  .protocol div:last-child{border-right:0}
-  .protocol b{display:block;color:var(--ink);font:11px/1.25 "IBM Plex Mono",Menlo,monospace;letter-spacing:.08em}
-  .protocol span{display:block;margin-top:4px;font-size:11px;color:var(--muted)}
-  .protocol div:not(:last-child)::after{content:"›";position:absolute;right:-7px;top:15px;z-index:2;color:var(--cyan);background:var(--panel);padding:0 2px}
-  .toc{display:flex;flex-wrap:wrap;gap:7px;padding:17px 0 2px}
-  .toc a{color:var(--text);text-decoration:none;border:1px solid var(--line);background:var(--panel);padding:5px 10px;border-radius:5px;font-size:11px}
-  .toc a:hover{border-color:var(--cyan);color:var(--ink)}
-  .section{padding:52px 0 0;scroll-margin-top:18px}
-  .section-head{display:grid;grid-template-columns:58px minmax(0,1fr);gap:14px;margin-bottom:18px}
-  .num{font-size:12px;color:var(--cyan);border-top:2px solid var(--cyan);padding-top:7px}
-  .section-head p{color:var(--muted);max-width:820px;margin:0}
-  .grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}
-  .grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
-  .grid4{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-  .card{background:rgba(21,35,42,.94);border:1px solid var(--line);border-radius:8px;padding:16px}
-  .card p:last-child{margin-bottom:0}
-  .card .k{font:9.5px/1.3 "IBM Plex Mono",Menlo,monospace;letter-spacing:.17em;color:var(--muted);margin-bottom:7px;text-transform:uppercase}
-  .card.current{border-top:3px solid var(--red)}
-  .card.target{border-top:3px solid var(--green)}
-  .card.cyan{border-top:3px solid var(--cyan)}
-  .card.blue{border-top:3px solid var(--blue)}
-  .card.amber{border-top:3px solid var(--amber)}
-  .card.violet{border-top:3px solid var(--violet)}
-  .note{border-left:3px solid var(--cyan);padding:4px 0 4px 13px;margin:14px 0;color:var(--muted);max-width:900px}
-  .note.warn{border-color:var(--red)}
-  .note b{color:var(--ink)}
-  .diagram{margin:14px 0;background:var(--code);border:1px solid var(--line);border-radius:8px;padding:8px;overflow:auto}
-  svg{display:block;width:100%;height:auto;min-width:720px}
-  svg text{font-family:"Avenir Next","Segoe UI","PingFang SC",sans-serif}
-  svg .m{font-family:"IBM Plex Mono","SFMono-Regular",Menlo,monospace}
-  .legend{display:flex;gap:17px;flex-wrap:wrap;padding:4px 7px 8px;font-size:11px;color:var(--muted)}
-  .legend span::before{content:"";display:inline-block;width:9px;height:9px;border-radius:2px;margin-right:6px;background:var(--swatch);vertical-align:-1px}
-  .table-wrap{overflow-x:auto;border:1px solid var(--line);border-radius:8px;background:var(--panel);margin:13px 0}
-  .table-wrap:focus-visible{outline:2px solid var(--amber);outline-offset:3px}
-  table{width:100%;border-collapse:collapse;min-width:780px;font-size:12px}
-  caption{text-align:left;padding:10px 12px;color:var(--muted);font:10px/1.35 "IBM Plex Mono",Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;background:#122027;border-bottom:1px solid var(--line)}
-  th{text-align:left;color:var(--muted);font:10px/1.35 "IBM Plex Mono",Menlo,monospace;letter-spacing:.12em;text-transform:uppercase;padding:10px 12px;border-bottom:1px solid var(--line);background:#122027}
-  td{padding:10px 12px;vertical-align:top;border-bottom:1px solid #223741;line-height:1.62}
-  tr:last-child td{border-bottom:0}
-  td:first-child{color:var(--ink);font-weight:600}
-  .yes{color:var(--green)}
-  .partial{color:var(--amber)}
-  .no{color:var(--red)}
-  .out{color:var(--violet)}
-  .tag{display:inline-block;padding:2px 7px;border:1px solid var(--line);border-radius:4px;font-size:9.5px;letter-spacing:.08em;color:var(--muted)}
-  .decision{display:grid;grid-template-columns:120px 1fr;gap:9px 13px;padding:13px 0;border-top:1px solid var(--line)}
-  .decision:first-child{border-top:0}
-  .decision .status{font:10px/1.4 "IBM Plex Mono",Menlo,monospace;letter-spacing:.13em}
-  .decision .status.adopt{color:var(--green)}
-  .decision .status.modify{color:var(--amber)}
-  .decision .status.reject{color:var(--red)}
-  .mode{min-height:205px;display:flex;flex-direction:column}
-  .mode .bind{font:12px/1.5 "IBM Plex Mono",Menlo,monospace;color:var(--cyan);margin:7px 0}
-  .mode .rule{margin-top:auto;border-top:1px solid var(--line);padding-top:10px;color:var(--muted);font-size:12px}
-  .steps{counter-reset:step;display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px}
-  .step{counter-increment:step;background:var(--panel);border:1px solid var(--line);padding:14px;border-radius:7px}
-  .step::before{content:counter(step,decimal-leading-zero);display:block;color:var(--cyan);font:10px/1 "IBM Plex Mono",Menlo,monospace;margin-bottom:9px}
-  .step b{color:var(--ink);display:block;margin-bottom:5px}
-  .checklist{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px 24px;margin:12px 0 0;padding:0;counter-reset:test}
-  .checklist li{counter-increment:test;list-style:none;position:relative;padding:8px 0 8px 34px;border-top:1px solid var(--line)}
-  .checklist li::before{content:counter(test,decimal-leading-zero);position:absolute;left:0;top:9px;color:var(--cyan);font:10px/1.4 "IBM Plex Mono",Menlo,monospace}
-  .status-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;margin:13px 0}
-  .status-card{border:1px solid var(--line);border-top:4px solid var(--state);background:var(--panel);padding:15px;border-radius:7px;min-height:185px}
-  .status-card .state{color:var(--state);font:10px/1.4 "IBM Plex Mono",Menlo,monospace;letter-spacing:.14em;margin-bottom:10px}
-  .status-card ul{margin:0;padding-left:16px;font-size:12px}
-  .status-card li{margin:4px 0}
-  .foot{margin-top:56px;padding-top:20px;border-top:1px solid var(--line);color:var(--muted);font-size:11px}
-  .foot code{font-size:10px}
-  @media(max-width:900px){
-    body{padding:22px 15px 70px}
-    .hero-grid,.grid2,.grid3,.grid4,.status-grid{grid-template-columns:1fr}
-    .protocol{grid-template-columns:1fr}
-    .protocol div{border-right:0;border-bottom:1px solid var(--line)}
-    .protocol div:last-child{border-bottom:0}
-    .protocol div::after{display:none}
-    .section-head{grid-template-columns:42px 1fr}
-    .steps{grid-template-columns:1fr 1fr}
-    .checklist{grid-template-columns:1fr}
-  }
-  @media(max-width:560px){.steps{grid-template-columns:1fr}.hero .lead{font-size:14px}}
-  @media(prefers-reduced-motion:no-preference){
-    .protocol{animation:reveal .45s ease-out both}
-    @keyframes reveal{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:none}}
-  }
-</style>
-</head>
-<body>
-<main class="wrap">
-  <header class="hero">
-    <div class="hero-grid">
-      <div>
-        <div class="eyebrow">Remote Web Access / Owner only / Self-hosted</div>
-        <h1>Four access methods, one owner-authentication scheme</h1>
-        <p class="lead">Supports same-machine access, LAN or VPN, SSH tunnels, and owner domains behind HTTPS reverse proxies. Every Web startup generates an instance token; HTTP, SSE and WebSocket share authentication rules. OpenProgram operates no public relay and adds no accounts, RBAC or project permissions.</p>
-      </div>
-      <aside class="owner-card" aria-label="Single-owner authority summary">
-        <div class="label">AUTHORITY RESULT</div>
-        <div class="principal">owner/install/&lt;16hex&gt;</div>
-        <div class="scope">Current profile/state instance · token possession → <b style="color:var(--ink)">owner tier · fixed capability set</b><br>
-          paired channel speaker → paired tier · fixed capability set</div>
-      </aside>
-    </div>
-    <div class="protocol" aria-label="Request-authentication order summary">
-      <div><b>HOST</b><span>Resolve authority</span></div>
-      <div><b>CLASSIFY</b><span>route / method / source</span></div>
-      <div><b>ORIGIN</b><span>Browser and CSRF</span></div>
-      <div><b>TOKEN</b><span>Cookie or Bearer</span></div>
-      <div><b>AUTHORITY</b><span>Map owner tier</span></div>
-      <div><b>ACTION</b><span>HTTP / SSE / WS</span></div>
-    </div>
-  </header>
+}</pre>
 
-  <nav class="toc" aria-label="On-page contents">
-    <a href="#method">01 Methods and boundaries</a>
-    <a href="#current">02 Current implementation</a>
-    <a href="#survey">03 Framework comparison</a>
-    <a href="#synthesis">04 Adopted and rejected</a>
-    <a href="#design">05 Final design</a>
-    <a href="#contract">06 Acceptance contract</a>
-    <a href="#status">07 Implementation progress</a>
-  </nav>
-
-  <section class="section" id="method">
-    <div class="section-head">
-      <div class="num">01</div>
-      <div><h2>Methods and product boundaries</h2><p>Web UI is a complete owner-administration authority boundary. Multi-person collaboration continues through channel-speaker attribution and restricted capabilities, not Web accounts.</p></div>
-    </div>
-
-    <div class="grid4">
-      <article class="card mode cyan">
-        <div class="k">Same machine</div><h3>Same-machine access</h3>
-        <div class="bind">127.0.0.1</div>
-        <p>CLI automatically opens a loopback URL with a fragment token.</p>
-        <div class="rule">Token authentication is always enabled; Host and Origin are still validated.</div>
-      </article>
-      <article class="card mode blue">
-        <div class="k">LAN / VPN</div><h3>Direct network access</h3>
-        <div class="bind">web.host = 0.0.0.0</div>
-        <p>Requires explicit configuration of complete exact <code>allowed_origins</code>.</p>
-        <div class="rule">HTTP is allowed only for explicit local/overlay address ranges with a warning; otherwise use HTTPS.</div>
-      </article>
-      <article class="card mode amber">
-        <div class="k">SSH tunnel</div><h3>SSH port forwarding</h3>
-        <div class="bind">127.0.0.1</div>
-        <p>The browser connects to a local forwarded port; SSH encrypts transport.</p>
-        <div class="rule">Do not change <code>web.host</code>; the instance token still authenticates.</div>
-      </article>
-      <article class="card mode violet">
-        <div class="k">Public domain</div><h3>HTTPS reverse proxy</h3>
-        <div class="bind">proxy → 127.0.0.1</div>
-        <p>nginx or Caddy terminates HTTPS on the same machine, preserving public Host.</p>
-        <div class="rule">Trust only loopback proxies; OpenProgram does not manage certificates.</div>
-      </article>
-    </div>
-
-    <div class="diagram" tabindex="0" role="region" aria-label="Four remote Web access deployment topologies">
-      <svg viewBox="0 0 1120 390" role="img" aria-label="Four remote Web access topologies">
-        <rect x="18" y="18" width="1084" height="354" rx="9" fill="#0b1216" stroke="#294049"/>
-        <text x="42" y="51" fill="#7f9595" font-size="11" class="m" letter-spacing="1.6">FOUR SUPPORTED DEPLOYMENTS · ONE APPLICATION CREDENTIAL</text>
-
-        <g transform="translate(42,78)">
-          <rect width="238" height="236" rx="7" fill="#15232a" stroke="#67c9c7"/>
-          <text x="18" y="29" fill="#67c9c7" font-size="11" class="m">LOCAL</text>
-          <rect x="28" y="59" width="70" height="48" rx="5" fill="#192c34" stroke="#70a7e8"/>
-          <text x="63" y="88" fill="#e7eee9" font-size="12" text-anchor="middle">Browser</text>
-          <path d="M103 83 H137" stroke="#67c9c7" stroke-width="2"/>
-          <path d="M132 78 L139 83 L132 88" fill="none" stroke="#67c9c7" stroke-width="2"/>
-          <rect x="143" y="51" width="68" height="64" rx="5" fill="#192c34" stroke="#8bcf9a"/>
-          <text x="177" y="77" fill="#e7eee9" font-size="11" text-anchor="middle">Open-</text>
-          <text x="177" y="92" fill="#e7eee9" font-size="11" text-anchor="middle">Program</text>
-          <text x="119" y="138" fill="#7f9595" font-size="10" text-anchor="middle" class="m">127.0.0.1</text>
-          <rect x="22" y="163" width="194" height="45" rx="4" fill="#0b1216" stroke="#294049"/>
-          <text x="119" y="182" fill="#e8ad67" font-size="10" text-anchor="middle" class="m">TOKEN + HOST + ORIGIN</text>
-          <text x="119" y="198" fill="#7f9595" font-size="10" text-anchor="middle">Local access is not exempt from authentication</text>
-        </g>
-
-        <g transform="translate(306,78)">
-          <rect width="238" height="236" rx="7" fill="#15232a" stroke="#70a7e8"/>
-          <text x="18" y="29" fill="#70a7e8" font-size="11" class="m">LAN / VPN</text>
-          <rect x="20" y="56" width="70" height="54" rx="5" fill="#192c34" stroke="#70a7e8"/>
-          <text x="55" y="88" fill="#e7eee9" font-size="12" text-anchor="middle">Device</text>
-          <path d="M95 83 H137" stroke="#70a7e8" stroke-width="2"/>
-          <path d="M132 78 L139 83 L132 88" fill="none" stroke="#70a7e8" stroke-width="2"/>
-          <rect x="143" y="51" width="68" height="64" rx="5" fill="#192c34" stroke="#8bcf9a"/>
-          <text x="177" y="77" fill="#e7eee9" font-size="11" text-anchor="middle">Open-</text>
-          <text x="177" y="92" fill="#e7eee9" font-size="11" text-anchor="middle">Program</text>
-          <text x="119" y="138" fill="#7f9595" font-size="10" text-anchor="middle" class="m">EXPLICIT web.host</text>
-          <rect x="22" y="163" width="194" height="45" rx="4" fill="#0b1216" stroke="#294049"/>
-          <text x="119" y="182" fill="#e8ad67" font-size="10" text-anchor="middle" class="m">NONEMPTY EXACT ORIGINS</text>
-          <text x="119" y="198" fill="#7f9595" font-size="10" text-anchor="middle">Reject startup without required configuration</text>
-        </g>
-
-        <g transform="translate(570,78)">
-          <rect width="238" height="236" rx="7" fill="#15232a" stroke="#e8ad67"/>
-          <text x="18" y="29" fill="#e8ad67" font-size="11" class="m">SSH TUNNEL</text>
-          <rect x="17" y="56" width="63" height="54" rx="5" fill="#192c34" stroke="#70a7e8"/>
-          <text x="49" y="88" fill="#e7eee9" font-size="11" text-anchor="middle">Browser</text>
-          <rect x="93" y="56" width="52" height="54" rx="5" fill="#192c34" stroke="#e8ad67"/>
-          <text x="119" y="88" fill="#e7eee9" font-size="11" text-anchor="middle">SSH</text>
-          <rect x="158" y="51" width="63" height="64" rx="5" fill="#192c34" stroke="#8bcf9a"/>
-          <text x="190" y="77" fill="#e7eee9" font-size="10" text-anchor="middle">Open-</text>
-          <text x="190" y="92" fill="#e7eee9" font-size="10" text-anchor="middle">Program</text>
-          <path d="M80 83 H92 M145 83 H157" stroke="#e8ad67" stroke-width="2"/>
-          <text x="119" y="138" fill="#7f9595" font-size="10" text-anchor="middle" class="m">BACKEND LOOPBACK</text>
-          <rect x="22" y="163" width="194" height="45" rx="4" fill="#0b1216" stroke="#294049"/>
-          <text x="119" y="182" fill="#e8ad67" font-size="10" text-anchor="middle" class="m">SSH ENCRYPTION + TOKEN</text>
-          <text x="119" y="198" fill="#7f9595" font-size="10" text-anchor="middle">Do not change web.host</text>
-        </g>
-
-        <g transform="translate(834,78)">
-          <rect width="238" height="236" rx="7" fill="#15232a" stroke="#b89ae8"/>
-          <text x="18" y="29" fill="#b89ae8" font-size="11" class="m">PUBLIC HTTPS</text>
-          <rect x="12" y="56" width="60" height="54" rx="5" fill="#192c34" stroke="#70a7e8"/>
-          <text x="42" y="88" fill="#e7eee9" font-size="11" text-anchor="middle">Browser</text>
-          <rect x="88" y="56" width="58" height="54" rx="5" fill="#192c34" stroke="#b89ae8"/>
-          <text x="117" y="79" fill="#e7eee9" font-size="10" text-anchor="middle">nginx /</text>
-          <text x="117" y="94" fill="#e7eee9" font-size="10" text-anchor="middle">Caddy</text>
-          <rect x="162" y="51" width="63" height="64" rx="5" fill="#192c34" stroke="#8bcf9a"/>
-          <text x="194" y="77" fill="#e7eee9" font-size="10" text-anchor="middle">Open-</text>
-          <text x="194" y="92" fill="#e7eee9" font-size="10" text-anchor="middle">Program</text>
-          <path d="M72 83 H87 M146 83 H161" stroke="#b89ae8" stroke-width="2"/>
-          <text x="119" y="138" fill="#7f9595" font-size="10" text-anchor="middle" class="m">HTTPS → LOOPBACK</text>
-          <rect x="22" y="163" width="194" height="45" rx="4" fill="#0b1216" stroke="#294049"/>
-          <text x="119" y="182" fill="#e8ad67" font-size="10" text-anchor="middle" class="m">OWNER DOMAIN + TOKEN</text>
-          <text x="119" y="198" fill="#7f9595" font-size="10" text-anchor="middle">No OpenProgram relay</text>
-        </g>
-      </svg>
-      <div class="legend">
-        <span style="--swatch:var(--cyan)">Local machine</span><span style="--swatch:var(--blue)">Direct network</span>
-        <span style="--swatch:var(--amber)">SSH</span><span style="--swatch:var(--violet)">Public HTTPS</span>
-      </div>
-    </div>
-
-    <div class="note"><b>Boundary:</b>No Web accounts, RBAC, project permissions, OAuth/SSO, built-in TLS, certificate lifecycle, public relays, hosted tunnels, public sharing URLs or authentication-off mode.</div>
-  </section>
-
-  <section class="section" id="current">
-    <div class="section-head">
-      <div class="num">02</div>
-      <div><h2>Current implementation and remaining controls</h2><p>Owner process tokens, canonical Origin, fragment bootstrap, shared HTTP/WS authentication, auth-url, minimal health and non-retrievable secrets are in production paths; complete deployment acceptance remains unfinished.</p></div>
-    </div>
-    <div class="grid2">
-      <article class="card cyan">
-        <div class="k">Current behavior</div><h3>OwnerAuthMiddleware authenticates first</h3>
-        <p><code>OwnerAuthState</code> Generate a 32-byte token, hold a per-state lock, write an owner-only token file and token-free <code>access.json</code>, and derive a profile-specific cookie.<code>OwnerAuthMiddleware</code> Validate Host/request origin and cookie or Bearer before route dispatch.</p>
-        <p>Attach current-profile owner authority only after authentication; validate WebSocket before <code>accept()</code> . Uvicorn uses <code>proxy_headers=False</code>.</p>
-      </article>
-      <article class="card amber">
-        <div class="k">Remaining work</div><h3>Constrain secret handling and acceptance scope</h3>
-        <p>Both plaintext-reveal paths are removed: legacy account routes return 410, config-key reveal queries return 404, and credential responses retain masks only; replace/preserve/delete schemas are implemented.</p>
-        <p>Still missing direct-HTTP startup warnings and independent acceptance for SSE, real-browser bootstrap/WS, restart, bind failure, multiple profiles and nginx/Caddy smoke deployments.</p>
-      </article>
-    </div>
-    <div class="table-wrap" tabindex="0" role="region" aria-label="Current implementation and missing-controls table">
-      <table>
-        <caption>Current implementation and missing controls</caption>
-        <thead><tr><th>Current object</th><th>Implemented</th><th>Missing or risky</th></tr></thead>
-        <tbody>
-          <tr><td><code>OwnerAuthState</code></td><td class="yes">Token, lock, owner-only files, access snapshot, cookie and constant-time comparison</td><td>Real bind-failure, restart and multi-profile acceptance missing</td></tr>
-          <tr><td>Canonical Origin</td><td class="yes">Effective Origin, non-loopback fail-closed behavior and local HTTP networks</td><td>Startup output still lacks complete fields and direct-HTTP warnings</td></tr>
-          <tr><td><code>OwnerAuthMiddleware</code></td><td class="yes">HTTP/WS, cookie/Bearer, Host/Origin/CSRF, owner authority</td><td>Independent SSE and real-browser WS acceptance missing</td></tr>
-          <tr><td>Fragment bootstrap</td><td class="yes">Backend, frontend gate, synchronous clearing, no Web Storage and auth-url</td><td>Browser-level end-to-end acceptance missing</td></tr>
-          <tr><td>Reverse proxy</td><td class="partial"><code>proxy_headers=False</code>  and loopback-only forwarded scheme</td><td>nginx/Caddy HTTPS, WS and SSE smoke deployments untested</td></tr>
-          <tr><td>Provider secret</td><td class="partial">Some responses masked by default</td><td>Two reveal paths return plaintext</td></tr>
-          <tr><td><code>/healthz</code></td><td class="yes">Returns only status=ok; details are under protected <code>/api/diagnostics</code></td><td>Complete response-class cache audit remains unfinished</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="note warn"><b>Loopback is not authentication.</b>Any website can send requests to localhost; WebSocket is not protected by HTTP same-origin read rules; local processes can omit Origin; DNS rebinding can supply an external Host. Tokens are therefore mandatory locally too.</div>
-  </section>
-
-  <section class="section" id="survey">
-    <div class="section-head">
-      <div class="num">03</div>
-      <div><h2>Open-source implementation survey</h2><p>Covers existing reference material and additional systems with remote Web, authentication, reverse-proxy or secret-handling capabilities; explicitly marks absent target capabilities as not applicable.</p></div>
-    </div>
-    <div class="table-wrap" tabindex="0" role="region" aria-label="Open-source remote-access comparison table">
-      <table style="min-width:1080px">
-        <caption>Open-source remote-access comparison</caption>
-        <thead><tr><th>System</th><th>Defaults and authentication</th><th>Remote method</th><th>Adopt</th><th>Rejected or not applicable</th></tr></thead>
-        <tbody>
-          <tr><td><a href="https://github.com/openclaw/openclaw/blob/main/docs/gateway/remote.md">OpenClaw</a></td><td>Loopback; external access requires authentication and explicit Origin</td><td>SSH, reverse proxies and other external-network methods</td><td>fragment, Host/Origin, proxy trust</td><td>Tokenless identity replacement</td></tr>
-          <tr><td><a href="https://github.com/jupyter/notebook/blob/4.x/docs/source/changelog.rst">Jupyter Server</a></td><td>Notebook 4.3 defaults to tokens, exchanged for cookies on first access</td><td>SSH, HTTPS public server</td><td>Automatic token → cookie experience</td><td>Query tokens and password mode</td></tr>
-          <tr><td><a href="https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/web-dashboard.md#when-the-gate-engages">Hermes Agent</a></td><td>Loopback; external bind requires an auth provider and fails closed</td><td>Session cookie; one-time WS ticket</td><td>External fail-closed and secret redaction</td><td>Auth-provider accounts, a second ticket system and reveal</td></tr>
-          <tr><td><a href="https://github.com/agent0ai/agent-zero/blob/main/helpers/settings.py">Agent Zero</a></td><td>Local; optional single login; cookie + CSRF</td><td>Reverse proxy, VPS and built-in tunnel</td><td>cookie/CSRF/Origin/WS, secret mask</td><td>Optional authentication and built-in public tunnel</td></tr>
-          <tr><td><a href="https://github.com/OpenHands/OpenHands/blob/main/docs/SELF_HOSTING.md">OpenHands</a></td><td>session API key; HTTP/WS</td><td>SSH, nginx/HTTPS</td><td>Instance key and loopback backend</td><td>Tokens exposed through public HTML/browser storage and plaintext secret retrieval</td></tr>
-          <tr><td><a href="https://github.com/sst/opencode/blob/dev/packages/web/src/content/docs/server.mdx">opencode</a></td><td>Loopback; no authentication without a password</td><td>External host and CORS origins; separate WS ticket</td><td>loopback default</td><td>Optional authentication and second WS ticket</td></tr>
-          <tr><td><a href="https://github.com/open-webui/docs/blob/main/docs/reference/https/nginx.md">Open WebUI</a></td><td>Accounts, roles and JWT/cookie</td><td>nginx/Caddy, WS, SSE</td><td>Proxy, Upgrade and SSE-buffering configuration</td><td>Accounts, groups and RBAC</td></tr>
-          <tr><td><a href="https://github.com/langgenius/dify/blob/main/api/core/entities/provider_configuration.py">Dify</a></td><td>account/workspace/role</td><td>Reverse proxy</td><td>Credential obfuscation and replacement semantics</td><td>Tenant and role layers</td></tr>
-          <tr><td><a href="https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/features/authentication.mdx">LibreChat</a></td><td>Registration, JWT, roles and ACL</td><td>nginx HTTPS/WS</td><td>Proxy details</td><td>User-identity data model</td></tr>
-          <tr><td><a href="https://github.com/Mintplex-Labs/anything-llm/blob/master/server/utils/middleware/validatedRequest.js">AnythingLLM</a></td><td>Single or multiple users; optional single-user password</td><td>Docker port</td><td>Single owner-credential concept</td><td>Optional authentication and role system</td></tr>
-          <tr><td><a href="https://github.com/microsoft/autogen/blob/main/python/packages/autogen-studio/autogenstudio/web/auth/manager.py">AutoGen Studio</a></td><td>Loopback; no authentication by default; optional OAuth/JWT</td><td>research prototype</td><td>loopback default</td><td>query/localStorage token, post-accept auth</td></tr>
-          <tr><td><a href="https://github.com/SWE-agent/SWE-agent/tree/main/docs">SWE-agent</a></td><td>Current repository provides a command-line agent</td><td>No owner Web-control UI</td><td>Record capability absence</td><td class="out">Remote-security design not applicable</td></tr>
-          <tr><td><a href="https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md">pi-mono / pi-ai</a></td><td>TUI, SDK, RPC/provider transport</td><td>No packaged owner Web server</td><td>Record capability absence</td><td class="out">Remote Web ownership not applicable</td></tr>
-          <tr><td><a href="https://github.com/fastclaw-ai/weclaw/blob/main/README.md">WeClaw</a></td><td>WeChat gateway + HTTP API</td><td>Configurable listen address</td><td>Distinguish external HTTP from Web UI</td><td class="out">No browser owner UI</td></tr>
-          <tr><td><a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md">Codex CLI</a></td><td>App-server and experimental WS</td><td>service-mediated pairing/remote control</td><td>Record protocol differences</td><td>Do not adopt relay-based remote control</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="table-wrap" tabindex="0" role="region" aria-label="Three remote-identity design classes table">
-      <table>
-        <caption>Three remote-identity design classes</caption>
-        <thead><tr><th>Type</th><th>Framework or capability</th><th>OpenProgram treatment</th></tr></thead>
-        <tbody>
-          <tr><td>Instance credential</td><td>Jupyter, OpenClaw, OpenHands</td><td class="yes">Adopt: one owner, one root key, two transport credential forms</td></tr>
-          <tr><td>Application account</td><td>Open WebUI, Dify, LibreChat, AnythingLLM</td><td class="no">Reject: no registration, roles or resource ACL needed</td></tr>
-          <tr><td>Hosted remote control</td><td>pairing, hosted tunnel, relay service</td><td class="no">Reject: OpenProgram operates no external service</td></tr>
-        </tbody>
-      </table>
-    </div>
-  </section>
-
-  <section class="section" id="synthesis">
-    <div class="section-head">
-      <div class="num">04</div>
-      <div><h2>Adopt, adapt and reject</h2><p>The final design keeps only one root key (instance token), two transport credential forms (Bearer header and profile-scoped HttpOnly cookie), one browser bootstrap and one HTTP/WS/SSE authentication rule set.</p></div>
-    </div>
-    <div class="card">
-      <div class="decision"><div class="status adopt">Adopt</div><div><b>OpenClaw</b> 's exact Origin, Host/DNS-rebinding controls, SSH and proxy-trust restrictions.</div></div>
-      <div class="decision"><div class="status modify">Adapt</div><div><b>Jupyter</b> 's automatic launch-token experience: replace query with fragment, then exchange for an HttpOnly cookie.</div></div>
-      <div class="decision"><div class="status adopt">Adopt</div><div>Generate 32 random bytes with the standard library and compare decoded credentials in constant time; this is OpenProgram's own instance-token construction.</div></div>
-      <div class="decision"><div class="status adopt">Adopt</div><div><b>Agent Zero</b> 's combined cookie, CSRF, Origin and WebSocket validation, and masked-only secret updates.</div></div>
-      <div class="decision"><div class="status modify">Adapt</div><div>External proxies or VPNs may add transport and access controls but cannot replace the OpenProgram token.</div></div>
-      <div class="decision"><div class="status reject">Reject</div><div>Disabling authentication, query/localStorage tokens, plaintext secret reveal, multi-user accounts, RBAC, built-in tunnels and public relays.</div></div>
-    </div>
-  </section>
-
-  <section class="section" id="design">
-    <div class="section-head">
-      <div class="num">05</div>
-      <div><h2>Final authentication and deployment design</h2><p>Run one Web process per profile/state instance. Rotate tokens on every startup. Browsers bootstrap once with fragments, then use derived HttpOnly cookies; native clients use Bearer headers.</p></div>
-    </div>
-
-    <div class="steps">
-      <div class="step"><b>Generate</b>32 random bytes encoded as 43-character unpadded base64url.</div>
-      <div class="step"><b>Lock and save</b>First hold <code>&lt;state&gt;/web.lock</code>, then atomically write the owner-only token and token-free <code>access.json</code>.</div>
-      <div class="step"><b>Derive and compare</b><code>openprogram_owner_&lt;owner16&gt;</code> Use a fixed HMAC domain; after decoding, compare only with <code>compare_digest</code>.</div>
-      <div class="step"><b>Invalidate</b>Process restart rotates the token, invalidating old Bearer and cookie credentials together.</div>
-    </div>
-
-    <h3 style="margin-top:25px">Unified request-processing order</h3>
-    <div class="diagram" tabindex="0" role="region" aria-label="Unified authentication request-order diagram">
-      <svg viewBox="0 0 1120 350" role="img" aria-label="Unified HTTP SSE WebSocket authentication order">
-        <defs>
-          <marker id="arr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#67c9c7" stroke-width="1.5"/></marker>
-          <marker id="redarr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#ef7772" stroke-width="1.5"/></marker>
-        </defs>
-        <rect x="18" y="18" width="1084" height="314" rx="9" fill="#0b1216" stroke="#294049"/>
-        <text x="42" y="49" fill="#7f9595" font-size="11" class="m" letter-spacing="1.5">COMMON ASGI ORDER · NO ACTION BEFORE AUTHENTICATION</text>
-        <g transform="translate(36,81)">
-          <rect width="116" height="86" rx="6" fill="#15232a" stroke="#70a7e8"/>
-          <text x="58" y="35" fill="#e7eee9" font-size="13" text-anchor="middle">Request</text>
-          <text x="58" y="57" fill="#7f9595" font-size="9" text-anchor="middle" class="m">HTTP · SSE · WS</text>
-        </g>
-        <g transform="translate(176,81)">
-          <rect width="126" height="86" rx="6" fill="#15232a" stroke="#67c9c7"/>
-          <text x="63" y="31" fill="#e7eee9" font-size="12" text-anchor="middle">Host + scheme</text>
-          <text x="63" y="53" fill="#7f9595" font-size="9" text-anchor="middle">canonical parse</text>
-          <text x="63" y="68" fill="#7f9595" font-size="9" text-anchor="middle" class="m">request_origin</text>
-        </g>
-        <g transform="translate(326,81)">
-          <rect width="126" height="86" rx="6" fill="#15232a" stroke="#67c9c7"/>
-          <text x="63" y="31" fill="#e7eee9" font-size="12" text-anchor="middle">Classify</text>
-          <text x="63" y="53" fill="#7f9595" font-size="9" text-anchor="middle">route · method</text>
-          <text x="63" y="68" fill="#7f9595" font-size="9" text-anchor="middle">credential source</text>
-        </g>
-        <g transform="translate(476,81)">
-          <rect width="126" height="86" rx="6" fill="#15232a" stroke="#67c9c7"/>
-          <text x="63" y="31" fill="#e7eee9" font-size="12" text-anchor="middle">Origin / CSRF</text>
-          <text x="63" y="53" fill="#7f9595" font-size="9" text-anchor="middle">Sec-Fetch-Site</text>
-          <text x="63" y="68" fill="#7f9595" font-size="9" text-anchor="middle">safe / unsafe rules</text>
-        </g>
-        <g transform="translate(626,81)">
-          <rect width="126" height="86" rx="6" fill="#15232a" stroke="#e8ad67"/>
-          <text x="63" y="31" fill="#e7eee9" font-size="12" text-anchor="middle">Authentication</text>
-          <text x="63" y="53" fill="#7f9595" font-size="9" text-anchor="middle">cookie · Bearer</text>
-          <text x="63" y="68" fill="#7f9595" font-size="9" text-anchor="middle">bootstrap body</text>
-        </g>
-        <g transform="translate(776,81)">
-          <rect width="126" height="86" rx="6" fill="#15232a" stroke="#8bcf9a"/>
-          <text x="63" y="32" fill="#e7eee9" font-size="12" text-anchor="middle">Owner scope</text>
-          <text x="63" y="55" fill="#7f9595" font-size="9" text-anchor="middle" class="m">owner_authority(</text>
-          <text x="63" y="69" fill="#7f9595" font-size="9" text-anchor="middle" class="m">principal_id)</text>
-        </g>
-        <g transform="translate(926,81)">
-          <rect width="150" height="86" rx="6" fill="#192c34" stroke="#8bcf9a"/>
-          <text x="75" y="32" fill="#e7eee9" font-size="12" text-anchor="middle">Route / stream</text>
-          <text x="75" y="54" fill="#7f9595" font-size="9" text-anchor="middle">WS accept occurs</text>
-          <text x="75" y="69" fill="#7f9595" font-size="9" text-anchor="middle">only here</text>
-        </g>
-        <path d="M152 124 H174 M302 124 H324 M452 124 H474 M602 124 H624 M752 124 H774 M902 124 H924" stroke="#67c9c7" stroke-width="2" marker-end="url(#arr)"/>
-
-        <path d="M239 168 V216 M539 168 V216 M689 168 V216" stroke="#ef7772" stroke-width="1.6" marker-end="url(#redarr)"/>
-        <rect x="169" y="220" width="140" height="53" rx="5" fill="#211d20" stroke="#ef7772"/>
-        <text x="239" y="242" fill="#ef7772" font-size="11" text-anchor="middle" class="m">403</text><text x="239" y="260" fill="#9f8584" font-size="10" text-anchor="middle">Host / scheme</text>
-        <rect x="469" y="220" width="140" height="53" rx="5" fill="#211d20" stroke="#ef7772"/>
-        <text x="539" y="242" fill="#ef7772" font-size="11" text-anchor="middle" class="m">403</text><text x="539" y="260" fill="#9f8584" font-size="10" text-anchor="middle">Origin / CSRF</text>
-        <rect x="619" y="220" width="140" height="53" rx="5" fill="#211d20" stroke="#ef7772"/>
-        <text x="689" y="242" fill="#ef7772" font-size="11" text-anchor="middle" class="m">401</text><text x="689" y="260" fill="#9f8584" font-size="10" text-anchor="middle">authentication</text>
-        <text x="42" y="305" fill="#7f9595" font-size="10">Public static shells, ownership challenges, bootstrap and minimal health still validate Host; only credential checks are omitted or built in according to route policy.</text>
-      </svg>
-    </div>
-
-    <h3 style="margin-top:25px">Fragment to HttpOnly cookie</h3>
-    <div class="diagram" tabindex="0" role="region" aria-label="Fragment-bootstrap sequence diagram">
-      <svg viewBox="0 0 1120 480" role="img" aria-label="Browser fragment-token bootstrap sequence">
-        <defs><marker id="seqarr" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8" fill="none" stroke="#67c9c7" stroke-width="1.5"/></marker></defs>
-        <rect x="18" y="18" width="1084" height="444" rx="9" fill="#0b1216" stroke="#294049"/>
-        <text x="42" y="49" fill="#7f9595" font-size="11" class="m" letter-spacing="1.5">FRAGMENT BOOTSTRAP · TOKEN DOES NOT ENTER THE INITIAL HTTP REQUEST</text>
-        <g>
-          <rect x="92" y="72" width="210" height="43" rx="5" fill="#15232a" stroke="#70a7e8"/>
-          <text x="197" y="98" fill="#e7eee9" font-size="13" text-anchor="middle">CLI</text>
-          <rect x="455" y="72" width="210" height="43" rx="5" fill="#15232a" stroke="#e8ad67"/>
-          <text x="560" y="98" fill="#e7eee9" font-size="13" text-anchor="middle">Browser</text>
-          <rect x="818" y="72" width="210" height="43" rx="5" fill="#15232a" stroke="#8bcf9a"/>
-          <text x="923" y="98" fill="#e7eee9" font-size="13" text-anchor="middle">Web server</text>
-          <path d="M197 115 V430 M560 115 V430 M923 115 V430" stroke="#294049" stroke-dasharray="5 6"/>
-        </g>
-        <text x="215" y="150" fill="#7f9595" font-size="10" class="m">01</text>
-        <path d="M225 156 H548" stroke="#67c9c7" stroke-width="2" marker-end="url(#seqarr)"/>
-        <text x="387" y="147" fill="#e7eee9" font-size="11" text-anchor="middle" class="m">open /#token=&lt;token&gt;</text>
-
-        <text x="578" y="200" fill="#7f9595" font-size="10" class="m">02</text>
-        <path d="M585 206 H911" stroke="#67c9c7" stroke-width="2" marker-end="url(#seqarr)"/>
-        <text x="748" y="197" fill="#e7eee9" font-size="11" text-anchor="middle" class="m">GET /  · fragment absent</text>
-        <path d="M911 239 H573" stroke="#8bcf9a" stroke-width="2" marker-end="url(#seqarr)"/>
-        <text x="742" y="231" fill="#8bcf9a" font-size="11" text-anchor="middle">public static shell</text>
-
-        <text x="578" y="282" fill="#7f9595" font-size="10" class="m">03</text>
-        <rect x="596" y="259" width="245" height="47" rx="5" fill="#192c34" stroke="#e8ad67"/>
-        <text x="718" y="279" fill="#e7eee9" font-size="11" text-anchor="middle">read token into memory</text>
-        <text x="718" y="296" fill="#e8ad67" font-size="10" text-anchor="middle" class="m">history.replaceState()</text>
-
-        <text x="578" y="337" fill="#7f9595" font-size="10" class="m">04</text>
-        <path d="M585 343 H911" stroke="#67c9c7" stroke-width="2" marker-end="url(#seqarr)"/>
-        <text x="748" y="334" fill="#e7eee9" font-size="11" text-anchor="middle" class="m">POST /api/auth/bootstrap · exact JSON ≤ 256 B</text>
-        <path d="M911 378 H573" stroke="#8bcf9a" stroke-width="2" marker-end="url(#seqarr)"/>
-        <text x="742" y="369" fill="#8bcf9a" font-size="11" text-anchor="middle" class="m">204 · Set-Cookie derived HMAC; HttpOnly; SameSite=Strict</text>
-
-        <rect x="455" y="404" width="573" height="33" rx="5" fill="#15232a" stroke="#8bcf9a"/>
-        <text x="742" y="425" fill="#e7eee9" font-size="11" text-anchor="middle">Subsequent HTTP / SSE / WebSocket uses the cookie; server restart invalidates it</text>
-      </svg>
-    </div>
-
-    <div class="grid3">
-      <article class="card cyan"><div class="k">Public allowlist</div><h3>Only four public categories</h3><p>Static shells/assets (including the prebuilt-file-only <code>GET/HEAD /docs</code>  documentation site), ownership challenge, bootstrap and minimal health. Source checkouts read <code>docs/_site</code>; installed packages read the same prebuilt site placed under <code>openprogram/interfaces/server/_frontend/docs</code>  during release. Staleness checks run only when source workers register routes, not on HTTP requests. The shell uses CSP <code>frame-ancestors 'none'</code>  and <code>X-Frame-Options: DENY</code>.</p></article>
-      <article class="card amber"><div class="k">Browser cookie</div><h3>CSRF validation remains</h3><p><code>GET/HEAD/OPTIONS</code>  must be side-effect-free. Unsafe methods and WS require Origin equal to <code>request_origin</code>; only safe requests may omit Origin.</p></article>
-      <article class="card violet"><div class="k">Native client</div><h3>Header-only Bearer</h3><p>HTTP, SSE and native WS use Bearer. Reject query tokens. Except for bootstrap, any Authorization header prevents invalid Bearer credentials from falling back to cookies. Bootstrap with Authorization returns the same 401 directly.</p></article>
-    </div>
-
-    <div class="note"><b>Listener ownership: </b><code>&lt;state&gt;/web/access.json</code> Freeze bind, port, effective Origin and token fingerprint, but not the token. After verifying worker PID/port, CLI sends a fresh 32-byte nonce only to <code>GET /api/auth/challenge</code>  and locally verifies <code>HMAC-SHA256(raw_token, "openprogram-web-challenge-v1\0" || nonce || "\0" || revision)</code>; the token is never sent to the probed port.</div>
-
-    <h3 style="margin-top:25px">Authentication matrix</h3>
-    <div class="table-wrap" tabindex="0" role="region" aria-label="HTTP SSE WebSocket authentication matrix table">
-      <table>
-        <caption>HTTP, SSE and WebSocket authentication matrix</caption>
-        <thead><tr><th>Request form</th><th>Credential</th><th>Origin</th><th>Failure result</th></tr></thead>
-        <tbody>
-          <tr><td>Cookie + unsafe HTTP</td><td>Required</td><td>Equal to <code>request_origin</code>; reject missing</td><td><code>401</code> or <code>403</code></td></tr>
-          <tr><td>Cookie + WebSocket</td><td>Required before accept</td><td>Equal to <code>request_origin</code>; reject missing</td><td>Upgrade HTTP <code>401/403</code></td></tr>
-          <tr><td>Cookie + safe HTTP/SSE</td><td>Required</td><td>Must match when present; same-origin navigation may omit</td><td><code>401</code> or <code>403</code></td></tr>
-          <tr><td>Bearer HTTP/SSE</td><td>Required</td><td>May omit; must match when present</td><td><code>401</code> or <code>403</code></td></tr>
-          <tr><td>Bearer WebSocket</td><td>Required before accept</td><td>Native clients may omit; must match when present</td><td>Upgrade HTTP <code>401/403</code></td></tr>
-          <tr><td>Listener ownership challenge</td><td>No credential; nonce + optional revision</td><td>May omit; must match when present</td><td><code>400</code> or <code>403</code></td></tr>
-          <tr><td>Fragment bootstrap</td><td>Body token only; Authorization rejected</td><td>Equal to <code>request_origin</code></td><td><code>401</code> or <code>403</code></td></tr>
-        </tbody>
-      </table>
-    </div>
-
-    <div class="grid2" style="margin-top:22px">
-      <article class="card">
-        <div class="k">SSH</div><h3>Keep backend on loopback</h3>
-        <pre>ssh -N -L 18100:127.0.0.1:18100 owner@remote-host
-
-openprogram web auth-url \
-  --base-url http://127.0.0.1:18100</pre>
-      </article>
-      <article class="card">
-        <div class="k">Reverse proxy</div><h3>Public domains use HTTPS</h3>
-        <pre>{
+<h3 id="reverse-proxy">Same-host HTTPS proxy</h3>
+<pre translate="no" tabindex="0">{
   "web": {
     "host": "127.0.0.1",
     "allowed_origins": ["https://agent.example.com"]
   }
+}</pre>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Party</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">OpenProgram</th><td>Starts Uvicorn with <code translate="no">proxy_headers=False</code>. Never trusts <code translate="no">X-Forwarded-For</code>. Trusts <code translate="no">X-Forwarded-Proto</code> only from a raw loopback peer, one value, <code translate="no">http</code> or <code translate="no">https</code>; any other value is rejected, and it is ignored from other peers.</td></tr>
+<tr><th scope="row">Proxy</th><td>Preserves the public Host, overwrites the scheme, supports WebSocket Upgrade, disables SSE buffering</td></tr>
+<tr><th scope="row">Missing scheme header</th><td>A DNS or public-IP origin stays HTTP and is refused with <code translate="no">403</code>, so no insecure owner cookie can be set</td></tr>
+</tbody>
+</table>
+<details>
+<summary>nginx</summary>
+<pre translate="no" tabindex="0">map $http_upgrade $connection_upgrade {
+    default upgrade;
+    ''      close;
 }
 
-# proxy preserves Host and Upgrade,
-# overwrites X-Forwarded-Proto, clears unused forwarded headers,
-# and disables SSE buffering</pre>
-      </article>
-    </div>
+server {
+    listen 443 ssl;
+    server_name agent.example.com;
 
-    <div class="note"><b>Origin and proxy trust:</b>Default loopback automatically includes the exact current-port <code>localhost</code>  and actual listen literal; other Origins require explicit <code>config.json</code>  configuration. HTTP permits only that localhost, loopback, RFC 1918, IPv4/IPv6 link-local, IPv6 ULA and RFC 6598 range; other addresses and DNS names require HTTPS. Each request accepts one valid Host;<code>http/ws</code>  and <code>https/wss</code>  map to their corresponding browser Origins. Uvicorn uses <code>proxy_headers=False</code>; OpenProgram does not trust <code>X-Forwarded-For</code> and accepts only one <code>X-Forwarded-Proto</code> from the original loopback peer. The <code>request_origin</code>  constructed from scheme + Host must be valid.</div>
+    # ssl_certificate and ssl_certificate_key are owner-managed.
 
-    <h3 style="margin-top:25px">Non-retrievable secrets</h3>
-    <div class="grid3">
-      <article class="card current"><div class="k">Remove</div><h3>Remove both reveal paths</h3><p>Account reveal routes return 410; config-key status retains masks but returns 404 on a <code>reveal</code>  query.</p></article>
-      <article class="card target"><div class="k">Return</div><h3>Masked responses only</h3><p>Return <code>has_value</code>  and <code>masked</code>/<code>masked_key</code>. Values at least 12 characters use <code>sk-…abc4</code>, hiding at least five characters; shorter values use eight fixed dots.</p></article>
-      <article class="card target"><div class="k">Replace / delete</div><h3>Define the two action classes separately</h3><p>Config keys use <code>POST /api/config</code>  for replacement and<code>DELETE /api/config/key/{env}</code>  for deletion; API-key accounts use dedicated update for replacement and<code>accounts/remove</code>  to delete the entire account. Empty values and masks are invalid.</p></article>
-    </div>
-  </section>
+    location / {
+        proxy_pass http://127.0.0.1:18100;
+        proxy_http_version 1.1;
+        proxy_set_header Host $http_host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header Forwarded "";
+        proxy_set_header X-Forwarded-Host "";
+        proxy_set_header X-Forwarded-For "";
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection $connection_upgrade;
+        proxy_buffering off;
+        proxy_read_timeout 3600s;
+    }
+}</pre>
+</details>
+<details>
+<summary>Caddy</summary>
+<pre translate="no" tabindex="0">agent.example.com {
+    reverse_proxy 127.0.0.1:18100
+}</pre>
+<p class="note">Certificates are Caddy's job because the owner chose Caddy; OpenProgram does not call its APIs.</p>
+</details>
 
-  <section class="section" id="contract">
-    <div class="section-head">
-      <div class="num">06</div>
-      <div><h2>Implementation contract and acceptance</h2><p>Accept connections only after configuration validation, secure token persistence and fingerprint calculation. Executable behavior tests establish completion, not documentation.</p></div>
-    </div>
-    <ol class="checklist">
-      <li>Loopback HTTP, SSE and WS fail without credentials.</li>
-      <li>Correct Bearer succeeds without Origin; wrong tokens perform no action and return the same 401.</li>
-      <li>Clear fragments before other fetches; bootstrap accepts only exact bounded JSON, rejects mixed Authorization and derives the specified HMAC cookie.</li>
-      <li>Unauthenticated <code>GET/HEAD /docs</code>  and <code>/docs/**</code>  can read prebuilt static docs in both source checkouts and installed packages without scanning source or triggering builds; the wheel must include <code>openprogram/interfaces/server/_frontend/docs/index.html</code>. Host validation still applies; unsafe methods and private APIs are excluded.</li>
-      <li>Cookie-authenticated unsafe HTTP and WS reject missing, opaque and cross-site Origins.</li>
-      <li>Loopback, direct bind and proxies reject external, duplicate, unspecified and multicast Hosts and validate HTTP/WS scheme mapping.</li>
-      <li>Default loopback accepts only implicit Origins; other SSH local ports require explicit configuration.</li>
-      <li>Non-loopback bind without a valid Origin list rejects startup; explicit local/overlay HTTP ranges are accepted with warnings, other addresses rejected.</li>
-      <li>Disable Uvicorn proxy-header rewriting; scheme trusts only the original loopback peer, X-Forwarded-For never changes trust, and direct WS/Caddy WSS validate scheme mapping.</li>
-      <li>A second process using the same state directory cannot alter the live token; failure cleanup verifies ownership.</li>
-      <li>Restart rotates tokens and invalidates old Bearer and cookies.</li>
-      <li>Malformed Authorization cannot fall back to a valid cookie.</li>
-      <li>Static assets and minimal health contain no session, filesystem or credential metadata.</li>
-      <li>CSP/X-Frame-Options prevent framing; authentication and sensitive responses use no-store.</li>
-      <li>Legacy account reveal returns 410 and config-key reveal query returns 404. Config keys and accounts enforce exact replace/preserve/delete schemas; 8–11-character values use fixed masks; frontend types contain no plaintext field.</li>
-      <li>HTTP, SSE and WS authenticate behind nginx/Caddy HTTPS while backend stays on loopback.</li>
-      <li>Channel turns retain paired authority tiers rather than gaining Web-owner authority.</li>
-      <li>Profile servers sharing a hostname but using different ports have distinct cookie names and independent authentication.</li>
-      <li>Listener ownership probes verify worker PID/port and access snapshot, send only random nonces, validate versioned token-HMAC proofs and reject foreign listeners, stale snapshots and port/fingerprint/proof/revision mismatches.</li>
-    </ol>
-  </section>
+<h2 id="secrets">Stored secrets</h2>
+<p>Owner authentication authorizes replacing and using a secret, never reading it.</p>
+<table class="stack">
+<thead><tr><th scope="col"></th><th scope="col">Config or environment key</th><th scope="col">API-key account</th></tr></thead>
+<tbody>
+<tr><th scope="row">Read</th><td><code translate="no">GET /api/config/key/{env_var}</code>: <code translate="no">{"has_value":false,"masked":""}</code> or <code translate="no">{"has_value":true,"masked":"sk-…abc4"}</code>; undeclared name <code translate="no">404</code></td><td><code translate="no">GET /api/providers/{provider}/accounts</code>: metadata with <code translate="no">has_value</code> and <code translate="no">masked_key</code>; no <code translate="no">identity</code>, <code translate="no">can_reveal</code>, <code translate="no">value</code> or full key</td></tr>
+<tr><th scope="row">Preserve</th><td>Omit the name from <code translate="no">api_keys</code></td><td>Use, rename, reorder and rotate neither take nor change <code translate="no">api_key</code></td></tr>
+<tr><th scope="row">Replace</th><td><code translate="no">POST /api/config</code> <code translate="no">{"api_keys":{"ENV_VAR":"new"}}</code>, one or more keys; <code translate="no">200 {"saved":true}</code></td><td><code translate="no">POST /api/providers/{provider}/accounts/{name}/update</code> <code translate="no">{"api_key":"new","validate":true}</code>; <code translate="no">validate</code> optional, default true; <code translate="no">200 {"ok":true}</code>; <code translate="no">404</code> if absent or not an API-key account</td></tr>
+<tr><th scope="row">Delete</th><td><code translate="no">DELETE /api/config/key/{env_var}</code>, no body, idempotent; removes the saved entry and live environment value; <code translate="no">204</code>. The parent environment can bring it back only after a restart.</td><td><code translate="no">POST /api/providers/{provider}/accounts/remove</code> <code translate="no">{"id":"name"}</code> deletes the whole credential pool; <code translate="no">200 {"removed":true,"name":"name","cleared_active":&lt;bool&gt;}</code>; <code translate="no">404</code> for a missing or unknown id</td></tr>
+<tr><th scope="row">Reveal</th><td>A <code translate="no">reveal</code> query: <code translate="no">404</code></td><td><code translate="no">…/accounts/{name}/reveal</code>: <code translate="no">410</code></td></tr>
+</tbody>
+</table>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Rule</th><th scope="col">Detail</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">400</code>, nothing changed</th><td>Unknown fields, unknown names, <code translate="no">null</code>, empty, non-printable or non-ASCII values, any displayed mask. Also a key validation definitively rejects; a transient or offline <code translate="no">unknown</code> result still saves.</td></tr>
+<tr><th scope="row">Mask</th><td>Values of 12 or more characters with ASCII visible parts: first 3, <code translate="no">…</code>, last 4, hiding at least 5. Otherwise a fixed <code translate="no">••••••••</code>, so short lengths stay hidden.</td></tr>
+<tr><th scope="row">Frontend</th><td>No reveal button, request or plaintext response field in provider detail, API-key settings or account manager</td></tr>
+<tr><th scope="row">MCP servers</th><td><code translate="no">MCPServerConfig.to_storage_dict()</code> keeps full values for the file; <code translate="no">to_response_dict()</code> masks every <code translate="no">env</code> and <code translate="no">headers</code> value, bearer token and OAuth client secret as <code translate="no">{has_value, masked}</code> on <code translate="no">/api/mcp/servers</code>, <code translate="no">/api/mcp/servers/{name}</code>, <code translate="no">/api/mcp/catalog</code>, <code translate="no">/api/mcp/catalog/diff</code>. <code translate="no">PATCH /api/mcp/servers/{name}</code>: omitted preserves, new value replaces, explicit empty deletes; persisted after the restart succeeds. <code translate="no">mcp_servers.json</code> is <code translate="no">0600</code> through temp file, <code translate="no">fsync</code> and <code translate="no">os.replace</code>.</td></tr>
+<tr><th scope="row">Project-file reveal</th><td>Unrelated file-navigation action under normal authentication; not a credential path</td></tr>
+</tbody>
+</table>
 
-  <section class="section" id="status">
-    <div class="section-head">
-      <div class="num">07</div>
-      <div><h2>Implementation progress</h2><p>Keep the three levels strictly separate. Design prose is not implementation evidence; classify using current production code and tests only.</p></div>
-    </div>
+<h2 id="startup">Startup</h2>
+<p>Validate configuration, generate and secure the token, write and check <code translate="no">access.json</code>, compute the fingerprint, then listen.</p>
+<table class="stack fixed">
+<thead><tr><th scope="col">Logged</th><th scope="col">Startup error</th></tr></thead>
+<tbody>
+<tr><th scope="row">Bind address and whether it is loopback</th><td>Malformed origin</td></tr>
+<tr><th scope="row">Effective origins</th><td>Non-loopback bind without an origin</td></tr>
+<tr><th scope="row">Whether loopback-proxy scheme handling is active</th><td>Unsafe public HTTP origin</td></tr>
+<tr><th scope="row">Token fingerprint, never the token</th><td>Unsafe token file</td></tr>
+<tr><th scope="row">Warning for non-loopback HTTP</th><td>Occupied Web-process lock</td></tr>
+</tbody>
+</table>
 
-    <div class="diagram" tabindex="0" role="region" aria-label="Implementation-status layers diagram">
-      <svg viewBox="0 0 1120 270" role="img" aria-label="Three implementation-status levels for remote Web access">
-        <rect x="18" y="18" width="1084" height="234" rx="9" fill="#0b1216" stroke="#294049"/>
-        <g transform="translate(42,47)">
-          <rect width="330" height="172" rx="7" fill="#15232a" stroke="#8bcf9a"/>
-          <rect width="330" height="34" rx="7" fill="#183027"/>
-          <text x="16" y="22" fill="#8bcf9a" font-size="11" class="m">IMPLEMENTED</text>
-          <text x="16" y="63" fill="#e7eee9" font-size="12">process token / cookie / middleware</text>
-          <text x="16" y="87" fill="#e7eee9" font-size="12">fragment bootstrap / auth-url / health</text>
-          <text x="16" y="111" fill="#e7eee9" font-size="12">Non-retrievable secrets / BackendEndpoint</text>
-          <text x="16" y="135" fill="#e7eee9" font-size="12">Real-listener HTTP / SSE / WS acceptance</text>
-          <text x="16" y="157" fill="#7f9595" font-size="10">Evidence in current code and tests</text>
-        </g>
-        <g transform="translate(392,47)">
-          <rect width="330" height="172" rx="7" fill="#15232a" stroke="#e8ad67"/>
-          <rect width="330" height="34" rx="7" fill="#322819"/>
-          <text x="16" y="22" fill="#e8ad67" font-size="11" class="m">PARTIAL</text>
-          <text x="16" y="63" fill="#e7eee9" font-size="12">Browser-driven asset / navigation audit</text>
-          <text x="16" y="87" fill="#e7eee9" font-size="12">nginx and Caddy smoke deployments</text>
-          <text x="16" y="157" fill="#7f9595" font-size="10">Production paths exist; acceptance scope incomplete</text>
-        </g>
-        <g transform="translate(742,47)">
-          <rect width="330" height="172" rx="7" fill="#15232a" stroke="#b89ae8"/>
-          <rect width="330" height="34" rx="7" fill="#28213a"/>
-          <text x="16" y="22" fill="#b89ae8" font-size="11" class="m">EXPLICITLY OUT OF SCOPE</text>
-          <text x="16" y="63" fill="#e7eee9" font-size="12">Accounts / RBAC / project ACL</text>
-          <text x="16" y="87" fill="#e7eee9" font-size="12">OAuth replacing tokens</text>
-          <text x="16" y="111" fill="#e7eee9" font-size="12">Built-in TLS / certificates</text>
-          <text x="16" y="135" fill="#e7eee9" font-size="12">relay / tunnel / insecure</text>
-          <text x="16" y="157" fill="#7f9595" font-size="10">Explicitly excluded from the product</text>
-        </g>
-      </svg>
-    </div>
+<h2 id="status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Status</th><th scope="col">Items</th></tr></thead>
+<tbody>
+<tr><th scope="row">Implemented</th><td>Everything above, except the two items below</td></tr>
+<tr><th scope="row">Partial</th><td>Browser-driven audit that no exported asset or navigation path embeds dynamic data; server-side tests cover responses and rendered HTML</td></tr>
+<tr><th scope="row">Partial</th><td>nginx and Caddy HTTPS, WebSocket and SSE smoke deployments; a real-listener origin matrix covers <code translate="no">X-Forwarded-Proto</code> and <code translate="no">X-Forwarded-Host</code></td></tr>
+</tbody>
+</table>
 
-    <div class="status-grid">
-      <article class="status-card" style="--state:var(--green)"><div class="state">Implemented</div><ul><li>Default loopback, lifespan and per-profile owner</li><li><code>OwnerAuthState</code> token, lock, cookie</li><li>Canonical Origin and shared middleware</li><li>Fragment bootstrap, auth-url and minimal health</li><li><code>proxy_headers=False</code>  and loopback-only forwarded scheme</li><li>Both plaintext-reveal paths removed, strict secret schemas and unified masks</li><li>MCP server credentials: separate disk persistence from response serialization;<code>env</code>/<code>headers</code>/bearer/client secrets all masked, preserve/replace/delete editing, configuration file <code>0600</code>  atomic writing</li><li><code>BackendEndpoint</code>  drives Bearer authentication for TUI and MCP CLI</li><li>Startup reports bind, Origin, fingerprint and plaintext-HTTP warnings</li><li>Real Uvicorn listener acceptance for HTTP/SSE/WS, bind failure, rotation, dual profiles and leakage scans</li></ul></article>
-      <article class="status-card" style="--state:var(--amber)"><div class="state">Partially implemented</div><ul><li>Browser-driven asset/navigation audit</li><li>nginx and Caddy smoke deployments</li></ul></article>
-      <article class="status-card" style="--state:var(--violet)"><div class="state">Explicitly excluded</div><ul><li>Accounts, RBAC and project permissions</li><li>OAuth/SSO replacing tokens</li><li>Built-in TLS and certificate management</li><li>Public relays, hosted tunnels and pairing</li><li>Authentication-off and plaintext reveal</li></ul></article>
-    </div>
-  </section>
+<details>
+<summary>Where each part lives and what tests it</summary>
+<table class="stack fixed">
+<thead><tr><th scope="col">Part</th><th scope="col">Code and tests</th></tr></thead>
+<tbody>
+<tr><th scope="row">Default bind, lifespan</th><td><code translate="no">_web_config()</code> and <code translate="no">create_app()</code> in <code translate="no">openprogram/interfaces/server/server.py</code></td></tr>
+<tr><th scope="row">Owner principal, tiers</th><td><code translate="no">openprogram/runtime/permissions/authority.py</code>; <code translate="no">tests/unit/providers/auth/test_authority_scope.py</code></td></tr>
+<tr><th scope="row">Token, lock, cookie</th><td><code translate="no">OwnerAuthState</code> in <code translate="no">openprogram/interfaces/server/owner_auth.py</code>; <code translate="no">test_process_token_is_owner_only_locked_and_replaced_after_release</code></td></tr>
+<tr><th scope="row">Origins</th><td><code translate="no">canonicalize_origin()</code>, <code translate="no">resolve_effective_origins()</code> in <code translate="no">openprogram/host/security/backend_endpoint.py</code>; parameterized owner-auth tests</td></tr>
+<tr><th scope="row">Middleware</th><td><code translate="no">OwnerAuthMiddleware</code>; owner-auth tests for HTTP mutation and pre-accept WebSocket</td></tr>
+<tr><th scope="row">Bootstrap</th><td><code translate="no">apps/web/lib/net/auth/owner-auth-bootstrap.ts</code>, <code translate="no">OwnerAuthBoundary</code>; <code translate="no">apps/web/scripts/settings/check-owner-auth-bootstrap.mjs</code>, TypeScript check, production build</td></tr>
+<tr><th scope="row"><code translate="no">auth-url</code></th><td><code translate="no">openprogram/interfaces/cli/commands/web.py</code>, <code translate="no">build_owner_auth_url()</code>; <code translate="no">tests/unit/providers/adapters/test_web_auth_url.py</code></td></tr>
+<tr><th scope="row">Secrets</th><td><code translate="no">openprogram/host/security/credential_mask.py</code>, <code translate="no">credential_secrets</code>; <code translate="no">tests/component/programs/mcp/test_mcp_secret_non_retrievability.py</code>, <code translate="no">apps/web/scripts/settings/check-secret-non-retrieval.mjs</code></td></tr>
+<tr><th scope="row">Internal clients</th><td><code translate="no">resolve_backend_endpoint()</code> returns a challenge-verified <code translate="no">BackendEndpoint</code>, so the token is read only after proof; used by <code translate="no">openprogram/interfaces/cli/ink.py</code> and <code translate="no">openprogram/interfaces/cli/commands/mcp.py</code>. The Node client sends Bearer only to backend URLs: <code translate="no">apps/cli/src/utils/backend.ts</code>, <code translate="no">apps/cli/tests/backendAuth.test.ts</code></td></tr>
+<tr><th scope="row">Startup report</th><td><code translate="no">start_server()</code>; <code translate="no">test_startup_logs_warn_about_plaintext_http_for_remote_origins</code></td></tr>
+<tr><th scope="row">Real listener</th><td><code translate="no">tests/component/providers/adapters/test_web_owner_auth_listener.py</code>: real Uvicorn socket, HTTP, SSE, pre-accept WebSocket denial, bind-failure cleanup, wire-level rotation, two-profile cookies, reverse-proxy origins, token-leak sweep over bodies, headers, logs and rendered pages</td></tr>
+</tbody>
+</table>
+</details>
 
-  <footer class="foot">Canonical source:<code>remote-web-access.md</code> · Chinese:<code>remote-web-access.zh.md</code> · Visualization source:<code>remote-web-access.html</code></footer>
-</main>
-</body>
-</html>
+<details id="contract">
+<summary>Acceptance behaviours</summary>
+<ol>
+<li>Loopback HTTP, SSE and WebSocket without a credential fail.</li>
+<li>A correct Bearer token works without <code translate="no">Origin</code>; a wrong one gets the same <code translate="no">401</code> and does nothing.</li>
+<li>Bootstrap clears the fragment before other fetches, accepts only the bounded JSON, sends no token in URL, query or Referer, derives the specified cookie, rejects a body token with <code translate="no">Authorization</code>, then opens HTTP, SSE and WebSocket.</li>
+<li>Cookie unsafe HTTP and WebSocket reject missing, opaque, cross-site and unlisted origins before action or accept.</li>
+<li>Foreign, duplicate, comma-joined, unspecified and multicast Hosts are rejected on loopback, direct bind and proxy; HTTP/WS and HTTPS/WSS give the same origin pairs.</li>
+<li>Default loopback accepts only its implicit origins; another SSH local port is rejected until configured.</li>
+<li>A non-loopback bind without valid origins refuses startup; the listed HTTP ranges pass with warnings; unspecified, multicast, documentation, benchmarking, reserved and global literals are rejected for HTTP.</li>
+<li>Uvicorn proxy rewriting is off; forwarded scheme is honoured only from a raw loopback peer; forged <code translate="no">X-Forwarded-For</code> changes nothing; public bootstrap without HTTPS fails; direct WS and Caddy WSS give the expected origin.</li>
+<li>A second process for one state directory cannot change the live token or snapshot; bind failure removes only the failing process's files.</li>
+<li>Restart rotates the token and invalidates the old Bearer and cookie.</li>
+<li>A malformed <code translate="no">Authorization</code> header never falls back to a cookie.</li>
+<li>Static assets and <code translate="no">/healthz</code> contain no token, session, filesystem or credential data or diagnostics.</li>
+<li>Headers reject framing; protected responses are <code translate="no">no-store</code>; <code translate="no">401</code> advertises the Bearer realm.</li>
+<li>Docs read without authentication from prebuilt files in checkouts and packages, with no scan or build; Host still applies; unsafe methods and private APIs are excluded.</li>
+<li>Reveal returns <code translate="no">410</code> and <code translate="no">404</code>; replace, preserve and delete follow the exact schemas; 8–11-character values use the fixed mask; masks are never accepted; frontend types have no reveal or full-secret field.</li>
+<li>nginx and Caddy carry authenticated HTTP, SSE and WebSocket over HTTPS with a loopback backend.</li>
+<li>Channel messages keep <code translate="no">paired</code> and gain no owner authority.</li>
+<li>Two profile servers on one hostname and different ports have distinct cookies and authenticate independently.</li>
+<li>The ownership probe checks PID, port and snapshot, sends only a fresh nonce, validates the versioned proof, optionally binds the revision, disables ambient HTTP proxies and never sends or logs the token. Foreign listeners and stale or mismatched snapshot, port, proof or revision are not the owner server.</li>
+</ol>
+</details>
+
+<details id="survey">
+<summary>Open-source survey</summary>
+<p>Systems in OpenProgram's design corpus plus others with relevant Web deployment, authentication, proxy or secret handling. Not exhaustive.</p>
+<table class="stack">
+<thead><tr><th scope="col">System</th><th scope="col">Design</th><th scope="col">Taken</th><th scope="col">Rejected or not applicable</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://github.com/openclaw/openclaw">OpenClaw</a></th><td>Loopback-first gateway, authenticated non-loopback, explicit origins, SSH and proxy guidance, Host and trusted-proxy controls (<a href="https://github.com/openclaw/openclaw/blob/main/docs/gateway/remote.md">remote</a>, <a href="https://github.com/openclaw/openclaw/blob/main/docs/gateway/security/index.md">security</a>, <a href="https://github.com/openclaw/openclaw/blob/main/docs/web/control-ui.md">Control UI</a>)</td><td>Exact origins, fragment bootstrap, SSH and proxy patterns, proxy trust limits</td><td>External identity replacing the token</td></tr>
+<tr><th scope="row"><a href="https://github.com/jupyter-server/jupyter_server">Jupyter Server</a></th><td>Notebook 4.3 made generated tokens the default and handed them to the opened browser; now token or cookie, HTTPS for public use, XSRF and WebSocket Origin checks (<a href="https://github.com/jupyter/notebook/blob/4.x/docs/source/changelog.rst">changelog</a>, <a href="https://github.com/jupyter-server/jupyter_server/blob/main/docs/source/operators/security.rst">security</a>, <a href="https://github.com/jupyter-server/jupyter_server/blob/main/docs/source/operators/public-server.rst">public server</a>). The closest single-owner experience; a precedent for the experience, not identical threats.</td><td>Automatic token entry, cookie transition</td><td>Query tokens (fragment instead), password mode</td></tr>
+<tr><th scope="row"><a href="https://github.com/NousResearch/Hermes-Agent">Hermes Agent</a></th><td>Loopback default; non-loopback needs a password or OAuth provider and fails without one; <code translate="no">--insecure</code> deprecated; single-use <a href="https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/dashboard_auth/ws_tickets.py">WS ticket</a>; redacted listings with an authenticated <a href="https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/web_server.py#L7663-L7696">reveal route</a> (<a href="https://github.com/NousResearch/hermes-agent/blob/main/website/docs/user-guide/features/web-dashboard.md#when-the-gate-engages">dashboard</a>)</td><td>External fail-closed behaviour, redacted secret views</td><td>Provider accounts, second WS ticket, reveal</td></tr>
+<tr><th scope="row"><a href="https://github.com/agent0ai/agent-zero">Agent Zero</a></th><td>Optional single login, session cookie, CSRF and WS Origin checks, reverse proxies, built-in tunnels, masked <a href="https://github.com/agent0ai/agent-zero/blob/main/helpers/settings.py">settings</a> (<a href="https://github.com/agent0ai/agent-zero/blob/main/docs/setup/installation.md">install</a>, <a href="https://github.com/agent0ai/agent-zero/blob/main/docs/setup/vps-deployment.md">VPS</a>)</td><td>Cookie, CSRF, Origin and WS checks together; masked-only updates</td><td>Optional authentication, built-in public tunnels</td></tr>
+<tr><th scope="row"><a href="https://github.com/OpenHands/OpenHands">OpenHands</a></th><td>Session API key across HTTP and WS; SSH and nginx <a href="https://github.com/OpenHands/OpenHands/blob/main/docs/SELF_HOSTING.md">self-hosting</a>; other editions add accounts</td><td>Common HTTP and WS key, loopback backend</td><td>Token in public HTML or browser storage, plaintext secret retrieval</td></tr>
+<tr><th scope="row"><a href="https://github.com/sst/opencode">opencode</a></th><td>Loopback default, optional Basic auth, CORS origins, short-lived <a href="https://github.com/sst/opencode/blob/dev/packages/core/src/pty/ticket.ts">PTY ticket</a> (<a href="https://github.com/sst/opencode/blob/dev/packages/web/src/content/docs/server.mdx">server</a>, <a href="https://github.com/sst/opencode/blob/dev/packages/opencode/src/cli/network.ts">network</a>)</td><td>Loopback default</td><td>Optional authentication; second ticket, since the HttpOnly cookie already avoids WS query credentials</td></tr>
+<tr><th scope="row"><a href="https://github.com/open-webui/open-webui">Open WebUI</a></th><td>Multi-user roles; <a href="https://github.com/open-webui/docs/blob/main/docs/reference/https/nginx.md">nginx</a> and <a href="https://github.com/open-webui/docs/blob/main/docs/reference/https/caddy.md">Caddy</a> guidance for HTTPS, Upgrade, SSE buffering</td><td>Proxy mechanics</td><td>Signup, accounts, JWT sessions, groups, RBAC</td></tr>
+<tr><th scope="row"><a href="https://github.com/langgenius/dify">Dify</a></th><td>Workspace and account roles; <a href="https://github.com/langgenius/dify/blob/main/api/core/entities/provider_configuration.py">credential responses</a> obfuscated with hidden-value updates</td><td>Masked-only responses, explicit replacement</td><td>Tenant and role layers</td></tr>
+<tr><th scope="row"><a href="https://github.com/danny-avila/LibreChat">LibreChat</a></th><td>Registration, admins, role access, JWT (<a href="https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/features/authentication.mdx">authentication</a>, <a href="https://github.com/LibreChat-AI/librechat.ai/blob/main/content/docs/remote/nginx.mdx">nginx</a>). Shows what real multi-user design needs.</td><td>Proxy details</td><td>Identity data model</td></tr>
+<tr><th scope="row"><a href="https://github.com/Mintplex-Labs/anything-llm">AnythingLLM</a></th><td>Separate single- and multi-user modes; single-user <a href="https://github.com/Mintplex-Labs/anything-llm/blob/master/server/utils/middleware/validatedRequest.js">bypasses auth</a> without a password; multi-user adds <a href="https://github.com/Mintplex-Labs/anything-llm/blob/master/server/utils/middleware/multiUserProtected.js">role checks</a></td><td>Single-owner concept</td><td>Optional authentication</td></tr>
+<tr><th scope="row"><a href="https://github.com/microsoft/autogen/tree/main/python/packages/autogen-studio">AutoGen Studio</a></th><td>Loopback default; <a href="https://github.com/microsoft/autogen/blob/main/python/packages/autogen-studio/autogenstudio/web/auth/manager.py">default auth</a> is none; optional OAuth or JWT; research prototype</td><td>Loopback default</td><td>Query or <code translate="no">localStorage</code> credentials, post-accept WS auth, optional auth</td></tr>
+<tr><th scope="row"><a href="https://github.com/openai/codex">Codex CLI</a></th><td><code translate="no">codex app-server</code> over stdio and experimental WebSocket; enrollment and pairing (<a href="https://github.com/openai/codex/blob/main/codex-rs/app-server/README.md">app-server</a>); no owner-hosted browser UI</td><td>None</td><td>Service-mediated remote control: OpenProgram runs no relay</td></tr>
+<tr><th scope="row"><a href="https://github.com/fastclaw-ai/weclaw/blob/main/README.md">WeClaw</a></th><td>HTTP API on <code translate="no">127.0.0.1:18011</code> by default, listen address changeable; no owner browser UI contract</td><td>None</td><td>Not a remote-Web precedent</td></tr>
+<tr><th scope="row"><a href="https://github.com/SWE-agent/SWE-agent">SWE-agent</a></th><td>Command-line agent; <a href="https://github.com/SWE-agent/SWE-agent/tree/main/docs">documentation</a> shows no owner Web UI</td><td>None</td><td>Not applicable</td></tr>
+<tr><th scope="row"><a href="https://github.com/badlogic/pi-mono/tree/main/packages/coding-agent">pi-mono</a></th><td>TUI, <a href="https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/sdk.md">SDK</a>, <a href="https://github.com/badlogic/pi-mono/blob/main/packages/coding-agent/docs/rpc.md">RPC mode</a>; no remote Web server contract</td><td>None</td><td>Not applicable</td></tr>
+<tr><th scope="row"><a href="https://github.com/badlogic/pi-mono/tree/main/packages/ai">pi-ai</a></th><td>Provider transport library</td><td>None</td><td>Not applicable</td></tr>
+</tbody>
+</table>
+
+<h3 id="synthesis">Three kinds of remote identity</h3>
+<table class="stack">
+<thead><tr><th scope="col">Kind</th><th scope="col">Examples</th><th scope="col">OpenProgram</th></tr></thead>
+<tbody>
+<tr><th scope="row">Instance credential</th><td>Jupyter, OpenClaw, OpenHands</td><td>Used: one root secret in two transport forms, one bootstrap, one set of checks; no WebSocket ticket, session database or OAuth flow</td></tr>
+<tr><th scope="row">Application accounts</th><td>Open WebUI, Dify, LibreChat, multi-user AnythingLLM</td><td>Rejected: state and policy the product does not need</td></tr>
+<tr><th scope="row">Managed remote control</th><td>Pairing, hosted tunnels, relays</td><td>Rejected: needs a service OpenProgram does not run</td></tr>
+</tbody>
+</table>
+</details>
+
+<p class="next"><a href="../runtime/security/sandbox-architecture.html">Permission model</a> · <a href="../memory/speaker-identity.html">Speaker identity</a> · <a href="../integrations/mcp-server.html">MCP server</a></p>

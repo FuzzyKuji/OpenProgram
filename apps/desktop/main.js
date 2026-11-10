@@ -32,14 +32,19 @@ const { loadInstance, resolveInstanceWorker } = require("./main/instance");
 const { useBrowserUserAgent, forgetClearanceOnChange } = require("./main/web-views/webtab-user-agent");
 const { readClientHints, registerClientHints } = require("./main/web-views/webtab-client-hints");
 const webTabPermissions = require("./main/web-views/webtab-permissions");
-const { DesktopUpdateService, desktopUpdateFetch } = require("./main/self-update/update-service");
+const {
+  DesktopUpdateService,
+  desktopUpdateFetch,
+  parseUpgradeOutcome,
+  replaceAppImage,
+} = require("./main/self-update/update-service");
 const { DesktopAttentionService } = require("./main/windows/attention-service");
 const {
   killWindowsProcessTree,
   resolveTerminalCommand,
   waitForTerminalPid,
 } = require("./main/terminal/terminal-command");
-const { verifyWindowsAuthenticode } = require("./main/self-update/windows-signature");
+const { readWindowsUpdateLine, verifyWindowsAuthenticode } = require("./main/self-update/windows-signature");
 const {
   loadTransferDecisions,
   saveTransferDecisionsAtomic,
@@ -69,6 +74,7 @@ const {
   startRecoveryCycle,
   beginRecoveryProbe,
   finishRecoveryProbe,
+  workerVersionAction,
 } = require("./main/worker/worker-recovery-state");
 const { installLockPath, installInProgress } = require("./main/self-update/install-lock");
 const { validateTransferPayload } = require("./main/web-views/tab-transfer-validation");
@@ -92,13 +98,16 @@ const {
 } = require("./main/windows/window-chrome");
 
 const INSTANCE = loadInstance(process.resourcesPath, app.isPackaged);
+// How the shell loader started this process (apps/desktop/shell/loader.js).
+// Null in embedded mode, where this file starts itself.
+let shellContext = null;
 if (INSTANCE.development) {
   // Its own name and userData: window state, the single-instance lock and
   // Chromium storage stay apart from the stable App's.
   app.setName(INSTANCE.name);
   app.setPath("userData", path.join(app.getPath("appData"), INSTANCE.name));
 }
-// 单实例：worker 单端口（稳定版 18100，详见 docs/reference/design/cli/single-port.md）
+// 单实例：worker 单端口（稳定版 18100，详见 docs/reference/design/cli/single-port.html）
 const WEB_PORT = process.env.OPENPROGRAM_WEB_PORT || String(INSTANCE.port);
 const START_URL =
   process.env.OPENPROGRAM_DESKTOP_URL || `http://127.0.0.1:${WEB_PORT}/chat`;
@@ -152,26 +161,101 @@ function scheduleAutomaticUpdateCheck(initial = false) {
   }, Math.min(delay, 2_147_000_000));
 }
 
+/** The release this App runs: a sealed version's own, otherwise the App's. */
+function runningReleaseVersion() {
+  if (!shellContext?.versionId) return app.getVersion();
+  const recorded = shellContext.runningRelease?.();
+  if (recorded) return recorded;
+  try {
+    return JSON.parse(fs.readFileSync(path.join(__dirname, "package.json"), "utf8")).version;
+  } catch {
+    return app.getVersion();
+  }
+}
+
+function updateFileFilters() {
+  if (process.platform === "win32") return [{ name: "Windows Installer", extensions: ["exe"] }];
+  if (process.platform === "darwin") return [{ name: "macOS Disk Image", extensions: ["dmg"] }];
+  return process.env.APPIMAGE
+    ? [{ name: "AppImage", extensions: ["AppImage"] }]
+    : [{ name: "Debian Package", extensions: ["deb"] }];
+}
+
+function canWriteBeside(file) {
+  try {
+    fs.accessSync(path.dirname(file), fs.constants.W_OK);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** A sealed version updates through its own Python, which holds the fetcher. */
+function runVersionStoreUpdate() {
+  const launch = shellContext.resolveWorker();
+  const env = { ...process.env, OPENPROGRAM_WEB_PORT: WEB_PORT, ...launch.env };
+  delete env.PYTHONHOME;
+  if (!launch.env.PYTHONPATH) delete env.PYTHONPATH;
+  return new Promise((resolve, reject) => {
+    let output = "";
+    const child = spawn(launch.authCommand, [...launch.authArgs, "upgrade", "--json"], {
+      stdio: ["ignore", "pipe", "ignore"],
+      env,
+      windowsHide: process.platform === "win32",
+    });
+    child.stdout.on("data", (data) => { output += data; });
+    child.on("error", reject);
+    child.on("close", (code) => resolve(parseUpgradeOutcome(output, code)));
+  });
+}
+
 function initializeDesktopUpdates() {
+  const appImage = process.platform === "linux" ? process.env.APPIMAGE : "";
+  const versionStore = Boolean(shellContext?.versionId);
+  let windowsLine = null;
+  const readLine = () => {
+    windowsLine ||= readWindowsUpdateLine();
+    return windowsLine;
+  };
   desktopUpdates = new DesktopUpdateService({
-    currentVersion: app.getVersion(),
+    currentVersion: runningReleaseVersion(),
     arch: process.arch,
     platform: process.platform,
     statePath: path.join(app.getPath("userData"), "update-state.json"),
     fetchImpl: desktopUpdateFetch,
+    linuxFormat: appImage ? "appimage" : "deb",
+    windowsLine: readLine,
+    versionStore,
+    readCurrentVersion: versionStore ? runningReleaseVersion : null,
+    applyVersionUpdate: versionStore ? runVersionStoreUpdate : null,
     chooseSavePath: async (name) => {
-      const windowsInstaller = process.platform === "win32";
+      if (appImage && canWriteBeside(appImage)) return path.join(path.dirname(appImage), `.${name}.download`);
       const result = await dialog.showSaveDialog({
         title: "Download OpenProgram Update",
         defaultPath: path.join(app.getPath("downloads"), name),
-        filters: windowsInstaller
-          ? [{ name: "Windows Installer", extensions: ["exe"] }]
-          : [{ name: "macOS Disk Image", extensions: ["dmg"] }],
+        filters: updateFileFilters(),
       });
       return result.canceled ? null : result.filePath;
     },
-    verifyArtifact: (filePath) => verifyWindowsAuthenticode(filePath),
-    openPath: (filePath) => shell.openPath(filePath),
+    verifyArtifact: async (filePath) => verifyWindowsAuthenticode(filePath, {
+      line: process.platform === "win32" ? await readLine() : null,
+    }),
+    openPath: async (filePath) => {
+      if (appImage && path.dirname(filePath) === path.dirname(appImage)) {
+        try {
+          replaceAppImage(filePath, appImage);
+        } catch (error) {
+          return `The new version could not replace ${appImage}: ${error.message}`;
+        }
+        setTimeout(() => {
+          app.relaunch(shellContext?.relaunchOptions?.());
+          app.exit(0);
+        }, 300);
+        return "";
+      }
+      if (filePath.endsWith(".AppImage")) fs.chmodSync(filePath, 0o755);
+      return shell.openPath(filePath);
+    },
     emit: broadcastUpdateState,
   });
   scheduleAutomaticUpdateCheck(true);
@@ -295,6 +379,7 @@ function isErrorPageUrl(url) {
  * instead of starting a worker from the half-installed runtime.
  */
 function appInstallInProgress() {
+  if (shellContext?.switchingInProgress?.()) return true;
   // The stable installers' lock says nothing about the development runtime.
   if (!app.isPackaged || INSTANCE.development) return false;
   return installInProgress(installLockPath(process.execPath));
@@ -378,7 +463,50 @@ function probe(url, timeoutMs) {
   });
 }
 
+// A sealed version's worker starts through the launcher, so its version guard
+// counts the attempt. An attempt that dies is retried by the recovery cycle
+// until the guard moves the pointer back or the recovery page takes over.
+async function spawnManagedWorker(action) {
+  let launch;
+  try {
+    launch = shellContext.resolveWorker();
+    if (action === "restart") await shellContext.stopWorker();
+  } catch (error) {
+    recoveryCoordinator.workerSpawned = false;
+    console.error(`[desktop] worker start failed: ${error.message}`);
+    void shellContext.openRecovery("failed");
+    return;
+  }
+  const env = { ...process.env, OPENPROGRAM_WEB_PORT: WEB_PORT, ...launch.env };
+  delete env.PYTHONHOME;
+  if (!launch.env.PYTHONPATH) delete env.PYTHONPATH;
+  const log = fs.openSync(launch.logFile, "a");
+  const child = spawn(launch.command, launch.args, {
+    detached: true,
+    stdio: ["ignore", log, log],
+    env,
+    windowsHide: process.platform === "win32",
+  });
+  fs.closeSync(log);
+  child.on("error", (error) => {
+    recoveryCoordinator.workerSpawned = false;
+    console.error(`[desktop] worker start failed: ${error.message}`);
+  });
+  child.on("exit", (code) => {
+    recoveryCoordinator.workerSpawned = false;
+    if (code === 0) return;
+    recoveryCoordinator.startRejected = true;
+    recoveryCoordinator.restartIssued = false;
+    recoveryCoordinator.unreachableProbes = 0;
+  });
+  child.unref();
+}
+
 function spawnWorker(action = "start") {
+  if (shellContext) {
+    void spawnManagedWorker(action);
+    return;
+  }
   const env = { ...process.env, OPENPROGRAM_WEB_PORT: WEB_PORT };
   delete env.PYTHONHOME;
   delete env.PYTHONPATH;
@@ -415,6 +543,17 @@ function spawnWorker(action = "start") {
 }
 
 function resolveWorkerStartUrl() {
+  if (shellContext) {
+    let launch;
+    try {
+      launch = shellContext.resolveWorker();
+    } catch {
+      return null;
+    }
+    return resolveAuthenticatedStartUrl(START_URL, { ...process.env, ...launch.env }, [
+      { command: launch.authCommand, args: launch.authArgs },
+    ]);
+  }
   if (!app.isPackaged) return resolveAuthenticatedStartUrl(START_URL);
   const launch = INSTANCE.development
     ? resolveInstanceWorker(INSTANCE)
@@ -427,6 +566,69 @@ function resolveWorkerStartUrl() {
   ]);
 }
 
+function readLocalJson(url, headers = {}, timeoutMs = 1500) {
+  return new Promise((resolve) => {
+    const request = http.get(url, { headers, timeout: timeoutMs }, (response) => {
+      let body = "";
+      response.setEncoding("utf8");
+      response.on("data", (chunk) => { body += chunk; });
+      response.on("end", () => {
+        try {
+          resolve(response.statusCode === 200 ? JSON.parse(body) : null);
+        } catch {
+          resolve(null);
+        }
+      });
+    });
+    request.on("timeout", () => request.destroy(new Error("timeout")));
+    request.on("error", () => resolve(null));
+  });
+}
+
+/** The version the worker on this App's port runs; older workers answer only with a token. */
+async function runningWorkerVersion(authenticatedUrl) {
+  const health = await readLocalJson(HEALTH_URL);
+  if (typeof health?.version === "string") return health.version;
+  const token = ownerAuthTokenFromStartUrl(authenticatedUrl);
+  if (!token) return null;
+  const system = await readLocalJson(new URL("/api/system/version", START_URL).toString(), {
+    Authorization: `Bearer ${token}`,
+  });
+  return typeof system?.currentVersion === "string" ? system.currentVersion : null;
+}
+
+/** The version a worker on this port should run, or null when any may. */
+function expectedWorkerVersion() {
+  if (INSTANCE.development || !app.isPackaged || process.env.OPENPROGRAM_DESKTOP_URL) return null;
+  if (shellContext) return shellContext.versionId && !shellContext.switchingInProgress?.() ? runningReleaseVersion() : null;
+  return app.getVersion();
+}
+
+// While a worker from another version is being replaced, its health answer is
+// not the one the windows are waiting for.
+const WORKER_VERSION_RESTART_MS = 60_000;
+let workerVersionRestart = null;
+
+async function restartWorkerFromOtherVersion(authenticatedUrl) {
+  const expected = expectedWorkerVersion();
+  if (!expected || recoveryCoordinator.workerVersionChecked) return false;
+  const running = await runningWorkerVersion(authenticatedUrl);
+  if (workerVersionAction(recoveryCoordinator, running, expected) !== "restart") return false;
+  console.log(`[desktop] the running worker is ${running}, this App is ${expected}: restarting it`);
+  workerVersionRestart = { expected, authenticatedUrl, until: Date.now() + WORKER_VERSION_RESTART_MS };
+  recoveryCoordinator.workerSpawned = true;
+  spawnWorker("restart");
+  return true;
+}
+
+async function workerVersionSettled() {
+  if (!workerVersionRestart) return true;
+  const { expected, authenticatedUrl, until } = workerVersionRestart;
+  if (Date.now() < until && await runningWorkerVersion(authenticatedUrl) !== expected) return false;
+  workerVersionRestart = null;
+  return true;
+}
+
 async function resolveStartUrl() {
   let workerWasReachable = false;
   for (let i = 0; i < 3; i++) {
@@ -434,7 +636,10 @@ async function resolveStartUrl() {
       workerWasReachable = true;
       recoveryCoordinator.workerSpawned = false;
       const authenticated = resolveWorkerStartUrl();
-      if (authenticated) return authenticated;
+      if (authenticated) {
+        if (await restartWorkerFromOtherVersion(authenticated)) return errorPageUrl();
+        return authenticated;
+      }
     }
   }
   if (!workerWasReachable && appInstallInProgress()) return errorPageUrl("updating");
@@ -443,6 +648,24 @@ async function resolveStartUrl() {
     spawnWorker();
   }
   return errorPageUrl();
+}
+
+// The shell's recovery page takes over when the version the launcher fell back
+// to does not come up either. Offered once per outage, so closing it sticks.
+let unreachableSince = null;
+let recoveryOffered = false;
+function watchManagedRecovery(reachable, installing) {
+  if (!shellContext?.recoveryDue) return;
+  if (reachable || installing) {
+    unreachableSince = null;
+    recoveryOffered = false;
+    return;
+  }
+  unreachableSince ??= Date.now();
+  if (!recoveryOffered && shellContext.recoveryDue(Date.now() - unreachableSince)) {
+    recoveryOffered = true;
+    void shellContext.openRecovery("failed");
+  }
 }
 
 function stopWindowRecovery(ctx) {
@@ -456,9 +679,10 @@ function stopWindowRecovery(ctx) {
 async function runWindowRecoveryProbe(ctx) {
   const state = ctx.recovery;
   if (ctx.win.isDestroyed() || !beginRecoveryProbe(state, Date.now())) return;
-  const reachable = await probe(HEALTH_URL, 1000);
+  const reachable = await probe(HEALTH_URL, 1000) && await workerVersionSettled();
   const authenticated = reachable ? resolveWorkerStartUrl() : null;
   const installing = !reachable && appInstallInProgress();
+  watchManagedRecovery(reachable, installing);
   const action = finishRecoveryProbe(
     state,
     recoveryCoordinator,
@@ -1566,6 +1790,30 @@ function registerTabTransferIpc() {
 
 // --------------------------------------------------------------------- menu
 
+// With sealed versions there is always a way back, even when the backend is
+// broken: the shell's recovery page needs nothing from it.
+function goBackMenuItem() {
+  return { label: "Go back to a previous version", click: () => void shellContext.openRecovery("menu") };
+}
+
+function applicationMenu() {
+  return {
+    label: INSTANCE.name,
+    submenu: [
+      { role: "about", label: `About ${INSTANCE.name}` },
+      ...(shellContext?.openRecovery ? [goBackMenuItem()] : []),
+      { type: "separator" },
+      { role: "services" },
+      { type: "separator" },
+      { role: "hide", label: `Hide ${INSTANCE.name}` },
+      { role: "hideOthers" },
+      { role: "unhide" },
+      { type: "separator" },
+      { role: "quit", label: `Quit ${INSTANCE.name}` },
+    ],
+  };
+}
+
 function buildMenu() {
   const isMac = process.platform === "darwin";
   const send = (channel) => () => {
@@ -1587,7 +1835,7 @@ function buildMenu() {
     click: shortcut({ action: "select-tab", index: i + 1 }),
   }));
   const template = [
-    ...(isMac ? [{ role: "appMenu" }] : []),
+    ...(isMac ? [applicationMenu()] : []),
     {
       label: "File",
       submenu: [
@@ -1598,6 +1846,8 @@ function buildMenu() {
         { label: "Reopen Closed Tab", accelerator: "Shift+CmdOrCtrl+T", click: shortcut({ action: "reopen-tab" }) },
         { type: "separator" },
         { role: "close", accelerator: "Shift+CmdOrCtrl+W" },
+        // Windows and Linux have no application menu to put this in.
+        ...(!isMac && shellContext?.openRecovery ? [{ type: "separator" }, goBackMenuItem()] : []),
       ],
     },
     { role: "editMenu" },
@@ -1697,14 +1947,15 @@ function showWindowSmoothly(win) {
 }
 
 // Launch / dock-click / second-instance share one in-flight main-window
-// create. See docs/reference/design/ui/desktop/window-lifecycle.md.
+// create. See docs/reference/design/ui/desktop/window-lifecycle.html.
 const ensureMainWindow = createMainWindowGate({
   windows,
   createWindow,
 });
 registerReopenIpc({ ipcMain, windows, recovery: selfUpdateReopen, origin: UI_ORIGIN });
 registerUiVerificationIpc({ ipcMain, windows, app, origin: UI_ORIGIN,
-  request: selfUpdateReopen.requestVerification, guard: uiVerificationGuard });
+  request: selfUpdateReopen.requestVerification, guard: uiVerificationGuard,
+  sealedVersion: () => shellContext });
 
 async function createWindow(options = {}) {
   const state = loadWindowState();
@@ -1748,6 +1999,7 @@ async function createWindow(options = {}) {
     applyRestoredChrome(win, state);
   }
   const ctx = makeWindowContext(windowId, win);
+  if (windowId === "main") win.webContents.once("did-finish-load", () => firstWindowLoaded?.());
   windows.set(windowId, ctx);
   contextsByBrowserWindowId.set(win.id, ctx);
   win.on("focus", () => { lastFocusedWindowId = ctx.id; });
@@ -1929,6 +2181,13 @@ function windowForWebContents(contents) {
   ) || BrowserWindow.getFocusedWindow() || null;
 }
 
+function webTabWatched(contents) {
+  const win = BrowserWindow.getAllWindows().find((candidate) =>
+    !candidate.isDestroyed() && candidate.contentView.children.some((view) => view.webContents === contents));
+  const view = win?.contentView.children.find((child) => child.webContents === contents);
+  return Boolean(win && view && win.isFocused() && view.getVisible?.() !== false);
+}
+
 // Web tabs present themselves as the Chromium they are and ask before a site
 // uses a device (main/web-views/webtab-client-hints.js, webtab-permissions.js).
 function registerWebTabIdentity() {
@@ -1947,6 +2206,10 @@ function registerWebTabIdentity() {
         noLink: true,
       };
       const parent = webContents ? windowForWebContents(webContents) : null;
+      // A page the user is not looking at (an Agent's, or one in a window
+      // behind another application) is not answered for them, and its
+      // question does not come in front of what they are doing.
+      if (webContents && !webTabWatched(webContents)) return null;
       const result = parent
         ? await dialog.showMessageBox(parent, options)
         : await dialog.showMessageBox(options);
@@ -1955,7 +2218,7 @@ function registerWebTabIdentity() {
   });
 }
 
-registerSingleMainWindow({
+const registerMainWindow = () => registerSingleMainWindow({
   app,
   BrowserWindow,
   ensureMainWindow,
@@ -1975,6 +2238,9 @@ registerSingleMainWindow({
     registerTabTransferIpc();
     registerOwnerAuthIpc();
     registerUpdateIpc();
+    require("./main/windows/pointer-follow").createPointerFollow({
+      ipcMain, screen: require("electron").screen, spawn: require("node:child_process").spawn,
+    });
     registerAttentionIpc();
     require("./main/windows/recording-bar").createRecordingBar({
       BrowserWindow, ipcMain, path, screen: require("electron").screen,
@@ -2007,6 +2273,24 @@ registerSingleMainWindow({
     buildMenu();
   },
 });
+
+let firstWindowLoaded = null;
+let started = null;
+
+/**
+ * The contract with the shell loader. Resolves when this main process is ready
+ * and the first window has loaded a page, even if that page is the wait page.
+ */
+function start(context = null) {
+  if (started) return started;
+  shellContext = context;
+  started = new Promise((resolve) => { firstWindowLoaded = resolve; });
+  registerMainWindow();
+  return started;
+}
+
+if (typeof module !== "undefined") module.exports = { start };
+if (!globalThis.__OPENPROGRAM_SHELL_LOADER__) void start();
 
 app.on("window-all-closed", () => {
   if (process.platform !== "darwin") app.quit();

@@ -31,7 +31,7 @@ def reopening(api, store_fixture, monkeypatch):
         **authority.local_owner_authority()))
     request = replace(request, pre_update_evidence=(*request.pre_update_evidence, config_evidence(config)))
     store.create(request, verifier_config=config)
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(request.update_id, phase, detail={
             "previous_system_gate": {"candidate_sha": request.base_sha},
         })
@@ -226,7 +226,7 @@ def test_controller_prepares_once_before_activation(api, store_fixture, monkeypa
         profile_snapshot={}, **authority.local_owner_authority()))
     request = replace(request, pre_update_evidence=(*request.pre_update_evidence, config_evidence(config)))
     store.create(request, verifier_config=config)
-    store.transition("su_test", UpdatePhase.STAGING)
+    store.transition("su_test", UpdatePhase.BUILDING)
     store.transition("su_test", UpdatePhase.READY)
     first = prepare_reopen(store, "su_test")
     path = store.root / "su_test" / "reopen-1.json"

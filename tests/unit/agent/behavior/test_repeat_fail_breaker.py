@@ -89,7 +89,7 @@ def test_changed_args_are_not_tripped():
 
 
 def test_many_distinct_failures_keep_safe_point_payload_valid():
-    from openprogram.runtime.execution.agent_checkpoint import MAX_AGENT_REPEAT_FAILURES
+    from openprogram.runtime.execution.runtime_contract import MAX_AGENT_REPEAT_FAILURES
 
     async def execute(call_id, args, cancel, on_update):
         return AgentToolResult(content=[TextContent(text="failed")], details={}, is_error=True)

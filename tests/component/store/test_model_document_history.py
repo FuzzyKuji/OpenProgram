@@ -3,7 +3,9 @@ import hashlib
 import os
 from types import SimpleNamespace
 
+import sqlite3
 import pytest
+from openprogram.state.store import reader_floor
 
 from openprogram.state.store.document_history import DocumentHistory, DocumentHistoryError
 from openprogram.state.store.session.session_store import SessionStore
@@ -233,9 +235,19 @@ def test_future_history_schema_is_not_silently_written(model_history):
     history,_,_,_=model_history
     with history._database() as db:
         db.execute("PRAGMA user_version=99")
+        reader_floor.record_floor(db,99); db.commit()
     with pytest.raises(DocumentHistoryError) as error:
         history.list("p1","a.docx")
     assert error.value.code=="HISTORY_CORRUPT"
+
+
+def test_history_newer_by_an_additive_migration_still_opens(model_history):
+    history,_,_,_=model_history
+    with history._database() as db:
+        db.execute("PRAGMA user_version=99")
+    assert history.list("p1","a.docx") is not None
+    with sqlite3.connect(history.root/"history.sqlite3") as db:
+        assert db.execute("PRAGMA user_version").fetchone()[0]==99
 
 
 @pytest.mark.skipif(os.name=='nt',reason='POSIX directory modes')

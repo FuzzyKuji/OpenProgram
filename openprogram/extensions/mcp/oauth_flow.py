@@ -17,6 +17,7 @@ down as soon as the code arrives (or the context manager exits).
 """
 from __future__ import annotations
 
+import contextvars
 import logging
 import asyncio
 import os
@@ -37,13 +38,13 @@ _log = logging.getLogger(__name__)
 # Keyed by callback port (each LocalhostCallback has a unique one).
 # Cleared on success / close.
 _pending_auth_urls: dict[int, str] = {}
+
+# Set while the worker connects its servers by itself, at startup and on its
+# own reconnects: nobody asked for a sign-in at that moment, so no browser is
+# brought in front of what the user is doing. The link stays pending, and
+# reconnecting the server from the App or the CLI opens it.
+unattended: contextvars.ContextVar[bool] = contextvars.ContextVar("mcp_oauth_unattended", default=False)
 _pending_auth_lock = threading.Lock()
-
-
-def get_pending_auth_url(port: int) -> Optional[str]:
-    """Last authorisation URL emitted for ``port`` (None if cleared)."""
-    with _pending_auth_lock:
-        return _pending_auth_urls.get(port)
 
 
 def get_all_pending_auth() -> dict[int, str]:
@@ -121,7 +122,7 @@ def _make_redirect_handler(callback_port: int):
         # Best-effort browser open. Skip entirely when there's
         # obviously no display — webbrowser.open on a headless box
         # tends to either error or silently spawn a dead xdg-open.
-        if _can_open_browser():
+        if _can_open_browser() and not unattended.get():
             try:
                 if webbrowser.open(url, new=2):
                     print("  (browser opened automatically)\n",  # noqa: T201 - terminal prompt

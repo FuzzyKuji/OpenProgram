@@ -15,7 +15,7 @@ import {
   wsMutationRequest,
   wsRequest,
 } from "@/lib/net/ws/ws-request";
-import { useSessionStore } from "@/lib/session-store";
+import { selectRow, useSessionStore } from "@/lib/session-store";
 import type {
   AssistantBlock,
   TurnFileSummary,
@@ -26,6 +26,7 @@ import { useCurrentProject } from "@/lib/files/files-shared";
 
 import {
   historyPresentation,
+  SPANS_TURNS_STATE,
   type TurnHistoryOperation,
   type TurnHistoryState,
 } from "./turn-files-history-state";
@@ -38,6 +39,7 @@ import {
   turnFilesSummaryComplete,
   type FileWriteState,
 } from "./turn-files-presentation";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 interface TurnFile {
   path: string;
@@ -92,13 +94,13 @@ export function TurnFilesChips({
   writeState?: FileWriteState;
 }) {
   const { text } = useTranslation();
-  const currentSessionId = useSessionStore((state) => state.currentSessionId);
-  const sessionId = sessionIdOverride ?? currentSessionId;
-  const updateMessage = useSessionStore((state) => state.updateMessage);
+  const sessionId = useRowSessionId(sessionIdOverride);
+  const applyLocalChange = useSessionStore((state) => state.applyLocalChange);
   const project = useCurrentProject();
   const ownedOrder = useSessionStore((state) => sessionId ? state.messageOrder[sessionId] : undefined);
-  const retainedSummary = useSessionStore((state) => state.messagesById[assistantMsgId]?.turnFiles);
+  const retainedSummary = useSessionStore((state) => selectRow(sessionId, assistantMsgId)(state)?.turnFiles);
   summary = summary ?? (ownedOrder?.includes(assistantMsgId) ? retainedSummary : undefined);
+  const spansTurns = Boolean(summary?.spansTurns);
   const embedded = useMemo(
     () => summaryFiles(summary, project?.path),
     [project?.path, summary],
@@ -151,7 +153,7 @@ export function TurnFilesChips({
   }, [embedded, summary?.file_count]);
 
   useEffect(() => {
-    if (!visible || !sessionId) return;
+    if (!visible || !sessionId || spansTurns) return;
     const controller = new AbortController();
     void wsRequest<{ status?: string; operation?: string | null; reason?: string; error?: string; session_id?: string; assistant_msg_id?: string }>(
       "turn_history_state",
@@ -173,7 +175,7 @@ export function TurnFilesChips({
         });
     });
     return () => controller.abort();
-  }, [assistantMsgId, historyNonce, sessionId, visible]);
+  }, [assistantMsgId, historyNonce, sessionId, spansTurns, visible]);
 
   useEffect(() => {
     if (embedded) {
@@ -182,7 +184,9 @@ export function TurnFilesChips({
   }, [embedded]);
 
   useEffect(() => {
-    if (embeddedComplete || writesFailed || !visible || !sessionId || !assistantMsgId) return;
+    // The server lists one turn, so its answer would replace a joined list
+    // with one part's. Files a joined list can't name stay counted.
+    if (embeddedComplete || spansTurns || writesFailed || !visible || !sessionId || !assistantMsgId) return;
     const controller = new AbortController();
     void wsRequest<{
       files?: TurnFile[];
@@ -215,10 +219,14 @@ export function TurnFilesChips({
           ? data[key] as number
           : (data.file_count ?? data.files?.length ?? 0) === loadedFiles.length && loadedFiles.every((file) => typeof file[key] === "number")
             ? loadedFiles.reduce((total, file) => total + (file[key] ?? 0), 0) : null;
-        updateMessage(sessionId, assistantMsgId, {
-          turnFiles: { version: 1, files: loadedFiles, file_count: data.file_count ?? data.files?.length ?? 0,
-            added: sum("added"), removed: sum("removed") },
-          reverted: Boolean(data.reverted),
+        applyLocalChange(sessionId, {
+          kind: "overlay_set", rowId: assistantMsgId,
+          fields: {
+            turnFiles: { version: 1, files: loadedFiles, file_count: data.file_count ?? data.files?.length ?? 0,
+              added: sum("added"), removed: sum("removed") },
+            reverted: Boolean(data.reverted),
+          },
+          clear: ["until_field_matches", "until_row_gone"],
         });
       }
       setFiles(loadedFiles);
@@ -230,7 +238,7 @@ export function TurnFilesChips({
     // `embeddedComplete` (a boolean) gates the load, not `embedded` itself:
     // persisting the loaded list replaces the summary object, which must not
     // trigger another request when the server also returns fewer rows.
-  }, [assistantMsgId, embeddedComplete, legacyLoad.attempt, sessionId, visible, writesFailed, updateMessage]);
+  }, [assistantMsgId, embeddedComplete, legacyLoad.attempt, sessionId, spansTurns, visible, writesFailed, applyLocalChange]);
 
   function historyAction(direction: "undo" | "redo") {
     if (!sessionId || busy) return;
@@ -298,8 +306,10 @@ export function TurnFilesChips({
         }
         setHistoryError("");
         setReverted(direction === "undo");
-        updateMessage(sessionId, assistantMsgId, {
-          reverted: direction === "undo",
+        applyLocalChange(sessionId, {
+          kind: "overlay_set", rowId: assistantMsgId,
+          fields: { reverted: direction === "undo" },
+          clear: ["until_field_matches", "until_row_gone"],
         });
         window.dispatchEvent(new CustomEvent("turn-files-history-changed", {
           detail: { sessionId, assistantMsgId },
@@ -353,7 +363,7 @@ export function TurnFilesChips({
     notice: historyNotice,
     operation: currentAction,
   } = historyPresentation(
-    historyState,
+    spansTurns ? SPANS_TURNS_STATE : historyState,
     historyError,
     {
       files_changed: text(
@@ -377,6 +387,10 @@ export function TurnFilesChips({
         "对话还在运行，运行结束后才能撤回。",
       ),
       in_progress: text("An undo for this turn is already in progress.", "这一轮的撤回正在进行中。"),
+      spans_turns: text(
+        "This reply continued after a restart. Undo works on one turn at a time, so it can't cover all of these files.",
+        "这条回复在重启后继续。撤回一次只处理一轮，无法覆盖这里的全部文件。",
+      ),
       fallback: text(
         "Undo isn't available for this turn right now. You can still review the changes.",
         "这一轮暂时无法撤回，仍可审阅修改。",

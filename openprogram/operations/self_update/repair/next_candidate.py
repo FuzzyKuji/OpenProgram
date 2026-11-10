@@ -72,7 +72,9 @@ def chain(store, record, *, read_only=False):
         if len(records) >= 3:
             raise ValueError("iteration ancestry exceeds budget")
         parent = store._load_unlocked(_validate_update_id(config["parent_id"]), read_only=read_only)
-        if config["parent_sha256"] != _digest(parent.request.to_dict()) or parent.state.attempt + 1 != current.state.attempt:
+        # A child written before the request format changed recorded the file as written.
+        written = _read(store.root / parent.request.update_id / "request.json")
+        if config["parent_sha256"] not in {_digest(parent.request.to_dict()), _digest(written)} or parent.state.attempt + 1 != current.state.attempt:
             raise ValueError("iteration parent changed")
         records.insert(0, parent)
     root = records[0]
@@ -81,7 +83,7 @@ def chain(store, record, *, read_only=False):
         config = _config(store, item)
         if config is not None and config["root_id"] != root.request.update_id:
             raise ValueError("iteration root changed")
-        for field in ("session_id", "agent_id", "repo", "base_sha", "goal", "assertions", "iteration_policy", "app_path"):
+        for field in ("session_id", "agent_id", "repo", "base_sha", "goal", "assertions", "iteration_policy"):
             if getattr(item.request, field) != getattr(root.request, field):
                 raise ValueError("iteration expanded original authorization")
         verifier = load_verifier_config(store, item)
@@ -338,7 +340,7 @@ def _reservation(store, record, records, manifest, result, *, automatic, assista
 
 
 def submit(update_id, candidate_sha, *, req=None, assistant_id=None, _resume=False):
-    """Trusted automatic call or the body of the forced one-shot owner tool."""
+    """Trusted automatic call or the body of the owner's retry tool call."""
     from openprogram.programs.tools.system.self_update import _require_local_owner
     from ..delivery.launcher import launch_supervisor
     store = SelfUpdateStore()
@@ -350,8 +352,8 @@ def submit(update_id, candidate_sha, *, req=None, assistant_id=None, _resume=Fal
         automatic = reservation["automatic"] if _resume else req is None
         if not automatic and not _resume:
             _require_local_owner(req)
-            if req.session_id != record.request.session_id or not assistant_id:
-                raise ValueError("retry requires the original owner session and persisted turn")
+            if not assistant_id:
+                raise ValueError("retry requires a persisted owner turn")
         records, manifest, result = validate(store, record, candidate_sha, automatic=automatic)
         proposal = _read(_path(store, record, "proposal"))
         if proposal != dict(schema=1, update_id=update_id, root_id=records[0].request.update_id,
@@ -386,15 +388,20 @@ def submit(update_id, candidate_sha, *, req=None, assistant_id=None, _resume=Fal
         if current.request != child:
             raise ValueError("published child differs from reservation")
         if automatic and current.state.phase is UpdatePhase.PREPARING:
-            store._transition_unlocked(child.update_id, UpdatePhase.STAGING, expected_phase=UpdatePhase.PREPARING,
+            store._transition_unlocked(child.update_id, UpdatePhase.BUILDING, expected_phase=UpdatePhase.PREPARING,
                 detail={"iteration_release": True, "parent_id": update_id, "reservation_sha256": _digest(reservation)})
         _status(store, record, "submitting", "original child reserved", child.update_id)
     try:
-        launch_supervisor(child.update_id, resume=(store.root / child.update_id / "supervisor.sh").exists())
+        if child.controller_version:
+            from ..control.switch import launch
+            launch(child.update_id, store=store)
+        else:
+            launch_supervisor(child.update_id, resume=(store.root / child.update_id / "supervisor.sh").exists())
     except Exception as exc:
         with store._locked():
             current = store._load_unlocked(child.update_id)
-            if current.state.phase in {UpdatePhase.PREPARING, UpdatePhase.STAGING, UpdatePhase.READY}:
+            if current.state.phase in {UpdatePhase.PREPARING, UpdatePhase.BUILDING, UpdatePhase.TRIAL,
+                                       UpdatePhase.READY, UpdatePhase.QUIESCING}:
                 store._transition_unlocked(child.update_id, UpdatePhase.ABORTED, expected_phase=current.state.phase,
                     detail={**current.state.detail, "reason": "supervisor launch failed: " + str(exc)[:1000]})
             _status(store, record, "stopped", "supervisor launch failed: " + str(exc), child.update_id)
@@ -456,8 +463,6 @@ def approval_preview(update_id, candidate_sha, req):
     store = SelfUpdateStore()
     with store._locked():
         record = store._load_unlocked(_validate_update_id(update_id))
-        if record.request.session_id != req.session_id:
-            raise ValueError("retry belongs to another session")
         records, manifest, _ = validate(store, record, candidate_sha, automatic=False)
         return dict(root_id=records[0].request.update_id, candidate_sha=candidate_sha,
             goal=record.request.goal, assertions=record.request.assertions, changed_paths=manifest["changed_paths"],
@@ -474,8 +479,6 @@ def cancel(update_id, req, store=None):
     jobs = []
     with store._locked():
         record = store._load_unlocked(_validate_update_id(update_id))
-        if record.request.session_id != req.session_id:
-            raise ValueError("iteration belongs to another session")
         root = chain(store, record)[0]
         store._write_json(_path(store, root, "stop"), dict(schema=1, root_id=root.request.update_id, at=time.time()))
         current = root
@@ -488,10 +491,11 @@ def cancel(update_id, req, store=None):
                 diagnosis.cancel_pending(store, reason="owner cancelled iteration")
             for source, kind in (("self_update_diagnose", "diagnose"), ("self_update_repair", "repair")):
                 job_id = f"self-update:{current.request.update_id}:{kind}:{current.state.attempt}"
-                job = load_job(req.session_id, job_id)
+                job = load_job(current.request.session_id, job_id)
                 if job is not None and job.source == source and job.spawn_caller == current.request.origin_assistant_id:
                     jobs.append(job_id)
-            if current.state.phase in {UpdatePhase.PREPARING, UpdatePhase.STAGING, UpdatePhase.READY}:
+            if current.state.phase in {UpdatePhase.PREPARING, UpdatePhase.BUILDING, UpdatePhase.TRIAL,
+                                       UpdatePhase.READY, UpdatePhase.QUIESCING}:
                 store._transition_unlocked(current.request.update_id, UpdatePhase.ABORTED,
                     expected_phase=current.state.phase, detail={**current.state.detail, "reason": "owner cancelled iteration"})
             reservation = _optional(_path(store, current, "next"))

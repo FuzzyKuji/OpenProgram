@@ -7,10 +7,11 @@ import { installDom, render } from "../_support/dom.mjs";
 installLoader({
   stubs: {
     "@/lib/i18n": STUBS.i18n,
-    "@/lib/desktop/desktop-bridge": "export const desktopBridge = () => globalThis.__bridge ?? null;",
     "@/components/solar-icons": "export const SolarIcon = () => null;",
     "@/components/avatar": "export const Avatar = () => null; export const AvatarPicker = () => null;",
   },
+  // By path: the section reaches it through use-desktop-bridge's relative import.
+  replace: { "/lib/desktop/desktop-bridge.ts": "export const desktopBridge = () => globalThis.__bridge ?? null;" },
 });
 const window = installDom();
 // The Switch looks for an enclosing form.
@@ -84,24 +85,24 @@ test("a download in progress is a progressbar with its byte counts, not a live r
   await view.unmount();
 });
 
-test("a failed check says so in words and keeps the error text as the tip", async () => {
+test("a failed check says so in words and shows the error text in the row", async () => {
   const bridge = installBridge(updateState());
   const view = await mount();
   await view.act(() => bridge.push(updateState({ status: "error", error: "ENOTFOUND github.com" })));
   const line = status(view.container);
   assert.equal(line.textContent, "Update check failed");
-  assert.equal(line.getAttribute("data-tip"), "ENOTFOUND github.com");
+  assert.ok(view.container.textContent.includes("ENOTFOUND github.com"));
   assert.equal(line.hasAttribute("title"), false);
   await view.unmount();
 });
 
-test("an action that throws reports Update check failed with the message as the tip", async () => {
+test("an action that throws reports Update check failed with the message in the row", async () => {
   installBridge(updateState(), { check: async () => { throw new Error("offline"); } });
   const view = await mount();
   await view.act(async () => { button(view.container, "Check now").click(); await flush(); });
   const line = status(view.container);
   assert.equal(line.textContent, "Update check failed");
-  assert.equal(line.getAttribute("data-tip"), "offline");
+  assert.ok(view.container.textContent.includes("offline"));
   await view.unmount();
 });
 

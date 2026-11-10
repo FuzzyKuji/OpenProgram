@@ -28,8 +28,8 @@
      content. Looks like a 64px-tall row with a 36px circle in it.
 
      Horizontal padding is 16px; in the collapsed left sidebar the left
-     padding is 6px (styles/base/sidebar.css), which places the avatar in
-     the 47px-wide collapsed card, and the right one 26px, so the name
+     padding is 5px (styles/base/sidebar.css), which places the avatar in
+     the 46px-wide collapsed card, and the right one 27px, so the name
      keeps its width. Between the two it moves with the rail:
      same duration and curve as the rail's width, read from the rail's
      shell (--rail-move-duration / --rail-move-easing, set by

@@ -20,9 +20,8 @@ several chats.
 from __future__ import annotations
 
 from openprogram.programs._host.runtime import ToolReturn, function
-
-#: Sources that are chat channels; the tool is hidden everywhere else.
-CHANNEL_SOURCES = frozenset({"telegram", "discord", "slack", "wechat"})
+# The tool is hidden on every other source.
+from openprogram.runtime.execution.foreground import CHANNEL_SOURCES
 
 _DESCRIPTION = (
     "Post a message to the chat this conversation is in (Telegram, Discord, "
@@ -73,8 +72,12 @@ def _chat_send_impl(text: str) -> str:
     if not channel_link.take_send(session_id):
         return (f"Error: already posted {channel_link.sends_per_turn()} "
                 "messages this turn.")
+    from openprogram.runtime.conversation.bound_reply import flattens_tables
+    if flattens_tables(session_id):
+        body = channel_link.flatten_tables(body)
     result = channel_link.post_message(
         turn.channel, turn.account_id, turn.peer_id, body,
+        thread_id=turn.thread_id,
     )
     if not result.ok:
         return f"Error: the {turn.channel} message was not sent ({result.error_kind})."

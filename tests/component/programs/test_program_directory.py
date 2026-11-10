@@ -135,13 +135,11 @@ def test_runtime_files_are_not_program_source(tmp_path, monkeypatch):
 
 def test_the_catalog_and_runtime_live_in_the_programs_directory(tmp_path, monkeypatch):
     from openprogram.state import paths
-    from openprogram.host.sandbox import protected_paths
     from openprogram.programs._host.ui import catalog, catalog_store
 
     monkeypatch.setattr(paths, "get_state_dir", lambda: tmp_path)
     assert catalog_store.path() == tmp_path / "programs" / "catalog.json"
     assert catalog.home() == tmp_path / "programs" / ".runtime"
-    assert protected_paths.application_catalog_path() == str(tmp_path / "programs" / "catalog.json")
 
 
 def _application(directory: Path, app_id: str, *, backend: bool = False) -> Path:

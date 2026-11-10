@@ -15,7 +15,8 @@ chunk 渲染一次). adapter 和上层永远不自己格式化.
 对剩余文本做行内转换, 最后按平台还原代码段 — 代码内容不被加粗/斜体
 规则误伤. 转换器是正则级的 (非完整 markdown parser), 覆盖 bold /
 italic / strike / code / link / heading / blockquote; 更复杂的结构
-(表格、嵌套列表) 原样透传, 各平台以纯文本显示, 不会报错.
+(表格、嵌套列表) 原样透传, 各平台以纯文本显示, 不会报错. 常驻 Agent 的
+出口先过 :func:`flatten_tables`, 表格逐行写成 ``表头: 值 · 表头: 值``.
 """
 from __future__ import annotations
 
@@ -39,8 +40,115 @@ _LINK_RE = re.compile(r"\[([^\]]+)\]\((https?://[^)\s]+)\)")
 _HEADING_RE = re.compile(r"^#{1,6}\s+(.+)$", re.M)
 
 
+# A ```visual block is HTML/SVG only the App can draw (apps/web/lib/chat/
+# markdown/visual.ts); a chat platform gets the text around it. A reply that
+# was nothing but a view says where to see it.
+_VISUAL_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})[ \t]*visual[^\n]*\n[\s\S]*?(?:^ {0,3}\1[ \t]*$|\Z)\n?", re.M)
+VISUAL_ONLY_NOTE = "[A visual was drawn here; open the conversation in OpenProgram to see it.]"
+
+
+def drop_visuals(text: str) -> str:
+    """``text`` without its ```visual blocks (the views only the App draws)."""
+    if "visual" not in text:
+        return text
+    kept = _VISUAL_RE.sub("", text)
+    if kept == text:
+        return text
+    kept = re.sub(r"\n{3,}", "\n\n", kept).strip()
+    return kept or VISUAL_ONLY_NOTE
+
+
+_TABLE_FENCE_RE = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+_TABLE_DELIMITER_RE = re.compile(r"^ {0,3}\|?[ \t]*:?-+:?[ \t]*(?:\|[ \t]*:?-+:?[ \t]*)*\|?[ \t]*$")
+_CELL_SPLIT_RE = re.compile(r"(?<!\\)\|")
+
+
+def _table_cells(line: str) -> list[str]:
+    row = line.strip()
+    row = row[1:] if row.startswith("|") else row
+    row = row[:-1] if row.endswith("|") and not row.endswith("\\|") else row
+    return [cell.strip().replace("\\|", "|") for cell in _CELL_SPLIT_RE.split(row)]
+
+
+def _is_table_start(header: str, delimiter: str) -> bool:
+    return ("|" in header and "|" in delimiter and bool(_TABLE_DELIMITER_RE.match(delimiter.rstrip("\n")))
+            and len(_table_cells(header)) == len(_table_cells(delimiter)))
+
+
+def _blocks(text: str) -> list[tuple[int, int, bool]]:
+    """The Markdown tables and fenced code blocks: ``(start, end, is_table)``
+    offsets of whole lines, the last line's newline included. An unclosed
+    fence runs to the end of ``text``."""
+    lines = text.splitlines(keepends=True)
+    blocks: list[tuple[int, int, bool]] = []
+    fence = ""
+    fence_start = index = offset = 0
+    while index < len(lines):
+        line = lines[index]
+        marker = _TABLE_FENCE_RE.match(line)
+        if fence:
+            if marker and marker.group(1)[0] == fence[0] and len(marker.group(1)) >= len(fence) \
+                    and not line.strip().strip(fence[0]):
+                fence = ""
+                blocks.append((fence_start, offset + len(line), False))
+        elif marker:
+            fence, fence_start = marker.group(1), offset
+        elif index + 1 < len(lines) and _is_table_start(line, lines[index + 1]):
+            last = index + 2
+            while last < len(lines) and "|" in lines[last] and not _TABLE_FENCE_RE.match(lines[last]):
+                last += 1
+            end = offset + sum(len(row) for row in lines[index:last])
+            blocks.append((offset, end, True))
+            index, offset = last, end
+            continue
+        offset += len(line)
+        index += 1
+    if fence:
+        blocks.append((fence_start, offset, False))
+    return blocks
+
+
+def block_spans(text: str) -> list[tuple[int, int]]:
+    """Where ``text`` must not be cut: its tables and fenced code blocks."""
+    return [(start, end) for start, end, _is_table in _blocks(text)]
+
+
+def _flat_row(headers: list[str], cells: list[str]) -> str:
+    parts = []
+    for position, cell in enumerate(cells):
+        header = headers[position] if position < len(headers) else ""
+        if cell:
+            parts.append(f"{header}: {cell}" if header else cell)
+    return " · ".join(parts)
+
+
+def flatten_tables(text: str) -> str:
+    """``text`` with each Markdown table written as one line per row:
+    ``Header: value · Header: value``. Code blocks are left alone."""
+    if "|" not in text:
+        return text
+    kept: list[str] = []
+    position = 0
+    for start, end, is_table in _blocks(text):
+        if not is_table:
+            continue
+        table = text[start:end]
+        rows = table.splitlines()
+        headers = _table_cells(rows[0])
+        flat = [_flat_row(headers, _table_cells(row)) for row in rows[2:]]
+        lines = [line for line in flat if line] or [" · ".join(cell for cell in headers if cell)]
+        if not any(lines):  # a table with no text in it: flat, it would be an empty message
+            continue
+        kept.append(text[position:start])
+        kept.append("\n".join(lines) + ("\n" if table.endswith("\n") else ""))
+        position = end
+    kept.append(text[position:])
+    return "".join(kept)
+
+
 def render(platform: str, text: str) -> str:
     """markdown → ``platform`` 的出站线上格式. 未知平台原样返回."""
+    text = drop_visuals(text)
     fn = _RENDERERS.get(platform)
     return fn(text) if fn else text
 
@@ -48,7 +156,7 @@ def render(platform: str, text: str) -> str:
 def strip_markdown(text: str) -> str:
     """markdown → 纯文本. WeChat 的常规输出, 也是 telegram HTML 解析
     失败时 poster 兜底重发用的形态."""
-    return _render_plain(text)
+    return _render_plain(drop_visuals(text))
 
 
 # ---------------------------------------------------------------------------

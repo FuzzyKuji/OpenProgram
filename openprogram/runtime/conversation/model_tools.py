@@ -157,6 +157,13 @@ def resolve_model(profile: dict, override: Optional[str] = None):
     _raise_model_unavailable(requested)
 
 
+NO_MODEL_CONFIGURED = (
+    "No model is configured. Pick a model from the model "
+    "selector (or enable one in Settings → Providers) and send "
+    "the message again."
+)
+
+
 def _raise_model_unavailable(requested) -> None:
     from openprogram.models.providers.utils.errors import ErrorReason, LLMError
     if requested:
@@ -167,11 +174,7 @@ def _raise_model_unavailable(requested) -> None:
             "Providers, or pick another model."
         )
     else:
-        msg = (
-            "No model is configured. Pick a model from the model "
-            "selector (or enable one in Settings → Providers) and send "
-            "the message again."
-        )
+        msg = NO_MODEL_CONFIGURED
     raise LLMError(message=msg, reason=ErrorReason.INVALID_REQUEST, retryable=False)
 
 
@@ -303,7 +306,7 @@ def resolve_tools(
             # whatever the enabled/toolset resolves to (it isn't in
             # DEFAULT_TOOLS, so it must be added explicitly). Required for the
             # "store intent, not snapshot" design — see
-            # docs/reference/design/runtime/agent-configuration/tool-toggle-management.md §5.1 改 C.
+            # docs/reference/design/runtime/agent-configuration/tool-toggle-management.html §5.1 改 C.
             want_web_search = bool(wanted.get("web_search"))
 
             def _overlay_web_search(tools):
@@ -329,10 +332,7 @@ def resolve_tools(
                     ]
                 return _apply_profile_gates(_overlay_web_search(resolved))
             if mode == "selected" or isinstance(preset, str):
-                if isinstance(preset, str):
-                    names = _access_preset_names(preset)
-                else:
-                    names = [str(n) for n in allowed_patterns]
+                names = _selected_tool_names(wanted)
                 resolved = agent_tools(
                     names=names, source=source, only_available=True
                 ) or []
@@ -389,6 +389,30 @@ def resolve_tools(
     except Exception:
         _apply_profile_gates([])
         return None
+
+
+def _selected_tool_names(policy: dict) -> list[str]:
+    """The names a selected tool policy or its Access preset lists."""
+    preset = policy.get("preset")
+    if isinstance(preset, str):
+        return _access_preset_names(preset)
+    return [str(name) for name in policy.get("allowed") or []]
+
+
+def agent_web_search_choice(policy: object) -> Optional[bool]:
+    """Whether an Agent's tool policy settles web search, as ``resolve_tools`` reads it.
+
+    The explicit switch wins; otherwise a selected list decides by whether it
+    names the tool. ``None`` leaves it to the policy's remaining rules.
+    """
+    if not isinstance(policy, dict):
+        return None
+    if isinstance(policy.get("web_search"), bool):
+        return policy["web_search"]
+    mode = policy.get("mode")
+    if mode == "selected" or (mode != "automatic" and isinstance(policy.get("preset"), str)):
+        return "web_search" in _selected_tool_names(policy)
+    return None
 
 
 def _access_preset_names(name: str) -> list[str]:

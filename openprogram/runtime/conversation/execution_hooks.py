@@ -34,8 +34,17 @@ def _agent_activator(executions: Any, service: Any):
 
     driver = AgentProductionDriver(
         executions, control_service=service, event_sink=emit_ws_frame,
+        run_ended=_run_ended,
     )
     return driver.activate
+
+
+def _run_ended(executions: Any, execution: Any, result: Any) -> None:
+    from openprogram.runtime.conversation.always_on import handoff
+    from openprogram.runtime.scheduler import run_finish
+
+    handoff.run_ended(executions, execution, result)
+    run_finish.finish_resumed(executions, execution, result)
 
 
 def _start_recovery_turn(store: Any, execution: Any, event: Any) -> str | None:
@@ -87,6 +96,22 @@ def _settle_terminal(executions: Any, execution: Any) -> None:
     chat.after_terminal(executions, execution)
 
 
+def _close_ownerless_run(executions: Any, execution: Any) -> None:
+    from openprogram.runtime.conversation.always_on import handoff
+    from openprogram.runtime.execution.model import ExecutionStatus
+    from openprogram.runtime.scheduler import run_finish
+
+    handoff.execution_closed(executions, execution)
+    if execution.status is not ExecutionStatus.CANCELLED:
+        run_finish.finish_resumed(executions, execution, None)
+
+
+def _restart_abandoned(executions: Any, execution: Any) -> None:
+    from openprogram.runtime.conversation.always_on import handoff
+
+    handoff.restart_abandoned(executions, execution)
+
+
 class _SessionGoals:
     """``execution.hooks.SessionGoals`` over the Goal tool."""
 
@@ -103,7 +128,9 @@ class _SessionGoals:
 
 hooks.register("agent_activator", _agent_activator)
 hooks.register("recovery_turn_starter", _start_recovery_turn)
+hooks.register("restart_abandoned", _restart_abandoned)
 hooks.register("permission_wait_reconciler", _reconcile_permission_waits)
 hooks.register("live_owner_signals", _LiveOwnerSignals())
 hooks.register("terminal_settler", _settle_terminal)
+hooks.register("ownerless_run_closer", _close_ownerless_run)
 hooks.register("session_goals", _SessionGoals())

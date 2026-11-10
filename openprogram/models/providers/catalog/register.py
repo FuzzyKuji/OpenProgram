@@ -22,7 +22,7 @@ class _StreamFnProvider:
         self._stream_simple = stream_simple_fn
         self.supports_idempotency_key = supports_idempotency_key
         # The request builder adds the provider's own server-side web search
-        # tool when ``web_search=True`` (docs/reference/design/providers/web-search.md).
+        # tool when ``web_search=True`` (docs/reference/design/providers/web-search.html).
         self.supports_web_search = supports_web_search
 
     def stream(self, model, context, options=None):

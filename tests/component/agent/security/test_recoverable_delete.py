@@ -714,19 +714,24 @@ def test_wheel_contains_both_runtime_shims(tmp_path):
         "pyproject.toml", "setup.py", "README.md", "LICENSE", "openprogram/__init__.py",
         "openprogram/interfaces/server/__init__.py", "openprogram/interfaces/cli/__init__.py",
         "openprogram/host/__init__.py",
-        "openprogram/host/sandbox/__init__.py", "openprogram/host/sandbox/shims/sitecustomize.py",
-        "openprogram/host/sandbox/shims/node_preload.cjs",
         "openprogram/programs/__init__.py",
         "openprogram/programs/applications/__init__.py",
         "openprogram/programs/applications/browser/__init__.py",
         "openprogram/programs/applications/browser/web_use/__init__.py",
         "openprogram/programs/applications/browser/web_use/playwright_exact_page_mcp.cjs",
-        "openprogram/host/sandbox/recoverable_delete.py",
     ):
         destination = project / relative
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(repo / relative, destination)
     shutil.copytree(repo / "openprogram/host/_platform", project / "openprogram/host/_platform")
+    # The shim imports the sandbox package, so the whole package is built: a
+    # hand-kept file list goes stale each time the package gains a module.
+    shutil.copytree(
+        repo / "openprogram/host/sandbox",
+        project / "openprogram/host/sandbox",
+        dirs_exist_ok=True,
+        ignore=shutil.ignore_patterns("__pycache__"),
+    )
     # Profile state an older installation left beside the package must not ship.
     (project / "openprogram/webui").mkdir()
     (project / "openprogram/webui/functions_meta.json").write_text(

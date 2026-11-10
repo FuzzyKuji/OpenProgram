@@ -12,6 +12,8 @@ from typing import AsyncGenerator, Awaitable, Callable
 
 from ..catalog.api_registry import get_api_provider
 from .budget import BudgetedRequest
+from ..utils import request_repair
+from .first_token import FirstToken
 from openprogram.models.usage.request import RequestReceipt
 from ..settings.env_api_keys import resolve_provider_key
 from ..types import (
@@ -250,7 +252,8 @@ async def _metered(stream_fn, model: Model, context, opts, budget, receipt=None)
         # Once invoked, absence of a receipt cannot prove the request was free.
         if receipt is not None:
             receipt.start()
-        events = stream_fn(model, context, opts)
+        context = request_repair.prepared(model, context)
+        events = request_repair.repairing(stream_fn(model, context, opts), stream_fn, model, context, opts)
         if budget is not None and receipt is None:
             budget.start()
     except BaseException:
@@ -260,8 +263,11 @@ async def _metered(stream_fn, model: Model, context, opts, budget, receipt=None)
             receipt.release()
         raise
 
+    first_token = FirstToken()
     try:
         async for event in events:
+            first_token.see(event)
+            first_token.stamp(event)
             yield event
     except BaseException:
         import asyncio

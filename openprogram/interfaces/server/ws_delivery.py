@@ -8,7 +8,7 @@ import json
 import time
 import uuid
 from dataclasses import dataclass
-from typing import Any, Literal
+from typing import Any, Callable, Literal
 
 from starlette.websockets import WebSocketDisconnect
 
@@ -63,7 +63,7 @@ _REPLACEABLE_TYPES = {
 class _Frame:
     payload: str
     size: int
-    kind: Literal["critical", "append", "replace", "snapshot", "control"]
+    kind: Literal["critical", "append", "replace", "snapshot", "control", "transcript"]
     key: tuple[str, ...]
     enqueued_at: float
     waiters: list[asyncio.Future[None]]
@@ -107,6 +107,10 @@ def _frame_metadata(payload: str) -> tuple[str, tuple[str, ...]]:
     if request_id:
         return "critical", (frame_type, "reply", str(request_id))
 
+    if frame_type == "transcript_update":
+        return "transcript", (frame_type, session_id)
+    if frame_type == "branches_changed":
+        return "replace", (frame_type, session_id)
     if frame_type == "pong":
         return "control", ("control", "pong")
     if frame_type == "job_status":
@@ -180,6 +184,23 @@ def _frame_metadata(payload: str) -> tuple[str, tuple[str, ...]]:
     return "critical", (frame_type or "unknown", session_id, entity_id)
 
 
+def _text_frames_continue(old_data: dict, new_data: dict) -> bool:
+    """Whether a text frame starts exactly where the one before it ends.
+
+    Merging across a gap would hide the gap from the offset check.
+    """
+    if "offset" not in old_data and "offset" not in new_data:
+        return True
+    if "offset" not in old_data or "offset" not in new_data:
+        return False
+    text = str(old_data["event"].get("text") or "")
+    return (
+        old_data.get("row_id") == new_data.get("row_id")
+        and old_data.get("item_id") == new_data.get("item_id")
+        and int(new_data["offset"]) == int(old_data["offset"]) + len(text.encode("utf-16-le", "surrogatepass")) // 2
+    )
+
+
 def _merge_adjacent(previous: _Frame, current: _Frame) -> _Frame | None:
     if previous.kind != "append" or previous.key != current.key:
         return None
@@ -206,6 +227,8 @@ def _merge_adjacent(previous: _Frame, current: _Frame) -> _Frame | None:
         else:
             old_event = old_data["event"]
             new_event = new_data["event"]
+            if not _text_frames_continue(old_data, new_data):
+                return None
             old_event["text"] = str(old_event.get("text") or "") + str(
                 new_event.get("text") or ""
             )
@@ -220,6 +243,114 @@ def _merge_adjacent(previous: _Frame, current: _Frame) -> _Frame | None:
         enqueued_at=previous.enqueued_at,
         waiters=[*previous.waiters, *current.waiters],
     )
+
+
+MAX_PARKED_FRAMES = 256
+
+
+_V3_DROPPED_STREAM_EVENTS = {"tool_use", "tool_result"}
+_V3_DROPPED_RESPONSES = {"tree_update", "user_message"}
+
+
+def frame_is_for_older_clients(ws: Any, payload: str) -> bool:
+    """A row-writing frame a version 3 socket now learns from transcript updates."""
+    if getattr(ws, "_history_protocol", 0) != 3:
+        return False
+    if '"chat_response"' not in payload:
+        return False
+    try:
+        envelope = json.loads(payload)
+    except ValueError:
+        return False
+    if not isinstance(envelope, dict):
+        return False
+    data = envelope.get("data")
+    if envelope.get("type") != "chat_response" or not isinstance(data, dict):
+        return False
+    if data.get("type") in _V3_DROPPED_RESPONSES:
+        return True
+    event = data.get("event")
+    return data.get("type") == "stream_event" and isinstance(event, dict) and event.get("type") in _V3_DROPPED_STREAM_EVENTS
+
+
+def is_row_writing_frame(envelope: dict) -> bool:
+    """A frame a transcript read must not be overtaken by."""
+    frame_type = envelope.get("type")
+    if frame_type in ("transcript_update", "transcript_gap"):
+        return True
+    data = envelope.get("data")
+    if frame_type != "chat_response" or not isinstance(data, dict):
+        return False
+    return data.get("type") == "stream_event"
+
+
+class ReadParking:
+    """Holds a session's row-writing frames while a read of it is being sent."""
+
+    def __init__(self, deliver: Callable[[str], Any]) -> None:
+        self._deliver = deliver
+        self._depth: dict[str, int] = {}
+        self._frames: dict[str, list[_Frame]] = {}
+        self._overflowed: set[str] = set()
+
+    def begin(self, session_id: str) -> Callable[[], None]:
+        """Park from now; the returned call ends this read, once."""
+        self._depth[session_id] = self._depth.get(session_id, 0) + 1
+        ended = False
+
+        def end() -> None:
+            nonlocal ended
+            if not ended:
+                ended = True
+                self._end(session_id)
+
+        return end
+
+    def offer(self, payload: str) -> bool:
+        """True when this frame is parked instead of sent."""
+        if not self._depth:
+            return False
+        try:
+            envelope = json.loads(payload)
+        except ValueError:
+            return False
+        if not isinstance(envelope, dict) or not is_row_writing_frame(envelope):
+            return False
+        data = envelope.get("data") or {}
+        session_id = str(data.get("session_id") or envelope.get("session_id") or "")
+        if self._depth.get(session_id, 0) <= 0:
+            return False
+        kind, key = _frame_metadata(payload)
+        frame = _Frame(payload, len(payload.encode("utf-8")), kind, key, time.monotonic(), [])  # type: ignore[arg-type]
+        parked = self._frames.setdefault(session_id, [])
+        merged = _merge_adjacent(parked[-1], frame) if parked and kind == "append" else None
+        if merged is not None:
+            parked[-1] = merged
+        elif session_id not in self._overflowed:
+            parked.append(frame)
+            if len(parked) > MAX_PARKED_FRAMES:
+                self._overflowed.add(session_id)
+                parked.clear()
+        return True
+
+    def _end(self, session_id: str) -> None:
+        depth = self._depth.get(session_id, 0) - 1
+        if depth > 0:
+            self._depth[session_id] = depth
+            return
+        self._depth.pop(session_id, None)
+        frames = self._frames.pop(session_id, [])
+        if session_id in self._overflowed:
+            self._overflowed.discard(session_id)
+            self._deliver(json.dumps({"type": "transcript_gap", "data": {"session_id": session_id}}))
+            return
+        for frame in frames:
+            self._deliver(frame.payload)
+
+    def clear(self) -> None:
+        self._depth.clear()
+        self._frames.clear()
+        self._overflowed.clear()
 
 
 class QueuedWebSocket:
@@ -240,6 +371,8 @@ class QueuedWebSocket:
         "send_failures",
         "disconnect_reason",
         "recovery_mode",
+        "_parking",
+        "_transcript_gaps",
     )
 
     def __init__(self, websocket: Any, loop: asyncio.AbstractEventLoop) -> None:
@@ -257,6 +390,8 @@ class QueuedWebSocket:
         object.__setattr__(self, "send_failures", 0)
         object.__setattr__(self, "disconnect_reason", None)
         object.__setattr__(self, "recovery_mode", None)
+        object.__setattr__(self, "_parking", ReadParking(self._enqueue))
+        object.__setattr__(self, "_transcript_gaps", set())
 
     def __getattr__(self, name: str) -> Any:
         return getattr(self._raw_websocket, name)
@@ -274,7 +409,7 @@ class QueuedWebSocket:
             )
 
     async def send_text(self, payload: str) -> None:
-        if getattr(self, "_bounded_history", False):
+        if getattr(self, "_history_protocol", 0) == 3:
             try:
                 envelope = json.loads(payload)
                 data = envelope.get("data") or {}
@@ -284,13 +419,13 @@ class QueuedWebSocket:
                     payload = json.dumps(envelope, ensure_ascii=False, default=str)
             except (ValueError, AttributeError):
                 pass
-        if (getattr(self, "_history_protocol", 0) == 1
+        if (getattr(self, "_history_protocol", 0) == 3
                 and len(payload.encode("utf-8")) > 128 * 1024):
             try:
                 kind = json.loads(payload).get("type")
             except (ValueError, AttributeError):
                 kind = None
-            if kind in {"session_loaded", "session_history_page", "branches_list", "full_tool_output"}:
+            if kind in {"session_loaded", "session_history_page", "sub_agent_transcript", "branches_list", "full_tool_output"}:
                 transfer = uuid.uuid4().hex
                 for index, start in enumerate(range(0, len(payload), 16 * 1024)):
                     end = start + 16 * 1024
@@ -310,6 +445,10 @@ class QueuedWebSocket:
             if not waiter.done():
                 waiter.set_exception(WebSocketDisconnect(1013))
         await waiter
+
+    def park_read(self, session_id: str) -> Callable[[], None]:
+        """Park this session's row frames; call the result when the read is queued."""
+        return self._parking.begin(session_id)
 
     def enqueue_text_threadsafe(self, payload: str) -> bool:
         if self._closing or self._loop.is_closed():
@@ -352,6 +491,14 @@ class QueuedWebSocket:
     ) -> bool:
         if self._closing:
             return False
+        if self._parking.offer(payload):
+            if waiter is not None and not waiter.done():
+                waiter.set_result(None)
+            return True
+        if frame_is_for_older_clients(self, payload):
+            if waiter is not None and not waiter.done():
+                waiter.set_result(None)
+            return True
         kind, key = _frame_metadata(payload)
         frame = _Frame(
             payload=payload,
@@ -361,6 +508,9 @@ class QueuedWebSocket:
             enqueued_at=time.monotonic(),
             waiters=[waiter] if waiter is not None else [],
         )
+
+        if kind == "transcript":
+            return self._enqueue_transcript(frame)
 
         if kind == "append" and self._queue:
             merged = _merge_adjacent(self._queue[-1], frame)
@@ -424,6 +574,41 @@ class QueuedWebSocket:
         self._wake.set()
         return True
 
+    def _enqueue_transcript(self, frame: _Frame) -> bool:
+        session_id = frame.key[1]
+        if session_id in self._transcript_gaps:
+            self.dropped += 1
+            self._resolve(frame)
+            return True
+        if (
+            self._total_frames() >= NORMAL_QUEUE_FRAMES
+            or self._total_bytes() + frame.size > NORMAL_QUEUE_BYTES
+        ):
+            self._resolve(frame)
+            self._collapse_to_gap(session_id)
+            return True
+        self._queue.append(frame)
+        self._queue_bytes += frame.size
+        self._wake.set()
+        return True
+
+    def _collapse_to_gap(self, session_id: str) -> None:
+        """Replace a session's queued updates with the one frame that makes it read."""
+        kept: list[_Frame] = []
+        for frame in self._queue:
+            if frame.kind == "transcript" and frame.key[1] == session_id:
+                self._queue_bytes -= frame.size
+                self.dropped += 1
+                self._resolve(frame)
+            else:
+                kept.append(frame)
+        self._queue[:] = kept
+        if session_id in self._transcript_gaps:
+            return
+        self._transcript_gaps.add(session_id)
+        payload = json.dumps({"type": "transcript_gap", "data": {"session_id": session_id}})
+        self._enqueue(payload)
+
     def _evict_replaceable_for(self, incoming_bytes: int) -> None:
         index = 0
         while (
@@ -433,6 +618,9 @@ class QueuedWebSocket:
             frame = self._queue[index]
             if frame.kind == "critical":
                 index += 1
+                continue
+            if frame.kind == "transcript":
+                self._collapse_to_gap(frame.key[1])
                 continue
             self._queue_bytes -= frame.size
             del self._queue[index]
@@ -471,6 +659,8 @@ class QueuedWebSocket:
                 while self._queue:
                     frame = self._queue.pop(0)
                     self._queue_bytes -= frame.size
+                    if frame.key[:1] == ("transcript_gap",):
+                        self._transcript_gaps.discard(frame.key[1])
                     self._inflight = frame
                     try:
                         await self._raw_websocket.send_text(frame.payload)
@@ -504,8 +694,7 @@ class QueuedWebSocket:
             return
 
     async def stop(self) -> None:
-        from openprogram.interfaces.server.session_history import close_snapshots
-        close_snapshots(self)
+        self._parking.clear()
         self._closing = True
         for frame in self._queue:
             self._reject(frame, 1001)

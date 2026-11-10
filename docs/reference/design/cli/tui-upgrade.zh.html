@@ -1,0 +1,63 @@
+<title>TUI 转录渲染</title>
+<meta name="description" content="Ink TUI 如何渲染工具调用、折叠输出、声明命令和快捷键、呈现运行中的提问。">
+<h1>TUI 转录渲染</h1>
+
+<p>工具调用折叠但不丢信息，Ctrl+O 显示全部，diff 结构化，Agent 忙时消息排队，快捷键可发现、可覆盖。运行中提问：<a href="../runtime/operations/user-input-requests.zh.html">用户输入请求</a>。</p>
+
+<h2 id="transcript">转录</h2>
+<pre translate="no" tabindex="0">⏺ Read(src/app.py)
+  ⎿ Read 52 lines
+⏺ Edit(src/app.py)
+  ⎿ Added 5 lines, removed 2 lines
+    12 + new line
+  … +14 lines (ctrl+o to expand)
+✻ verb… (esc to interrupt · 42s · ↓ 3.2k tokens)</pre>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">元素</th><th scope="col">设计</th></tr></thead>
+<tbody>
+<tr><th scope="row">工具外壳</th><td>每个工具一组渲染 hook（use-line、progress、result、error），共用一个外壳。圆点：排队暗、运行闪、完成绿、出错红。粗体工具名、括号内参数摘要、结果缩进在 <code translate="no">⎿</code> 下。两个字形，没有框</td></tr>
+<tr><th scope="row">截断</th><td>3 行，然后 <code translate="no">… +N lines (ctrl+o to expand)</code>。只隐藏一行时直接显示。超大输出先按字符预截断，估算剩余行数</td></tr>
+<tr><th scope="row">摘要</th><td>量化：<code translate="no">Read 52 lines</code>、<code translate="no">Added 5 lines, removed 2 lines</code> 加 diff、<code translate="no">Found 8 files</code>、<code translate="no">Done (12 calls · 48k tokens · 2m 10s)</code></td></tr>
+<tr><th scope="row">Ctrl+O</th><td>独立 Screen：冻结消息列表，展开重渲染，页脚有退出提示。其中 Ctrl+E 显示全部不截断。可作全局键：流控用 Ctrl+S、Ctrl+Q</td></tr>
+<tr><th scope="row">Spinner</th><td>一条合成行，随宽度渐进取舍</td></tr>
+<tr><th scope="row">忙时输入</th><td>输入进入队列（暗色，在输入框上方），↑ 取回编辑，轮次之间发出</td></tr>
+<tr><th scope="row">Diff</th><td>自写：行号、增删着色、三行上下文；用于编辑结果和 <code translate="no">/diff</code></td></tr>
+<tr><th scope="row">Markdown</th><td>marked-terminal，按流式状态、文本和宽度对每个文本段 memoize；cell-grid 渲染器每帧重绘</td></tr>
+</tbody>
+</table>
+<p class="note">信息密度学 Claude Code，下面的交互学 opencode。保留 vendored hermes-ink 渲染器：已有鼠标跟踪和 ScrollBox，换 OpenTUI 没有收益。</p>
+
+<h2 id="interaction">命令和交互</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">元素</th><th scope="col">设计</th></tr></thead>
+<tbody>
+<tr><th scope="row">命令注册表</th><td>每个命令声明一次（name、title、category、keybind、slash-name、enabled），驱动快捷键、Ctrl+K、斜杠命令和页脚提示，注册表和 handler 不会走样</td></tr>
+<tr><th scope="row">快捷键表</th><td>默认值和描述声明一次，生成配置 schema。用户覆盖放在 <code translate="no">~/.openprogram</code>。未知键报错；<code translate="no">"none"</code> 禁用。<code translate="no">?</code> 帮助来自同一张表</td></tr>
+<tr><th scope="row">提问</th><td>提问和审批占据输入槽而不是弹窗；转录仍可滚动，esc 只有一个含义</td></tr>
+<tr><th scope="row">危险操作</th><td>picker 的破坏性动作在行内确认：再按一次，行变红。没有嵌套确认层</td></tr>
+<tr><th scope="row">Picker</th><td>从 <code translate="no">pickerKind</code> 枚举逐个迁到 ModalProvider 和 Form 组件</td></tr>
+</tbody>
+</table>
+
+<h2 id="server-support">服务端支持</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">改动</th><th scope="col">原因</th></tr></thead>
+<tbody>
+<tr><th scope="row">工具流事件带 <code translate="no">call_id</code></th><td>结果按 id 匹配，并发同名调用归属正确</td></tr>
+<tr><th scope="row"><code translate="no">load_session</code> 回复带工具块</th><td><code translate="no">/resume</code> 恢复工具历史</td></tr>
+</tbody>
+</table>
+<p class="note">两者都涉及 <code translate="no">_event_parsing.py</code> 和 dispatcher 事件发送，与事件总线工作共用。</p>
+
+<h2 id="implementation-status">实现状态</h2>
+<table class="stack">
+<thead><tr><th scope="col">优先级</th><th scope="col">项目</th><th scope="col">状态</th></tr></thead>
+<tbody>
+<tr><th scope="row">基础</th><td>hermes-ink、四套主题、BottomBar、Ctrl+K、自动建议、<code translate="no">@file</code>、按会话草稿、账户和 channel 流程、Markdown memoize</td><td>已有</td></tr>
+<tr><th scope="row">基础</th><td>运行中决策：FIFO <code translate="no">pendingDecisions</code>，队首作为 <code translate="no">question</code> picker 占据输入槽。Shift+Tab 可到四种权限模式。<code translate="no">/keybindings</code> 列出快捷键</td><td>已有</td></tr>
+<tr><th scope="row">P0</th><td>工具外壳和按工具渲染、3 行截断（<code translate="no">Turn.tsx</code> 在 6 行折叠且无法展开）、Ctrl+O 屏、diff 组件（<code translate="no">/diff</code> 打印原始文本）</td><td>未实现</td></tr>
+<tr><th scope="row">P1</th><td>消息排队、合成 spinner 行、注册表统一、快捷键表和覆盖、<code translate="no">?</code> 帮助、行内危险确认</td><td>未实现</td></tr>
+<tr><th scope="row">P2</th><td>流事件的 <code translate="no">call_id</code>（结果仍按名称匹配）、恢复时的工具块、picker 迁移（<code translate="no">pickerKind</code> 与 ModalProvider 并存）</td><td>未实现</td></tr>
+</tbody>
+</table>
+<p class="note">P0 验收：混合工具的运行读起来是两行一条，Ctrl+O 显示全部，编辑显示彩色 diff，长 bash 输出折叠且 +N 准确。</p>

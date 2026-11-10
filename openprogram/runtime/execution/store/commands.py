@@ -3,10 +3,6 @@ from __future__ import annotations
 
 import hashlib
 
-
-
-import sqlite3
-
 import time
 
 
@@ -28,6 +24,7 @@ from .shared import (
     ExecutionConflict,
     _fingerprint,
 )
+from .run_tables import TableHandle
 
 class CommandsOperations:
     def accept_command(
@@ -102,7 +99,7 @@ class CommandsOperations:
         supersede_kinds: Collection[CommandKind] = (),
         supersede_code: str = "superseded",
         apply_command: bool = False,
-        after_transition: Callable[[sqlite3.Connection, ExecutionRecord], None] | None = None,
+        after_transition: Callable[[TableHandle, ExecutionRecord], None] | None = None,
     ) -> tuple[ControlCommand, ExecutionRecord, bool]:
         with self._transaction() as connection:
             command, duplicate = self._accept_command(
@@ -127,21 +124,13 @@ class CommandsOperations:
             if after_transition is not None:
                 after_transition(connection, execution)
             if supersede_kinds:
-                values = tuple(kind.value for kind in supersede_kinds)
-                placeholders = ",".join("?" for _ in values)
-                rows = connection.execute(
-                    "SELECT command_id, status FROM commands "
-                    "WHERE execution_id = ? AND command_id != ? "
-                    "AND status IN (?, ?) "
-                    f"AND kind IN ({placeholders})",
-                    (
-                        execution_id,
-                        command_id,
-                        CommandStatus.ACCEPTED.value,
-                        CommandStatus.APPLYING.value,
-                        *values,
-                    ),
-                ).fetchall()
+                rows = connection.rows(
+                    "commands",
+                    execution_id=execution_id,
+                    status=(CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value),
+                    kind=tuple(superseded.value for superseded in supersede_kinds),
+                    where=lambda row: row["command_id"] != command_id,
+                )
                 for row in rows:
                     self._transition_command(
                         connection,
@@ -205,7 +194,7 @@ class CommandsOperations:
             ), True
 
     def _steer_delivered(
-        self, connection: sqlite3.Connection, execution: ExecutionRecord, command_id: str,
+        self, connection: TableHandle, execution: ExecutionRecord, command_id: str,
     ) -> tuple[str, bool]:
         """The steer's user message id and whether the turn's branch holds it."""
         from openprogram.runtime.context.session_db import default_db
@@ -213,10 +202,7 @@ class CommandsOperations:
         message_id = hashlib.sha256(
             f"{execution.session_id}:{command_id}".encode()
         ).hexdigest()[:24]
-        turn_input = connection.execute(
-            "SELECT assistant_message_id FROM execution_inputs WHERE execution_id = ?",
-            (execution.execution_id,),
-        ).fetchone()
+        turn_input = connection.get("execution_inputs", execution.execution_id)
         return message_id, bool(turn_input) and default_db().has_persisted_ancestor(
             execution.session_id, message_id, str(turn_input["assistant_message_id"]),
         )
@@ -229,19 +215,15 @@ class CommandsOperations:
         statuses: Collection[CommandStatus] = (),
         kinds: Collection[CommandKind] = (),
     ) -> list[ControlCommand]:
-        query = "SELECT * FROM commands WHERE execution_id = ?"
-        values: list[Any] = [execution_id]
+        filters: dict[str, Any] = {}
         if statuses:
-            status_values = tuple(status.value for status in statuses)
-            query += " AND status IN (" + ",".join("?" for _ in status_values) + ")"
-            values.extend(status_values)
+            filters["status"] = [status.value for status in statuses]
         if kinds:
-            kind_values = tuple(kind.value for kind in kinds)
-            query += " AND kind IN (" + ",".join("?" for _ in kind_values) + ")"
-            values.extend(kind_values)
-        query += " ORDER BY submitted_at, command_id"
+            filters["kind"] = [kind.value for kind in kinds]
         with closing(self._connect()) as connection:
-            return [self._command(row) for row in connection.execute(query, values)]
+            return [self._command(row) for row in connection.rows(
+                "commands", execution_id=execution_id, order=("submitted_at", "command_id"), **filters,
+            )]
 
 
     def transition_command(
@@ -268,7 +250,7 @@ class CommandsOperations:
 
     def _accept_command(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         *,
         command_id: str,
         execution_id: str,
@@ -287,9 +269,7 @@ class CommandsOperations:
                 "actor": dict(actor),
             }
         )
-        existing_row = connection.execute(
-            "SELECT * FROM commands WHERE command_id = ?", (command_id,)
-        ).fetchone()
+        existing_row = connection.get("commands", command_id)
         if existing_row is not None:
             if existing_row["fingerprint"] != fingerprint:
                 raise CommandConflict(
@@ -313,18 +293,12 @@ class CommandsOperations:
         ):
             validate_command(kind, execution.status, execution.capabilities)
         if kind in {CommandKind.CONTINUE, CommandKind.STEP}:
-            pending = connection.execute(
-                "SELECT command_id FROM commands WHERE execution_id = ? "
-                "AND kind IN (?, ?) AND status IN (?, ?) LIMIT 1",
-                (
-                    execution_id,
-                    CommandKind.CONTINUE.value,
-                    CommandKind.STEP.value,
-                    CommandStatus.ACCEPTED.value,
-                    CommandStatus.APPLYING.value,
-                ),
-            ).fetchone()
-            if pending is not None:
+            if connection.exists(
+                "commands",
+                execution_id=execution_id,
+                kind=(CommandKind.CONTINUE.value, CommandKind.STEP.value),
+                status=(CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value),
+            ):
                 raise CommandConflict(
                     "continuation_pending",
                     "a continue or step command already owns this execution version",
@@ -341,28 +315,21 @@ class CommandsOperations:
             submitted_at=now,
             updated_at=now,
         )
-        connection.execute(
-            "INSERT INTO commands "
-            "(command_id, execution_id, expected_version, kind, payload_json, "
-            "actor_json, fingerprint, status, submitted_at, updated_at, "
-            "result_version, rejection_code, result_json) VALUES "
-            "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-            (
-                command.command_id,
-                command.execution_id,
-                command.expected_version,
-                command.kind.value,
-                _json(command.payload),
-                _json(command.actor),
-                fingerprint,
-                command.status.value,
-                command.submitted_at,
-                command.updated_at,
-                command.result_version,
-                command.rejection_code,
-                _json(command.result_json),
-            ),
-        )
+        connection.insert("commands", {
+            "command_id": command.command_id,
+            "execution_id": command.execution_id,
+            "expected_version": command.expected_version,
+            "kind": command.kind.value,
+            "payload_json": _json(command.payload),
+            "actor_json": _json(command.actor),
+            "fingerprint": fingerprint,
+            "status": command.status.value,
+            "submitted_at": command.submitted_at,
+            "updated_at": command.updated_at,
+            "result_version": command.result_version,
+            "rejection_code": command.rejection_code,
+            "result_json": _json(command.result_json),
+        })
         self._append_event(
             connection,
             execution_id=execution_id,
@@ -395,7 +362,7 @@ class CommandsOperations:
 
     def _transition_execution(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         execution_id: str,
         *,
         expected_version: int,
@@ -419,38 +386,19 @@ class CommandsOperations:
         now = time.time()
         terminal_at = now if target in TERMINAL_EXECUTION_STATUSES else None
         new_version = expected_version + 1
+        changes: dict[str, Any] = {
+            "status": target.value,
+            "status_version": new_version,
+            "reason_code": reason_code,
+            "updated_at": now,
+            "terminal_at": terminal_at,
+        }
         if clear_owner:
-            updated = connection.execute(
-                "UPDATE executions SET status = ?, status_version = ?, "
-                "reason_code = ?, updated_at = ?, terminal_at = ?, "
-                "current_attempt_id = NULL, owner_lease_json = '{}' "
-                "WHERE execution_id = ? AND status_version = ?",
-                (
-                    target.value,
-                    new_version,
-                    reason_code,
-                    now,
-                    terminal_at,
-                    execution_id,
-                    expected_version,
-                ),
-            )
-        else:
-            updated = connection.execute(
-                "UPDATE executions SET status = ?, status_version = ?, "
-                "reason_code = ?, updated_at = ?, terminal_at = ? "
-                "WHERE execution_id = ? AND status_version = ?",
-                (
-                    target.value,
-                    new_version,
-                    reason_code,
-                    now,
-                    terminal_at,
-                    execution_id,
-                    expected_version,
-                ),
-            )
-        if updated.rowcount != 1:
+            changes.update(current_attempt_id=None, owner_lease_json="{}")
+        updated = connection.update(
+            "executions", changes, execution_id=execution_id, status_version=expected_version,
+        )
+        if updated != 1:
             raise ExecutionConflict("stale_version", "execution changed concurrently")
         if target in TERMINAL_EXECUTION_STATUSES or (
             target is ExecutionStatus.RECONCILIATION_REQUIRED and clear_owner
@@ -458,18 +406,16 @@ class CommandsOperations:
             # Admission and owner closure share this transaction. A steer
             # arriving after the last safe point must get a definitive receipt,
             # including when unresolved effects end the attempt for reconciliation.
-            pending_steers = connection.execute(
-                "SELECT command_id, status FROM commands WHERE execution_id = ? "
-                "AND kind = ? AND status IN (?, ?) "
-                "AND EXISTS (SELECT 1 FROM execution_agent_turn_inputs "
-                "WHERE execution_id = commands.execution_id)",
-                (execution_id, CommandKind.STEER.value,
-                 CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value),
-            ).fetchall()
+            pending_steers = connection.rows(
+                "commands",
+                execution_id=execution_id,
+                kind=CommandKind.STEER.value,
+                status=(CommandStatus.ACCEPTED.value, CommandStatus.APPLYING.value),
+            ) if connection.exists("execution_agent_turn_inputs", execution_id=execution_id) else []
             for steer in pending_steers:
                 status = CommandStatus(steer["status"])
                 # Agent messages live in the session Git store. Recover a
-                # completed branch-linked write whose SQL receipt failed (including
+                # completed branch-linked write whose receipt failed (including
                 # a rolled-back ACCEPTED -> APPLYING transition on resume).
                 # Delivery holds this same transaction lock around the write.
                 message_id, delivered = self._steer_delivered(
@@ -489,11 +435,6 @@ class CommandsOperations:
                     rejection_code=None if delivered else "execution_finished",
                     receipt={"user_message_id": message_id} if delivered else None,
                 )
-        if target in TERMINAL_EXECUTION_STATUSES:
-            connection.execute(
-                "DELETE FROM execution_finish_repair_slots WHERE execution_id = ?",
-                (execution_id,),
-            )
         record = self._require_execution(connection, execution_id)
         self._append_event(
             connection,
@@ -508,7 +449,7 @@ class CommandsOperations:
 
     def _transition_command(
         self,
-        connection: sqlite3.Connection,
+        connection: TableHandle,
         command_id: str,
         *,
         expected_status: CommandStatus,
@@ -547,17 +488,16 @@ class CommandsOperations:
                 f"invalid command transition: {current.status.value} -> {target.value}",
             )
         now = time.time()
-        connection.execute(
-            "UPDATE commands SET status = ?, updated_at = ?, "
-            "result_version = ?, rejection_code = ?, result_json = ? WHERE command_id = ?",
-            (
-                target.value,
-                now,
-                result_version,
-                rejection_code,
-                _json(result_json or {}),
-                command_id,
-            ),
+        connection.update(
+            "commands",
+            {
+                "status": target.value,
+                "updated_at": now,
+                "result_version": result_version,
+                "rejection_code": rejection_code,
+                "result_json": _json(result_json or {}),
+            },
+            command_id=command_id,
         )
         command = self._get_command(connection, command_id)
         assert command is not None

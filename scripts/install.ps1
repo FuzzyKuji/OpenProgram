@@ -59,7 +59,11 @@ $ErrorActionPreference = "Continue"
 function Step($m){ Write-Host "==> $m" -ForegroundColor Cyan }
 function Ok($m){ Write-Host "  ok $m" -ForegroundColor Green }
 function Warn($m){ Write-Host "  !! $m" -ForegroundColor Yellow }
-function Die($m){ Write-Host "ERROR $m" -ForegroundColor Red; exit 1 }
+# Off the web this runs inside the person's own window, where `exit` would close it.
+function Die($m){
+  if ($ScriptPath) { Write-Host "ERROR $m" -ForegroundColor Red; exit 1 }
+  throw "ERROR $m"
+}
 
 function Invoke-CheckedNative {
   param(
@@ -74,11 +78,11 @@ function Invoke-CheckedNative {
 
 function Have($name){ return [bool](Get-Command $name -ErrorAction SilentlyContinue) }
 
-# Non-interactive signals — treated exactly like -Yes (defaults, no prompts).
+# Non-interactive signals - treated exactly like -Yes (defaults, no prompts).
 # CI / DEBIAN_FRONTEND=noninteractive are ecosystem conventions;
 # OPENPROGRAM_INSTALL_YES is our own escape hatch.
 # NOTE: Read-Host has no timeout, so (unlike install.sh) the ps1 prompts can't
-# self-default on expiry — an agent must pass -Yes or one of these env vars.
+# self-default on expiry - an agent must pass -Yes or one of these env vars.
 function Test-NonInteractive {
   if ($Yes) { return $true }
   if ($env:CI) { return $true }
@@ -86,10 +90,22 @@ function Test-NonInteractive {
   if ($env:OPENPROGRAM_INSTALL_YES) { return $true }
   return $false
 }
+# A program winget just installed is in the registry's PATH, not this session's.
+function Update-SessionPath {
+  $separator = [IO.Path]::PathSeparator
+  $merged = New-Object System.Collections.Generic.List[string]
+  foreach ($value in @($env:Path, [Environment]::GetEnvironmentVariable("Path", "User"), [Environment]::GetEnvironmentVariable("Path", "Machine"))) {
+    foreach ($entry in @("$value" -split [Regex]::Escape([string]$separator))) {
+      if ($entry -and -not ($merged | Where-Object { $_ -ieq $entry })) { $merged.Add($entry) }
+    }
+  }
+  $env:Path = $merged -join $separator
+}
 function Winget-Install($id){
   if (Have winget) {
     winget install --silent --accept-package-agreements --accept-source-agreements -e --id $id
     if ($LASTEXITCODE -ne 0) { Die "winget could not install $id (exit $LASTEXITCODE)" }
+    Update-SessionPath
   }
   else { Warn "winget not available - install $id manually" }
 }
@@ -110,7 +126,8 @@ function Test-OpenProgramCheckout($dir){
 
 # ---- 0. self-bootstrap (clone + re-invoke when not inside a checkout) --------
 if (-not $Bootstrapped -and -not (Test-OpenProgramCheckout $HostRoot)) {
-  if (-not (Have git)) { Die "git is required to install off the web - install Git for Windows (winget install Git.Git), or clone the repo and run scripts\install.ps1 from inside it." }
+  if (-not (Have git)) { Step "installing git"; Winget-Install "Git.Git" }
+  if (-not (Have git)) { Die "git is required to install off the web - install Git for Windows from https://git-scm.com/download/win, or clone the repo and run scripts\install.ps1 from inside it." }
   $dest = if ($Target) { $Target } else { Join-Path $HOME "OpenProgram" }
   if (-not $Target -and -not (Test-NonInteractive)) {
     $reply = Read-Host "Clone OpenProgram to [$dest]"
@@ -142,12 +159,16 @@ if (-not $Bootstrapped -and -not (Test-OpenProgramCheckout $HostRoot)) {
   if ($Yes)          { $forward += "-Yes" }
   if ($Python)       { $forward += @("-Python", $Python) }
   if ($Programs)     { $forward += @("-Programs", ($Programs -join ',')) }
-  & $child @forward
-  exit $LASTEXITCODE
+  & powershell.exe -NoLogo -NoProfile -ExecutionPolicy Bypass -File $child @forward
+  $childExit = $LASTEXITCODE
+  if ($ScriptPath) { exit $childExit }
+  $global:LASTEXITCODE = $childExit
+  if ($childExit -ne 0) { Die "the cloned installer stopped (exit $childExit); the message above says why" }
+  return
 }
 Step "checking system toolchain (python3.11+, node22.12+, git)"
 if (-not (Have git))  { Step "installing git";    Winget-Install "Git.Git" }
-if (Have git)  { Ok "git: $(git --version)" } else { Die "git missing after installation; open a new PowerShell and run this installer again" }
+if (Have git)  { Ok "git: $(git --version)" } else { Die "git is still missing - install Git for Windows from https://git-scm.com/download/win, then run this installer again" }
 if (-not $Minimal -and -not (Have node)) { Step "installing Node.js"; Winget-Install "OpenJS.NodeJS.LTS" }
 if (Have node) {
   $nodeVersion = (node -p "process.versions.node") 2>$null
@@ -156,7 +177,7 @@ if (Have node) {
   if ($nodeMajor -eq 22 -and $nodeMinor -ge 12) { Ok "node: $(node --version)" }
   elseif ($nodeMajor -gt 22) { Warn "node $(node --version) is newer than the validated Node 22 LTS; continuing with workspace-scoped installs" }
   else { Die "node $nodeVersion < 22.12 - upgrade to Node 22.12+ (Node 22 LTS recommended)" }
-} elseif (-not $Minimal) { Die "node not found after installation; open a new PowerShell and run this installer again" }
+} elseif (-not $Minimal) { Die "node is still missing - install Node.js 22 from https://nodejs.org, then run this installer again" }
 else { Warn "node not found (allowed by -Minimal)" }
 
 # ---- 2. Python env ----------------------------------------------------------
@@ -171,7 +192,7 @@ function Test-IsolatedCheckoutVenv {
   return ($LASTEXITCODE -eq 0)
 }
 
-function New-CheckoutVenv([switch]$Clear) {
+function Get-PythonCandidates {
   $candidates = New-Object System.Collections.Generic.List[object]
   if ($env:CONDA_PREFIX -and (Test-Path "$env:CONDA_PREFIX\python.exe")) {
     $candidates.Add([pscustomobject]@{ Command="$env:CONDA_PREFIX\python.exe"; Prefix=@() })
@@ -195,19 +216,33 @@ function New-CheckoutVenv([switch]$Clear) {
       $candidates.Add([pscustomobject]@{ Command=$common; Prefix=@() })
     }
   }
+  return $candidates
+}
+
+function Test-PythonCandidate($candidate) {
+  if ($candidate.Command.StartsWith("$HostRoot\.venv\", [StringComparison]::OrdinalIgnoreCase)) {
+    return $false
+  }
+  & $candidate.Command @($candidate.Prefix) -c "import sys; assert sys.version_info[:2] >= (3,11)" *> $null
+  return ($LASTEXITCODE -eq 0)
+}
+
+function New-CheckoutVenv([switch]$Clear) {
+  $candidates = @(Get-PythonCandidates)
+  if (-not ($candidates | Where-Object { Test-PythonCandidate $_ })) {
+    Step "installing Python 3.12"
+    Winget-Install "Python.Python.3.12"
+    $candidates = @(Get-PythonCandidates)
+  }
   foreach ($candidate in $candidates) {
-    if ($candidate.Command.StartsWith("$HostRoot\.venv\", [StringComparison]::OrdinalIgnoreCase)) {
-      continue
-    }
-    & $candidate.Command @($candidate.Prefix) -c "import sys; assert sys.version_info[:2] >= (3,11)" *> $null
-    if ($LASTEXITCODE -ne 0) { continue }
+    if (-not (Test-PythonCandidate $candidate)) { continue }
     $venvArgs = @($candidate.Prefix) + @("-m", "venv")
     if ($Clear) { $venvArgs += "--clear" }
     $venvArgs += "$HostRoot\.venv"
     & $candidate.Command @venvArgs
     if ($LASTEXITCODE -eq 0 -and (Test-IsolatedCheckoutVenv)) { return }
   }
-  Die "no working Python 3.11+ found; install Python 3.12 and run this installer again"
+  Die "no working Python 3.11+ found - install Python 3.12 from https://www.python.org/downloads/windows/, then run this installer again"
 }
 
 function Resolve-Python {
@@ -247,7 +282,7 @@ function Install-CliLauncher {
   $content = @"
 @echo off
 setlocal DisableDelayedExpansion
-for /f "tokens=2 delims=:" %%P in ('chcp') do set "_OPENPROGRAM_CODEPAGE=%%P"
+for /f "tokens=2 delims=:." %%P in ('chcp') do set "_OPENPROGRAM_CODEPAGE=%%P"
 chcp 65001 >nul
 "$quotedPython" -m openprogram %*
 set "_OPENPROGRAM_EXIT=%ERRORLEVEL%"
@@ -256,26 +291,32 @@ exit /b %_OPENPROGRAM_EXIT%
 "@
   [System.IO.File]::WriteAllText($launcher, $content, [System.Text.UTF8Encoding]::new($false))
 
-  # PowerShell selects the native script so its argument array does not pass
-  # through CMD's extra metacharacter parsing. Keep CMD for CMD callers.
-  $psLauncher = [IO.Path]::ChangeExtension($launcher, '.ps1')
-  $psContent = @"
-`$ErrorActionPreference = 'Stop'
-& '$($PY.Replace("'", "''"))' -m openprogram @args
-exit `$LASTEXITCODE
-"@
-  [System.IO.File]::WriteAllText($psLauncher, $psContent, [System.Text.UTF8Encoding]::new($true))
+  # PowerShell prefers a .ps1 over a .cmd of the same name and then refuses it
+  # under the default Restricted policy, so an old one has to go.
+  Remove-Item -LiteralPath ([IO.Path]::ChangeExtension($launcher, '.ps1')) -Force -ErrorAction SilentlyContinue
 
   $separator = [IO.Path]::PathSeparator
   $currentParts = @($env:Path -split [Regex]::Escape([string]$separator))
   if (-not ($currentParts | Where-Object { $_ -ieq $binDir })) {
     $env:Path = "$binDir$separator$env:Path"
   }
-  $userPath = [Environment]::GetEnvironmentVariable("Path", "User")
-  $userParts = @($userPath -split [Regex]::Escape([string]$separator))
-  if (-not ($userParts | Where-Object { $_ -ieq $binDir })) {
-    $updated = if ($userPath) { "$userPath$separator$binDir" } else { $binDir }
-    [Environment]::SetEnvironmentVariable("Path", $updated, "User")
+  # The registry value is read and written as stored: the Environment calls
+  # would expand an entry like %JAVA_HOME%\bin and freeze it at today's value.
+  $environmentKey = [Microsoft.Win32.Registry]::CurrentUser.CreateSubKey("Environment")
+  try {
+    $hasUserPath = $null -ne $environmentKey.GetValue("Path")
+    $userPath = [string]$environmentKey.GetValue("Path", "", [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+    $userParts = @($userPath -split [Regex]::Escape([string]$separator))
+    if (-not ($userParts | Where-Object { [Environment]::ExpandEnvironmentVariables($_) -ieq $binDir })) {
+      $updated = if ($userPath) { "$($userPath.TrimEnd($separator))$separator$binDir" } else { $binDir }
+      $kind = if ($hasUserPath) { $environmentKey.GetValueKind("Path") } else { [Microsoft.Win32.RegistryValueKind]::ExpandString }
+      $environmentKey.SetValue("Path", $updated, $kind)
+      # Deleting an absent variable writes nothing, and this call still tells
+      # Explorer and new terminals that the environment changed.
+      [Environment]::SetEnvironmentVariable("OPENPROGRAM_PATH_CHANGED", $null, "User")
+    }
+  } finally {
+    $environmentKey.Dispose()
   }
   Ok "CLI launcher: $launcher (added to your user PATH)"
 }
@@ -340,7 +381,7 @@ Install-DefaultExtras
 Install-Extras
 Install-Programs
 
-Write-Host "`nOpenProgram ready." -ForegroundColor Green
+Write-Host "`nOpenProgram ready. Open a new terminal so the openprogram command is found." -ForegroundColor Green
 Write-Host "  Start:     openprogram           # first run walks you through provider setup, then opens the chat"
-Write-Host "  Web UI:    openprogram web        # -> http://localhost:18100"
+Write-Host "  Web UI:    openprogram web        # opens the browser signed in (port 18100)"
 Write-Host "  Programs:  openprogram programs install <directory | git URL | owner/repo>"

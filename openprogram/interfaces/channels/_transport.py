@@ -41,7 +41,7 @@ import random
 import re
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -84,6 +84,16 @@ _RETRY_ATTEMPTS = 3
 _RETRY_FALLBACK_DELAYS = (1.0, 3.0)
 _RETRY_SLEEP_CAP = 30.0
 
+# 连接没建立的重试: 请求没发出去, 重发不会重复送达. 代理或网络抖动时
+# 单次连接常失败, 而一条回复丢了就找不回来.
+_CONNECT_RETRY_ATTEMPTS = 4
+_CONNECT_RETRY_DELAYS = (1.0, 2.0, 4.0)
+
+# 切开代码块时给收尾 fence "\n```" 留的余量.
+_FENCE_CLOSE_ROOM = 8
+# 代码块开头行 (``` + 语言名) 的合理长度上限.
+_MAX_FENCE_OPENER = 64
+
 
 @dataclass(frozen=True)
 class SendResult:
@@ -95,12 +105,17 @@ class SendResult:
     ``retryable`` True 表示瞬态失败值得重试 (网络 / rate_limit).
     ``retry_after`` 是平台明示的等待秒数 (Retry-After header / telegram
     ``parameters.retry_after`` / discord 429 body), 0 = 平台没说.
+    ``connect_failed`` True 表示连接没建立且前面没有已发出的片段, 平台
+    一点也没收到, 重发不会重复送达.
     """
     ok: bool
     message_id: str = ""
     error_kind: str = ""
     error_detail: str = ""
     retryable: bool = False
+    # No connection was made and no earlier piece went out, so the platform
+    # has none of the message.
+    connect_failed: bool = False
     retry_after: float = 0.0
 
     def __bool__(self) -> bool:
@@ -113,10 +128,10 @@ class SendResult:
     @classmethod
     def fail(
         cls, kind: str, detail: str = "", *,
-        retryable: bool = False, retry_after: float = 0.0,
+        retryable: bool = False, retry_after: float = 0.0, connect_failed: bool = False,
     ) -> "SendResult":
         return cls(ok=False, error_kind=kind, error_detail=detail,
-                   retryable=retryable, retry_after=retry_after)
+                   retryable=retryable, retry_after=retry_after, connect_failed=connect_failed)
 
 
 # ---------------------------------------------------------------------------
@@ -151,14 +166,19 @@ def post_message(
     limit = MAX_CHARS.get(platform, 1800)
     thread_kw = _thread_kwargs(platform, thread_id)
     last: SendResult = SendResult.fail("unknown", "no chunks sent")
-    for chunk in _chunk(text, limit):
+    delivered_a_piece = False
+    # 先摘掉再切: 切开的 visual 块每段都会各渲染出一句提示.
+    for chunk in _chunk(_format.drop_visuals(text), limit):
         for piece in _render_pieces(platform, chunk):
             last = _send_with_retry(
                 f"{platform}:{account_id}",
                 lambda p=piece: sender(account_id, target, p, **thread_kw),
             )
             if not last.ok:
-                return last
+                # The platform has the earlier pieces, so sending the whole
+                # text again would repeat them.
+                return replace(last, connect_failed=False) if delivered_a_piece else last
+            delivered_a_piece = True
     return last
 
 
@@ -249,10 +269,11 @@ def split_for_edit(platform: str, text: str, marker: str = "") -> tuple[str, str
     末尾, 长度一并计入.
     """
     limit = MAX_CHARS.get(platform, 1800)
+    text = _format.drop_visuals(text)
     if len(text) <= limit and len(_render_pieces(platform, text)) == 1:
         return text, ""
     cap = HARD_CAPS.get(platform)
-    budget = limit - len(marker) - 8   # 8: 收尾 fence "\n```" 的余量
+    budget = limit - len(marker) - _FENCE_CLOSE_ROOM
     while budget > 0:
         head, tail = _cut_at_line(text, budget)
         candidate = head + marker
@@ -263,54 +284,98 @@ def split_for_edit(platform: str, text: str, marker: str = "") -> tuple[str, str
 
 
 def _cut_at_line(text: str, budget: int) -> tuple[str, str]:
-    """在 ``budget`` 字以内的最后一个换行处切开, 不让代码块被切成两半
-    而不闭合."""
+    """在 ``budget`` 字以内的最后一个换行处切开; 切点落在代码块里时 head
+    补上收尾 fence, tail 用同一行开头 fence 重新打开.
+
+    代码块的开头行后面还没有内容时不在这里切: 否则 head 是空代码块,
+    tail 又从同一个开头行开始, 永远切不完. 切点正好在收尾 fence 前时
+    收尾 fence 归 head, tail 不重开 — 否则下一条是个空代码块, Telegram
+    会拒收. head 为空表示这一段只有空行, 没有要发的内容."""
     newline = text.rfind("\n", 0, budget)
-    cut = newline + 1 if newline > 0 else budget
+    cut = newline + 1 if newline > 0 else _hard_cut(text, budget)
+    head = text[:cut].rstrip("\n")
+    if head.count("```") % 2 == 1 and "\n" not in head[head.rfind("```"):]:
+        opening = head.rfind("```")
+        if head[:opening].strip():
+            return head[:opening].rstrip("\n"), text[opening:]
+        cut = _hard_cut(text, budget)
     head, tail = text[:cut].rstrip("\n"), text[cut:].lstrip("\n")
     if head.count("```") % 2 == 1:
-        opener = head[head.rfind("```"):].split("\n", 1)[0]
-        head += "\n```"
-        tail = opener + "\n" + tail
+        block = head[head.rfind("```"):]
+        opener = block.split("\n", 1)[0]
+        # 超长的"开头行"不是真的代码块; 重复它 tail 只会越切越长.
+        if len(opener) <= _MAX_FENCE_OPENER:
+            head = head + "\n```" if "\n" in block else ""
+            if tail.startswith("```"):
+                tail = tail[3:].lstrip("\n")
+            else:
+                tail = opener + "\n" + tail
     return head, tail
 
 
+def _hard_cut(text: str, budget: int) -> int:
+    """一行放不下时的切点, 不把 ``` 记号切成两半."""
+    cut = budget
+    for _ in range(2):
+        if 1 < cut < len(text) and text[cut - 1] == "`" and text[cut] == "`":
+            cut -= 1
+    return cut
+
+
 def _chunk(text: str, limit: int) -> list[str]:
-    if not text:
-        return [""]
-    return [text[i:i + limit] for i in range(0, len(text), limit)]
+    """按 ``limit`` 切原始 markdown, 每段的代码块都完整闭合."""
+    chunks: list[str] = []
+    rest = text
+    while len(rest) > limit:
+        head, rest = _cut_at_line(rest, limit - _FENCE_CLOSE_ROOM)
+        if head.strip():
+            chunks.append(head)
+    if rest.strip() or not chunks:
+        chunks.append(rest)
+    return chunks
 
 
 def _render_pieces(platform: str, chunk: str) -> list[str]:
-    """渲染一个原始 chunk; 渲染结果超平台硬上限时把原始 chunk 对半
-    递归再切 (escape 是逐字符的, 减半原文约等于减半渲染结果)."""
+    """渲染一个原始 chunk; 渲染结果超平台硬上限时在一半附近再切, 递归
+    直到放得下 (escape 是逐字符的, 减半原文约等于减半渲染结果)."""
     rendered = _format.render(platform, chunk)
     cap = HARD_CAPS.get(platform)
     if cap is None or len(rendered) <= cap or len(chunk) <= 1:
         return [rendered]
     mid = len(chunk) // 2
-    return (_render_pieces(platform, chunk[:mid])
-            + _render_pieces(platform, chunk[mid:]))
+    head, tail = _cut_at_line(chunk, mid)
+    if not head or not tail or len(head) >= len(chunk) or len(tail) >= len(chunk):
+        head, tail = chunk[:mid], chunk[mid:]
+    return _render_pieces(platform, head) + _render_pieces(platform, tail)
 
 
 def _send_with_retry(tag: str, op: Callable[[], SendResult]) -> SendResult:
-    """rate_limit 退避重试单点. 其他失败 (auth / bad_target / network /
-    format) 直接返回 — network 超时重发有重复送达风险, 不自动重试."""
-    result = SendResult.fail("unknown", "not attempted")
-    for attempt in range(_RETRY_ATTEMPTS):
+    """退避重试单点: rate_limit 和连接没建立 (``connect_failed``). 其他失败
+    (auth / bad_target / format / 请求发出后的 network) 直接返回 —
+    请求发出后超时再重发有重复送达风险, 不自动重试."""
+    rate_limited = unconnected = 0
+    while True:
         result = op()
-        if result.ok or result.error_kind != "rate_limit":
+        if result.ok:
             return result
-        if attempt == _RETRY_ATTEMPTS - 1:
-            break
-        wait = result.retry_after if result.retry_after > 0 else \
-            _RETRY_FALLBACK_DELAYS[min(attempt, len(_RETRY_FALLBACK_DELAYS) - 1)]
-        wait = min(wait, _RETRY_SLEEP_CAP)
-        _log.info("[%s] rate limited; retry %s/%s in %.1fs",
-                  tag, attempt + 1, _RETRY_ATTEMPTS - 1, wait)
+        if result.connect_failed:
+            unconnected += 1
+            if unconnected >= _CONNECT_RETRY_ATTEMPTS:
+                break
+            wait = _CONNECT_RETRY_DELAYS[unconnected - 1]
+        elif result.error_kind == "rate_limit":
+            rate_limited += 1
+            if rate_limited >= _RETRY_ATTEMPTS:
+                break
+            wait = result.retry_after if result.retry_after > 0 else \
+                _RETRY_FALLBACK_DELAYS[min(rate_limited - 1, len(_RETRY_FALLBACK_DELAYS) - 1)]
+            wait = min(wait, _RETRY_SLEEP_CAP)
+        else:
+            return result
+        _log.info("[%s] %s; retry in %.1fs", tag, result.error_kind, wait)
         time.sleep(wait)
-    _log.error("[%s] send failed after %s attempts: %s: %s",
-               tag, _RETRY_ATTEMPTS, result.error_kind, result.error_detail)
+    _log.error("[%s] send failed after retries: %s: %s",
+               tag, result.error_kind, result.error_detail)
     return result
 
 
@@ -321,9 +386,10 @@ def _send_with_retry(tag: str, op: Callable[[], SendResult]) -> SendResult:
 def _classify_network_error(exc: Exception) -> SendResult:
     """request 库异常 → SendResult."""
     detail = exc.reason if isinstance(exc, URLPolicyError) else type(exc).__name__
-    # 所有 requests 异常都当 network. 上层不知道更细节也没法 retry 得
-    # 更聪明, 重要的是给 retryable=True.
-    return SendResult.fail("network", detail, retryable=True)
+    # 所有 HTTP 异常都当 network, 给 retryable=True. 下面这几种失败时请求
+    # 肯定没离开本机, 只有它们重发不会重复送达.
+    connect_failed = isinstance(exc, (httpx.ConnectError, httpx.ConnectTimeout, httpx.ProxyError))
+    return SendResult.fail("network", detail, retryable=True, connect_failed=connect_failed)
 
 
 def _classify_http_status(
@@ -372,6 +438,7 @@ def _extract_retry_after(body: str, header: str = "") -> float:
 # ---------------------------------------------------------------------------
 
 _TG_PARSE_ERROR = re.compile(r"can't parse entities", re.I)
+_TG_ERROR_DETAIL_LIMIT = 300
 
 
 def _tg_chat_id(target: str) -> object:
@@ -454,13 +521,7 @@ def _tg_call(token: str, method: str, payload: dict,
                 # modified", 视为成功.
                 if "not modified" in desc.lower():
                     return SendResult.success(success_id or "")
-                kind = _telegram_kind_from_description(desc)
-                return SendResult.fail(
-                    kind,
-                    "telegram_api_error",
-                    retryable=(kind == "rate_limit"),
-                    retry_after=_extract_retry_after(r.text),
-                )
+                return _tg_api_error(desc, r.text)
             return _classify_http_status(
                 r.status_code, r.text, r.headers.get("Retry-After", ""),
             )
@@ -470,6 +531,17 @@ def _tg_call(token: str, method: str, payload: dict,
         return SendResult.success(str(mid) if mid is not None else "")
     except Exception as e:  # noqa: BLE001
         return _classify_network_error(e)
+
+
+def _tg_api_error(desc: str, body: str) -> SendResult:
+    """Telegram 业务错误 → SendResult, ``error_detail`` 保留平台给的原因."""
+    kind = _telegram_kind_from_description(desc)
+    return SendResult.fail(
+        kind,
+        " ".join(desc.split())[:_TG_ERROR_DETAIL_LIMIT],
+        retryable=(kind == "rate_limit"),
+        retry_after=_extract_retry_after(body),
+    )
 
 
 def _telegram_kind_from_description(desc: str) -> str:
@@ -495,10 +567,25 @@ def _post_file_telegram(
     if not token:
         return SendResult.fail("auth", f"account {account_id} has no bot_token")
     mime = mimetypes.guess_type(path.name)[0] or ""
-    method, field = (
-        ("sendPhoto", "photo") if mime.startswith("image/")
-        else ("sendDocument", "document")
-    )
+    def upload(method: str, field: str) -> SendResult:
+        return _tg_upload(token, method, field, chat_id, path, caption, thread_id)
+
+    if not mime.startswith("image/"):
+        return upload("sendDocument", "document")
+    result = upload("sendPhoto", "photo")
+    # Telegram 明确拒收的图片 (尺寸、比例、大小) 还能当文件发. 超时等
+    # 结果不明的失败不重发, 否则同一张图可能送达两次.
+    if not result.ok and result.error_kind in ("format", "unknown"):
+        _log.info("[telegram:%s] photo refused (%s); sending as a document",
+                  account_id, result.error_detail)
+        return upload("sendDocument", "document")
+    return result
+
+
+def _tg_upload(
+    token: str, method: str, field: str, chat_id: str, path: Path,
+    caption: str, thread_id: Optional[str],
+) -> SendResult:
     try:
         with path.open("rb") as fh:
             with safe_client("channel.telegram.api") as client:
@@ -513,17 +600,15 @@ def _post_file_telegram(
         try:
             data = r.json()
         except ValueError:
-            pass
+            # 2xx 但读不出结果: 可能已经送达, 不能算作平台拒收.
+            if r.is_success:
+                return SendResult.fail(
+                    "network", "unreadable Telegram response", retryable=True,
+                )
         if not data.get("ok"):
             desc = data.get("description", "") or ""
             if desc:
-                kind = _telegram_kind_from_description(desc)
-                return SendResult.fail(
-                    kind,
-                    "telegram_api_error",
-                    retryable=(kind == "rate_limit"),
-                    retry_after=_extract_retry_after(r.text),
-                )
+                return _tg_api_error(desc, r.text)
             return _classify_http_status(
                 r.status_code, r.text, r.headers.get("Retry-After", ""),
             )
@@ -536,6 +621,10 @@ def _post_file_telegram(
 # ---------------------------------------------------------------------------
 # Discord — scoped_user_id 是 "{channel_id}_{user_id}", 取前半
 # ---------------------------------------------------------------------------
+
+# 回复里的文字来自模型和网页内容, 不能让它 ping @everyone / 角色 / 用户.
+_DISCORD_NO_MENTIONS = {"parse": []}
+
 
 def _discord_headers(token: str) -> dict[str, str]:
     return {
@@ -558,7 +647,7 @@ def _post_discord(account_id: str, scoped_user_id: str, text: str) -> SendResult
             r = client.post(
                 f"https://discord.com/api/v10/channels/{channel_id}/messages",
                 headers=_discord_headers(token),
-                json={"content": text},
+                json={"content": text, "allowed_mentions": _DISCORD_NO_MENTIONS},
                 timeout=10,
             )
         if not r.is_success:
@@ -587,7 +676,7 @@ def _patch_discord(
             r = client.patch(
                 f"https://discord.com/api/v10/channels/{channel_id}/messages/{message_id}",
                 headers=_discord_headers(token),
-                json={"content": text},
+                json={"content": text, "allowed_mentions": _DISCORD_NO_MENTIONS},
                 timeout=10,
             )
         if not r.is_success:
@@ -619,7 +708,9 @@ def _post_file_discord(
                         "Authorization": f"Bot {token}",
                         "User-Agent": _discord_headers(token)["User-Agent"],
                     },
-                    data={"payload_json": json.dumps({"content": caption})},
+                    data={"payload_json": json.dumps({
+                        "content": caption, "allowed_mentions": _DISCORD_NO_MENTIONS,
+                    })},
                     files={"files[0]": (path.name, fh)},
                     timeout=120,
                 )
@@ -985,14 +1076,17 @@ def remember_wechat_context(account_id: str, user_id: str, token: str) -> None:
         _WECHAT_CONTEXT[(account_id, user_id)] = token
 
 
-def send_typing(platform: str, account_id: str, target: str) -> SendResult:
-    """显示一次"正在输入"; 有效期见 :data:`TYPING_REFRESH_SECONDS`."""
+def send_typing(platform: str, account_id: str, target: str,
+                thread_id: Optional[str] = None) -> SendResult:
+    """显示一次"正在输入"; 有效期见 :data:`TYPING_REFRESH_SECONDS`.
+    ``thread_id`` 让 Telegram 论坛话题里显示在原话题; 其他平台用不上."""
     if platform == "telegram":
         token = _accounts.load_credentials("telegram", account_id).get("bot_token")
         if not token:
             return SendResult.fail("auth", "no bot_token")
         return _tg_call(token, "sendChatAction", {
             "chat_id": _tg_chat_id(target), "action": "typing",
+            **_tg_thread(thread_id),
         }, success_id="")
     if platform == "discord":
         channel_id = target.partition("_")[0]

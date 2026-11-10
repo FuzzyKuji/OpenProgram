@@ -24,7 +24,10 @@ import { presentProviderSearch, presentTool, summarizeResult, type ToolTone } fr
 import { parseSearchSources, searchQuery } from "@/lib/chat/transcript/web-sources";
 import { SearchSourceList } from "../bubbles/web-sources";
 import { guiResultNote, isGuiToolCall } from "./gui-tool-view";
-import type { ToolGroupSummary } from "./tool-group-summary";
+import { summarizeToolGroup, type ToolGroupSummary } from "./tool-group-summary";
+import { useChosenOpen } from "./step-expansion";
+import { spawnFacts } from "@/lib/chat/transcript/owned-children";
+import { isAgentRunning, isStopped } from "@/lib/chat/transcript/row-status";
 import { afterTwoAnimationFrames } from "../list/collapse-frame";
 
 import type { AssistantBlock, ChatMsg, DetailNode } from "@/lib/session-store";
@@ -58,11 +61,13 @@ function wsSend(payload: unknown): void {
 
 /** 高度过渡容器：grid 0fr↔1fr 动画，展开向下推、收起平滑抽走。
  *  关闭动画结束后卸载子树，折叠状态不付渲染成本。 */
-function Collapse({ open, children }: {
+function Collapse({ open, restored, children }: {
   open: boolean;
+  /** Opened earlier and mounting again: it appears open, with no animation. */
+  restored?: boolean;
   children: React.ReactNode;
 }) {
-  const [shown, setShown] = useState(false);
+  const [shown, setShown] = useState(!!restored && open);
   const [mounted, setMounted] = useState(open);
   useEffect(() => {
     if (open) {
@@ -97,8 +102,14 @@ export function ExecutionStrip({
   after,
   subagentHeads,
   stopped,
+  status,
+  expansionId,
 }: {
+  /** Keeps the reader's open or closed choice across rebuilds of this row. */
+  expansionId?: string;
   label: string | ToolGroupSummary;
+  /** A live state after the sentence, such as a retry (retry-status.tsx). */
+  status?: React.ReactNode;
   /** The turn ended here because the user stopped it (or it was cut off):
    *  the row says so with a tag, as Claude and Codex mark a stopped step. */
   stopped?: "cancelled" | "interrupted";
@@ -112,7 +123,7 @@ export function ExecutionStrip({
   // The reader's own click wins over the conversation's view.
   const view = useTranscriptViewHere();
   const codeRain = useCodeRainStyle();
-  const [chosen, setOpen] = useState<boolean | null>(null);
+  const [chosen, setOpen] = useChosenOpen(expansionId);
   const open = chosen ?? view !== "normal";
   const { text } = useTranslation();
   const summary: ToolGroupSummary = typeof label === "string"
@@ -136,9 +147,10 @@ export function ExecutionStrip({
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >
-        {streaming && codeRain
+        {!summary.label ? null : streaming && codeRain
           ? <CodeRainText className="tl-label" text={summary.label} />
           : <span className={"tl-label" + (streaming ? " tl-label-shimmer" : "")}>{summary.label}</span>}
+        {status}
         {/* The dot is its own item, so the row's gap spaces both its sides. */}
         {failedNote ? <><span className="tl-fail" aria-hidden="true">·</span><span className="tl-fail">{failedNote}</span></> : null}
         {stopped ? (
@@ -153,7 +165,7 @@ export function ExecutionStrip({
         ) : null}
         <ChevronRight className="tl-chev" size={14} aria-hidden="true" />
       </button>
-      <Collapse open={open}>
+      <Collapse open={open} restored={chosen === true}>
         <div className="tl-body">{children}</div>
         {after}
       </Collapse>
@@ -232,7 +244,10 @@ export function StepRow({
   onOpenChange,
   dataMsgId,
   dataHeadId,
+  expansionId,
 }: {
+  /** Keeps the reader's open or closed choice across rebuilds of this row. */
+  expansionId?: string;
   icon: "thinking" | "function" | "llm" | "subagent";
   /** Per-tool icon; overrides the generic one for `icon`. */
   glyph?: SolarIconName;
@@ -266,9 +281,9 @@ export function StepRow({
   dataHeadId?: string;
 }) {
   const view = useTranscriptViewHere();
-  const [chosen, setOpen] = useState<boolean | null>(null);
+  const [chosen, setOpen] = useChosenOpen(expansionId);
   const open = chosen ?? stepOpenByDefault(view, icon);
-  const [kidsOpen, setKidsOpen] = useState(!!defaultKidsOpen);
+  const kidsOpen = chosen ?? !!defaultKidsOpen;
   const [copied, setCopied] = useState(false);
   const { text } = useTranslation();
   const codeRain = useCodeRainStyle() && !!running;
@@ -304,7 +319,7 @@ export function StepRow({
     });
   }
   function toggle() {
-    if (subSteps) setKidsOpen((v) => !v);
+    if (subSteps) setOpen(!kidsOpen);
     else if (inlineBody) {
       const next = !expanded;
       if (onOpenChange) onOpenChange(next);
@@ -378,12 +393,12 @@ export function StepRow({
         </span>
       </div>
       {inlineBody ? (
-        <Collapse open={expanded}>
+        <Collapse open={expanded} restored={chosen === true}>
           <div className="tl-step-body">{inlineBody}</div>
         </Collapse>
       ) : null}
       {subSteps ? (
-        <Collapse open={kidsOpen}>
+        <Collapse open={kidsOpen} restored={chosen === true}>
           <div className="tl-sub">{subSteps}</div>
         </Collapse>
       ) : null}
@@ -417,9 +432,10 @@ export function RestartStep() {
   );
 }
 
-export const ThinkingStep = memo(function ThinkingStep({ text: thinkingText, running }: {
+export const ThinkingStep = memo(function ThinkingStep({ text: thinkingText, running, expansionId }: {
   text: string;
   running?: boolean;
+  expansionId?: string;
 }) {
   useMarkdownReady();
   const { text } = useTranslation();
@@ -428,6 +444,7 @@ export const ThinkingStep = memo(function ThinkingStep({ text: thinkingText, run
   return (
     <StepRow
       icon="thinking"
+      expansionId={expansionId}
       title={text("Thinking", "思考")}
       note={short(plainNote(line))}
       running={running}
@@ -459,7 +476,7 @@ export function toolOutcome(
   running?: boolean,
 ): AssistantBlock["outcome"] {
   if (block.outcome || running || block.is_error || block.result != null) return block.outcome;
-  if (turnStatus === "cancelled" || turnStatus === "interrupted") return "cancelled";
+  if (isStopped(turnStatus)) return "cancelled";
   if (turnStatus === "error") return "unknown";
   return undefined;
 }
@@ -472,7 +489,9 @@ export function FunctionStep({
   running,
   sessionId,
   turnStatus,
+  expansionId,
 }: {
+  expansionId?: string;
   block: AssistantBlock;
   tree?: TNode | null;
   running?: boolean;
@@ -550,6 +569,7 @@ export function FunctionStep({
   return (
     <StepRow
       icon="function"
+      expansionId={expansionId}
       glyph={view.icon}
       tone={view.tone}
       title={view.title}
@@ -583,7 +603,9 @@ export function ProviderSearchStep({
   running,
   sessionId,
   turnStatus,
+  expansionId,
 }: {
+  expansionId?: string;
   block: AssistantBlock;
   running?: boolean;
   sessionId?: string;
@@ -617,6 +639,7 @@ export function ProviderSearchStep({
   return (
     <StepRow
       icon="function"
+      expansionId={expansionId}
       glyph={view.icon}
       tone={view.tone}
       title={view.title}
@@ -726,6 +749,7 @@ export function TreeStep({ node, actions, defaultKidsOpen, sessionId }: {
   ) : undefined;
   return (
     <StepRow
+      expansionId={node.path ? `node:${node.path}` : undefined}
       icon={isLlm ? "llm" : "function"}
       glyph={isLlm ? undefined : treeView?.icon}
       tone={isLlm ? undefined : treeView?.tone}
@@ -754,10 +778,10 @@ export function TreeStep({ node, actions, defaultKidsOpen, sessionId }: {
 /** 子代理步骤：轮次里子代理唯一的显示处。状态在摘要位；点行内联展开它
  *  自己的对话（任务、步骤、回复，运行中实时）；Open ↗ 把主视图切到它最新
  *  的回复；运行中可取消。 */
-export function SubAgentStep({ card }: { card: ChatMsg }) {
+export function SubAgentStep({ card, expansionId }: { card: ChatMsg; expansionId?: string }) {
   const { text } = useTranslation();
   const view = useTranscriptViewHere();
-  const [chosen, setOpen] = useState<boolean | null>(null);
+  const [chosen, setOpen] = useChosenOpen(expansionId ?? `card:${card.id}`);
   const open = chosen ?? stepOpenByDefault(view, "subagent");
   // The agent's newest reply, from its loaded branch: later messages to the
   // agent move it past the head its spawn card recorded.
@@ -767,7 +791,7 @@ export function SubAgentStep({ card }: { card: ChatMsg }) {
     || (attach.head_id || "").slice(0, 8)
     || text("Sub-agent", "子代理");
   const status = attach.status;
-  const running = status === "running" || status === "pending" || status === "queued";
+  const running = isAgentRunning(status);
   const cancelling = status === "cancelling";
   const isError = status === "errored";
   const statusNote = cancelling
@@ -822,6 +846,7 @@ export function SubAgentStep({ card }: { card: ChatMsg }) {
   return (
     <StepRow
       icon="subagent"
+      expansionId={expansionId ?? `card:${card.id}`}
       title={`${text("Sub-agent", "子代理")}: ${name}`}
       note={statusNote}
       running={running}
@@ -869,5 +894,27 @@ export function SubAgentStep({ card }: { card: ChatMsg }) {
         </>
       }
     />
+  );
+}
+
+/** Sub-agents with no tool step of their own, as the timeline a tool-started
+ *  agent draws in: one summary row, and a step per agent when opened. */
+export function SubAgentStrip({ cards, streaming, sessionId, expansionId }: {
+  cards: ChatMsg[];
+  streaming?: boolean;
+  sessionId?: string;
+  expansionId?: string;
+}) {
+  const { text } = useTranslation();
+  const facts = spawnFacts(cards, text);
+  return (
+    <ExecutionStrip
+      expansionId={expansionId}
+      streaming={streaming}
+      subagentHeads={facts.spawnHeads}
+      label={summarizeToolGroup([], { text, ...facts, sessionId })}
+    >
+      {cards.map((card) => <SubAgentStep key={card.id} card={card} />)}
+    </ExecutionStrip>
   );
 }

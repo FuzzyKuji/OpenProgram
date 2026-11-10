@@ -28,7 +28,8 @@ const mocks = {
     return store;
   }`,
   "@/lib/session-store": `export const useSessionStore = { getState: () => host.sessions,
-    subscribe: (listener) => { host.storeListeners.add(listener); return () => host.storeListeners.delete(listener); } };`,
+    subscribe: (listener) => { host.storeListeners.add(listener); return () => host.storeListeners.delete(listener); } };
+    export const selectViewRows = () => (state) => state.rowsById;`,
   "@/lib/runtime-bridge/state": "export const runtimeState = host.runtime; export const getSocket = () => host.socket;",
   "@/lib/execution/function-invocation": "export const parseFunctionInvocation = () => ({kind:'none'});",
   "@/lib/abilities/functions-store": "export const useFunctions = {getState: () => ({functions:[]})};",
@@ -52,7 +53,7 @@ const mocks = {
     }
   };`,
   "@/lib/net/ws/chat-stream": `export const appendLocalUserTurn = (sid, id, text, display, timestamp, status) => {
-    host.sessions.messagesById[id] = {id, role:'user', content:text, status};
+    host.sessions.rowsById[id] = {id, role:'user', content:text, status};
     (host.sessions.messageOrder[sid] ??= []).push(id);
   };`,
   "@/lib/net/execution/execution-client": `export class ExecutionApiError extends Error {}
@@ -108,7 +109,7 @@ function running(sid = "A", { provisional = false, replyId = "exec-A" } = {}) {
     ? { session_id: sid, msg_id: "" }
     : { session_id: sid, msg_id: "user-A", execution_id: "exec-A", status_version: 7 };
   host.sessions.runningTasks[sid] = task;
-  host.sessions.messagesById[replyId] = { id: replyId, role: "assistant", status: "streaming", content: "partial" };
+  host.sessions.rowsById[replyId] = { id: replyId, role: "assistant", status: "streaming", content: "partial" };
   host.sessions.messageOrder[sid] = [replyId];
   return task;
 }
@@ -150,13 +151,13 @@ beforeEach(() => {
   });
   host.sessions = {
     activeChatKey: "A", currentSessionId: "A", welcomeVisible: true,
-    runningTasks: {}, messagesById: {}, messageOrder: {}, composerDrafts: {}, pendingDecisions: [],
+    runningTasks: {}, rowsByView: {}, rowsById: {}, messageOrder: {}, composerDrafts: {}, pendingDecisions: [],
     pendingProjectsByChat: {}, composerSettingsBySession: {}, additionalWorkingDirsBySession: {},
     setRunningTaskFor(sid, task) {
       host.runWrites.push([sid, task]);
       if (task) this.runningTasks[sid] = task; else delete this.runningTasks[sid];
     },
-    updateMessage(sid, id, patch) { Object.assign(this.messagesById[id], patch); },
+    applyLocalChange(sid, change) { if (change.fields && this.rowsById[change.rowId]) Object.assign(this.rowsById[change.rowId], change.fields); },
   };
   host.socket = { readyState: 1, send: wire => host.frames.push(JSON.parse(wire)) };
 });
@@ -302,7 +303,7 @@ for (const outcome of ["false", "throw"]) {
         return false;
       }));
       assert.equal(host.sessions.runningTasks.A, task);
-      assert.equal(host.sessions.messagesById[replyId].status, "streaming");
+      assert.equal(host.sessions.rowsById[replyId].status, "streaming");
       assert.equal(host.runWrites.length, 0);
       assert.equal(Object.keys(host.runtime._optimisticCancels).length, 0);
       useSendQueue.getState().drain("A");
@@ -761,14 +762,14 @@ test("a Stop on a turn known by id but not by version waits for the version, the
   // A reconnect's run state handed over the ids alone: the client must not
   // pretend the reply stopped while the server keeps running the turn.
   host.sessions.runningTasks.A = { session_id: "A", msg_id: "user-A", execution_id: "exec-A" };
-  host.sessions.messagesById["exec-A"] = { id: "exec-A", role: "assistant", status: "streaming", content: "partial" };
+  host.sessions.rowsById["exec-A"] = { id: "exec-A", role: "assistant", status: "streaming", content: "partial" };
   host.sessions.messageOrder.A = ["exec-A"];
   const task = host.sessions.runningTasks.A;
   stopSession("A", () => assert.fail("no version to cancel with yet"));
   await nextTurn(); await nextTurn();
   assert.deepEqual(host.frames, [{ action: "get_run_state", session_id: "A" }]);
   assert.equal(host.sessions.runningTasks.A, task, "the composer still shows the turn running");
-  assert.equal(host.sessions.messagesById["exec-A"].status, "streaming");
+  assert.equal(host.sessions.rowsById["exec-A"].status, "streaming");
   assert.equal(stopDeferred("A"), true);
   // The server names the turn with its version: the slot learns it and the
   // held Stop goes out as an exact cancel.
@@ -781,7 +782,7 @@ test("a Stop on a turn known by id but not by version waits for the version, the
   assert.deepEqual([cancel?.execution_id, cancel?.expected_version], ["exec-A", 9]);
   assert.equal(stopDeferred("A"), false);
   assert.equal(host.sessions.runningTasks.A, undefined);
-  assert.equal(host.sessions.messagesById["exec-A"].status, "cancelled");
+  assert.equal(host.sessions.rowsById["exec-A"].status, "cancelled");
   assert.equal(host.runtime._optimisticCancels[cancel.command_id].sessionId, "A");
   releaseStopHold("A", false);
 });

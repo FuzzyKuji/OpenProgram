@@ -7,7 +7,6 @@ from ..checkpoints import ExecutionCheckpointStore
 from ..driver import DriverRegistry, DriverRegistryConflict
 from ..effects import EffectStatus, EffectStore
 from ..model import CommandKind, CommandStatus, ControlCommand, ExecutionRecord, ExecutionStatus, TERMINAL_EXECUTION_STATUSES
-from ..retention import compact_later
 from ..store import CommandConflict, ExecutionStore
 from ..state_blobs import ExecutionStateBlobStore
 
@@ -20,7 +19,6 @@ from .shared import (
 )
 
 from .waits import WaitsOperations
-from .agent_safe_points import AgentSafePointOperations
 from .cancellation import CancellationOperations
 from .branches import BranchesOperations
 from .activation import ActivationOperations
@@ -28,7 +26,7 @@ from .safe_points import SafePointsOperations
 from .recovery import RecoveryOperations
 
 
-class RuntimeControlService(AgentSafePointOperations, WaitsOperations, CancellationOperations, BranchesOperations, ActivationOperations, SafePointsOperations, RecoveryOperations):
+class RuntimeControlService(WaitsOperations, CancellationOperations, BranchesOperations, ActivationOperations, SafePointsOperations, RecoveryOperations):
     """The sole coordinator for canonical commands and live driver signals."""
 
     def __init__(
@@ -39,7 +37,6 @@ class RuntimeControlService(AgentSafePointOperations, WaitsOperations, Cancellat
         *,
         activator: Activator | None = None,
         owner_id: str = "control-service",
-        lease_ttl_seconds: float = 30.0,
         cancel_grace_seconds: float = 30.0,
     ) -> None:
         self.executions = executions
@@ -51,7 +48,6 @@ class RuntimeControlService(AgentSafePointOperations, WaitsOperations, Cancellat
         self.checkpoints = ExecutionCheckpointStore(executions)
         self.activator = activator
         self.owner_id = owner_id
-        self.lease_ttl_seconds = lease_ttl_seconds
         self.cancel_grace_seconds = max(0.0, float(cancel_grace_seconds))
         self._terminal_observer: Callable[[ExecutionRecord], object] | None = None
         self._pause_observer: Callable[[ExecutionRecord], object] | None = None
@@ -113,18 +109,15 @@ class RuntimeControlService(AgentSafePointOperations, WaitsOperations, Cancellat
         observer = self._terminal_observer
         if execution.status is ExecutionStatus.CANCELLED:
             try:
-                from ..projections import ExecutionProjectionReadModel
-                ExecutionProjectionReadModel(self.executions).project_cancelled_assistant(execution)
+                from ..event_effects import ExecutionEventEffects
+                ExecutionEventEffects(self.executions).project_cancelled_assistant(execution)
             except Exception:
-                # The transition already persisted a DAG outbox obligation.
-                # Display retries must not reject a canonical cancellation.
+                # The event effect retries this; a display failure must not
+                # reject a cancellation that is already written.
                 _log.exception("cancelled chat projection deferred for %s", execution.execution_id)
         if observer is not None:
             # Resource-release failures remain visible to control callers.
             observer(execution)
-        # A finished execution keeps its effects' identity, not their replay
-        # payloads, and no state blob nothing references.
-        compact_later(self.executions, execution)
 
 
     def _observe_paused(self, execution: ExecutionRecord) -> None:
@@ -290,11 +283,13 @@ class RuntimeControlService(AgentSafePointOperations, WaitsOperations, Cancellat
     ) -> ControlCommand | None:
         if kind is None:
             return None
-        row = connection.execute(
-            "SELECT * FROM commands WHERE execution_id = ? AND kind = ? "
-            "AND status = ? ORDER BY submitted_at, command_id LIMIT 1",
-            (execution_id, kind.value, CommandStatus.APPLYING.value),
-        ).fetchone()
+        row = connection.first(
+            "commands",
+            order=("submitted_at", "command_id"),
+            execution_id=execution_id,
+            kind=kind.value,
+            status=CommandStatus.APPLYING.value,
+        )
         return self.executions._command(row) if row is not None else None
 
 

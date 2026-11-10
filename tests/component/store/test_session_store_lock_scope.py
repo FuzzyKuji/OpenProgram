@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import threading
 
-from openprogram.state.store.session.git_session import GitSession
+from openprogram.state.store.session.session_log import SessionLog
 from openprogram.state.store.session.session_store import SessionStore
 
 
@@ -42,15 +42,15 @@ def test_slow_session_rebuild_does_not_block_cached_session(tmp_path, monkeypatc
 
     entered = threading.Event()
     release = threading.Event()
-    original = GitSession.read_meta
+    original = SessionLog.read_meta
 
-    def blocked_read_meta(git: GitSession):
+    def blocked_read_meta(git: SessionLog):
         if git.path.name == "slow":
             entered.set()
             assert release.wait(30)
         return original(git)
 
-    monkeypatch.setattr(GitSession, "read_meta", blocked_read_meta)
+    monkeypatch.setattr(SessionLog, "read_meta", blocked_read_meta)
     slow = threading.Thread(target=store.get_session, args=("slow",))
     slow.start()
     assert entered.wait(30)
@@ -71,15 +71,15 @@ def test_slow_session_delete_does_not_block_cached_session(tmp_path, monkeypatch
 
     entered = threading.Event()
     release = threading.Event()
-    original = GitSession.destroy
+    original = SessionLog.destroy
 
-    def blocked_destroy(git: GitSession):
+    def blocked_destroy(git: SessionLog):
         if git.path.name == "slow":
             entered.set()
             assert release.wait(30)
         return original(git)
 
-    monkeypatch.setattr(GitSession, "destroy", blocked_destroy)
+    monkeypatch.setattr(SessionLog, "destroy", blocked_destroy)
     slow = threading.Thread(target=store.delete_session, args=("slow",))
     slow.start()
     assert entered.wait(30)
@@ -134,10 +134,10 @@ def test_concurrent_first_load_publishes_one_index(tmp_path, monkeypatch):
 
     entered = threading.Event()
     release = threading.Event()
-    original = GitSession.read_meta
+    original = SessionLog.read_meta
     reads = 0
 
-    def blocked_read_meta(git: GitSession):
+    def blocked_read_meta(git: SessionLog):
         nonlocal reads
         if git.path.name == "same":
             reads += 1
@@ -145,8 +145,8 @@ def test_concurrent_first_load_publishes_one_index(tmp_path, monkeypatch):
             assert release.wait(30)
         return original(git)
 
-    monkeypatch.setattr(GitSession, "read_meta", blocked_read_meta)
-    results: list[tuple[GitSession, object] | None] = []
+    monkeypatch.setattr(SessionLog, "read_meta", blocked_read_meta)
+    results: list[tuple[SessionLog, object] | None] = []
     first = threading.Thread(target=lambda: results.append(store._open("same")))
     second = threading.Thread(target=lambda: results.append(store._open("same")))
     first.start()

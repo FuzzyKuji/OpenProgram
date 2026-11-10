@@ -305,7 +305,8 @@ def execute(patch: str, **_: Any) -> str:
         if os.path.isabs(path):
             violation = validate_write_path(path)
             if violation:
-                return f"Error: sandbox policy: {violation}"
+                from openprogram.runtime.permissions import refusal
+                raise refusal.sandbox("apply_patch", violation)
 
     # Apply every section in memory first so a later failure does not
     # leave an earlier file already written.
@@ -397,7 +398,7 @@ function(
     description=DESCRIPTION,
     parameters=SPEC["parameters"],
     toolset=['core'],
-    unsafe_in=['wechat', 'telegram', 'plan'],
+    unsafe_in=["plan"],
     # Exempt: paths are parsed out of the patch text, not a path/file_path
     # argument. execute() already validate_write_path's each target.
     path_params={},

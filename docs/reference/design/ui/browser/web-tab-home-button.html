@@ -1,60 +1,34 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-  <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Built-in browser Home button</title>
-  <style>
-    :root { color-scheme: dark; --bg:#161615; --panel:#20201f; --line:#3a3935; --text:#e8e7df; --muted:#aaa89d; --accent:#d19a66; }
-    * { box-sizing:border-box; }
-    body { margin:0; padding:40px max(24px,10vw) 80px; background:var(--bg); color:var(--text); font:14px/1.65 -apple-system,BlinkMacSystemFont,"PingFang SC","Segoe UI",sans-serif; }
-    main { max-width:920px; }
-    h1 { font-size:24px; margin:0 0 8px; }
-    h2 { margin:34px 0 10px; font-size:17px; color:var(--accent); }
-    p { color:var(--muted); margin:8px 0; }
-    code { color:var(--text); background:#2a2927; border-radius:4px; padding:1px 5px; }
-    ul { margin:8px 0; padding-left:22px; color:var(--muted); }
-    .card { border:1px solid var(--line); border-radius:10px; background:var(--panel); padding:18px 20px; }
-    .status { color:var(--accent); font-weight:600; }
-  </style>
-</head>
-<body>
-<main>
-  <h1>Built-in browser Home button</h1>
-  <p>Add a Home entry to the OpenProgram built-in browser toolbar, reusing the existing new-tab page without introducing a configurable home URL.</p>
+<title>Built-in browser Home button</title>
+<meta name="description" content="What the Home button in the built-in browser toolbar does.">
+<h1>Built-in browser Home button</h1>
 
-  <h2>Behavior</h2>
-  <div class="card">
-    <ul>
-      <li>Both the desktop native WebContentsView toolbar and the ordinary browser iframe toolbar display a House icon button.</li>
-      <li>The button title and accessible name follow the current language: <code>Home</code> or <code>Home</code>.</li>
-      <li>Clicking replaces the current <code>web</code>  tab in place with the existing <code>ntp</code>  page; it does not add a tab or navigate to an external URL.</li>
-      <li>Preserve tab order, active state and compound-tab member position; remove the old web tab id and clear legacy split state that references it.</li>
-    </ul>
-  </div>
+<p>A House button in both toolbars (desktop native <code translate="no">WebContentsView</code> and browser iframe) replaces the current <code translate="no">web</code> tab in place with the existing <code translate="no">ntp</code> page. There is no configurable home URL.</p>
 
-  <h2>Boundaries</h2>
-  <p>Do not add custom home settings, search-engine settings, dependencies, background processes or a new page implementation. Back, forward, address input, reload, bookmarks, split view and external opening remain unchanged.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Aspect</th><th scope="col">Behaviour</th></tr></thead>
+<tbody>
+<tr><th scope="row">Label</th><td>Title and accessible name follow the interface language</td></tr>
+<tr><th scope="row">Tabs</th><td>No tab added, no external navigation. Order, active state and compound-tab position are kept.</td></tr>
+<tr><th scope="row">Cleanup</th><td>The old web tab id goes, with any legacy split state that references it</td></tr>
+<tr><th scope="row">Unchanged</th><td>Back, forward, address input, reload, bookmarks, split view, external opening</td></tr>
+<tr><th scope="row">Not added</th><td>Custom home or search-engine settings, dependencies, background processes, a new page</td></tr>
+</tbody>
+</table>
 
-  <h2>Task files</h2>
-  <p>Production code:<code>apps/web/components/center-tabs/browser/web-tab-pane.tsx</code>, <code>apps/web/lib/tabs/center-tabs-store.ts</code>. Tests:<code>apps/web/tests/tabs/web-split/</code>. Design and acceptance records: this file.</p>
+<details>
+<summary>Code and verification</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col">Where</th></tr></thead>
+<tbody>
+<tr><th scope="row">Button</th><td><code translate="no">apps/web/components/center-tabs/browser/pane/pane-controls.tsx</code>, <code translate="no">desktop-web-tab-pane.tsx</code>, <code translate="no">iframe-web-tab-pane.tsx</code></td></tr>
+<tr><th scope="row">Action</th><td><code translate="no">replaceWebTabWithNewTabPage</code> in <code translate="no">apps/web/lib/tabs/store/browser.ts</code></td></tr>
+<tr><th scope="row">Tests</th><td><code translate="no">apps/web/tests/tabs/web-split/</code>: in-place replacement, group updates, native web-view id cleanup, a button in both toolbars</td></tr>
+<tr><th scope="row">Installed App</th><td>One Home button with correct title and accessible name. Clicking it shows the new-tab page, keeps the tab count and removes the old tab's CDP target.</td></tr>
+</tbody>
+</table>
+</details>
 
-  <h2>Acceptance</h2>
-  <ul>
-    <li>RED: the existing code lacks the store action, House button and wiring for both toolbars.</li>
-    <li>GREEN: state tests demonstrate in-place replacement, group updates and native web-view id cleanup; source checks verify Home buttons in both toolbars.</li>
-    <li>After building, use only the installed <code>/Applications/OpenProgram.app</code>  for visible page acceptance; do not start Electron from source.</li>
-  </ul>
+<h2 id="implementation-status">Implementation status</h2>
+<p>Implemented.</p>
 
-  <h2>Implementation record</h2>
-  <p class="status">Implemented and passed automated checks and installed-App acceptance.</p>
-  <ul>
-    <li>All Web checks, TypeScript checks and the production build passed.</li>
-    <li>The installed <code>/Applications/OpenProgram.app</code>  starts the default worker with its bundled Python runtime; Electron was not started from source.</li>
-    <li>DOM/ARIA acceptance confirms exactly one <code>Home</code>  button in the toolbar;<code>title</code>  and the accessible name are correct, and the address bar displays <code>https://example.com/</code>.</li>
-    <li>Clicking Home displays the existing <code>New tab</code>  page, preserves the tab count and removes the original web tab's CDP target.</li>
-    <li>One screenshot of the current viewport confirms button placement and visual consistency; OCR, candidate-box detection and repeated screenshots were not used.</li>
-  </ul>
-</main>
-</body>
-</html>
+<p class="next"><a href="built-in-browser.html">Built-in browser</a></p>

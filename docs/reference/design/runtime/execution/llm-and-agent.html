@@ -1,289 +1,155 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Unified Agent execution</title>
-<style>
-  :root { color-scheme: dark; --bg:#111214; --panel:#17191c; --panel-2:#1d2024; --line:#30343a; --line-strong:#454b54; --text:#e8e9eb; --muted:#a3a7ae; --faint:#747981; --orange:#ee7d55; --orange-soft:rgba(238,125,85,.12); --cyan:#4bc6d8; --cyan-soft:rgba(75,198,216,.11); --green:#67c78a; --yellow:#d8b35d; --red:#ef6b62; --sidebar:238px; }
-  * { box-sizing:border-box; }
-  html { scroll-behavior:smooth; }
-  body { margin:0; background:var(--bg); color:var(--text); font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Microsoft YaHei",sans-serif; font-size:15px; line-height:1.65; }
-  a { color:inherit; }
-  code,pre,.mono { font-family:ui-monospace,SFMono-Regular,Menlo,Monaco,Consolas,"Liberation Mono",monospace; }
-  code { color:#f0b29d; }
-  .layout { min-height:100vh; }
-  .sidebar { position:fixed; inset:0 auto 0 0; width:var(--sidebar); padding:26px 18px; border-right:1px solid var(--line); background:#131518; overflow-y:auto; }
-  .brand { font-size:13px; color:var(--faint); letter-spacing:.08em; text-transform:uppercase; }
-  .doc-name { margin:8px 0 24px; font-size:18px; font-weight:650; line-height:1.35; }
-  .nav-label { margin:22px 10px 8px; color:var(--faint); font-size:11px; letter-spacing:.08em; text-transform:uppercase; }
-  nav a { display:block; padding:7px 10px; border-radius:7px; color:var(--muted); text-decoration:none; font-size:13px; }
-  nav a:hover { color:var(--text); background:var(--panel-2); }
-  .main { margin-left:var(--sidebar); }
-  .hero { padding:68px clamp(28px,6vw,88px) 52px; border-bottom:1px solid var(--line); background:radial-gradient(circle at 78% 22%,rgba(75,198,216,.09),transparent 30%),radial-gradient(circle at 58% 0%,rgba(238,125,85,.08),transparent 32%); }
-  .eyebrow { color:var(--orange); font-size:12px; font-weight:700; letter-spacing:.12em; text-transform:uppercase; }
-  h1 { max-width:980px; margin:12px 0 18px; font-size:clamp(32px,5vw,58px); line-height:1.08; letter-spacing:-.035em; }
-  .lead { max-width:900px; margin:0; color:var(--muted); font-size:18px; }
-  .meta { display:flex; flex-wrap:wrap; gap:9px; margin-top:28px; }
-  .pill { padding:5px 10px; border:1px solid var(--line); border-radius:999px; color:var(--muted); font-size:12px; background:rgba(17,18,20,.55); }
-  .pill.target { color:var(--cyan); border-color:rgba(75,198,216,.35); background:var(--cyan-soft); }
-  .content { max-width:1240px; padding:30px clamp(28px,6vw,88px) 100px; }
-  section { scroll-margin-top:22px; padding-top:35px; }
-  h2 { margin:0 0 10px; font-size:25px; letter-spacing:-.02em; }
-  h3 { margin:28px 0 9px; font-size:17px; }
-  p { margin:9px 0 14px; color:var(--muted); }
-  .decision { display:grid; grid-template-columns:1.1fr .9fr; gap:14px; margin-top:24px; }
-  .card { border:1px solid var(--line); border-radius:12px; background:var(--panel); padding:18px 20px; }
-  .card h3 { margin-top:0; }
-  .decision-main { border-color:rgba(238,125,85,.45); background:linear-gradient(135deg,var(--orange-soft),var(--panel) 48%); }
-  .decision-main .big { margin:0; color:var(--text); font-size:20px; font-weight:650; }
-  .status-grid,.phase-grid,.brief-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; margin-top:16px; }
-  .status { min-height:124px; }
-  .status .tag { display:inline-block; margin-bottom:9px; font-size:11px; font-weight:750; letter-spacing:.08em; text-transform:uppercase; }
-  .tag.now { color:var(--yellow); } .tag.target { color:var(--cyan); } .tag.keep { color:var(--green); } .tag.remove { color:var(--red); }
-  .status strong { display:block; margin-bottom:5px; font-size:16px; }
-  .status p { margin:0; font-size:13px; }
-  .diagram { margin-top:18px; padding:20px; border:1px solid var(--line); border-radius:14px; background:#141619; overflow-x:auto; }
-  svg { display:block; width:100%; min-width:760px; height:auto; }
-  .caption { margin:10px 2px 0; color:var(--faint); font-size:12px; }
-  table { width:100%; border-collapse:separate; border-spacing:0; margin-top:16px; border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:13px; }
-  th,td { padding:12px 14px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top; }
-  th { color:var(--text); background:var(--panel-2); font-weight:650; }
-  td { color:var(--muted); background:var(--panel); }
-  tr:last-child td { border-bottom:0; }
-  td:first-child,th:first-child { width:20%; }
-  pre { margin:15px 0; padding:18px 20px; overflow-x:auto; border:1px solid var(--line); border-radius:12px; background:#0e1012; color:#d6d9de; line-height:1.6; font-size:13px; }
-  pre code { color:inherit; }
-  .callout { margin:16px 0; padding:14px 16px; border-left:3px solid var(--cyan); background:var(--cyan-soft); color:var(--muted); }
-  .callout.warn { border-left-color:var(--yellow); background:rgba(216,179,93,.08); }
-  .phase { position:relative; padding-left:48px; min-height:158px; }
-  .phase-no { position:absolute; left:16px; top:16px; color:var(--orange); font:700 14px ui-monospace,monospace; }
-  .phase h3 { margin-top:0; }
-  .phase ul,.brief ul,.checks { margin:8px 0 0; padding-left:18px; color:var(--muted); }
-  li { margin:5px 0; }
-  .phase .gate { margin-top:12px; color:var(--green); font-size:12px; }
-  .source-list a { color:var(--cyan); text-decoration-thickness:1px; text-underline-offset:3px; }
-  .scope-list { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-top:16px; }
-  .scope-list .card { padding:15px 17px; }
-  .scope-list strong { display:block; margin-bottom:5px; }
-  .check { color:var(--green); } .cross { color:var(--red); }
-  .footer { margin-top:52px; padding-top:22px; border-top:1px solid var(--line); color:var(--faint); font-size:12px; }
-  @media (max-width:900px) { :root{--sidebar:0px}.sidebar{display:none}.main{margin-left:0}.decision,.status-grid,.phase-grid,.brief-grid,.scope-list{grid-template-columns:1fr}.hero{padding-top:44px} }
-</style>
-</head>
-<body>
-<div class="layout">
-  <aside class="sidebar">
-    <div class="brand">OpenProgram Design</div>
-    <div class="doc-name">Unified Agent execution and Workflow refactoring</div>
-    <nav aria-label="Contents">
-      <div class="nav-label">Decision</div>
-      <a href="#decision">Conclusions and boundaries</a><a href="#current">Current implementation</a><a href="#architecture">Target architecture</a>
-      <div class="nav-label">Contracts</div>
-      <a href="#primitives">Four execution primitives</a><a href="#workflow">Workflow process</a><a href="#observability">DAG and chat display</a><a href="#errors">Failure and recovery</a>
-      <div class="nav-label">Execution</div>
-      <a href="#migration">Migration stages</a><a href="#compatibility">Compatibility and removals</a><a href="#tests">Acceptance matrix</a><a href="#comparison">Framework comparison</a><a href="#status">Implementation status</a>
-    </nav>
-  </aside>
+<title>Agent execution core</title>
+<meta name="description" content="How programs and sessions enter one Agent loop, and which primitive to use.">
+<h1>Agent execution core</h1>
 
-  <main class="main"><p>Agent, agent(), agent_async(), and Agent.arun share the same execution core. Ordinary Agent methods and managed Program functions require no per-function decorator. The <a href="../../integrations/nooa.html#contract">unified Agent and Context contract</a> owns configuration, context, and scope lifetime.</p>
-    <header class="hero">
-      <div class="eyebrow">Refactor Plan · Design Only</div>
-      <h1>Unify Agent execution semantics</h1>
-      <p class="lead">Programs use <code>agent()</code> or configured <code>Agent</code> calls. Independent sessions, background Jobs and sub-agent branches remain owned by internal adapters, but both paths must enter the same Agent loop instead of maintaining separate planning, tool-call, model-override and error semantics.</p>
-      <div class="meta"><span class="pill target">Goal: one public Agent API</span><span class="pill">Scope: Runtime / Workflow / DAG / Chat UI</span><span class="pill">Migration: staged and reversible</span><span class="pill">Status: Workflow orchestration migrated · App/DAG acceptance pending</span></div>
-    </header>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 300" role="img" aria-label="Programs enter through agent() and Agent on the current Runtime. Chat, CLI, sub-agents and Jobs enter through the internal run_agent_turn(), which manages sessions and durable Jobs. Both run the same agent loop.">
+  <defs><marker id="la-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="24">Programs</text>
+  <text class="t-soft" x="0" y="48">Workflow roles, Agent methods</text>
+  <text class="t-cmd notranslate" translate="no" x="0" y="82">agent(), Agent</text>
+  <text class="t-soft" x="0" y="106">current Runtime</text>
+  <text class="t-big" x="360" y="24">Sessions</text>
+  <text class="t-soft" x="360" y="48">Chat, CLI, sub-agent, Job</text>
+  <text class="t-cmd notranslate" translate="no" x="360" y="82">run_agent_turn()</text>
+  <text class="t-soft" x="360" y="106">session, branch, Job, recovery, head, archive</text>
+  <line class="ln" x1="150" y1="122" x2="150" y2="186" marker-end="url(#la-a)"/>
+  <line class="ln" x1="500" y1="122" x2="500" y2="186" marker-end="url(#la-a)"/>
+  <rect class="tile" x="0" y="196" width="680" height="96" rx="8"/>
+  <text class="t-big" x="24" y="230">One Agent loop</text>
+  <text class="t-cmd notranslate" translate="no" x="24" y="256">runtime/agent/loop → provider stream</text>
+  <text class="t-soft" x="24" y="278">same retry, cancel, timeout, usage and Call events</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>Programs</strong><small>Workflow roles, Agent methods</small><small><code translate="no">agent()</code>, <code translate="no">Agent</code>: current Runtime</small></li>
+  <li><strong>Sessions</strong><small>Chat, CLI, sub-agent, Job</small><small><code translate="no">run_agent_turn()</code>: session, branch, Job, recovery, head, archive</small></li>
+  <li class="flow-end"><strong>One Agent loop</strong><small><code translate="no">runtime/agent/loop</code></small><small>same retry, cancel, timeout, usage and Call events</small></li>
+</ol>
+</figure>
 
-    <div class="content">
-      <section id="decision">
-        <h2>1. Conclusions and boundaries</h2>
-        <p>This refactoring adds no third Agent abstraction and does not wrap the session Job API in another public function. Public semantics remain in <code>agent()</code>; persistence and branching belong to the execution environment, not the Workflow authoring API.</p>
-        <div class="decision">
-          <div class="card decision-main"><h3>Shared execution entry</h3><p class="big"><code>agent()</code> and configured <code>Agent</code> calls enter the same autonomous tool loop.</p><p>Ordinary Agentic Functions do not call it and permit only one <code>llm()</code>; the full classification contract is in <a href="../workflows/workflow.md">Workflows</a>. Within a Workflow, <code>agent()</code> runs in the current Runtime and forms parent-child Call relationships.</p></div>
-          <div class="card"><h3>Internal session adapter</h3><p><code>run_agent_turn()</code> serves only Chat, CLI, background Jobs and genuinely independent sub-agents. It creates session branches, claims workers, restores Jobs and moves session heads; Programs must not import it directly.</p></div>
-        </div>
-        <div class="scope-list"><div class="card"><strong class="check">Included in this refactoring</strong><span>Unified Agent loops, Workflow selection/creation/repair, DAG ownership, structured output, error propagation, migration tests and UI display contracts.</span></div><div class="card"><strong class="cross">Not introduced by this refactoring</strong><span>A new Workflow DSL, graph execution engine, second Agent profile system, extra persistence database or display of hidden chain-of-thought.</span></div></div>
-      </section>
+<p class="note">Lifecycle before and after the loop is all that differs. No per-function decorator is needed: <code translate="no">Agent</code> scopes ordinary methods itself. <code translate="no">agent()</code>, <code translate="no">agent_async()</code> and <code translate="no">Agent.arun</code> share the core.</p>
 
-      <section id="current">
-        <h2>2. Current implementation: verified facts</h2>
-        <div class="status-grid">
-          <div class="card status"><span class="tag now">Current</span><strong><code>agent()</code> Already uses the current Runtime</strong><p><code>openprogram/runtime/agent/agent_function.py</code> calls <code>runtime.exec(..., execution_kind="agent")</code>, making it naturally suitable for a Workflow DAG.</p></div>
-          <div class="card status"><span class="tag now">Current</span><strong><code>run_agent_turn()</code> is a persistent Job entry</strong><p>It creates/resumes session Jobs and manages worker claims, branches, heads, archives and chain depth.</p></div>
-          <div class="card status"><span class="tag keep">Current</span><strong>Workflow model calls go through roles</strong><p>A Workflow calls the model only through its module-level roles (<code>role(prompt, context=)</code>, <code>role.choose</code>), which run on the public <code>agent()</code>/<code>llm()</code> execution core; <code>run_agent_turn()</code> remains exclusive to Chat/CLI/Jobs.</p></div>
-          <div class="card status"><span class="tag keep">Current</span><strong>Public <code>agent()</code> already supports structured results</strong><p>Public <code>agent()</code> Already passes <code>response_format</code> through to the current Runtime and returns validated JSON values unchanged; the Workflow planner still parses JSON text.</p></div>
-        </div>
-        <table><thead><tr><th>Location</th><th>Current responsibility</th><th>Problem</th><th>Target</th></tr></thead><tbody>
-          <tr><td><code>agent.agent_function</code></td><td>Tool loop inside the current Runtime</td><td>Incomplete parameters and unclear DAG labels</td><td>Extend into the sole public Agent contract</td></tr>
-          <tr><td><code>agent.sub_agent_run</code></td><td>Session branches and durable Jobs</td><td>Called directly by internal Workflow planning</td><td>Retain only as an internal lifecycle adapter</td></tr>
-          <tr><td>Workflow authoring</td><td>The chat Agent with its file tools, plus <code>openprogram programs check</code></td><td>No dedicated authoring tools</td><td>See <a href="../workflows/workflow.md">Workflows</a></td></tr>
-          <tr><td><code>Runtime.exec</code></td><td>Shared lower-level LLM/tool loop</td><td>Public parameters are not fully exposed</td><td>Remain the sole Agent-loop core without public session semantics</td></tr>
-        </tbody></table>
-      </section>
+<h2 id="primitives">Primitives</h2>
 
-      <section id="architecture">
-        <h2>3. Target architecture: two adapter entries, one execution core</h2>
-        <div class="diagram">
-          <svg viewBox="0 0 1120 560" role="img" aria-label="Target Agent architecture. Programs and Workflows enter the current Runtime through public agent. Chat, CLI and sub-agents create Jobs/sessions through internal run_agent_turn, then enter the same Agent loop. Both paths share profiles, tool resolution, providers, errors and DAG events.">
-            <defs><marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#747981"/></marker><filter id="shadow"><feDropShadow dx="0" dy="7" stdDeviation="10" flood-opacity=".22"/></filter></defs>
-            <rect x="24" y="22" width="500" height="118" rx="14" fill="#17191c" stroke="#ee7d55"/><text x="52" y="55" fill="#ee7d55" font-size="12" font-weight="700">PROGRAM EXECUTION</text><text x="52" y="86" fill="#e8e9eb" font-size="19" font-weight="650">Workflow / Application</text><text x="52" y="113" fill="#a3a7ae" font-size="13">Call public agent(); ordinary Agentic Functions call only llm()</text>
-            <rect x="596" y="22" width="500" height="118" rx="14" fill="#17191c" stroke="#4bc6d8"/><text x="624" y="55" fill="#4bc6d8" font-size="12" font-weight="700">SESSION EXECUTION</text><text x="624" y="86" fill="#e8e9eb" font-size="19" font-weight="650">Chat / CLI / sub-agent / background Job</text><text x="624" y="113" fill="#a3a7ae" font-size="13">Call internal run_agent_turn(); manage sessions and durable Jobs</text>
-            <path d="M274 140V196" stroke="#747981" stroke-width="2" marker-end="url(#arrow)"/><path d="M846 140V196" stroke="#747981" stroke-width="2" marker-end="url(#arrow)"/>
-            <rect x="94" y="204" width="360" height="92" rx="12" fill="#1d2024" stroke="#ee7d55"/><text x="274" y="238" text-anchor="middle" fill="#e8e9eb" font-size="17" font-weight="650">public agent()</text><text x="274" y="266" text-anchor="middle" fill="#a3a7ae" font-size="12">prompt · tools · profile · response format · limits · label</text>
-            <rect x="666" y="204" width="360" height="92" rx="12" fill="#1d2024" stroke="#4bc6d8"/><text x="846" y="238" text-anchor="middle" fill="#e8e9eb" font-size="17" font-weight="650">internal run_agent_turn()</text><text x="846" y="266" text-anchor="middle" fill="#a3a7ae" font-size="12">session · branch · Job · recovery · head · archive</text>
-            <path d="M274 296V348H560V374" fill="none" stroke="#747981" stroke-width="2" marker-end="url(#arrow)"/><path d="M846 296V348H560V374" fill="none" stroke="#747981" stroke-width="2" marker-end="url(#arrow)"/>
-            <rect x="180" y="382" width="760" height="142" rx="16" fill="#202328" stroke="#454b54" filter="url(#shadow)"/><text x="560" y="418" text-anchor="middle" fill="#67c78a" font-size="12" font-weight="700">ONE AGENT LOOP KERNEL</text><text x="560" y="452" text-anchor="middle" fill="#e8e9eb" font-size="20" font-weight="650">Runtime.exec → AgentSession → agent_loop → provider stream</text><text x="560" y="483" text-anchor="middle" fill="#a3a7ae" font-size="13">Same profile resolver · tool resolver · retry/cancel/timeout · usage · error normalization · Call events</text><text x="560" y="506" text-anchor="middle" fill="#747981" font-size="12">No second executor class; reuse existing Runtime and dispatcher execution inputs</text>
-          </svg>
-        </div>
-        <p class="caption">Differences exist only in lifecycle before/after execution: Programs reuse the current Runtime; sessions create durable Jobs first. Model loops, tool selection and error semantics remain identical.</p>
-      </section>
+<table class="stack">
+<thead><tr><th scope="col">Primitive</th><th scope="col">Means</th><th scope="col">Persistent session</th><th scope="col">DAG</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">llm()</code></th><td>One logical model request, with structured output and its repair budget</td><td>No, current Runtime</td><td>One LLM Call</td></tr>
+<tr><th scope="row"><code translate="no">agent()</code></th><td>Model and tool loop for one task; final text or a validated structured value</td><td>No, current Runtime</td><td>Agent Call holding LLM and Function Calls</td></tr>
+<tr><th scope="row">Workflow role</th><td><code translate="no">role(prompt, context=)</code> runs a tool loop; <code translate="no">role.choose</code> picks one option</td><td>No, current Runtime</td><td>Child of the entry node, exact request stored</td></tr>
+<tr><th scope="row"><code translate="no">goal</code> Program, <code translate="no">create_goal</code></th><td>Keeps an objective active across a conversation's turns until verification accepts it. Needs a conversation.</td><td>Yes, saved in its session</td><td>Turns, then a verification turn</td></tr>
+<tr><th scope="row"><code translate="no">run_agent_turn()</code></th><td>Internal session lifecycle; not a Program primitive</td><td>Yes</td><td>Independent Agent Call on a session branch</td></tr>
+</tbody>
+</table>
 
-      <section id="primitives">
-        <h2>4. Fixed hierarchy of four execution primitives</h2>
-        <p>Workflow is the highest layer and may directly choose <code>llm()</code>, <code>agent()</code>, <code>goal()</code> or ordinary Python Functions.<code>goal()</code> builds on <code>agent()</code>; <code>agent()</code> builds on <code>llm()</code>. These are dependencies; a Workflow need not traverse every layer.</p>
-        <div class="diagram"><svg viewBox="0 0 1120 380" role="img" aria-label="Workflow is the highest layer and may directly call ordinary functions, llm, agent or goal. Goal depends on agent, agent on llm, and llm on provider.">
-          <defs><marker id="arrow2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#747981"/></marker></defs>
-          <rect x="340" y="18" width="440" height="72" rx="12" fill="#241d1b" stroke="#ee7d55"/><text x="560" y="49" text-anchor="middle" fill="#e8e9eb" font-size="19" font-weight="650">Workflow / Application</text><text x="560" y="72" text-anchor="middle" fill="#a3a7ae" font-size="12">Select any capability below as required by the task</text>
-          <rect x="48" y="150" width="210" height="70" rx="11" fill="#17191c" stroke="#454b54"/><text x="153" y="180" text-anchor="middle" fill="#e8e9eb" font-size="16">Python Functions</text><text x="153" y="202" text-anchor="middle" fill="#747981" font-size="11">Deterministic execution</text>
-          <rect x="306" y="150" width="210" height="70" rx="11" fill="#17191c" stroke="#67c78a"/><text x="411" y="180" text-anchor="middle" fill="#e8e9eb" font-size="16">llm()</text><text x="411" y="202" text-anchor="middle" fill="#747981" font-size="11">One model call</text>
-          <rect x="564" y="150" width="210" height="70" rx="11" fill="#17191c" stroke="#4bc6d8"/><text x="669" y="180" text-anchor="middle" fill="#e8e9eb" font-size="16">agent()</text><text x="669" y="202" text-anchor="middle" fill="#747981" font-size="11">Autonomous tool loop</text>
-          <rect x="822" y="150" width="210" height="70" rx="11" fill="#17191c" stroke="#d8b35d"/><text x="927" y="180" text-anchor="middle" fill="#e8e9eb" font-size="16">goal()</text><text x="927" y="202" text-anchor="middle" fill="#747981" font-size="11">Agent execution + LLM judgment</text>
-          <path d="M560 90V118H153V150M560 118H411V150M560 118H669V150M560 118H927V150" fill="none" stroke="#747981" stroke-width="1.6" marker-end="url(#arrow2)"/><path d="M927 220V270H669V220" fill="none" stroke="#d8b35d" stroke-width="1.6" marker-end="url(#arrow2)"/><path d="M669 220V316H411V220" fill="none" stroke="#4bc6d8" stroke-width="1.6" marker-end="url(#arrow2)"/>
-          <text x="798" y="263" fill="#a3a7ae" font-size="11">Goal internally calls agent</text><text x="514" y="309" fill="#a3a7ae" font-size="11">Each agent iteration calls llm/provider</text>
-        </svg></div>
-        <table><thead><tr><th>Primitive</th><th>Public semantics</th><th>Persistent session?</th><th>DAG record</th></tr></thead><tbody>
-          <tr><td><code>llm()</code></td><td>Exactly one logical model request; structured output supported</td><td>No; inherits current Runtime</td><td>One LLM Call</td></tr>
-          <tr><td><code>agent()</code></td><td>Model/tool loop within one task; returns final text or structured results</td><td>No; inherits current Runtime</td><td>One Agent Call containing LLM and Function Calls</td></tr>
-          <tr><td><code>goal()</code></td><td>Attempt with an Agent, then independently judge goal satisfaction. Programs isolate pre-call history by default; <code>/goal</code> explicitly supplies the current session view</td><td>Yes; writes the same GoalState in its owning session</td><td>Goal → Agent → Goal judge</td></tr>
-          <tr><td><code>run_agent_turn()</code></td><td>Internal session lifecycle adapter, not a Program primitive</td><td>Yes</td><td>Independent Agent Call associated with session/branch</td></tr>
-        </tbody></table>
-        <h3>Target public signature</h3>
-        <pre><code>def agent(
+<p class="note">Workflow code calls the model only through roles. The contract is in <a href="../workflows/workflow.html">Workflows</a>; the Agent and Context owners are in <a href="unified-agent.html">Agent and Context contract</a>.</p>
+
+<details>
+<summary>Signature of agent()</summary>
+<pre translate="no" tabindex="0">def agent(
     prompt: str | list[dict],
     *,
-    description: str = "",
-    agent_id: str = "",
-    model: str = "",
-    effort: str = "",
-    tools: Sequence[str] | None = None,
-    response_format: dict | JsonSchemaOutput | None = None,
-    max_iterations: int = 20,
-    timeout_s: float | None = None,
-) -&gt; str | dict | list | int | float | bool | None:
-    ...</code></pre>
-        <p><code>description</code> affects only visible labels and Call metadata; <code>agent_id</code> reuses the existing Agents-page profile resolver; explicit <code>model</code>/<code>tools</code> overrides corresponding profile fields. The public signature adds no <code>session_id</code>, <code>branch_from</code>, <code>advance_head</code>, <code>archive_when_done</code> or <code>run_in_background</code>.</p>
-      </section>
+    model=None, effort=None, tools=None, tools_deny=None,
+    response_format=None, choices=None,
+    max_iterations=None, stop_after_tool_round=False, timeout_s=None,
+    tool_choice=None, parallel_tool_calls=None, execution_kind="agent",
+    runtime=None, return_raw=False, toolset=None, tools_allow=None,
+    instructions=None, context=None, tools_source=None,
+    on_retry=None, web_search=None, stream_fn=None,
+) -&gt; Any: ...</pre>
+<p class="note">No <code translate="no">session_id</code>, <code translate="no">branch_from</code>, <code translate="no">advance_head</code>, <code translate="no">archive_when_done</code> or <code translate="no">run_in_background</code>: persistence belongs to the execution environment. Saved Agent profiles go through <code translate="no">Agent.from_spec</code>, whose explicit overrides win.</p>
+</details>
 
-      <section id="workflow">
-        <h2>5. Workflow process</h2>
-        <p>Workflows are written by the chat Agent as plain Python packages: <code>Agent</code> instances as roles, explicit <code>Context</code> objects and ordinary functions. There are no separate tools for searching, creating or revising workflows. The complete contract is defined by <a href="../workflows/workflow.md">Workflows</a>.</p>
-        <table><thead><tr><th>Stage</th><th>Who</th><th>Result</th><th>Observability</th></tr></thead><tbody>
-          <tr><td>Write</td><td>Chat Agent with its file tools</td><td>Package in <code>~/.openprogram/programs/&lt;name&gt;/</code></td><td>Ordinary tool calls in the chat</td></tr>
-          <tr><td>Check</td><td><code>openprogram programs check</code></td><td>Import probe, sandboxed tests, Git commit on success</td><td>Check report (<code>--json</code>)</td></tr>
-          <tr><td>Load</td><td>Worker watcher</td><td>Entries of the clean committed revision become tools</td><td>Load state on the Programs page and in <code>workflows list</code></td></tr>
-          <tr><td>Run</td><td>The Workflow's own code</td><td>Entry result</td><td>Entry node with one child per role call</td></tr>
-        </tbody></table>
-      </section>
+<h2 id="decision">Boundaries</h2>
 
-      <section id="observability">
-        <h2>6. DAG and chat display contract</h2>
-        <p>Primary acceptance is not merely a function returning JSON: users must see which role calls a Workflow made, what each request contained, which Programs actually ran and where an error occurred. The entry call is one node; each role call is a child holding the exact request; plain functions are not recorded.</p>
-        
-        <table><thead><tr><th>UI level</th><th>Default display</th><th>Expanded display</th></tr></thead><tbody>
-          <tr><td>Top-level Workflow</td><td>Name, state, duration, step count and complete Conclusion</td><td>Role calls in order, each with its exact request and reply</td></tr>
-          <tr><td>Agent</td><td>Description label, state and iteration count</td><td>Model-output summaries and actual Program calls; no hidden chain-of-thought</td></tr>
-          <tr><td>Program Call</td><td>Name, argument summary and state</td><td>Input, output, errors and side-panel details</td></tr>
-          <tr><td>sub-agent session</td><td>Separate navigable row</td><td>Switch to the child session; returning preserves the same row rather than another card system</td></tr>
-        </tbody></table>
-      </section>
+<table class="stack fixed">
+<thead><tr><th scope="col">Not added</th><th scope="col">Instead</th></tr></thead>
+<tbody>
+<tr><th scope="row">A third Agent abstraction or a public wrapper over Jobs</th><td><code translate="no">agent()</code> and <code translate="no">Agent</code></td></tr>
+<tr><th scope="row">Workflow DSL or graph engine</th><td>Python packages; static graphs from imports and entry identities</td></tr>
+<tr><th scope="row">Second profile system or extra database</th><td>Existing Agents profiles and stores</td></tr>
+<tr><th scope="row">Hidden chain-of-thought in the UI</th><td>Model-output summaries</td></tr>
+</tbody>
+</table>
 
-      <section id="errors">
-        <h2>7. Failures, recovery and state consistency</h2>
-        <table><thead><tr><th>Failure point</th><th>Handling rule</th><th>User-visible state</th></tr></thead><tbody>
-          <tr><td>Provider/model lacks structured output</td><td>After capability detection, use text JSON + local schema validation; never overwrite an internal LLM error with Workflow completed</td><td>Corresponding Agent/LLM Call error; top-level Workflow failed</td></tr>
-          <tr><td>Candidate Workflow validation fails</td><td>Pass deterministic diagnostics to bounded public <code>agent()</code> repair; fail at the limit</td><td>Each repair is an expandable Agent node</td></tr>
-          <tr><td>Worker restart</td><td>Only session/Job paths use durable recovery; in-Program Agents terminate with the parent Call and follow the parent Workflow retry policy</td><td>Do not retain old running states indefinitely</td></tr>
-          <tr><td>User cancellation</td><td>Propagate one cancellation token to Runtime, provider and tools; terminate child calls before closing the parent Workflow</td><td>Consistent cancelled/interrupted states, never completed</td></tr>
-          <tr><td>Tool or child Workflow failure</td><td>Preserve original error payload, caller and partial artifacts; summary must not claim completion</td><td>Failed nodes and Conclusion agree</td></tr>
-          <tr><td>Historical run recovery</td><td>Old SINGLE/code.py state serves only historical recovery; every new task must use project selection/creation</td><td>Old records remain readable; new runs create no legacy project</td></tr>
-        </tbody></table>
-      </section>
+<p class="note">Programs do not import <code translate="no">runtime.conversation.sub_agent_run</code>, except the sub-agent tools (<code translate="no">programs/tools/agents/agent</code>, <code translate="no">send_message</code>), its product entry.</p>
 
-      <section id="migration">
-        <h2>8. Staged migration plan</h2>
-        <p>Each stage first adds tests reproducing the current gap, then modifies the corresponding layer. Never change public API, session lifecycle, Workflow layout and chat visual styles in one stage.</p>
-        <div class="phase-grid">
-          <div class="card phase"><span class="phase-no">01</span><h3>Freeze execution contracts</h3><ul><li>Record current <code>agent()</code>, <code>run_agent_turn()</code> and Runtime call graphs.</li><li>Add architecture tests: Programs must not import <code>agent.sub_agent_run</code>.</li><li>Add real registered-schema tests fixing public parameters of the four Workflow management functions.</li></ul><div class="gate">Gate: add only failing tests and documentation; no behavior change.</div></div>
-          <div class="card phase"><span class="phase-no">02</span><h3>Complete public agent()</h3><ul><li>Pass through <code>response_format</code>, content blocks, description and Agent profile.</li><li>Reuse profile/tool resolvers without a new configuration format.</li><li>Add an Agent wrapper Call for stable ownership of LLM/tool nodes.</li></ul><div class="gate">Gate: public-agent unit tests, DAG-caller tests and provider-fallback tests.</div></div>
-          <div class="card phase"><span class="phase-no">03</span><h3>Workflow authoring without dedicated tools</h3><ul><li>The chat Agent writes packages in <code>~/.openprogram/programs</code>.</li><li><code>openprogram programs check</code> tests and commits them; only clean committed revisions load.</li><li>Model calls inside a Workflow go through its roles.</li></ul><div class="gate">Gate: loader, check and request-content tests.</div></div>
-          <div class="card phase"><span class="phase-no">04</span><h3>Restrict the session adapter</h3><ul><li><code>run_agent_turn()</code> remains internal, supporting branches, Jobs, recovery and archive.</li><li>Confirm dispatcher ultimately uses the same Agent-loop core as public agent.</li><li>Remove duplicate model defaults, tool resolution and error normalization.</li></ul><div class="gate">Gate: background recovery, cancellation, branch/head and spawn-caller tests.</div></div>
-          <div class="card phase"><span class="phase-no">05</span><h3>Migrate all Programs</h3><ul><li>Scan <code>openprogram/programs/</code> for internal Agent API and direct-loop calls.</li><li>Workflows and Applications consistently use public <code>agent()</code>; ordinary Agentic Functions permit only one <code>llm()</code>.</li><li>Retain the vanilla sub-agent tool as the product entry for the session adapter.</li></ul><div class="gate">Gate: static dependency checks + Programs catalog/graph regressions.</div></div>
-          <div class="card phase"><span class="phase-no">06</span><h3>DAG and chat display</h3><ul><li>Backend events add execution_kind, label, caller, iteration and artifact metadata.</li><li>Frontend renders the same Runtime hierarchy without inferring a separate structure.</li><li>Conclusion, footer and collapse behavior reuse existing shared components.</li></ul><div class="gate">Gate: mapper, RuntimeBlock, reload and actual-App DOM acceptance.</div></div>
-          <div class="card phase"><span class="phase-no">07</span><h3>Compatibility cleanup and release</h3><ul><li>Read-only recovery for old runs; prohibit legacy SINGLE for new runs.</li><li>Delete unused planner helpers and duplicate test fixtures.</li><li>Update design navigation, API documentation and Programs dependency graphs.</li></ul><div class="gate">Gate: wheel packages current web/out; default 18100 App/Web/TUI share the same source.</div></div>
-          <div class="card phase"><span class="phase-no">08</span><h3>Controlled rollout</h3><ul><li>Run focused component tests first, then required complete suites.</li><li>Accept one real reuse, create, repair and cancel session each.</li><li>Retain the old recovery reader for one compatibility period; never write the old format again.</li></ul><div class="gate">Gate: record all acceptance evidence in implementation status, not as retroactive design assumptions.</div></div>
-        </div>
-      </section>
+<h2 id="workflow">Workflow lifecycle</h2>
 
-      <section id="compatibility">
-        <h2>9. Compatibility, retention and removals</h2>
-        <table><thead><tr><th>Object</th><th>Treatment</th><th>Reason</th></tr></thead><tbody>
-          <tr><td><code>agent()</code></td><td>Retain and extend; old arguments continue working</td><td>Already the correct public primitive within ambient Runtime</td></tr>
-          <tr><td><code>run_agent_turn()</code></td><td>Retain as internal; prohibit Programs imports</td><td>Chat/CLI/background genuinely need durable sessions</td></tr>
-          <tr><td><code>_request_project_decision()</code></td><td>Replace with actual tool behavior of a single orchestration Agent</td><td>Selection JSON followed by authoring creates two Agent semantics and a disconnected DAG</td></tr>
-          <tr><td>legacy SINGLE / <code>code.py</code></td><td>Read-only recovery; prohibit creation</td><td>Preserve historical records without creating unmaintainable single-file Workflows</td></tr>
-          <tr><td>Workflow project package</td><td>Continue standard Python packages and explicit Agent method or function exports</td><td>Support multi-file maintenance, Git revisions, static dependency graphs and direct Python calls</td></tr>
-          <tr><td>Agents profile</td><td>Reuse existing Agents configuration/resolver</td><td>Avoid a second model/tool configuration inside Programs</td></tr>
-        </tbody></table>
-      </section>
+<table class="stack">
+<thead><tr><th scope="col">Stage</th><th scope="col">Who</th><th scope="col">Result</th><th scope="col">Where to see it</th></tr></thead>
+<tbody>
+<tr><th scope="row">Write</th><td>Chat Agent with file tools</td><td>Package in <code translate="no">~/.openprogram/programs/&lt;name&gt;/</code></td><td>Tool calls in the chat</td></tr>
+<tr><th scope="row">Check</th><td><code translate="no">openprogram programs check</code></td><td>Import probe, sandboxed tests, Git commit on success</td><td>Report (<code translate="no">--json</code>)</td></tr>
+<tr><th scope="row">Load</th><td>Worker watcher</td><td>Entries of the clean committed revision become tools</td><td>Programs page, <code translate="no">openprogram programs list</code></td></tr>
+<tr><th scope="row">Run</th><td>The Workflow's code</td><td>Entry result</td><td>Entry node with one child per role call</td></tr>
+</tbody>
+</table>
 
-      <section id="tests">
-        <h2>10. Acceptance matrix</h2>
-        <div class="brief-grid">
-          <div class="card brief"><h3>API and registration</h3><ul><li>Only <code>PROGRAM_ENTRIES</code> of built-in and user Workflows register as tools; category directories are not registered.</li><li><code>agent()</code> has stable model/tools/profile override order.</li><li>Structured output validates with providers supporting and lacking native schemas.</li></ul></div>
-          <div class="card brief"><h3>Call structure</h3><ul><li>Each role call is a child of its Workflow entry node.</li><li>All Programs called by a Workflow appear in the DAG.</li><li>Direct/manual Workflows are not incorrectly attached to the prior assistant through predecessor.</li></ul></div>
-          <div class="card brief"><h3>Lifecycle</h3><ul><li>Parent cancellation terminates Agent, LLM and tools.</li><li>Session Job restart recovers only the session path.</li><li>New runs never generate SINGLE; old runs resume or return an explicit incompatibility error.</li></ul></div>
-          <div class="card brief"><h3>UI</h3><ul><li>Collapsed state shows Workflow title, Conclusion and footer.</li><li>Expand progressively, not all children at once.</li><li>App/Web/TUI read the same default profile and worker at 18100.</li></ul></div>
-        </div>
-        <h3>Suggested focused checks</h3>
-        <pre><code>pytest -q tests/component/agent/test_agentic_workflow.py
-pytest -q tests/unit/programs/dag/test_runtime_exec_dag.py
-pytest -q tests/unit/agent/workflows/test_agentic_programming_goal.py
+<h2 id="observability">What the UI shows</h2>
+
+<table class="stack">
+<thead><tr><th scope="col">Level</th><th scope="col">Collapsed</th><th scope="col">Expanded</th></tr></thead>
+<tbody>
+<tr><th scope="row">Workflow</th><td>Name, state, duration, step count, full Conclusion</td><td>Role calls in order, each with its exact request and reply</td></tr>
+<tr><th scope="row">Agent</th><td>Label, state, iterations</td><td>Model-output summaries, actual Program calls</td></tr>
+<tr><th scope="row">Program Call</th><td>Name, argument summary, state</td><td>Input, output, errors, side-panel details</td></tr>
+<tr><th scope="row">Sub-agent session</th><td>Navigable row</td><td>Switches to the child session; returning keeps the same row</td></tr>
+</tbody>
+</table>
+
+<p class="note">Plain functions are not recorded. Children expand progressively, not all at once.</p>
+
+<h2 id="errors">Failures</h2>
+
+<table class="stack">
+<thead><tr><th scope="col">Failure</th><th scope="col">Handling</th><th scope="col">User sees</th></tr></thead>
+<tbody>
+<tr><th scope="row">No native structured output</th><td>Falls back by capability to text JSON with local schema validation</td><td>An error stays on its LLM or Agent Call; Workflow failed</td></tr>
+<tr><th scope="row"><code translate="no">programs check</code> fails</th><td>No commit; the chat Agent reads the report and edits</td><td>Check report in the chat</td></tr>
+<tr><th scope="row">Worker restart</th><td>Session and Job paths recover. A <code translate="no">resumable</code> entry resumes through <code translate="no">step()</code>. Other in-Program Agents end with the parent.</td><td>No stale running state</td></tr>
+<tr><th scope="row">User cancellation</th><td>One token reaches Runtime, provider and tools; children end before the parent</td><td>Cancelled or interrupted, never completed</td></tr>
+<tr><th scope="row">Tool or child Workflow failure</th><td>Keeps error payload, caller and partial artifacts</td><td>Failed nodes and Conclusion agree</td></tr>
+</tbody>
+</table>
+
+<h2 id="tests">Invariants</h2>
+
+<ul>
+<li>Only <code translate="no">PROGRAM_ENTRIES</code> register as tools; category directories do not.</li>
+<li>Each role call is a child of its entry node, and every Program a Workflow calls appears in the DAG.</li>
+<li>A direct Workflow does not attach to the prior assistant through <code translate="no">predecessor</code>.</li>
+<li>App, Web and TUI of one profile share one worker.</li>
+</ul>
+
+<details>
+<summary>Focused tests</summary>
+<pre translate="no" tabindex="0">pytest -q tests/unit/programs/dag/test_runtime_exec_dag.py
 pytest -q tests/component/agent/jobs/test_async_job_recovery.py
 pytest -q tests/unit/agent/jobs/test_spawn_caller_invariant.py
-pytest -q tests/component/webui/abilities/test_programs_explorer.py
-npm --prefix web run check:chat-ui
-npx --prefix web tsc --noEmit
-python -m scripts.docs_site.checklinks
-git diff --check</code></pre>
-        <div class="callout warn">Unit-test success is insufficient for completion. Run reuse, create, repair and cancel sessions in the packaged App and inspect reloaded DOM, DAG caller, state and Conclusion.</div>
-      </section>
+pytest -q tests/component/webui/abilities/test_programs_explorer.py</pre>
+</details>
 
-      <section id="comparison">
-        <h2>11. Framework comparison and decisions</h2>
-        <p>Compare only capabilities directly relevant to this architectural decision. OpenProgram introduces no new third-party orchestration runtime.</p>
-        <table><thead><tr><th>Reference</th><th>Adopted</th><th>Not adopted</th></tr></thead><tbody class="source-list">
-          <tr><td><a href="https://openai.github.io/openai-agents-python/running_agents/">OpenAI Agents SDK · Running agents</a></td><td>Runner owns the model/tool loop of one logical turn; max turns, sessions and hooks are separate.</td><td>Do not use Runner as a second OpenProgram runtime; retain current Runtime/dispatcher.</td></tr>
-          <tr><td><a href="https://openai.github.io/openai-agents-python/tools/">OpenAI Agents SDK · Tools</a></td><td>Python function tools and agent-as-tool are explicit calls; parents can observe child execution.</td><td>Do not implicitly convert Workflows into handoffs; they remain Python packages.</td></tr>
-          <tr><td><a href="https://openai.github.io/openai-agents-python/multi_agent/">OpenAI Agents SDK · Orchestration</a></td><td>Distinguish a manager calling a child Agent from handing control to another Agent.</td><td>Inside a Program, <code>agent()</code> does not automatically create session branches; only product-level sub-agent actions switch sessions.</td></tr>
-          <tr><td><a href="https://docs.langchain.com/oss/python/langgraph/workflows-agents">LangGraph · Workflows and agents</a></td><td>Workflows are predefined code paths; Agents dynamically choose tools locally.</td><td>No new graph DSL; static call graphs derive from Python imports and explicit entry identities .</td></tr>
-          <tr><td><a href="https://docs.langchain.com/oss/python/langgraph/persistence">LangGraph · Persistence</a></td><td>Persistence, threads, checkpoints and interruption recovery should be explicit lifecycle capabilities.</td><td>Do not force every in-Program Agent into a persistent thread; only the session adapter uses durable Jobs.</td></tr>
-        </tbody></table>
-      </section>
+<details>
+<summary>Compared with other frameworks</summary>
+<table class="stack">
+<thead><tr><th scope="col">Reference</th><th scope="col">Adopted</th><th scope="col">Not adopted</th></tr></thead>
+<tbody>
+<tr><th scope="row"><a href="https://openai.github.io/openai-agents-python/running_agents/">OpenAI Agents SDK: running agents</a></th><td>A runner owns the loop of one logical turn; limits, sessions and hooks are separate</td><td>A second runtime</td></tr>
+<tr><th scope="row"><a href="https://openai.github.io/openai-agents-python/tools/">OpenAI Agents SDK: tools</a></th><td>Function tools and agent-as-tool are explicit; parents observe child execution</td><td>Turning Workflows into handoffs</td></tr>
+<tr><th scope="row"><a href="https://openai.github.io/openai-agents-python/multi_agent/">OpenAI Agents SDK: orchestration</a></th><td>Calling a child differs from handing over control</td><td>Implicit session branches from <code translate="no">agent()</code></td></tr>
+<tr><th scope="row"><a href="https://docs.langchain.com/oss/python/langgraph/workflows-agents">LangGraph: workflows and agents</a></th><td>Workflows are predefined paths; Agents choose tools locally</td><td>A graph DSL</td></tr>
+<tr><th scope="row"><a href="https://docs.langchain.com/oss/python/langgraph/persistence">LangGraph: persistence</a></th><td>Persistence and interruption recovery are explicit lifecycle capabilities</td><td>A persistent thread for every in-Program Agent</td></tr>
+</tbody>
+</table>
+</details>
 
-      <section id="status">
-        <h2>12. Implementation status</h2>
-        <div class="status-grid">
-          <div class="card status"><span class="tag keep">Verified current</span><strong>Existing public <code>llm()</code>, <code>agent()</code>, <code>goal()</code></strong><p>All three already use ambient Runtime; retain the hierarchy direction.</p></div>
-          <div class="card status"><span class="tag keep">Verified current</span><strong>Runtime already supports most target parameters</strong><p><code>response_format</code>, tools, model, effort, timeout and execution_kind capabilities already exist.</p></div>
-          <div class="card status"><span class="tag keep">Verified current</span><strong>Workflow role calls use the public execution core</strong><p>A role call runs <code>openprogram.runtime.agent.agent_function()</code> (or <code>llm()</code> for <code>role.choose</code>) with the role's tools and the request parts defined in <a href="../workflows/workflow.md">Workflows</a>.</p></div>
-          <div class="card status"><span class="tag now">Partial</span><strong>Workflow-embedded <code>agent()</code> still uses the session adapter</strong><p>legacy <code>code.py</code> In the execution path, <code>_agent_function()</code> remains bound to the session turn; project-snapshot execution already uses public <code>agent()</code>.</p></div>
-          <div class="card status"><span class="tag target">Pending</span><strong>Unified DAG and App visual acceptance remain incomplete</strong><p>Component tests cover reuse/create/revise/pin/resume; selection-Agent nodes, Conclusion and reload behavior in the default App remain unverified.</p></div>
-          <div class="card status"><span class="tag keep">Verified current</span><strong>public <code>agent()</code> Structured-output passthrough</strong><p>Public <code>agent()</code> Accepts a bare JSON Schema or <code>JsonSchemaOutput</code>, returning Runtime-validated objects, arrays, scalars or null unchanged. Without structured-output requests, retain text and legacy <code>{"text": ...}</code> compatibility; Workflow-planner migration is outside this implementation.</p></div>
-        </div>
-        <div class="footer">Document role: this page owns Agent execution semantics. The workflow form, context rules and loading are authoritative in the <a href="../workflows/workflow.md">workflow design</a>; other pages must not duplicate that contract.</div>
-      </section>
-    </div>
-  </main>
-</div>
-</body>
-</html>
+<h2 id="status">Implementation status</h2>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Status</th><th scope="col">Items</th></tr></thead>
+<tbody>
+<tr><th scope="row">Implemented</th><td><code translate="no">llm()</code>, <code translate="no">agent()</code> on the current Runtime; structured output; Workflow roles on the public core; <code translate="no">programs check</code> and loading; session adapter</td></tr>
+<tr><th scope="row">Not yet verified</th><td>DAG and Conclusion display after reload in the installed App</td></tr>
+</tbody>
+</table>

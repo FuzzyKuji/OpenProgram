@@ -329,17 +329,6 @@ def _mutation_state_matches(project_id: str, action: str, payload: dict,
     return _identity_matches(source, state.get("source", {})) and not target.get("exists")
 
 
-def _replayed_mutation_result(project_id: str, action: str, payload: dict) -> dict:
-    result = {"ok": True}
-    if action == "project_file_write":
-        target, _error = _resolve(project_id, str(payload.get("path") or ""))
-        try:
-            result["mtime"] = os.stat(target).st_mtime if target else None
-        except OSError:
-            result["mtime"] = None
-    return result
-
-
 def _normalise_mutation_result(result: dict) -> dict:
     result = dict(result)
     if result.get("status") == "recovery_required":

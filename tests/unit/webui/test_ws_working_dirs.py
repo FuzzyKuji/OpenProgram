@@ -1,6 +1,6 @@
 """ws action ``set_working_dirs`` + ``session_loaded`` 回带。
 
-设计：docs/reference/design/runtime/session/additional-working-directories.md §3.2/§3.3。
+设计：docs/reference/design/runtime/session/additional-working-directories.html §3.2/§3.3。
 锁三件事：
   1. 合法目录列表 → expanduser 后落库（save_session_run_config）+ 广播
      ``working_dirs`` 帧；
@@ -30,6 +30,16 @@ class FakeWS:
 
     async def send_text(self, text: str) -> None:
         self.sent.append(json.loads(text))
+
+
+class WebWS(FakeWS):
+    """A socket that reads turns, as the web client does."""
+
+    _history_protocol = 3
+
+
+def _rows(frame: dict) -> list[dict]:
+    return [row for turn in frame["data"]["turns"] for row in turn["rows"]]
 
 
 @pytest.fixture
@@ -265,7 +275,7 @@ def test_session_loaded_keeps_workflow_llm_output_inside_runtime_card(
     monkeypatch.setattr(_s, "_get_provider_info", lambda sid=None: {})
     monkeypatch.setattr(_s, "_is_run_active", lambda sid: False)
 
-    ws = FakeWS()
+    ws = WebWS()
     try:
         asyncio.run(ws_session.handle_load_session(ws, {"session_id": sid}))
     finally:
@@ -273,12 +283,12 @@ def test_session_loaded_keeps_workflow_llm_output_inside_runtime_card(
             _s._sessions.pop(sid, None)
 
     loaded = next(f for f in ws.sent if f.get("type") == "session_loaded")
-    messages = loaded["data"]["messages"]
+    messages = _rows(loaded)
     assert [m["id"] for m in messages] == ["u1", "a1", "run1"]
     runtime = messages[-1]
-    assert runtime["display"] == "runtime"
+    assert runtime["rowKind"] == "function_run"
     assert runtime["function"] == "agentic_workflow"
-    assert runtime["context_tree"]
+    assert [child["path"] for child in runtime["contextTree"]["children"]] == ["inner-llm"]
     assert "inner-llm" not in {m["id"] for m in messages}
 
 
@@ -330,26 +340,24 @@ def test_session_loaded_emits_function_run_sibling_navigation(
     with _s._sessions_lock:
         _s._sessions[sid] = {"id": sid}
 
-    ws = FakeWS()
+    ws = WebWS()
     try:
         asyncio.run(ws_session.handle_load_session(ws, {"session_id": sid}))
         loaded = next(frame for frame in ws.sent if frame["type"] == "session_loaded")
-        late = next(message for message in loaded["data"]["messages"]
-                    if message.get("id") == "run-late")
-        assert late["sibling_index"] == 2
-        assert late["sibling_total"] == 2
-        assert late["prev_sibling_id"] == "run-early"
-        assert late["next_sibling_id"] is None
+        late = next(message for message in _rows(loaded) if message.get("id") == "run-late")
+        assert late["siblingIndex"] == 2
+        assert late["siblingTotal"] == 2
+        assert late["prevSiblingId"] == "run-early"
+        assert late.get("nextSiblingId") is None
 
         db.set_head(sid, "run-early")
         asyncio.run(ws_session.handle_load_session(ws, {"session_id": sid}))
         loaded = [frame for frame in ws.sent if frame["type"] == "session_loaded"][-1]
-        early = next(message for message in loaded["data"]["messages"]
-                     if message.get("id") == "run-early")
-        assert early["sibling_index"] == 1
-        assert early["sibling_total"] == 2
-        assert early["prev_sibling_id"] is None
-        assert early["next_sibling_id"] == "run-late"
+        early = next(message for message in _rows(loaded) if message.get("id") == "run-early")
+        assert early["siblingIndex"] == 1
+        assert early["siblingTotal"] == 2
+        assert early.get("prevSiblingId") is None
+        assert early["nextSiblingId"] == "run-late"
     finally:
         with _s._sessions_lock:
             _s._sessions.pop(sid, None)
@@ -425,7 +433,7 @@ def test_session_loaded_chat_navigation_is_request_indexed(
     with _s._sessions_lock:
         _s._sessions[sid] = {"id": sid}
 
-    ws = FakeWS()
+    ws = WebWS()
     try:
         asyncio.run(ws_session.handle_load_session(ws, {"session_id": sid}))
     finally:
@@ -433,21 +441,15 @@ def test_session_loaded_chat_navigation_is_request_indexed(
             _s._sessions.pop(sid, None)
 
     loaded = next(frame for frame in ws.sent if frame["type"] == "session_loaded")
-    middle = next(
-        message for message in loaded["data"]["messages"]
-        if message.get("id") == "a-middle"
-    )
+    middle = next(message for message in _rows(loaded) if message.get("id") == "a-middle")
     assert {
         key: middle[key]
-        for key in (
-            "sibling_index", "sibling_total",
-            "prev_sibling_id", "next_sibling_id",
-        )
+        for key in ("siblingIndex", "siblingTotal", "prevSiblingId", "nextSiblingId")
     } == {
-        "sibling_index": 2,
-        "sibling_total": 3,
-        "prev_sibling_id": "a-first-leaf",
-        "next_sibling_id": "a-last-leaf",
+        "siblingIndex": 2,
+        "siblingTotal": 3,
+        "prevSiblingId": "a-first-leaf",
+        "nextSiblingId": "a-last-leaf",
     }
     assert sibling_key_calls <= len(nodes) * 2, (
         "session load must group chat siblings once per request: "

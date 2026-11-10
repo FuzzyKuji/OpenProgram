@@ -1,47 +1,122 @@
-<!DOCTYPE html>
-<html lang="zh">
-<head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>OpenProgram · 队列与执行中引导</title>
-<style>
-  :root { color-scheme:dark; --bg:#11141a; --panel:#181d26; --panel2:#202735;
-    --line:#303a4a; --text:#dce3ec; --muted:#96a1b1; --blue:#72a8ff;
-    --green:#55d69c; --amber:#f0c562; --red:#ff7b7b; --mono:ui-monospace,SFMono-Regular,Menlo,monospace }
-  * { box-sizing:border-box } body { margin:0; background:var(--bg); color:var(--text);
-    font:14px/1.65 -apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC",sans-serif }
-  main { max-width:1120px; margin:auto; padding:42px 28px 88px }
-  h1 { margin:0 0 8px; font-size:29px } h2 { margin:42px 0 14px; padding-top:17px;
-    border-top:1px solid var(--line); font-size:20px } h3 { margin:0 0 7px; font-size:15px }
-  p { margin:8px 0 } code { padding:1px 5px; border:1px solid #2b3544; border-radius:5px;
-    background:#0d1015; color:#d6e5ff; font-family:var(--mono); font-size:.91em }
-  .eyebrow { color:var(--blue); font:600 11px/1.4 var(--mono); letter-spacing:.13em; text-transform:uppercase }
-  .sub,.small { color:var(--muted) } .lead,.card,.diagram,.table-wrap { border:1px solid var(--line);
-    border-radius:11px; background:var(--panel) } .lead { margin-top:20px; padding:16px 18px; border-left:4px solid var(--blue) }
-  .grid { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px }
-  .card { padding:15px 16px } ul { margin:7px 0; padding-left:20px } li { margin:4px 0 }
-  .diagram { padding:18px; overflow:auto } .flow { display:flex; align-items:center; gap:9px; min-width:800px }
-  .state { flex:1; padding:12px; border:1px solid var(--line); border-radius:8px; background:var(--panel2); text-align:center }
-  .arrow { color:var(--muted); font-family:var(--mono) } .ok { color:var(--green) } .warn { color:var(--amber) }
-  .bad { color:var(--red) } .table-wrap { overflow:auto } table { width:100%; border-collapse:collapse; min-width:760px }
-  th,td { padding:9px 11px; border-bottom:1px solid var(--line); text-align:left; vertical-align:top }
-  th { background:var(--panel2); color:#cbd5e3; font-size:12px } tr:last-child td { border-bottom:0 }
-  .pill { display:inline-block; padding:2px 7px; border:1px solid currentColor; border-radius:999px; font:600 10px var(--mono) }
-  .note { margin:12px 0; padding:11px 13px; border-left:3px solid var(--amber); background:#262113; color:#ddd0aa }
-  @media(max-width:780px) { main { padding:28px 17px 68px } .grid { grid-template-columns:1fr } }
-</style>
-</head>
-<body><main>
-<p class="eyebrow">OpenProgram / Web / 对话输入</p><h1>队列与当前轮次引导</h1>
-<div class="lead">运行中输入的每条消息在发送时决定去处。回车和发送按钮是 steer：在支持的安全点向指定的当前执行添加文本。Cmd/Ctrl+回车是排队：对话在前一轮结束后把它作为一条后续消息发送。这两种队列操作都不会取消当前执行；取消由独立的停止控件负责。</div>
-<h2>参考与兼容性</h2><p><a href="https://learn.chatgpt.com/docs/prompting#steering-and-queuing">Codex 提示</a> 区分排队的后续消息与当前轮次输入。 <a href="https://learn.chatgpt.com/docs/app-server#steer-an-active-turn">Codex App Server</a> 把 steering 绑定到预期的当前轮次，且不接受运行设置覆盖。OpenProgram 使用既有执行命令服务和安全点，不增加第二套 session 收件箱或 provider 专属 steering 传输。</p>
-<h2>投递</h2><div class="diagram">排队文本 → 执行身份与当前版本 → 持久化 execution.steer 命令 → 下一个安全点 → 持久化 steering 用户消息</div>
-<p>队列保留条目，直到匹配的 applied 回执确认用户消息已持久化。accepted 或 applying 命令使用同一命令信封自动检查。命令只携带消息、精确执行身份、版本和幂等键，不改变权限、模型、工具或当前程序。不支持或已结束的执行让条目继续排队；空闲时的协调按 FIFO 顺序发送普通后续消息。</p>
-<p>发送前，客户端保留不可变命令信封。确认丢失时，投递状态保持未确认：条目仍可见，普通队列处理不能再次发送，自动确认重试复用同一信封。每个排队条目使用一个确认计时器，从 1.5 秒开始，传输失败后退避到最多 30 秒。确定回执清除重试状态；不确定投递不能转为普通重复发送。确认的旧版本拒绝允许依据新快照创建新信封。错误可见；传输失败后总会释放 injected 标志。</p>
-<h2>归属与界面</h2><p>当前 session 及其运行执行决定目标，不得临时选择其他 session 或关联子 Agent。不再有常驻的排队或注入偏好，发送时按的键决定去处。排队消息显示为贴在输入框上方的一张浮起卡片。标题统计条数和其中正在插入当前轮的条数，并可折叠卡片。每行一行：标签（steer 在途时为“插入当前轮”，等待时为“下一轮”，失败后为“未发送”或“待确认”）、正文第一行，以及悬停或键盘聚焦时出现的操作。操作包括不取消执行的“插入当前轮”、重试、编辑，以及投递并非不确定时的移除。点击正文展开完整消息和附件。“全部清除”一次写入移除所有行，正在投递或编辑的行除外，因此清除不会把将被移除的行发送出去。附件保留既有草稿行为；steering 在规范命令大小限制内接受文本。</p>
-<p>普通后续消息准入先从持久 session head 确定 predecessor，再更新服务端对话镜像。它包含前一条助手回复、工具结果和已投递 steering 输入；显式分支 predecessor 保持不变。</p>
-<p>被取消或中断的助手轮次保留部分内容并显示终态，包括空回复。取消提示不推断取消由谁发起。</p>
-<h2>存储边界</h2><p>队列条目仍只存在于当前 renderer。待定 steering 条目在确定确认解析命令前不能作为普通消息发送。规范的接受操作把命令持久化到服务端；应用命令时持久化用户消息。执行结束后，未投递 steering 命令被拒绝，对应条目可恢复普通排队。已完成的工具批次不会仅因 steering 消息到达而被跳过。本次改动不使用新消息代理替换普通聊天传输。</p>
-<h2>验收</h2><ul><li>排队两条后续消息：每条只在前一轮结束后开始。</li><li>工具运行期间添加文本：同一执行和工具继续，指令进入后续模型上下文。</li><li>确认丢失：保留条目，重放同一命令，不重复投递。</li><li>目标已结束、不可用或不支持时保留输入并报告状态。</li><li>切换范围不能引导另一段对话；停止仍是独立显式操作。</li></ul>
-<h2>实现状态</h2><p>实现使用规范执行命令和不取消执行的队列控件。Agent 命令应用通过当前回复分支中已持久化的用户输入确认；仅安全点准入仍处于 applying。owner 过期不能授权迟到输入写入。执行关闭会处理未投递命令，即使执行正等待 effect 协调。验收使用默认 App 与真实请求处理；静态检查不能替代运行验收。</p>
-<p data-status="partial">steering 确认丢失后的自动恢复及助手终态提示正在实现与验证。既有队列归属和命令幂等性不变。</p><section><h2>函数重试确认</h2><p>每次重试携带请求身份，分发确认或拒绝时回传。接受计时器在分发被接受时结束，而不是等函数执行完成。拒绝或断线发送只恢复对应待处理卡片，并报告一次真实原因。缺少确认保持不确定，不自动重新提交。历史和界面验证仍具权威性。</p></section><h2>Steer 生命周期审查约束</h2><p>补充消息绑定用户请求时选中的执行。版本冲突只允许更新该执行的版本，不能选择替代执行。Stop 保留尚未完成接收的补充消息；未确认命令保持原始内容和身份，禁止作为普通消息重复发送。</p><p>仅将文本 steer 命令及停止、目标结束后保留的草稿保存到当前窗口的 session storage。刷新后恢复原命令，待会话状态加载后继续确认，不发送普通对话。普通未发送队列和附件仍仅存在于内存。浏览器禁止存储时尽力保留当前内存状态；服务端命令记录仍是权威来源。</p><p>验收覆盖查询和版本重试期间停止、目标执行替换、确认丢失与刷新、多条补充消息、文本与思考生成、无输出等待、工具、暂停与继续、取消及历史恢复、附件与长度限制、跨会话授权。</p><p data-status="implemented">生命周期修复通过独立规格及质量复核。合并版本的完整验证包括 3,279 项 Python 测试通过、2 项既有跳过、964 项 Web 测试通过、8 项浏览器测试通过；静态检查、TypeScript 和文档链接均通过。精确实现版本和安装 App 的验收分别记录在本地发布记录中。</p><h2>审查覆盖范围</h2><p>验收矩阵覆盖输入准备、执行身份、重复与未确认命令、接收前停止、刷新恢复、流式文本与思考、工具与暂停、命令持久化及历史恢复。具体测试文件和对应行为见英文版的同一矩阵。</p></main></body></html>
+<title>队列与插话</title>
+<meta name="description" content="运行中输入的消息如何插入当前执行或排队成后续消息，以及投递如何保持精确。">
+<h1>队列与插话</h1>
+
+<table class="stack">
+<thead><tr><th scope="col">按键</th><th scope="col">动作</th><th scope="col">去向</th></tr></thead>
+<tbody>
+<tr><th scope="row">回车、发送按钮</th><td>插话</td><td>当前这次执行，在支持的安全点</td></tr>
+<tr><th scope="row">Cmd/Ctrl+回车</th><td>排队</td><td>上一轮结束后的一条后续消息</td></tr>
+<tr><th scope="row">停止</th><td>取消</td><td>单独的控件；上面两个动作都不取消</td></tr>
+</tbody>
+</table>
+<p class="note">没有常驻偏好：发送时按的键决定。目标由当前会话及其运行中的执行决定，绝不选择其他会话或子 Agent。</p>
+
+<h2 id="delivery">投递</h2>
+<figure>
+<svg class="fig-wide" viewBox="0 0 680 100" role="img" aria-label="排队文本绑定执行身份和版本，变成持久的 execution.steer 命令，等待下一个安全点，然后持久化成一条插话用户消息。">
+  <defs><marker id="sq-a" viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto"><path class="head" d="M0 0L8 4L0 8z"/></marker></defs>
+  <text class="t-big" x="0" y="40">排队</text>
+  <text class="t-soft" x="0" y="66">保留该行</text>
+  <line class="ln" x1="72" y1="33" x2="124" y2="33" marker-end="url(#sq-a)"/>
+  <text class="t-big" x="136" y="40">绑定</text>
+  <text class="t-soft" x="136" y="66">执行、版本</text>
+  <line class="ln" x1="184" y1="33" x2="252" y2="33" marker-end="url(#sq-a)"/>
+  <text class="t-big" x="264" y="40">命令</text>
+  <text class="t-cmd" translate="no" x="264" y="66">execution.steer</text>
+  <line class="ln" x1="352" y1="33" x2="396" y2="33" marker-end="url(#sq-a)"/>
+  <text class="t-big" x="408" y="40">安全点</text>
+  <text class="t-soft" x="408" y="66">下一个</text>
+  <line class="ln" x1="508" y1="33" x2="556" y2="33" marker-end="url(#sq-a)"/>
+  <text class="t-big" x="568" y="40">已持久化</text>
+  <text class="t-soft" x="568" y="66">用户消息</text>
+</svg>
+<ol class="flow fig-narrow">
+  <li><strong>排队</strong><small>保留该行</small></li>
+  <li><strong>绑定</strong><small>执行、版本</small></li>
+  <li><strong>命令</strong><small><code translate="no">execution.steer</code></small></li>
+  <li><strong>安全点</strong><small>下一个</small></li>
+  <li class="flow-end"><strong>已持久化</strong><small>用户消息</small></li>
+</ol>
+</figure>
+
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">方面</th><th scope="col">规则</th></tr></thead>
+<tbody>
+<tr><th scope="row">保留到</th><td>匹配的已应用回执确认用户消息已持久化；仅进入安全点仍算应用中</td></tr>
+<tr><th scope="row">命令携带</th><td>只有消息、精确执行身份、版本、幂等键。不改权限、模型、工具或程序</td></tr>
+<tr><th scope="row">发送前</th><td>客户端保留不可变的信封</td></tr>
+<tr><th scope="row">确认丢失</th><td>投递未确认：该行保持可见，普通排空不能重发，确认重试复用信封</td></tr>
+<tr><th scope="row">确认定时器</th><td>每行一个；1.5 秒，传输失败后退避到 30 秒。明确回执清除</td></tr>
+<tr><th scope="row">版本过期拒绝</th><td>针对同一执行的新快照发一个新信封</td></tr>
+<tr><th scope="row">目标</th><td>在用户请求时绑定。版本重试只刷新版本，不能换成另一个执行</td></tr>
+<tr><th scope="row">不支持或已结束</th><td>条目保持排队；空闲对账按 FIFO 排空普通后续消息。执行结束时未投递的插话被拒绝，这些行可恢复排队</td></tr>
+<tr><th scope="row">停止</th><td>把在途指令保留为未发送草稿，即使尚未接纳。不确定的命令在明确回执前不可变；停止不能抹掉它，也不能允许普通发送</td></tr>
+<tr><th scope="row">工具</th><td>不因插话到来跳过已完成的工具批次</td></tr>
+<tr><th scope="row">持有者过期</th><td>不能授权迟到的输入写入。执行关闭时解决未投递命令，即使在等待效果对账</td></tr>
+</tbody>
+</table>
+<p class="note">错误可见；传输失败后注入标记总是释放。参考：<a href="https://learn.chatgpt.com/docs/prompting#steering-and-queuing">Codex 提示</a>、<a href="https://learn.chatgpt.com/docs/app-server#steer-an-active-turn">App Server 插话</a>（绑定预期轮次，不接受运行时覆盖）。OpenProgram 用自己的执行命令服务和安全点，没有第二个会话收件箱、消息代理或模型专属传输。</p>
+
+<h2 id="queue-card">队列卡片</h2>
+<p>输入框上方停靠的一张浮起卡片。标题显示行数和有多少加入当前轮，并可折叠卡片。</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">行部件</th><th scope="col">说明</th></tr></thead>
+<tbody>
+<tr><th scope="row">标签</th><td>插入当前轮（插话在途）、下一轮（等待）、未发送或待确认（失败后）</td></tr>
+<tr><th scope="row">文本</th><td>首行；点击展开完整消息和附件</td></tr>
+<tr><th scope="row">动作，悬停或键盘聚焦时显示</th><td>加入当前轮（不取消）、重试、编辑、投递确定时可移除</td></tr>
+<tr><th scope="row">全部清除</th><td>一次写入移除所有行，正在投递或编辑的除外，绝不排空将被移除的行</td></tr>
+<tr><th scope="row">限制</th><td>附件保持草稿行为；插话接受最多 4,096 个 Unicode 码点的文本</td></tr>
+</tbody>
+</table>
+
+<h2 id="storage">存储</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">数据</th><th scope="col">位置</th></tr></thead>
+<tbody>
+<tr><th scope="row">普通队列项、附件</th><td>渲染进程内存</td></tr>
+<tr><th scope="row">待确认的文本插话回执、已停止或结束的插话草稿</th><td>同窗口 session storage；刷新后恢复且不重放聊天；尽力而为，不是第二份命令日志</td></tr>
+<tr><th scope="row">已接受的命令</th><td>服务端规范接受</td></tr>
+<tr><th scope="row">已应用的输入</th><td>持久化的用户消息</td></tr>
+</tbody>
+</table>
+<p class="note">待确认的插话在解决前不能作为普通消息排空。读取或转录更新带来带有该插话命令 id 的行时，插话即确认；读取之后，未解决的命令用原身份确认。</p>
+
+<h2 id="history">历史</h2>
+<ul>
+<li>普通后续消息在更新服务端镜像前从持久会话头解析前驱，包含上一回复、工具结果和已投递的插话。显式分支前驱不变。</li>
+<li>已取消和中断的轮次保留部分内容并显示终止状态，包括空回复。取消提示不推断是谁取消的。</li>
+</ul>
+
+<h2 id="function-retry-acknowledgement">函数重试确认</h2>
+<p>每次重试带一个请求身份，由确认或拒绝回传。接受定时器在派发时结束，不等函数完成。拒绝或断线发送只恢复对应的待处理卡片，原因只报一次。缺失的确认保持不确定，不自动重发。历史和界面校验仍然权威。</p>
+
+<details id="audit-coverage">
+<summary>验收和审计覆盖</summary>
+<ul>
+<li>排队两条后续消息，各自在上一轮结束后开始。</li>
+<li>工具运行时加入文本：同一执行和工具继续；指令进入之后的模型上下文。</li>
+<li>确认丢失：保留该行，重放同一命令且不重复投递。</li>
+<li>已结束、不可用和不支持的目标保留输入并报告状态。</li>
+<li>切换范围不能插话到别的对话。</li>
+</ul>
+<table class="stack">
+<thead><tr><th scope="col">边界</th><th scope="col">行为</th><th scope="col">回归</th></tr></thead>
+<tbody>
+<tr><th scope="row">输入准备</th><td>展开粘贴、附件、4,096 码点</td><td><code translate="no">submit-reliability.test.mjs</code></td></tr>
+<tr><th scope="row">目标归属</th><td>会话身份；快照替换；同执行版本重试</td><td><code translate="no">submit-reliability.test.mjs</code>、<code translate="no">test_execution_cursor_auth_audit.py</code></td></tr>
+<tr><th scope="row">重复和不确定命令</th><td>同信封重试；一个定时器；有界退避</td><td><code translate="no">submit-reliability.test.mjs</code></td></tr>
+<tr><th scope="row">接纳前停止</th><td>快照和版本拒绝竞争时保留草稿</td><td><code translate="no">submit-reliability.test.mjs</code></td></tr>
+<tr><th scope="row">刷新和存储</th><td>已接受、确认丢失和已停止的命令；精确重放；存储被拒</td><td><code translate="no">test_queue_steer.py</code>、<code translate="no">submit-reliability.test.mjs</code></td></tr>
+<tr><th scope="row">流式</th><td>文本、推理和静默等待被打断；部分内容保留</td><td><code translate="no">test_streaming_steer.py</code></td></tr>
+<tr><th scope="row">工具和暂停</th><td>整批工具完成；暂停时的输入进入继续执行</td><td><code translate="no">test_safe_points.py</code>、<code translate="no">test_continue_step_steer.py</code></td></tr>
+<tr><th scope="row">持久命令</th><td>接受顺序、幂等、检查点回滚、持有者过期</td><td><code translate="no">test_safe_points.py</code>、<code translate="no">test_continue_step_steer.py</code></td></tr>
+<tr><th scope="row">历史</th><td>取消的部分回复；显式下一轮前驱；会话头不回退</td><td><code translate="no">test_streaming_steer.py</code>、<code translate="no">test_queue_steer.py</code></td></tr>
+</tbody>
+</table>
+<p class="note">另外覆盖：多条已接受输入、模型静默等待、暂停和继续、冷历史、跨会话授权。</p>
+</details>
+
+<h2 id="implementation-status">实现状态</h2>
+<p>已实现：规范执行命令、不取消的队列控件、自动回执确认、助手终止状态提示、上述生命周期约定。静态检查不能替代 App 中的运行验收。</p>

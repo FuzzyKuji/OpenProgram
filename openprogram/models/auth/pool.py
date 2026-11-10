@@ -32,11 +32,24 @@ with the existing lock guarantees.
 
 Keeping policy (strategy) separate from mechanism (cooldown bookkeeping)
 means adding a fifth strategy later touches ~15 lines in one place.
+
+Conversation affinity sits on top of the rotating strategies
+(``round_robin``, ``random``, ``least_used``): a conversation stays on the
+credential that last served it while that credential is healthy and the
+conversation was active within :data:`AFFINITY_IDLE_MS`. Every request of
+a conversation carries the whole conversation so far, and what the vendor
+cached of it is cached under the key that sent it; moving to another key
+pays for the whole prompt again. ``fill_first`` and ``fixed`` already keep
+to one credential. The memory is per process and bounded
+(:data:`AFFINITY_MAX`); after magpie's gateway affinity (yetone/magpie,
+MIT).
 """
 from __future__ import annotations
 
 import random
+import threading
 import time
+from collections import OrderedDict
 from typing import Optional
 
 from .types import (
@@ -110,7 +123,53 @@ def _healthy_indices(pool: CredentialPool, now_ms: int) -> list[int]:
     return [i for i, c in enumerate(pool.credentials) if _is_healthy(c, now_ms=now_ms)]
 
 
-def pick(pool: CredentialPool, *, now_ms: Optional[int] = None) -> Credential:
+# How long a conversation keeps its credential after its last request: past
+# this, what the vendor cached of it has gone cold (Anthropic keeps a cache
+# entry 5 minutes, or an hour with the long retention; OpenAI about an
+# hour), so there is nothing left to keep.
+AFFINITY_IDLE_MS = 60 * 60 * 1000
+# Conversations remembered at most; the least recently used goes first.
+AFFINITY_MAX = 4096
+
+_ROTATING = frozenset({"round_robin", "random", "least_used"})
+_affinity: OrderedDict[tuple[str, str, str], tuple[str, int]] = OrderedDict()
+_affinity_lock = threading.Lock()
+
+
+def _remembered(pool: CredentialPool, key: str, now: int) -> Optional[int]:
+    """Index of the healthy credential that last served conversation ``key``."""
+    with _affinity_lock:
+        entry = _affinity.get((pool.provider_id, pool.account_id, key))
+    if entry is None or now - entry[1] > AFFINITY_IDLE_MS:
+        return None
+    return next(
+        (i for i, c in enumerate(pool.credentials)
+         if c.credential_id == entry[0] and _is_healthy(c, now_ms=now)),
+        None,
+    )
+
+
+def _remember(pool: CredentialPool, key: str, cred: Credential, now: int) -> None:
+    slot = (pool.provider_id, pool.account_id, key)
+    with _affinity_lock:
+        _affinity[slot] = (cred.credential_id, now)
+        _affinity.move_to_end(slot)
+        while len(_affinity) > AFFINITY_MAX:
+            _affinity.popitem(last=False)
+
+
+def forget_affinity() -> None:
+    """Drop every remembered conversation (tests, account removal)."""
+    with _affinity_lock:
+        _affinity.clear()
+
+
+def pick(
+    pool: CredentialPool,
+    *,
+    now_ms: Optional[int] = None,
+    affinity_key: str = "",
+) -> Credential:
     """Return the next credential to use.
 
     Side effects: increments ``use_count`` and updates ``last_used_at_ms``
@@ -119,6 +178,10 @@ def pick(pool: CredentialPool, *, now_ms: Optional[int] = None) -> Credential:
     caller's job via :class:`AuthStore.put_pool`. Not auto-persisting
     here avoids a write-per-API-call; the manager writes only when
     cooldowns or status changes warrant it.
+
+    ``affinity_key`` names the conversation asking: under a rotating
+    strategy it gets the credential that last served it while that one is
+    healthy (see the module docstring).
 
     Raises :class:`AuthPoolExhaustedError` if every credential is
     cooled-down or disabled.
@@ -155,7 +218,12 @@ def pick(pool: CredentialPool, *, now_ms: Optional[int] = None) -> Credential:
             account_id=pool.account_id,
         )
 
-    if strategy == "fill_first":
+    sticky = affinity_key and strategy in _ROTATING
+    remembered = _remembered(pool, affinity_key, now) if sticky else None
+
+    if remembered is not None:
+        idx = remembered
+    elif strategy == "fill_first":
         # The pinned credential is the default/first try; fall through the rest
         # by list order when it's cooled down.
         pinned = next(
@@ -188,6 +256,8 @@ def pick(pool: CredentialPool, *, now_ms: Optional[int] = None) -> Credential:
     picked = pool.credentials[idx]
     picked.use_count += 1
     picked.last_used_at_ms = now
+    if sticky:
+        _remember(pool, affinity_key, picked, now)
     return picked
 
 

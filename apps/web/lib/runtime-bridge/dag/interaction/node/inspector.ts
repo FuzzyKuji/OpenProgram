@@ -113,7 +113,7 @@ function _copy(text: string, toast: string): void {
  *  nodes); a node whose caller is ANOTHER CALL is function-internal
  *  machinery, which the backend rejects — so the actions are not
  *  offered there in the first place. Must mirror the caller-based gate
- *  in interfaces/server/context_git_routes.py. */
+ *  in interfaces/server/routes/chat_branches.py. */
 function _isChainTurn(node: GNode): boolean {
   if (node.display === "root") return false;
   const c = node.caller;

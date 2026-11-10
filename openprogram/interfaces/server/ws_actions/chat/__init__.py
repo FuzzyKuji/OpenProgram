@@ -38,6 +38,9 @@ from .commands import handle_compact
 from .commands import handle_sandbox
 from .rewind import handle_rewind_list
 from .rewind import handle_rewind
+from .rewind import handle_rewind_marks
+from .rewind import handle_rewind_redo
+from .rewind import handle_rewind_undo
 
 
 ACTIONS = {
@@ -48,6 +51,9 @@ ACTIONS = {
     "sandbox": handle_sandbox,
     "rewind_list": handle_rewind_list,
     "rewind": handle_rewind,
+    "rewind_marks": handle_rewind_marks,
+    "rewind_undo": handle_rewind_undo,
+    "rewind_redo": handle_rewind_redo,
 }
 
 __all__ = [
@@ -79,5 +85,8 @@ __all__ = [
     "handle_sandbox",
     "handle_rewind_list",
     "handle_rewind",
+    "handle_rewind_marks",
+    "handle_rewind_undo",
+    "handle_rewind_redo",
     "ACTIONS",
 ]

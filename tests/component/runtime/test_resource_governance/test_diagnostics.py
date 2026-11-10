@@ -268,11 +268,12 @@ def test_shared_remaining_ignores_released_reservation(tmp_path) -> None:
         assert governor.admit_job(job, persist=lambda _job: None).accepted
     reserved = governor.reserve_tokens(sibling.id, 30)
     assert reserved.accepted
-    ledger.connection().execute(
-        "UPDATE usage_reservations SET state = 'released' WHERE reservation_id = ?",
-        (reserved.reservation_id,),
-    )
-    ledger.connection().commit()
+    with ledger.run_tables().transaction() as tables:
+        tables.update(
+            "usage_reservations",
+            {"state": "released"},
+            reservation_id=reserved.reservation_id,
+        )
 
     view = build_job_resource_view(target, ledger=ledger, resolved=resolved)
 
@@ -308,7 +309,7 @@ def test_job_runner_exposes_one_canonical_resource_view_read(
     )
     governor = ResourceGovernor(ledger, limit_resolver=lambda _sid, _job: resolved)
     monkeypatch.setattr(
-        "openprogram.state.paths.get_execution_db_path",
+        "openprogram.state.paths.get_run_state_path",
         lambda: tmp_path / "executions.sqlite3",
     )
     runner = JobRunner(max_workers=1, governor=governor)
@@ -341,17 +342,16 @@ def test_resource_view_reports_live_runtime_and_idle_usage(tmp_path, monkeypatch
     )
     assert governor.admit_job(job, persist=lambda _job: None).accepted
     assert governor.claim_next(owner_instance_id="worker") is not None
-    row = ledger.connection().execute(
-        "SELECT started_at, last_activity_at FROM job_admissions WHERE job_id = ?",
-        (job.id,),
-    ).fetchone()
+    row = ledger.run_tables().handle.first("job_admissions", job_id=job.id)
     monkeypatch.setattr(
-        "openprogram.runtime.jobs.resource_governance.governor.time.time", lambda: row[0] + 12.5,
+        "openprogram.runtime.jobs.resource_governance.governor.time.time", lambda: row["started_at"] + 12.5,
     )
-    ledger.connection().execute(
-        "UPDATE job_admissions SET last_activity_at = ? WHERE job_id = ?",
-        (row[0] + 9.0, job.id),
-    )
+    with ledger.run_tables().transaction() as tables:
+        tables.update(
+            "job_admissions",
+            {"last_activity_at": row["started_at"] + 9.0},
+            job_id=job.id,
+        )
 
     view = build_job_resource_view(job, ledger=ledger, resolved=resolved)
 

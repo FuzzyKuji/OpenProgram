@@ -200,16 +200,6 @@ def _load_config() -> dict:
     return user_config.read_config()
 
 
-def _save_config(config: dict):
-    """Save config to ~/.openprogram/config.json.
-
-    Delegates to the canonical writer in ``openprogram.state.config`` so there is one
-    write path — and one place that enforces 0o600 on the secrets-bearing
-    file."""
-    from openprogram.state import config as user_config
-    user_config.write_config(config)
-
-
 def _get_api_key(env_var: str) -> str:
     """Get a search/TTS key from the environment (injected from
     config.json ``api_keys`` by ``_apply_config_keys`` below). LLM
@@ -428,21 +418,26 @@ def _web_config() -> dict:
 
 
 async def _recover_execution_control() -> None:
-    """Recover canonical executions and projections before legacy reconciliation."""
+    """Recover executions and start applying their events."""
     from openprogram.runtime.execution import default_store, recover_execution_startup
-    from openprogram.runtime.execution.projections import start_projection_worker
+    from openprogram.runtime.execution.event_effects import start_event_effects
 
     result = await asyncio.to_thread(
         recover_execution_startup,
     )
     if result.canonical:
         _log(f"[startup] recovered {len(result.canonical)} canonical execution(s)")
-    if result.projections.failed:
-        _log(
-            f"[startup] projection replay deferred for "
-            f"{result.projections.failed} item(s)"
-        )
-    start_projection_worker(default_store())
+    start_event_effects(default_store())
+
+
+async def _finish_open_permissions_migration() -> None:
+    """Executions are recovered now, so an approval the new policy drops can resume."""
+    from openprogram.operations.migrations.open_permissions import resume_open_approvals
+
+    try:
+        await resume_open_approvals()
+    except Exception as exc:  # noqa: BLE001 - retried at the next start
+        _log(f"[startup] open permissions migration not finished: {type(exc).__name__}: {exc}")
 
 
 def create_app(*, owner_auth=None, port: int = 18100):
@@ -482,6 +477,13 @@ def create_app(*, owner_auth=None, port: int = 18100):
             get_event_bus().subscribe(_forward, types={WS_FRAME_EVENT})
         except Exception as e:  # noqa: BLE001
             _log(f"[startup] event-bus WS forwarder failed: {e}")
+        try:
+            from openprogram.interfaces.server.transcript import publisher as transcript_publisher
+            from openprogram.interfaces.server.ws_delivery import send_to_connection
+
+            transcript_publisher.start(lambda ws, payload: send_to_connection(ws, payload, _loop))
+        except Exception as e:  # noqa: BLE001
+            _log(f"[startup] transcript publisher failed: {e}")
 
     async def _reconcile_interrupted_runs():
         """Flip DAG nodes frozen at status='running' (a previous worker
@@ -497,6 +499,26 @@ def create_app(*, owner_auth=None, port: int = 18100):
         threading.Thread(
             target=_run_legacy_recovery,
             name="openprogram-legacy-dag-recovery",
+            daemon=True,
+        ).start()
+
+        def _restore_channel_aliases() -> None:
+            # Chats tied to a channel account before the chip wrote routing
+            # aliases get theirs, so the account's messages reach them.
+            try:
+                from openprogram.interfaces.server.ws_actions.chat.conversation_channel import (
+                    restore_channel_aliases,
+                )
+                from openprogram.interfaces.server import server as _server
+                n = restore_channel_aliases(_server)
+                if n:
+                    _log(f"[startup] restored {n} channel routing alias(es)")
+            except Exception as e:  # noqa: BLE001
+                _log(f"[startup] restore_channel_aliases failed: {e}")
+
+        threading.Thread(
+            target=_restore_channel_aliases,
+            name="openprogram-channel-alias-restore",
             daemon=True,
         ).start()
 
@@ -518,6 +540,9 @@ def create_app(*, owner_auth=None, port: int = 18100):
 
     async def _start_mcp_servers():
         nonlocal mcp_startup_task
+        from openprogram.operations.worker.runner import trial_mode
+        if trial_mode():
+            return
         mcp_startup_task = asyncio.create_task(
             _load_mcp_servers(), name="openprogram-mcp-startup",
         )
@@ -566,6 +591,9 @@ def create_app(*, owner_auth=None, port: int = 18100):
         """Periodically poll PyPI / npm for newer versions of installed
         plugins. Result is broadcast over WS as ``plugins:update_available``
         so the Plugins UI can badge upgradable rows."""
+        from openprogram.operations.worker.runner import trial_mode
+        if trial_mode():
+            return
         try:
             from openprogram.extensions.plugins import autoupdate as _au
             def _broadcast_updates(payload: dict):
@@ -588,6 +616,17 @@ def create_app(*, owner_auth=None, port: int = 18100):
         except Exception as e:  # noqa: BLE001
             _log(f"[plugin-autoupdate] startup failed: {type(e).__name__}: {e}")
 
+    async def _start_release_check():
+        """Remember once a day whether a newer release exists."""
+        from openprogram.operations.worker.runner import trial_mode
+        if trial_mode():
+            return
+        try:
+            from openprogram.operations.self_update.github_release import availability
+            availability.start()
+        except Exception as e:  # noqa: BLE001
+            _log(f"[release-check] startup failed: {type(e).__name__}: {e}")
+
     async def _stop_mcp_servers():
         if mcp_startup_task is not None:
             if not mcp_startup_task.done():
@@ -602,24 +641,22 @@ def create_app(*, owner_auth=None, port: int = 18100):
         except Exception as e:  # noqa: BLE001
             _log(f"[mcp] shutdown failed: {type(e).__name__}: {e}")
 
-    async def _stop_execution_projection_worker():
-        from openprogram.runtime.execution.projections import stop_projection_worker
+    async def _stop_execution_event_effects():
+        from openprogram.runtime.execution.event_effects import stop_event_effects
 
-        stop_projection_worker()
+        stop_event_effects()
 
     # Startup runs in listed order, shutdown in reverse — same semantics
     # the eight @app.on_event handlers had before the deprecated API was
     # dropped. _capture_loop MUST stay first: everything downstream that
     # broadcasts depends on the module-global _loop it captures.
     async def _install_builtin_agents():
-        # The built-in Agents this instance has never installed. Nothing is
-        # installed before setup has created the default Agent: the first
-        # record created becomes the default, and that must be Main.
-        from openprogram.runtime.agent_registry import manager as _A
+        # The built-in Agents (Assistant first, as the default) this
+        # instance has never installed. The App never runs the CLI setup
+        # wizard, so this is where a fresh install gets them.
         from openprogram.runtime.agent_registry.builtin_agents import create_builtin_agents
         try:
-            if _A.get_default() is not None:
-                create_builtin_agents()
+            create_builtin_agents()
         except Exception:
             logger.warning("built-in Agents were not installed", exc_info=True)
 
@@ -628,14 +665,16 @@ def create_app(*, owner_auth=None, port: int = 18100):
         _subscribe_event_bus,
         _install_builtin_agents,
         _recover_execution_control,
+        _finish_open_permissions_migration,
         _reconcile_interrupted_runs,
         _start_mcp_servers,
         _load_plugins,
         _retire_agent_workspace_files,
         _start_skills_watcher,
         _start_plugin_autoupdate,
+        _start_release_check,
     )
-    _SHUTDOWN = (_stop_mcp_servers, _stop_execution_projection_worker)
+    _SHUTDOWN = (_stop_mcp_servers, _stop_execution_event_effects)
 
     @asynccontextmanager
     async def _lifespan(_app):
@@ -699,7 +738,7 @@ def create_app(*, owner_auth=None, port: int = 18100):
 
     # Auth v2 REST + SSE routes. Kept in a dedicated module so server.py
     # doesn't accumulate more authentication state than it already has.
-    from openprogram.interfaces.server.auth_routes import router as _auth_router
+    from openprogram.interfaces.server.routes.identity.credentials import router as _auth_router
     app.include_router(_auth_router)
 
     # Frontend: the Next.js static export (apps/web/out/) is served by this
@@ -768,11 +807,13 @@ def create_app(*, owner_auth=None, port: int = 18100):
     # /api/chat/branch, /api/function/{name} — routes.chat
     from openprogram.interfaces.server.routes import chat as _routes_chat
     _routes_chat.register(app)
+    from openprogram.interfaces.server.routes import visual_frame as _routes_visual_frame
+    _routes_visual_frame.register(app)
 
-    # Retry / Edit / Checkout routes live in context_git_routes.py — see
+    # Retry / Edit / Checkout routes live in routes/chat_branches.py — see
     # docs/design/context/overview.md. Keeping them out of this module keeps
     # it under control.
-    from openprogram.interfaces.server.context_git_routes import router as _chat_router
+    from openprogram.interfaces.server.routes.chat_branches import router as _chat_router
     app.include_router(_chat_router)
 
     # Workdir picker, browse, history, canvas — registered from routes.workdir
@@ -788,6 +829,10 @@ def create_app(*, owner_auth=None, port: int = 18100):
     # Pause / Resume / Stop — routes.lifecycle
     from openprogram.interfaces.server.routes.execution import lifecycle as _routes_lifecycle
     _routes_lifecycle.register(app)
+
+    # Activity's second level: a branch's runs and what one run did.
+    from openprogram.interfaces.server.routes.execution import activity_runs as _routes_activity_runs
+    _routes_activity_runs.register(app)
 
     # Durable Goal projection and pause/edit/resume/cancel actions.
     from openprogram.interfaces.server.routes.execution import goal as _routes_goal
@@ -830,6 +875,9 @@ def create_app(*, owner_auth=None, port: int = 18100):
 
     from openprogram.interfaces.server.routes import self_updates as _routes_self_updates
     _routes_self_updates.register(app)
+
+    from openprogram.interfaces.server.routes.settings import versions as _routes_versions
+    _routes_versions.register(app)
 
     from openprogram.interfaces.server.routes.identity import provider_login as _routes_provider_login
     _routes_provider_login.register(app)

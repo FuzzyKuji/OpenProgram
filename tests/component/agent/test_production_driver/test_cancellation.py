@@ -22,10 +22,6 @@ def test_queued_agent_cancel_releases_reserved_slot_immediately(tmp_path):
         )
     )
     assert cancelled.execution.status is ExecutionStatus.CANCELLED
-    with sqlite3.connect(store.path) as connection:
-        assert connection.execute(
-            "SELECT COUNT(*) FROM execution_finish_repair_slots"
-        ).fetchone()[0] == 0
 
 
 
@@ -75,7 +71,6 @@ def test_cancel_targets_exact_handle_and_releases_its_question_wait(tmp_path, mo
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="agent-owner",
-        ttl_seconds=30,
     )
     active, _running = attempts.activate(
         attempt.attempt_id,
@@ -155,7 +150,6 @@ def test_cancel_rejects_a_handle_from_another_attempt(tmp_path):
         execution.execution_id,
         expected_version=execution.status_version,
         owner_id="agent-owner",
-        ttl_seconds=30,
     )
     active, _running = attempts.activate(
         attempt.attempt_id,
@@ -176,8 +170,7 @@ def test_cancel_rejects_a_handle_from_another_attempt(tmp_path):
 
 
 
-def test_cancel_during_dispatched_nonrepeatable_tool_preserves_unknown_effect(tmp_path):
-    from openprogram.runtime.execution.effects import EffectStatus
+def test_cancel_during_a_running_tool_is_final(tmp_path):
     from openprogram.runtime.execution.state_machine import InvalidCommand
 
     store, attempts, control, driver, request, snapshot, execution, active, hook = (
@@ -207,8 +200,6 @@ def test_cancel_during_dispatched_nonrepeatable_tool_preserves_unknown_effect(tm
         "arguments": {"n": "cancel"},
     }) is False
     assert hook("tool.started", {"tool_call_id": "call-cancel"}) is False
-    unresolved = control.effects.list_unresolved(execution.execution_id)
-    assert unresolved and unresolved[0].status is EffectStatus.DISPATCHED
     cancelling = asyncio.run(control.request_cancel(
         command_id="cancel-uncertain-tool",
         execution_id=execution.execution_id,
@@ -230,11 +221,6 @@ def test_cancel_during_dispatched_nonrepeatable_tool_preserves_unknown_effect(tm
     assert finished.execution.owner_lease == {}
     assert finished.command is not None
     assert finished.command.status is CommandStatus.APPLIED
-    still = control.effects.get(unresolved[0].effect_id)
-    assert still == unresolved[0]
-    assert still.status is EffectStatus.DISPATCHED
-    assert still.receipt == {} and still.resolved_at is None
-    assert control.effects.list_unresolved(execution.execution_id) == unresolved
     with pytest.raises(InvalidCommand, match="invalid while execution is cancelled"):
         asyncio.run(control.request_continue(
             command_id="must-not-replay-uncertain-tool",
@@ -242,5 +228,3 @@ def test_cancel_during_dispatched_nonrepeatable_tool_preserves_unknown_effect(tm
             expected_version=finished.execution.status_version,
             actor={"surface": "test"},
         ))
-    assert control.effects.get(still.effect_id) == still
-    assert control.effects.list_unresolved(execution.execution_id) == unresolved

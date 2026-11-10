@@ -40,7 +40,7 @@ import type {
   ThinkingEffort,
   PermissionMode,
 } from './repl/types.js';
-import { PERMISSION_CYCLE } from './repl/types.js';
+import { PERMISSION_MODES } from './repl/types.js';
 import { ChannelActivityFeed } from '../components/ChannelActivityFeed.js';
 import type { SettingRow } from '../components/SettingsPanel.js';
 import type { JobRow } from '../ws/client.js';
@@ -153,10 +153,10 @@ export const REPL: React.FC<REPLProps> = ({
   const [qrAscii, setQrAscii] = useState<string | undefined>(undefined);
   const [qrStatus, setQrStatus] = useState<string | undefined>(undefined);
   const [agentsList, setAgentsList] = useState<AgentInfo[]>([]);
-  // Permission tier for tool calls — the 5 modes shared with the web
-  // Mode menu. Default ask (approval cards), matching web + Claude Code;
-  // a resumed session restores its saved tier via session_loaded.
-  const [permissionMode, setPermissionModeState] = useState<PermissionMode>('ask');
+  // Permission tier for tool calls — the modes shared with the web Mode
+  // menu. Starts at the default, Bypass; a resumed session restores
+  // its saved tier via session_loaded.
+  const [permissionMode, setPermissionModeState] = useState<PermissionMode>('bypass');
   // Thinking effort cycle: off → minimal → low → medium → high → xhigh → off.
   const [thinkingEffort, setThinkingEffort] = useState<ThinkingEffort>('xhigh');
   const [connState, setConnState] = useState<ConnectionState>(client.getState());
@@ -328,15 +328,12 @@ export const REPL: React.FC<REPLProps> = ({
       }, 800);
       return;
     }
-    // shift+tab cycles the safe permission tiers (ask → acceptEdits →
-    // plan → auto), like Claude Code. bypass never enters the cycle —
-    // it's only reachable via /permissions + confirm — and pressing
-    // shift+tab while in bypass exits back to ask. Skipped while a
-    // picker owns the input (multi-ask uses shift+tab to go back).
+    // shift+tab cycles the permission tiers in the picker's order. Skipped
+    // while a picker owns the input (multi-ask uses shift+tab to go back).
     if (key.shift && key.tab && !pickerKind) {
       setPermissionMode((m) => {
-        const i = PERMISSION_CYCLE.indexOf(m);
-        return i < 0 ? 'ask' : PERMISSION_CYCLE[(i + 1) % PERMISSION_CYCLE.length]!;
+        const i = PERMISSION_MODES.indexOf(m);
+        return i < 0 ? 'bypass' : PERMISSION_MODES[(i + 1) % PERMISSION_MODES.length]!;
       });
       return;
     }

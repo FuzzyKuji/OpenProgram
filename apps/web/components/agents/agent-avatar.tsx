@@ -1,7 +1,7 @@
 "use client";
 
 /** The picture of one Agent, wherever the interface names it. */
-import { Avatar, type AvatarConfig, type BotMood } from "@/components/avatar";
+import { Avatar, type AvatarConfig, type BotFitRule, type BotMood } from "@/components/avatar";
 import { agentAvatarConfig, agentCharacterShape } from "@/lib/agents/agent-avatar";
 import { useAgents } from "@/lib/agents/agents-query";
 import { conversationAgentId } from "@/lib/agents/settle-agent-invocation";
@@ -15,6 +15,9 @@ export interface AgentAvatarProps {
    *  Agent's character is alive wherever it stands for the Agent. */
   live?: boolean;
   mood?: BotMood;
+  /** "mark" sizes a character by the brand-mark rule, for a control where
+   *  it sits beside logos (the Agent chip and its menu). */
+  fit?: BotFitRule;
   className?: string;
 }
 
@@ -22,7 +25,7 @@ export interface AgentAvatarProps {
  *  Agent surfaces use; a character is its own silhouette. */
 const radiusFor = (size: number) => (size >= 36 ? 10 : size >= 28 ? 8 : 5);
 
-export function AgentAvatar({ agent, size, live = true, mood, className }: AgentAvatarProps) {
+export function AgentAvatar({ agent, size, live = true, mood, fit, className }: AgentAvatarProps) {
   return (
     <Avatar
       size={size}
@@ -32,6 +35,7 @@ export function AgentAvatar({ agent, size, live = true, mood, className }: Agent
       live={live}
       mood={mood}
       decorative
+      fit={fit}
       className={className}
     />
   );

@@ -24,26 +24,24 @@ def test_owner_loss_keeps_observed_work_and_excludes_offline_time(runtime, monke
     control = default_control_service()
     control.attempts = attempts
     leased, reserved = attempts.lease(admission.execution_id, expected_version=admission.status_version,
-                                     owner_id="lost-worker", ttl_seconds=30)
+                                     owner_id="lost-worker")
     active, _ = attempts.activate(leased.attempt_id, generation=leased.generation,
                                  expected_execution_version=reserved.status_version)
     goal = goals.load_goal("goal-chat")
     goal["active_started_at"] = clock[0]
     goal["usage"]["active_elapsed_s"] = 7.0
     goals.save_goal("goal-chat", goal)
-    clock[0] += 12
-    attempts.heartbeat(active.attempt_id, generation=active.generation, ttl_seconds=30)
     clock[0] += 3600
     control.recover_owner_loss(admission.execution_id)
     chat.after_terminal(store, store.get_execution(admission.execution_id))
     recovered = goals.load_goal("goal-chat")
-    assert recovered["usage"]["active_elapsed_s"] == pytest.approx(19)
+    assert recovered["usage"]["active_elapsed_s"] == pytest.approx(7)
     assert recovered["usage"]["active_time_known"] is False
     assert recovered["active_started_at"] is None
     clock[0] += 1000
     chat.after_terminal(store, store.get_execution(admission.execution_id))
     chat.refresh_usage("goal-chat")
-    assert goals.load_goal("goal-chat")["usage"]["active_elapsed_s"] == pytest.approx(19)
+    assert goals.load_goal("goal-chat")["usage"]["active_elapsed_s"] == pytest.approx(7)
     assert goals.load_goal("goal-chat")["active_started_at"] is None
     # No hidden cap is introduced. An explicit time ceiling cannot treat an
     # unobserved crash interval as free time, however.

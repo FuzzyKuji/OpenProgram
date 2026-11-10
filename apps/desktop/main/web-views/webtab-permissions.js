@@ -99,8 +99,9 @@ function createDecisionStore(filePath) {
 
 /**
  * Install the request and check handlers on the web tab session.
- * `ask({ origin, purpose, webContents })` resolves true to allow; the shell
- * shows it as a dialog on the tab's window.
+ * `ask({ origin, purpose, webContents })` resolves true to allow, false to
+ * block, or null when the question could not be put; the shell shows it as a
+ * dialog on the tab's window.
  */
 function registerWebTabPermissions(targetSession, { filePath, ask }) {
   const store = createDecisionStore(filePath);
@@ -123,6 +124,8 @@ function registerWebTabPermissions(targetSession, { filePath, ask }) {
       answer = Promise.resolve()
         .then(() => ask({ origin, purpose, webContents }))
         .then((allowed) => {
+          // null: nobody was there to ask. Refused this time, asked again later.
+          if (allowed === null) return false;
           for (const key of keys) store.set(origin, key, allowed ? "allow" : "block");
           return allowed === true;
         }, () => false)

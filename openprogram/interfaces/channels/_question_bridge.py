@@ -58,9 +58,16 @@ def _on_question_asked(event) -> None:
         if target is None:
             return  # not a channel session (web / ad-hoc) — web card covers it
         channel, account_id, peer_id = target
-        text = _render_question(data)
-        from openprogram.interfaces.channels.outbound import send as _send
-        _send(channel, account_id, peer_id, text)
+        thread_id = ""
+        # The running turn knows the chat and thread the question belongs to;
+        # the session row only remembers the first peer and no thread.
+        from openprogram.interfaces.channels import _active_turns
+        turn = _active_turns.get(session_id)
+        if turn is not None:
+            channel, account_id = turn.channel, turn.account_id
+            peer_id, thread_id = turn.peer_id, turn.thread_id
+        from openprogram.interfaces.channels._conversation import _post
+        _post(channel, account_id, peer_id, _render_question(data), thread_id)
     except Exception:
         # Never let a rendering / send hiccup crash the bus dispatch.
         _log.warning("question relay to channel failed", exc_info=True)

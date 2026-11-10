@@ -1,4 +1,4 @@
-"""session_db — git-backed SessionStore facade.
+"""session_db — SessionStore facade.
 
 ``SessionDB`` is now an alias for :class:`SessionStore` (see
 ``openprogram.state.store.session.session_store``). The old SQLite-backed

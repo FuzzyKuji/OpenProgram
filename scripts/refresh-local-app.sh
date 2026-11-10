@@ -239,6 +239,9 @@ cleanup() {
 }
 app_verified_for_reopen=0
 app_reopen_attempted=0
+# Whether the user was in the App when the refresh closed it. Only then does
+# it come back in front; otherwise it reopens behind what they are doing.
+app_was_front=0
 finish_refresh() {
   local status=$? reopen_status=0 cleanup_status=0
   trap - EXIT
@@ -297,7 +300,7 @@ while true; do
     stamp "reusing the development build of ${build_revision:0:10}"
     tui_bundle="$prebuilt_dir/index-standalone.cjs"
   else
-    $build_nice "$repo_root/scripts/release/stage-release-assets.sh"
+    OPENPROGRAM_DOCS_FORMAT=quarantine $build_nice "$repo_root/scripts/release/stage-release-assets.sh"
     tui_bundle="$repo_root/apps/cli/dist/index-standalone.cjs"
   fi
   # Freeze the runtime assets with the wheel, including additions required by
@@ -449,6 +452,9 @@ cp "$repo_root/apps/desktop/scripts/install-app.sh" "$installer_stage"
 validate_default_app_source "$build_revision"
 
 if pgrep -f "^/Applications/OpenProgram[.]app/Contents/MacOS/OpenProgram( |$)" >/dev/null 2>&1; then
+  if lsappinfo info -only bundleid "$(lsappinfo front 2>/dev/null)" 2>/dev/null | grep -q '"ai.openprogram.desktop"'; then
+    app_was_front=1
+  fi
   stamp "quitting the App"
   osascript -e 'tell application id "ai.openprogram.desktop" to quit' >/dev/null 2>&1 || true
   for _ in {1..50}; do
@@ -589,10 +595,14 @@ stamp "App signed"
 reopen_app() {
   local open_status=0
   app_reopen_attempted=1
-  if test "${OPENPROGRAM_REFRESH_BACKGROUND:-0}" = 1; then
-    open -g -a "$app_path" || open_status=$?
-  else
+  if test "$app_was_front" = 1 && test "${OPENPROGRAM_REFRESH_BACKGROUND:-0}" != 1; then
     open -a "$app_path" || open_status=$?
+  else
+    # The App shows its window when it is ready, which activates it; the
+    # application the user is in gets the front straight back.
+    "$local_python" "$repo_root/openprogram/host/_platform/front.py" "$app_path" 30 >/dev/null 2>&1 &
+    sleep 0.3
+    open -g -a "$app_path" || open_status=$?
   fi
   if test "$open_status" != 0; then
     printf 'OpenProgram did not reopen after the refresh (open exit %s)\n' "$open_status" >&2
@@ -641,7 +651,7 @@ else
 fi
 # launchd load and detached start return before the web listener is ready.
 # Poll only; repeated start requests can race that same pending cold start.
-health_timeout=120
+health_timeout=300
 health_deadline=$((SECONDS + health_timeout))
 health_status=7
 while test "$SECONDS" -lt "$health_deadline"; do

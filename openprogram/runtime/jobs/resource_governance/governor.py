@@ -24,8 +24,10 @@ from openprogram.runtime.jobs.resource_governance.limits import (
 from openprogram.runtime.jobs.resource_governance.usage import (
     _empty_usage_view,
     _job_fingerprint,
+    _job_scope_chain,
     _microusd_text,
     _scope_usage_breakdown,
+    _smallest,
     _usage_view,
 )
 from openprogram.runtime.jobs.resource_governance.dispatch import DispatchOperations
@@ -33,10 +35,11 @@ from openprogram.runtime.jobs.resource_governance.borrowed import BorrowedOperat
 from openprogram.runtime.jobs.resource_governance.finalization import FinalizationOperations
 from openprogram.runtime.jobs.resource_governance.recovery import RecoveryOperations
 from openprogram.runtime.jobs.resource_governance.reservations import ReservationsOperations
+from openprogram.runtime.jobs.resource_governance.tables import TablesAccess
 
 
-class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOperations, RecoveryOperations, ReservationsOperations):
-    """Single durable admission boundary backed by the usage SQLite DB."""
+class ResourceGovernor(TablesAccess, DispatchOperations, BorrowedOperations, FinalizationOperations, RecoveryOperations, ReservationsOperations):
+    """Single durable admission boundary, held in the profile's run tables."""
 
     @staticmethod
     def admission_fingerprint(job: Job) -> str:
@@ -103,65 +106,42 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
         )
 
 
-    def _capacity(self, conn, session_id: str, resolved: ResolvedResourceLimits) -> dict:
-        row = conn.execute(
-            """SELECT
-                SUM(CASE WHEN state IN ('live','stopping') THEN 1 ELSE 0 END),
-                SUM(CASE WHEN state IN ('preparing','queued') THEN 1 ELSE 0 END),
-                COUNT(*)
-               FROM job_admissions WHERE session_id = ?""",
-            (session_id,),
-        ).fetchone()
+    def _capacity(self, tables, session_id: str, resolved: ResolvedResourceLimits) -> dict:
+        tables.tables.ensure_session(session_id)
+        admissions = tables.rows("job_admissions", session_id=session_id)
         limits = resolved.effective_limits()
         configured_live_limit = limits["max_live_per_session"]
         return {
             "scheduler_capacity": resolved.scheduler_capacity,
             "session_live": {
-                "used": int(row[0] or 0), "limit": configured_live_limit,
+                "used": sum(row["state"] in ("live", "stopping") for row in admissions),
+                "limit": configured_live_limit,
             },
-            "session_queued": {"used": int(row[1] or 0), "limit": limits["max_queued_per_session"]},
-            "session_jobs": {"used": int(row[2] or 0), "limit": limits["max_jobs_per_session"]},
+            "session_queued": {
+                "used": sum(row["state"] in ("preparing", "queued") for row in admissions),
+                "limit": limits["max_queued_per_session"],
+            },
+            "session_jobs": {"used": len(admissions), "limit": limits["max_jobs_per_session"]},
         }
 
 
-    @staticmethod
-    def _session_usage(conn, session_id: str) -> dict[str, Any]:
-        row = conn.execute(
-            """SELECT budget_scope_id FROM budget_scopes
-               WHERE scope_kind = 'session' AND session_id = ?""",
-            (session_id,),
-        ).fetchone()
+    def _session_usage(self, tables, session_id: str) -> dict[str, Any]:
+        row = tables.first("budget_scopes", scope_kind="session", session_id=session_id)
         if row is None:
             return _empty_usage_view()
-        return _usage_view(_scope_usage_breakdown(conn, row["budget_scope_id"]))
+        return _usage_view(_scope_usage_breakdown(self.ledger, tables, row["budget_scope_id"]))
 
 
-    @staticmethod
-    def _ancestor_limits(conn, parent_job_id: str | None) -> ResourceLimits:
+    def _ancestor_limits(self, tables, parent_job_id: str | None) -> ResourceLimits:
         if not parent_job_id:
             return ResourceLimits()
-        row = conn.execute(
-            """WITH RECURSIVE ancestors AS (
-                   SELECT b.* FROM job_admissions a
-                   JOIN budget_scopes b ON b.budget_scope_id = a.budget_scope_id
-                   WHERE a.job_id = ?
-                   UNION ALL
-                   SELECT parent.* FROM budget_scopes parent
-                   JOIN ancestors child
-                     ON child.parent_scope_id = parent.budget_scope_id
-               )
-               SELECT MIN(max_total_tokens), MIN(max_cost_microusd),
-                      MIN(max_runtime_seconds), MIN(idle_timeout_seconds)
-               FROM ancestors""",
-            (parent_job_id,),
-        ).fetchone()
-        if row is None:
-            return ResourceLimits()
+        chain = _job_scope_chain(self.ledger, tables, parent_job_id)
+        cost = _smallest(chain, "max_cost_microusd")
         return ResourceLimits(
-            max_total_tokens=row[0],
-            max_cost_usd=_microusd_text(row[1]) if row[1] is not None else None,
-            max_runtime_seconds=row[2],
-            idle_timeout_seconds=row[3],
+            max_total_tokens=_smallest(chain, "max_total_tokens"),
+            max_cost_usd=_microusd_text(cost) if cost is not None else None,
+            max_runtime_seconds=_smallest(chain, "max_runtime_seconds"),
+            idle_timeout_seconds=_smallest(chain, "idle_timeout_seconds"),
         )
 
 
@@ -217,8 +197,8 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
         except ResourceLimitError:
             fallback = resolve_resource_limits(ResourceLimits())
             try:
-                with self.ledger.read() as conn:
-                    usage = self._session_usage(conn, job.parent_session_id)
+                self.ledger.open_accounting_reader()
+                usage = self._session_usage(self._read(), job.parent_session_id)
             except Exception:
                 return self._denied(
                     "quota.accounting_unavailable",
@@ -250,18 +230,14 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
             spawn_depth_limit = max_spawn_depth()
             spawn_fanout_limit = max_spawn_fanout()
 
-        with self.ledger.immediate() as conn:
+        with self._write() as tables:
             resolved = self._with_ancestor_limits(
-                resolved, self._ancestor_limits(conn, job.parent_job_id),
+                resolved, self._ancestor_limits(tables, job.parent_job_id),
             )
             effective = resolved.effective_limits()
-            existing = conn.execute(
-                """SELECT admission_id, request_fingerprint, budget_scope_id, state
-                   FROM job_admissions WHERE job_id = ?""",
-                (job.id,),
-            ).fetchone()
-            capacity = self._capacity(conn, job.parent_session_id, resolved)
-            usage = self._session_usage(conn, job.parent_session_id)
+            existing = self._admission(tables, job.id)
+            capacity = self._capacity(tables, job.parent_session_id, resolved)
+            usage = self._session_usage(tables, job.parent_session_id)
             if existing is not None:
                 if existing["request_fingerprint"] != fingerprint:
                     return self._denied(
@@ -285,12 +261,10 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
             borrowed_parent_job_id = None
             if borrowed_claim is not None:
                 parent_job_id, owner_instance_id, lease_generation = borrowed_claim
-                parent_claim = conn.execute(
-                    """SELECT session_id FROM job_admissions
-                       WHERE job_id = ? AND state IN ('live','stopping')
-                         AND owner_instance_id = ? AND lease_generation = ?""",
-                    (parent_job_id, owner_instance_id, lease_generation),
-                ).fetchone()
+                parent_claim = self._admission(
+                    tables, parent_job_id, state=("live", "stopping"),
+                    owner_instance_id=owner_instance_id, lease_generation=lease_generation,
+                )
                 if (
                     parent_claim is None
                     or parent_claim["session_id"] != job.parent_session_id
@@ -317,13 +291,15 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
                     or job.caller_session_id
                     or job.parent_session_id
                 )
-                fanout_used = conn.execute(
-                    """SELECT COUNT(*) FROM job_admissions
-                       WHERE COALESCE(caller_session_id, session_id) = ?
-                         AND caller_turn_id = ?
-                         AND creates_agent = 1""",
-                    (fanout_session_id, caller_turn_id),
-                ).fetchone()[0]
+                tables.tables.ensure_session(fanout_session_id)
+                fanout_used = tables.count(
+                    "job_admissions", caller_turn_id=caller_turn_id, creates_agent=1,
+                    where=lambda row: (
+                        row["caller_session_id"]
+                        if row["caller_session_id"] is not None
+                        else row["session_id"]
+                    ) == fanout_session_id,
+                )
                 if fanout_used >= spawn_fanout_limit:
                     return self._denied(
                         "quota.spawn_fanout", resolved=resolved,
@@ -341,81 +317,70 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
                     "quota.jobs_exhausted", resolved=resolved,
                     capacity=capacity, retryable=False, usage=usage,
                 )
-            admitted_seq = conn.execute(
-                "SELECT COALESCE(MAX(admitted_seq), 0) + 1 FROM job_admissions"
-            ).fetchone()[0]
-            conn.execute(
-                """INSERT OR IGNORE INTO budget_scopes (
-                    budget_scope_id, scope_kind, session_id, job_id,
-                    max_total_tokens, max_cost_microusd,
-                    max_runtime_seconds, idle_timeout_seconds, created_at
-                ) VALUES (?, 'session', ?, NULL, ?, ?, ?, ?, ?)""",
-                (
-                    session_scope_id, job.parent_session_id,
-                    session_effective["max_total_tokens"],
-                    ResourceLimits.usd_to_microusd(session_effective["max_cost_usd"])
-                    if session_effective["max_cost_usd"] is not None else None,
-                    session_effective["max_runtime_seconds"],
-                    session_effective["idle_timeout_seconds"],
-                    time.time(),
-                ),
+            admitted_seq = 1 + max(
+                (row["admitted_seq"] for row in tables.rows("job_admissions")), default=0,
             )
-            conn.execute(
-                """UPDATE budget_scopes SET
-                    max_total_tokens = ?, max_cost_microusd = ?
-                   WHERE budget_scope_id = ?""",
-                (
-                    session_effective["max_total_tokens"],
-                    ResourceLimits.usd_to_microusd(session_effective["max_cost_usd"])
-                    if session_effective["max_cost_usd"] is not None else None,
-                    session_scope_id,
-                ),
+            session_tokens = session_effective["max_total_tokens"]
+            session_cost = (
+                ResourceLimits.usd_to_microusd(session_effective["max_cost_usd"])
+                if session_effective["max_cost_usd"] is not None else None
+            )
+            tables.insert(
+                "budget_scopes",
+                {
+                    "budget_scope_id": session_scope_id, "scope_kind": "session",
+                    "session_id": job.parent_session_id, "job_id": None,
+                    "max_total_tokens": session_tokens, "max_cost_microusd": session_cost,
+                    "max_runtime_seconds": session_effective["max_runtime_seconds"],
+                    "idle_timeout_seconds": session_effective["idle_timeout_seconds"],
+                    "created_at": time.time(),
+                },
+                on_conflict="ignore",
+            )
+            tables.update(
+                "budget_scopes",
+                {"max_total_tokens": session_tokens, "max_cost_microusd": session_cost},
+                budget_scope_id=session_scope_id,
+                where=lambda row: (
+                    row["max_total_tokens"], row["max_cost_microusd"],
+                ) != (session_tokens, session_cost),
             )
             parent_scope = session_scope_id
             if job.parent_job_id:
-                parent = conn.execute(
-                    "SELECT budget_scope_id FROM job_admissions WHERE job_id = ?",
-                    (job.parent_job_id,),
-                ).fetchone()
+                parent = self._admission(tables, job.parent_job_id)
                 if parent is not None:
-                    parent_scope = parent[0]
-            conn.execute(
-                """INSERT INTO budget_scopes (
-                    budget_scope_id, scope_kind, session_id, job_id,
-                    parent_scope_id, max_total_tokens, max_cost_microusd,
-                    max_runtime_seconds, idle_timeout_seconds, created_at
-                ) VALUES (?, 'job', ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    scope_id, job.parent_session_id, job.id, parent_scope,
+                    parent_scope = parent["budget_scope_id"]
+            tables.insert("budget_scopes", {
+                "budget_scope_id": scope_id, "scope_kind": "job",
+                "session_id": job.parent_session_id, "job_id": job.id,
+                "parent_scope_id": parent_scope,
+                "max_total_tokens": (
                     effective["max_total_tokens"]
                     if resolved.fields["max_total_tokens"].source == "job"
-                    else None,
+                    else None
+                ),
+                "max_cost_microusd": (
                     ResourceLimits.usd_to_microusd(effective["max_cost_usd"])
                     if (
                         effective["max_cost_usd"] is not None
                         and resolved.fields["max_cost_usd"].source == "job"
                     )
-                    else None,
-                    effective["max_runtime_seconds"], effective["idle_timeout_seconds"],
-                    time.time(),
+                    else None
                 ),
-            )
-            conn.execute(
-                """INSERT INTO job_admissions (
-                    admission_id, job_id, session_id, parent_job_id,
-                    caller_session_id, caller_turn_id, creates_agent,
-                    request_fingerprint,
-                    budget_scope_id, dispatch_ready, borrowed_parent_job_id, state,
-                    admitted_seq, created_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'preparing', ?, ?)""",
-                (
-                    admission_id, job.id, job.parent_session_id, job.parent_job_id,
-                    caller_session_id or job.caller_session_id,
-                    caller_turn_id, int(creates_agent), fingerprint, scope_id,
-                    int(dispatch_ready), borrowed_parent_job_id,
-                    admitted_seq, time.time(),
-                ),
-            )
+                "max_runtime_seconds": effective["max_runtime_seconds"],
+                "idle_timeout_seconds": effective["idle_timeout_seconds"],
+                "created_at": time.time(),
+            })
+            tables.insert("job_admissions", {
+                "admission_id": admission_id, "job_id": job.id,
+                "session_id": job.parent_session_id, "parent_job_id": job.parent_job_id,
+                "caller_session_id": caller_session_id or job.caller_session_id,
+                "caller_turn_id": caller_turn_id, "creates_agent": int(creates_agent),
+                "request_fingerprint": fingerprint, "budget_scope_id": scope_id,
+                "dispatch_ready": int(dispatch_ready),
+                "borrowed_parent_job_id": borrowed_parent_job_id,
+                "state": "preparing", "admitted_seq": admitted_seq, "created_at": time.time(),
+            })
 
         job.admission_id = admission_id
         job.budget_scope_id = scope_id
@@ -426,21 +391,17 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
         try:
             persist(job)
         except Exception:
-            with self.ledger.immediate() as conn:
-                conn.execute(
-                    "DELETE FROM job_admissions WHERE admission_id = ? AND state = 'preparing'",
-                    (admission_id,),
-                )
-                conn.execute("DELETE FROM budget_scopes WHERE budget_scope_id = ?", (scope_id,))
+            with self._write() as tables:
+                tables.delete("job_admissions", admission_id=admission_id, state="preparing")
+                tables.delete("budget_scopes", budget_scope_id=scope_id)
             raise
-        with self.ledger.immediate() as conn:
-            conn.execute(
-                "UPDATE job_admissions SET state = 'queued' "
-                "WHERE admission_id = ? AND state = 'preparing'",
-                (admission_id,),
+        with self._write() as tables:
+            tables.update(
+                "job_admissions", {"state": "queued"},
+                admission_id=admission_id, state="preparing",
             )
-            capacity = self._capacity(conn, job.parent_session_id, resolved)
-            usage = self._session_usage(conn, job.parent_session_id)
+            capacity = self._capacity(tables, job.parent_session_id, resolved)
+            usage = self._session_usage(tables, job.parent_session_id)
         return AdmissionDecision(
             accepted=True,
             job_id=job.id,
@@ -452,14 +413,11 @@ class ResourceGovernor(DispatchOperations, BorrowedOperations, FinalizationOpera
         )
 
 
-    def _resolved_for_admission(self, conn, job_id: str):
-        row = conn.execute(
-            "SELECT session_id FROM job_admissions WHERE job_id = ?", (job_id,),
-        ).fetchone()
+    def _resolved_for_admission(self, tables, job_id: str):
+        row = self._admission(tables, job_id)
         if row is None:
             return None, None
         job = Job(
             id=job_id, parent_session_id=row["session_id"], prompt="", agent_id="",
         )
         return row, self._limit_resolver(row["session_id"], job)
-

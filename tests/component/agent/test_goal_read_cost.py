@@ -17,11 +17,11 @@ def test_goal_read_sees_another_store_without_rebuilding_history(runtime, monkey
     db.get_session("goal-chat")
 
     rebuilds = []
-    original = SessionMemoryIndex.rebuild_from_paths
+    original = SessionMemoryIndex.rebuild
     def counted(self, *args, **kwargs):
         rebuilds.append(1)
         return original(self, *args, **kwargs)
-    monkeypatch.setattr(SessionMemoryIndex, "rebuild_from_paths", counted)
+    monkeypatch.setattr(SessionMemoryIndex, "rebuild", counted)
 
     for _ in range(5):
         assert goals.load_goal("goal-chat")["text"] == "finish the task"

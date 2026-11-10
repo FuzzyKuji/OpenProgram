@@ -13,24 +13,24 @@ from .branches import BranchesOperations
 from .node_deletion import NodeDeletionOperations
 
 if TYPE_CHECKING:
-    from openprogram.state.store.session.git_session import GitSession
+    from openprogram.state.store.session.session_log import SessionLog
     from openprogram.state.store.session.memory_index import SessionMemoryIndex
 
 
 class SessionStore(IndexOperations, StorageOperations, SessionsOperations, MessagesOperations, BranchesOperations, NodeDeletionOperations):
-    """Git-backed session store.
+    """Conversations kept in one append-only log per session.
 
     One instance per process (use ``default_store()``). Methods are
-    thread-safe — per-session locks live on the GitSession / index.
+    thread-safe — per-session locks live on the index.
 
-    ``root_path`` is the directory holding per-session git repos.
+    ``root_path`` is the directory holding the sessions.
     """
 
     _INDEX_FIELDS = frozenset({
         "id", "agent_id", "title", "created_at", "updated_at",
         "source", "channel", "account_id", "peer_display", "peer_id",
         "pinned", "archived", "group", "status", "unread", "environment_id",
-        "sort_at", "sort_since",
+        "sort_at", "sort_since", "agent_trial",
     })
 
     _EMPTY_SHELL_AGE = 3600       # 1 hour
@@ -46,10 +46,10 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         self._explicit_root = root_path is not None
         self._project_ids: dict[str, str] = {}
         self.root_path.mkdir(parents=True, exist_ok=True)
-        # Cache: session_id → (GitSession, SessionMemoryIndex). Lazy,
+        # Cache: session_id → (SessionLog, SessionMemoryIndex). Lazy,
         # LRU-ordered (OrderedDict: insertion/access order = recency), and
         # size-capped at ``_cache_cap`` — see the _DEFAULT_CACHE_CAP note.
-        self._sessions: "OrderedDict[str, tuple[GitSession, SessionMemoryIndex]]" = shared.OrderedDict()
+        self._sessions: "OrderedDict[str, tuple[SessionLog, SessionMemoryIndex]]" = shared.OrderedDict()
         self._cache_cap = cache_cap if cache_cap is not None else shared._resolve_cache_cap()
         self._lock = shared.threading.Lock()
         # Filesystem work is serialized per session, not across the store.
@@ -84,18 +84,19 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
 
         Needed because Agent method tools run in a spawn()'d
         subprocess (see ``openprogram/runtime/conversation/process_runner.py``) that
-        writes Call nodes directly to the per-session git history with
+        writes Call nodes to the session's log with
         its OWN ``SessionStore`` instance. The parent worker's cached
         index never observes those writes, so ``get_messages`` /
         ``build_branches_payload`` keep returning the pre-subprocess
         snapshot — which is missing every nested code/tool node (an
         Agent method's square + its sub-call and exec children).
 
-        Cheap: O(history length) git directory listing on next access.
+        Cheap: the next access reads what was appended.
         """
         with self._session_lock(session_id):
             with self._lock:
                 self._sessions.pop(session_id, None)
+        shared.report_foreign_change(session_id)
 
 
     def mark_merged(self, session_id: str, head_ids: list[str]) -> None:
@@ -108,7 +109,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return
-        git, idx = pair
+        session_log, idx = pair
         with idx._lock:
             cur = list(idx.meta.get("merged_heads") or [])
             changed = False
@@ -122,7 +123,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
             if changed:
                 idx.meta["merged_heads"] = cur
         if changed:
-            self._persist_meta(git, idx)
+            self._persist_meta(session_log, idx)
 
 
     def merged_heads(self, session_id: str) -> set[str]:
@@ -136,7 +137,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return set()
-        _git, idx = pair
+        _session_log, idx = pair
         merged = set(idx.meta.get("merged_heads") or [])
         # Fallback: auto-detect merged peers by scanning recent
         # ContextCommits for multi-parent commits (= merge commits).
@@ -178,7 +179,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return []
-        _git, idx = pair
+        _session_log, idx = pair
         rows: list[dict[str, shared.Any]] = []
         # Snapshot: a concurrent turn can add a branch entry mid-scan.
         for head, entry in list((idx.meta.get("branches") or {}).items()):
@@ -203,13 +204,12 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         Used to retire attach-pointer rows that have been consumed by
         a merge: the pointer is a side-channel reference, not part of
         the conv chain, so dropping it doesn't orphan anything. Caller
-        is responsible for ``commit_turn`` if a git commit should
-        record the deletion.
+        is responsible for ``commit_turn`` at the turn boundary.
         """
         pair = self._open(session_id)
         if pair is None:
             return False
-        git, idx = pair
+        session_log, idx = pair
         if node_id not in idx.nodes_by_id:
             return False
         with idx._lock:
@@ -227,16 +227,12 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
                     kids.remove(node_id)
                     if not kids:
                         del idx.children_by_caller[parent]
-            for fpath in (git.path / "history").glob(f"*-{node_id}.json"):
-                try:
-                    fpath.unlink()
-                except OSError:
-                    pass
+        session_log.delete_nodes([node_id])
         branches = dict(idx.meta.get("branches") or {})
         if node_id in branches:
             branches.pop(node_id, None)
             idx.set_meta(branches=branches)
-        self._persist_meta(git, idx)
+        self._persist_meta(session_log, idx)
         return True
 
 
@@ -285,25 +281,6 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         }
 
 
-    def session_commits(self, session_id: str, *, limit: int = 100) -> list:
-        """The session repo's per-turn git commits, newest first.
-
-        Each successful turn is one commit (``commit_turn``), so this is
-        the entity layer's time axis — the turn boundaries with their sha
-        + timestamp + message. Returns ``GitSession.CommitInfo`` records.
-
-        Exposed because the per-turn commits were being *written* but had
-        no reader (``GitSession.log`` was only ever called by itself): the
-        memory provenance layer and the UI timeline both want to walk a
-        session's turns. Empty list if the session doesn't exist yet.
-        """
-        pair = self._open(session_id)
-        if pair is None:
-            return []
-        git, _idx = pair
-        return git.log(limit=limit)
-
-
     def get_nodes(self, session_id: str) -> list[shared.Call]:
         """Raw Call objects for a session, sorted by seq.
 
@@ -313,7 +290,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return []
-        _git, idx = pair
+        _session_log, idx = pair
         return idx.all_nodes()
 
 
@@ -321,7 +298,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return None
-        _git, idx = pair
+        _session_log, idx = pair
         for n in reversed(idx.all_nodes()):
             if n.is_user():
                 return n.output
@@ -330,11 +307,11 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
 
     def sessions_with_binding(self, channel: str, account_id: shared.Optional[str]) -> list[str]:
         out: list[str] = []
+        # Registry rows carry channel / account_id as top-level fields.
         for sess in self.list_sessions(limit=10**9, include_archived=True):
-            extra = sess.get("extra_meta") or {}
-            if extra.get("channel") != channel:
+            if sess.get("channel") != channel:
                 continue
-            if account_id is not None and extra.get("account_id") != account_id:
+            if account_id is not None and sess.get("account_id") != account_id:
                 continue
             out.append(sess["id"])
         return out
@@ -359,7 +336,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return []
-        _git, idx = pair
+        _session_log, idx = pair
         if msg_id not in idx.nodes_by_id:
             return []
         # Descendants follow caller only (sub-calls of this node, not
@@ -384,7 +361,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
         pair = self._open(session_id)
         if pair is None:
             return None
-        _git, idx = pair
+        _session_log, idx = pair
         # Old semantics: longest message-tree chain via the predecessor field.
         children = idx.children_by_predecessor
         roots = [msg_id] if msg_id else [
@@ -417,7 +394,7 @@ class SessionStore(IndexOperations, StorageOperations, SessionsOperations, Messa
             pair = self._open(sess["id"])
             if not pair:
                 continue
-            _git, idx = pair
+            _session_log, idx = pair
             for n in idx.all_nodes():
                 if (n.created_at or 0) >= since:
                     total += 1

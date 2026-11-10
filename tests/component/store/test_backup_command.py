@@ -34,8 +34,8 @@ def profile(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     (state / "memory" / "topics").mkdir(parents=True)
     (state / "memory" / "core.md").write_text("remembered", encoding="utf-8")
     (state / "memory" / "topics" / "a.md").write_text("topic a", encoding="utf-8")
-    (state / "sessions").mkdir()
-    (state / "sessions" / "s1.json").write_text('{"id": "s1"}', encoding="utf-8")
+    (state / "commands").mkdir()
+    (state / "commands" / "s1.json").write_text('{"id": "s1"}', encoding="utf-8")
     (state / "config.json").write_text('{"theme": "dark"}', encoding="utf-8")
     (state / "config.json").chmod(0o600)
     (state / "bindings.json").write_text('{"discord": []}', encoding="utf-8")
@@ -266,7 +266,7 @@ def test_create_captures_scope_and_excludes_noise(profile: Path):
 
     assert "memory/core.md" in names
     assert "memory/topics/a.md" in names
-    assert "sessions/s1.json" in names
+    assert "commands/s1.json" in names
     assert "config.json" in names
     assert "bindings.json" in names
     assert "programs_meta.json" in names
@@ -747,11 +747,11 @@ def test_create_and_restore_round_trip(profile: Path, capsys):
 
     # Mutate state, then restore it away.
     (profile / "memory" / "core.md").write_text("clobbered", encoding="utf-8")
-    (profile / "sessions" / "s1.json").unlink()
+    (profile / "commands" / "s1.json").unlink()
 
     assert _cmd_backup_restore(archive.name, yes=True) == 0
     assert (profile / "memory" / "core.md").read_text(encoding="utf-8") == "remembered"
-    assert (profile / "sessions" / "s1.json").exists()
+    assert (profile / "commands" / "s1.json").exists()
 
 
 def test_restore_snapshots_current_state_first(profile: Path):
@@ -785,7 +785,7 @@ def test_create_backup_is_busy_during_restore_publication(
         tmp_path / "incoming.tar.gz",
         {
             "memory/core.md": b"new-memory",
-            "sessions/s1.json": b'{"generation": "new"}',
+            "commands/s1.json": b'{"generation": "new"}',
         },
     )
     marker = tmp_path / "restore-paused"
@@ -812,7 +812,7 @@ def test_backup_create_cli_reports_busy_without_archive(
         tmp_path / "incoming.tar.gz",
         {
             "memory/core.md": b"new-memory",
-            "sessions/s1.json": b'{"generation": "new"}',
+            "commands/s1.json": b'{"generation": "new"}',
         },
     )
     marker = tmp_path / "restore-paused"
@@ -838,7 +838,7 @@ def test_busy_restore_cli_does_not_create_safety_snapshot(
         tmp_path / "incoming.tar.gz",
         {
             "memory/core.md": b"new-memory",
-            "sessions/s1.json": b'{"generation": "new"}',
+            "commands/s1.json": b'{"generation": "new"}',
         },
     )
     marker = tmp_path / "restore-paused"

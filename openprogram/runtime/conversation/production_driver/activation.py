@@ -14,9 +14,9 @@ from openprogram.runtime.execution.driver import (
     TerminationReceipt,
 )
 from openprogram.runtime.execution.attempts import AttemptRecord, AttemptStatus
-from openprogram.runtime.execution.agent_checkpoint import (
-    AGENT_CHECKPOINT_SCHEMA_VERSION,
-    AgentCheckpointError,
+from openprogram.runtime.execution.agent_journal import AGENT_STATE_SCHEMA_VERSION
+from openprogram.runtime.execution.runtime_contract import (
+    RuntimeContractError,
     validate_runtime_contract,
 )
 from openprogram.runtime.execution.control.service import RuntimeControlService
@@ -122,7 +122,7 @@ class ActivationOperations:
                 fork=True,
                 retry=True,
                 safe_point_kinds=shared.AGENT_SAFE_POINT_KINDS,
-                state_schema_version=AGENT_CHECKPOINT_SCHEMA_VERSION,
+                state_schema_version=AGENT_STATE_SCHEMA_VERSION,
             )
         envelope = shared.normalize_agent_turn_payload(payload)
         if envelope["kind"] != "chat":
@@ -143,7 +143,7 @@ class ActivationOperations:
             return CapabilitySet(
                 pause=True,
                 safe_point_kinds=("agent.wait.before_tool",),
-                state_schema_version=AGENT_CHECKPOINT_SCHEMA_VERSION,
+                state_schema_version=AGENT_STATE_SCHEMA_VERSION,
             )
         request = envelope["request"]
         text = str(request.get("user_text") or "").lstrip()
@@ -159,7 +159,7 @@ class ActivationOperations:
             fork=True,
             retry=True,
             safe_point_kinds=shared.AGENT_SAFE_POINT_KINDS,
-            state_schema_version=AGENT_CHECKPOINT_SCHEMA_VERSION,
+            state_schema_version=AGENT_STATE_SCHEMA_VERSION,
         )
 
 
@@ -176,7 +176,7 @@ class ActivationOperations:
             fork=True,
             retry=True,
             safe_point_kinds=shared.AGENT_SAFE_POINT_KINDS,
-            state_schema_version=AGENT_CHECKPOINT_SCHEMA_VERSION,
+            state_schema_version=AGENT_STATE_SCHEMA_VERSION,
         )
 
 
@@ -229,8 +229,7 @@ class ActivationOperations:
                 )
                 if (execution.parent_execution_id is not None
                         and activation.checkpoint.execution_id != execution.execution_id):
-                    with self.executions._connect() as connection:
-                        connection.execute("BEGIN")
+                    with self.executions._transaction() as connection:
                         branch = RuntimeControlService._agent_branch_checkpoint_is_valid(
                             self.executions, connection, execution, activation.checkpoint,
                         )
@@ -238,16 +237,13 @@ class ActivationOperations:
                         raise shared.AgentDriverError("invalid_checkpoint", "Agent branch source checkpoint is invalid")
                     if record.assistant_message_id != f"{execution.execution_id}_reply":
                         raise shared.AgentDriverError("checkpoint_schema_invalid", "Agent branch assistant anchor is invalid")
-                    branch_payload = shared.copy.deepcopy(dict(continuation.state.payload))
-                    branch_payload["turn"]["assistant_message_id"] = record.assistant_message_id
-                    branch_state = replace(continuation.state, payload=branch_payload)
-                    branch_state.validate()
                     branch_snapshot = shared.copy.deepcopy(dict(continuation.resolved_snapshot))
                     # The validated manifest permits only this revision identity
                     # change; model, tools, prompt and authority remain exact.
                     branch_snapshot["request_semantics"]["_execution_revision_id"] = execution.revision_id
                     continuation = replace(
-                        continuation, state=branch_state, resolved_snapshot=branch_snapshot,
+                        continuation, assistant_message_id=record.assistant_message_id,
+                        resolved_snapshot=branch_snapshot,
                     )
                     from openprogram.runtime.context.session_db import default_db
                     from openprogram.state.store.session.nodes import Call, ROLE_LLM
@@ -260,7 +256,7 @@ class ActivationOperations:
                             metadata={"agent_id": request.agent_id, "execution_id": execution.execution_id},
                         ))
                 if (
-                    record.user_message_id != continuation.state.payload["turn"]["user_message_id"]
+                    record.user_message_id != continuation.user_message_id
                     or record.assistant_message_id != continuation.assistant_message_id
                 ):
                     raise shared.AgentDriverError(
@@ -287,7 +283,7 @@ class ActivationOperations:
                     reset_worktree(_workdir_token)
                 from openprogram.runtime.agent.durable_steps import retained_function_names
                 validate_runtime_contract(continuation.resolved_snapshot, _contract, durable_function_names=retained_function_names(self.executions, execution.execution_id))
-            except AgentCheckpointError as exc:
+            except RuntimeContractError as exc:
                 shared._log.warning("Agent continuation %s rejected: %s", execution.execution_id, exc)
                 raise shared.AgentDriverError(exc.code, str(exc)) from exc
         if activation is not None and activation.checkpoint is not None and self.activation_observer is not None:
@@ -330,19 +326,10 @@ class ActivationOperations:
                     task.cancel()
                     return
             try:
-                # Validate ownership before executing any user work, then
-                # retain the exact fenced lease independently of transport
-                # event loops, including bounded terminal-write retries.
-                self._control_service().attempts.heartbeat(
+                # Validate ownership before executing any user work.
+                self._control_service().attempts.ensure_held(
                     attempt.attempt_id, generation=attempt.generation,
-                    ttl_seconds=shared.AGENT_LEASE_SECONDS,
                 )
-                shared.threading.Thread(
-                    target=self._maintain_owner,
-                    args=(attempt, handle),
-                    daemon=True,
-                    name=f"openprogram-agent-lease-{attempt.attempt_id}",
-                ).start()
                 result = shared.asyncio.run(
                     self._run_attempt(
                         attempt, request, cancel_event,
@@ -373,46 +360,6 @@ class ActivationOperations:
         )
 
 
-    def _maintain_owner(self, attempt: AttemptRecord, handle: shared.AgentDriverHandle) -> None:
-        """Renew a live producer's lease; never renew a replacement owner."""
-        wake = shared.threading.Event()
-        handle.done.add_done_callback(lambda _done: wake.set())
-        key = self._key(handle)
-        interval = shared.AGENT_LEASE_SECONDS / 3
-        while True:
-            wake.wait(interval)
-            wake.clear()
-            with self._handles_lock:
-                pending = key in self._pending_finishes
-                stalled = key in self._finish_repair_stalled
-            if handle.done.done() and (not pending or stalled):
-                return
-            service = self._control_service()
-            try:
-                service.attempts.heartbeat(
-                    attempt.attempt_id, generation=attempt.generation,
-                    ttl_seconds=shared.AGENT_LEASE_SECONDS,
-                )
-            except Exception:
-                # Signal this producer only. Looking up a physical process by
-                # execution_id could kill a replacement after a concurrent
-                # handoff. In-flight external operations remain cooperative.
-                handle.cancel_event.set()
-                try:
-                    current = service.attempts.get(attempt.attempt_id)
-                    if current is not None and current.status is AttemptStatus.ENDED:
-                        return
-                except Exception:
-                    # Status unknown: treat as owner loss below, the safe default.
-                    _log.debug("attempt %s status lookup failed after heartbeat loss", attempt.attempt_id, exc_info=True)
-                self._recover_owner_loss(attempt)
-                return
-            if handle.done.done():
-                # Finish retries are bounded and can settle before the next
-                # normal heartbeat. Do not leave an idle lease thread alive.
-                interval = min(shared.AGENT_LEASE_SECONDS / 3, 0.1)
-
-
     def activation_committed(self, binding: DriverBinding[shared.AgentDriverHandle]) -> None:
         """Release a driver-owned producer after registry fencing commits."""
         key = self._key(binding.handle)
@@ -434,6 +381,14 @@ class ActivationOperations:
             gate.set()
 
 
+    def _tell_function_process(self, handle: shared.AgentDriverHandle, command: str) -> None:
+        """A function subprocess learns of a stop from a line in its log."""
+        from openprogram.runtime.conversation.process_runner import is_subprocess_alive
+
+        record = self.executions.get_execution(handle.execution_id)
+        if record is not None and is_subprocess_alive(record.session_id, execution_id=handle.execution_id):
+            self.executions.function_log(handle.execution_id).request(command, handle.generation)
+
     async def request_pause(
         self, handle: shared.AgentDriverHandle, command_id: str
     ) -> DriverAck:
@@ -442,6 +397,7 @@ class ActivationOperations:
         # command at its next declared provider/tool boundary.  ACK only
         # confirms delivery to this fenced owner; it never fabricates a
         # checkpoint or changes command state.
+        self._tell_function_process(handle, "pause")
         return DriverAck(command_id=command_id, attempt_id=handle.attempt_id)
 
 
@@ -456,6 +412,7 @@ class ActivationOperations:
         with self._handles_lock:
             self._cancel_commands[self._key(handle)] = command_id
         handle.cancel_event.set()
+        self._tell_function_process(handle, "cancel")
         return DriverAck(command_id=command_id, attempt_id=handle.attempt_id)
 
 
@@ -507,6 +464,7 @@ class ActivationOperations:
     def fail_admission(
         self, admission: shared.CanonicalAgentAdmission, *, reason_code: str,
         target: ExecutionStatus = ExecutionStatus.FAILED,
+        failure_text: str | None = None,
     ) -> None:
         """Finish an admitted turn that could not create a live owner.
 
@@ -521,7 +479,6 @@ class ActivationOperations:
                 admission.execution_id,
                 expected_version=admission.status_version,
                 owner_id=f"agent-failure-{shared.uuid.uuid4().hex}",
-                ttl_seconds=shared.AGENT_LEASE_SECONDS,
             )
             active, running = service.attempts.activate(
                 attempt.attempt_id,
@@ -535,6 +492,7 @@ class ActivationOperations:
                 target=target,
                 outcome="cancelled" if target is ExecutionStatus.CANCELLED else "failed",
                 reason_code=reason_code,
+                failure_text=failure_text,
             )
         except Exception:
             # The durable record may already have been handled by another

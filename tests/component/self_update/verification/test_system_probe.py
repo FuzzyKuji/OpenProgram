@@ -81,7 +81,7 @@ def live(tmp_path, monkeypatch):
                             repo=str(tmp_path), worktree_id="wt", base_sha="1" * 40, candidate_sha="2" * 40,
                             changed_paths=("feature.py",), pre_update_evidence=("tests:pass",), goal="Fix feature", assertions=("Feature works",))
     store.create(request)
-    for phase in (UpdatePhase.STAGING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
+    for phase in (UpdatePhase.BUILDING, UpdatePhase.READY, UpdatePhase.ACTIVATING):
         store.transition(request.update_id, phase)
     try:
         with listener._listener(state, port):
@@ -109,6 +109,79 @@ def test_failed_observation_never_produces_a_pass(live, failed):
     with pytest.raises(SystemProbeError) as error:
         probe_system(record)
     assert state.token not in str(error.value)
+
+
+def _other_instance(tmp_path, monkeypatch, state, **extra):
+    """The same live listener, reached as another instance's port and state directory."""
+    from openprogram.operations.self_update.verification import system_probe
+    profile = tmp_path / "profile"
+    (profile / "owner.json").write_text(json.dumps({"version": 1, "principal_id": "owner/install/0123456789abcdef"}))
+    (profile / "worker.lock").write_text(str(os.getpid()))
+    port = system_probe._PORT
+    monkeypatch.setattr(system_probe, "_PORT", 1)
+    monkeypatch.setattr("openprogram.operations.worker.lifecycle.current_worker_pid", lambda: None)
+    monkeypatch.setattr("openprogram.runtime.permissions.authority.owner_principal_id", lambda: "someone-else")
+    return system_probe.ProbeTarget(port=port, state_dir=profile, **extra)
+
+
+def test_another_instance_is_probed_by_its_port_and_state_directory(live, tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification.system_probe import probe_instance
+    record, _, state = live
+    target = _other_instance(tmp_path, monkeypatch, state)
+    gate = probe_instance(record, target, revision="2" * 40, require_loaded=False)
+    assert gate["candidate_sha"] == "2" * 40 and gate["worker_pid"] == os.getpid()
+
+
+def test_the_token_can_be_supplied(live, tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification.system_probe import probe_instance
+    from openprogram.operations.self_update.verification.system_probe import SystemProbeError
+    record, _, state = live
+    target = _other_instance(tmp_path, monkeypatch, state, token="A" * 43)
+    with pytest.raises(SystemProbeError, match="owner_auth"):
+        probe_instance(record, target, require_loaded=False)
+
+
+def test_regression_rule_a_row_that_was_ok_must_stay_ok(live, tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification import system_probe
+    record, flags, state = live
+    flags["doctor"] = False
+    target = _other_instance(tmp_path, monkeypatch, state, doctor_baseline={"check_python": True})
+    from openprogram.operations.diagnostics import checks as doctor
+    monkeypatch.setattr(doctor, "run_checks", lambda: [
+        {"id": "check_python", "ok": False, "label": "x", "detail": "x"},
+        {"id": "check_login", "ok": False, "label": "x", "detail": "x"}])
+    with pytest.raises(system_probe.SystemProbeError, match="doctor"):
+        system_probe.probe_instance(record, target, require_loaded=False)
+
+
+def test_regression_rule_a_row_already_failing_does_not_block(live, tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification import system_probe
+    from openprogram.operations.diagnostics import checks as doctor
+    record, _, state = live
+    baseline = {"check_python": True, "check_login": False}
+    target = _other_instance(tmp_path, monkeypatch, state, doctor_baseline=baseline)
+    monkeypatch.setattr(doctor, "run_checks", lambda: [
+        {"id": "check_python", "ok": True, "label": "x", "detail": "x"},
+        {"id": "check_login", "ok": False, "label": "x", "detail": "x"}])
+    assert system_probe.probe_instance(record, target, require_loaded=False)["checks"]
+
+
+def test_doctor_baseline_records_each_row(live, tmp_path, monkeypatch):
+    from openprogram.operations.self_update.verification import system_probe
+    from openprogram.operations.diagnostics import checks as doctor
+    record, _, state = live
+    target = _other_instance(tmp_path, monkeypatch, state)
+    monkeypatch.setattr(doctor, "run_checks", lambda: [
+        {"id": "check_python", "ok": True, "label": "x", "detail": "x"},
+        {"id": "check_login", "ok": False, "label": "x", "detail": "x"}])
+    assert system_probe.doctor_baseline(record, target) == {"check_python": True, "check_login": False}
+
+
+def test_an_instance_that_cannot_be_observed_gives_no_baseline(live, tmp_path):
+    from openprogram.operations.self_update.verification import system_probe
+    record, _, _ = live
+    target = system_probe.ProbeTarget(port=9, state_dir=tmp_path / "nowhere")
+    assert system_probe.doctor_baseline(record, target, timeout=2) == {}
 
 
 def test_wrong_candidate_is_rejected_by_real_hmac_challenge(live):
@@ -203,7 +276,7 @@ def test_supervisor_real_gate_controls_startup_job(store_fixture, live, monkeypa
     monkeypatch.setattr("openprogram.runtime.context.session_db.default_db", lambda: store_fixture)
     store = SelfUpdateStore()
     # The listener fixture has no worker or session side effects. Replace its
-    # example update with a fully frozen request at the public STAGING entry.
+    # example update with a fully frozen request at the public building entry.
     store.transition(record.request.update_id, UpdatePhase.NEEDS_MANUAL_RECOVERY)
     request = replace(record.request, update_id="su_handoff", session_id="p1",
                       origin_turn_id="u1", origin_assistant_id="a1")
@@ -217,7 +290,7 @@ def test_supervisor_real_gate_controls_startup_job(store_fixture, live, monkeypa
     config = freeze_verifier_config(request, turn)
     request = replace(request, pre_update_evidence=(*request.pre_update_evidence, config_evidence(config)))
     store.create(request, verifier_config=config)
-    store.transition(request.update_id, UpdatePhase.STAGING)
+    store.transition(request.update_id, UpdatePhase.BUILDING)
     update_dir = store.root / request.update_id
     installer = update_dir / "controller/install-app.sh"
     installer.parent.mkdir()

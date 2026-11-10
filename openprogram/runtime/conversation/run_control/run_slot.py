@@ -3,8 +3,9 @@
 One conversation runs one turn at a time. The web server owns that slot
 (its run reservation, the running task it shows and the guard every chat
 entry point takes), so a turn the runtime starts on its own, such as a
-reminder wake or an always-on check-in, must take the same slot or it runs
-on top of the owner's turn. The runtime cannot import the server; the
+reminder wake or a handed-over message, must take the same slot or it runs
+on top of the owner's turn. (An always-on check-in runs beside the
+conversation on a side branch and takes no slot.) The runtime cannot import the server; the
 server registers itself here instead. Without a host the slot falls back
 to the in-process turn registry.
 """

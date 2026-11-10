@@ -125,7 +125,7 @@ test('the width moves from the click in both directions; only a settled close is
   try {
     assert.equal(rail.style.getPropertyValue('--rail-open-w'), '320px');
     await view.render(createElement(Rail, { open: false }));
-    assert.equal(rail.style.width, '63px', 'closing starts in the click frame');
+    assert.equal(rail.style.width, '62px', 'closing starts in the click frame');
     assert.equal(rail.style.getPropertyValue('--rail-open-w'), '320px', 'the open width stays');
     for (const name of ['data-rail-moving', 'data-rail-holding', 'data-rail-closing']) assert.equal(rail.hasAttribute(name), false, name);
     assert.equal(rail.hasAttribute('data-rail-closed'), false, 'not settled while moving');
@@ -174,7 +174,7 @@ test('a close before the first frame (a stored closed rail on mount) is settled 
     await act(async () => root.render(createElement(Rail, { open: true })));
     await act(async () => root.render(createElement(Rail, { open: false })));
     const rail = host.querySelector('#rail');
-    assert.equal(rail.style.width, '63px');
+    assert.equal(rail.style.width, '62px');
     assert.equal(rail.getAttribute('data-rail-closed'), '');
   } finally { await act(async () => root.unmount()); host.remove(); frames.length = 0; timers.clear(); }
 });
@@ -250,7 +250,7 @@ test('the left sidebar keeps every element through a close, its settle, an open 
     const parts = ['#convSection', '#favSection', '.rail-wordmark', '[data-sessions]', '[data-links]', '.rail-header', '#navNewChat .sidebar-nav-label', '.rail-toggle-close', '.rail-toggle-open'];
     for (const part of parts) assert.ok(shell().querySelector(part), part);
     await click(toggle);
-    assert.equal(shell().style.width, '63px');
+    assert.equal(shell().style.width, '62px');
     assert.equal(shell().classList.contains('collapsed'), true, 'the collapsed look comes with the click, so the fades start there');
     assert.equal(toggle.getAttribute('aria-label'), 'Show sidebar');
     sameNodes(open, shell(), 'closing');
@@ -386,7 +386,7 @@ test('the right panel keeps its rows, toggle, views and Resources mounted; only 
     assert.equal(rows.length, 3);
     for (const row of rows) assert.ok(row.classList.contains('rail-row'), 'each view button rides the card as one row');
     await act(async () => useSessionStore.getState().setRightDockOpen(false));
-    assert.equal(shell().style.width, '63px');
+    assert.equal(shell().style.width, '62px');
     assert.equal(shell().classList.contains('collapsed'), true);
     assert.equal(host.hasAttribute('inert'), false, 'not inert while the close moves');
     assert.equal(shell().querySelector('[data-resources]').dataset.active, 'false', 'Resources stops working at the click, stays mounted');
@@ -452,7 +452,7 @@ test('the toggles ride the moving edge: one inset per state, moved on the rail\'
   const header = declarations('.rail-header');
   assert.equal(header.get('padding'), '8px');
   assert.equal(header.get('transition'), 'padding-left var(--rail-move-duration) var(--rail-move-easing), padding-right var(--rail-move-duration) var(--rail-move-easing)');
-  // (63 - 16 - 30) / 2 = 8.5px: centred in the collapsed card.
+  // (62 - 16 - 30) / 2 = 8px: centred in the collapsed card.
   const centred = 'calc((var(--rail-collapsed-w) - 4 * var(--spacing) - var(--ui-list-h)) / 2)';
   assert.equal(declarations('.sidebar.collapsed:not(.right-sidebar) .rail-header').get('padding-right'), centred);
   assert.equal(declarations('.right-sidebar.collapsed .rail-header').get('padding-left'), centred);

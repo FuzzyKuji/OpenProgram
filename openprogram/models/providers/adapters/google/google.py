@@ -178,19 +178,6 @@ def _build_config(
     )
 
 
-def _make_empty_assistant(model: Model) -> AssistantMessage:
-    return AssistantMessage(
-        role="assistant",
-        content=[],
-        api=model.api,
-        provider=model.provider,
-        model=model.id,
-        usage=Usage(),
-        stop_reason="stop",
-        timestamp=int(time.time() * 1000),
-    )
-
-
 # ---------------------------------------------------------------------------
 # stream_simple — main streaming entry point
 # ---------------------------------------------------------------------------
@@ -264,7 +251,7 @@ async def stream_simple(
     contents = _build_contents(context)
     config = _build_config(model, context, opts)
 
-    partial = _make_empty_assistant(model)
+    partial = AssistantMessage.empty(model)
     content_blocks: list[Any] = []
     current_block: TextContent | ThinkingContent | None = None
     usage_final = Usage()

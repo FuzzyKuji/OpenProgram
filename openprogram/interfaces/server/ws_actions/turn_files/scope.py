@@ -53,8 +53,8 @@ def _open_session(session_id: str):
     pair = store._open(session_id)
     if pair is None:
         return None
-    git, index = pair
-    return store, git, index, store._session_dir(session_id)
+    session_log, index = pair
+    return store, session_log, index, store._session_dir(session_id)
 
 
 def _relative(path: str, root: Path | None) -> str:
@@ -448,7 +448,7 @@ def _history_eligibility(session_id: str, turn_id: str) -> dict:
     opened = _open_session(session_id)
     if opened is None:
         return {"status": "error", "action": None, "error": "unknown session"}
-    _store, _git, index, session_dir = opened
+    _store, _session_log, index, session_dir = opened
     node = index.nodes_by_id.get(turn_id)
     if node is None:
         return {"status": "error", "action": None, "error": "unknown turn"}
@@ -529,7 +529,7 @@ def _turn_scope(
     opened = _open_session(session_id)
     if opened is None:
         return {"status": "error", "error": f"unknown session {session_id!r}"}
-    _store, _git, index, session_dir = opened
+    _store, _session_log, index, session_dir = opened
     if turn_id not in index.nodes_by_id:
         return {"status": "error", "error": f"unknown turn {turn_id!r}"}
     root = _project_root(session_id)
@@ -676,7 +676,7 @@ def _branch_scope(
     opened = _open_session(session_id)
     if opened is None:
         return {"status": "error", "error": f"unknown session {session_id!r}"}
-    _store, _git, index, session_dir = opened
+    _store, _session_log, index, session_dir = opened
     root = _project_root(session_id)
     lineages: dict[str, dict] = {}
     active_llm = [

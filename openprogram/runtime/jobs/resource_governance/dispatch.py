@@ -8,6 +8,13 @@ from openprogram.runtime.jobs.resource_governance.contracts import (
     AdmissionDecision,
     DispatchClaim,
 )
+from openprogram.runtime.jobs.resource_governance.tables import RunTables, load_job_sessions
+from openprogram.runtime.jobs.resource_governance.usage import _job_scope_chain
+from openprogram.runtime.execution.store.ownership import owns_store_schema
+
+
+def _next_generation(row: dict[str, Any]) -> int:
+    return row["lease_generation"] + 1
 
 
 class DispatchOperations:
@@ -33,51 +40,45 @@ class DispatchOperations:
         """Atomically exchange queued capacity for live capacity."""
         if not self._owner_holds_worker_lock(owner_instance_id):
             return False
-        with self.ledger.immediate() as conn:
-            row, resolved = self._resolved_for_admission(conn, job_id)
-            if row is None or resolved is None:
+        with self._write() as tables:
+            admission, resolved = self._resolved_for_admission(tables, job_id)
+            if admission is None or resolved is None:
                 return False
-            admission = conn.execute(
-                """SELECT state, owner_instance_id FROM job_admissions
-                   WHERE job_id = ?""", (job_id,),
-            ).fetchone()
             if admission["state"] == "live":
                 return admission["owner_instance_id"] == owner_instance_id
             if admission["state"] != "queued":
                 return False
-            capacity = self._capacity(conn, row["session_id"], resolved)
+            capacity = self._capacity(tables, admission["session_id"], resolved)
             live = capacity["session_live"]
-            global_live = conn.execute(
-                "SELECT COUNT(*) FROM job_admissions WHERE state IN ('live','stopping')"
-            ).fetchone()[0]
+            global_live = tables.count("job_admissions", state=("live", "stopping"))
             if global_live >= resolved.scheduler_capacity:
                 return False
             if live["limit"] is not None and live["used"] >= live["limit"]:
                 return False
+            if self._pending_finalization(tables, job_id):
+                return False
             now = time.time()
-            changed = conn.execute(
-                """UPDATE job_admissions
-                   SET state = 'live', owner_instance_id = ?, started_at = ?,
-                       last_activity_at = ?, lease_expires_at = ?,
-                       lease_generation = lease_generation + 1
-                   WHERE job_id = ? AND state = 'queued'
-                     AND dispatch_ready = 1 AND terminal_blocked = 0
-                     AND NOT EXISTS (
-                         SELECT 1 FROM job_finalizations
-                         WHERE job_finalizations.job_id = job_admissions.job_id
-                           AND job_finalizations.state = 'pending'
-                     )""",
-                (owner_instance_id, now, now, now + 30.0, job_id),
-            ).rowcount
-            return changed == 1
+            return tables.update(
+                "job_admissions",
+                {
+                    "state": "live", "owner_instance_id": owner_instance_id,
+                    "started_at": now, "last_activity_at": now,
+                    "lease_generation": _next_generation,
+                },
+                job_id=job_id, state="queued", dispatch_ready=1, terminal_blocked=0,
+            ) == 1
 
 
     def has_live_jobs(self) -> bool:
         """Include claims acquired before canonical activation in shutdown checks."""
-        with self.ledger.read() as connection:
-            return connection.execute(
-                "SELECT 1 FROM job_admissions WHERE state IN ('live', 'stopping') LIMIT 1"
-            ).fetchone() is not None
+        run_tables = self.ledger.run_tables()
+        if owns_store_schema(self.ledger._path()):  # noqa: SLF001
+            run_tables = self._tables()
+        else:
+            # Another process owns the rows; only its logs say what they are now.
+            run_tables = RunTables(run_tables.log)
+            load_job_sessions(run_tables)
+        return run_tables.handle.exists("job_admissions", state=("live", "stopping"))
 
 
     def claim_next(
@@ -91,56 +92,49 @@ class DispatchOperations:
         if not self._owner_holds_worker_lock(owner_instance_id):
             return None
         excluded_sessions = excluded_sessions or set()
-        with self.ledger.immediate() as conn:
-            queued = conn.execute(
-                """SELECT job_id, session_id FROM job_admissions
-                   WHERE state = 'queued' AND dispatch_ready = 1
-                     AND terminal_blocked = 0
-                     AND NOT EXISTS (
-                         SELECT 1 FROM job_finalizations
-                         WHERE job_finalizations.job_id = job_admissions.job_id
-                           AND job_finalizations.state = 'pending'
-                     )
-                   ORDER BY admitted_seq"""
-            ).fetchall()
+        with self._write() as tables:
+            pending = {
+                row["job_id"] for row in tables.rows("job_finalizations", state="pending")
+            }
+            queued = [
+                row for row in tables.rows(
+                    "job_admissions", state="queued", dispatch_ready=1, terminal_blocked=0,
+                    order="admitted_seq",
+                )
+                if row["job_id"] not in pending
+            ]
             for candidate in queued:
                 if only_job_id is not None and candidate["job_id"] != only_job_id:
                     continue
                 if candidate["session_id"] in excluded_sessions:
                     continue
                 row, resolved = self._resolved_for_admission(
-                    conn, candidate["job_id"],
+                    tables, candidate["job_id"],
                 )
                 if row is None or resolved is None:
                     continue
-                global_live = conn.execute(
-                    """SELECT COUNT(*) FROM job_admissions
-                       WHERE state IN ('live','stopping')"""
-                ).fetchone()[0]
+                global_live = tables.count("job_admissions", state=("live", "stopping"))
                 if global_live >= resolved.scheduler_capacity:
                     return None
-                capacity = self._capacity(conn, candidate["session_id"], resolved)
+                capacity = self._capacity(tables, candidate["session_id"], resolved)
                 live = capacity["session_live"]
                 if live["limit"] is not None and live["used"] >= live["limit"]:
                     continue
                 now = time.time()
-                changed = conn.execute(
-                    """UPDATE job_admissions
-                       SET state = 'live', owner_instance_id = ?, started_at = ?,
-                           last_activity_at = ?, lease_expires_at = ?,
-                           lease_generation = lease_generation + 1
-                       WHERE job_id = ? AND state = 'queued'
-                         AND dispatch_ready = 1 AND terminal_blocked = 0""",
-                    (
-                        owner_instance_id, now, now, now + 30.0,
-                        candidate["job_id"],
-                    ),
-                ).rowcount
+                changed = tables.update(
+                    "job_admissions",
+                    {
+                        "state": "live", "owner_instance_id": owner_instance_id,
+                        "started_at": now, "last_activity_at": now,
+                        "lease_generation": _next_generation,
+                    },
+                    job_id=candidate["job_id"], state="queued",
+                    dispatch_ready=1, terminal_blocked=0,
+                )
                 if changed == 1:
-                    generation = conn.execute(
-                        "SELECT lease_generation FROM job_admissions WHERE job_id = ?",
-                        (candidate["job_id"],),
-                    ).fetchone()[0]
+                    generation = tables.first(
+                        "job_admissions", job_id=candidate["job_id"],
+                    )["lease_generation"]
                     return DispatchClaim(
                         candidate["job_id"], candidate["session_id"], generation,
                     )
@@ -178,21 +172,23 @@ class DispatchOperations:
     ) -> bool:
         """Idempotently put an existing admission back in the claim queue."""
         queue_state = "paused_waiting_claim" if paused else "queued_resume"
-        with self.ledger.immediate() as conn:
-            row = conn.execute(
-                "SELECT state, queue_state, resume_command_id FROM job_admissions WHERE job_id = ? AND admission_id = ?",
-                (job_id, admission_id),
-            ).fetchone()
+        with self._write() as tables:
+            row = self._admission(tables, job_id, admission_id=admission_id)
             if row is None:
                 return False
             if row["state"] == "live":
                 return row["resume_command_id"] == command_id
             if row["state"] == "queued" and row["resume_command_id"] not in (None, command_id):
                 return False
-            return conn.execute(
-                "UPDATE job_admissions SET state = 'queued', queue_state = ?, resume_command_id = ?, dispatch_ready = 1, owner_instance_id = NULL, lease_expires_at = NULL WHERE job_id = ? AND admission_id = ? AND state IN ('queued', 'released')",
-                (queue_state, command_id, job_id, admission_id),
-            ).rowcount == 1
+            return tables.update(
+                "job_admissions",
+                {
+                    "state": "queued", "queue_state": queue_state,
+                    "resume_command_id": command_id, "dispatch_ready": 1,
+                    "owner_instance_id": None,
+                },
+                job_id=job_id, admission_id=admission_id, state=("queued", "released"),
+            ) == 1
 
 
     def reclaim_paused(self, job_id: str, *, admission_id: str, command_id: str) -> bool:
@@ -211,11 +207,8 @@ class DispatchOperations:
         command_id: str | None = None,
     ) -> DispatchClaim | None:
         """Claim exactly one admission, returning an existing same-owner claim."""
-        with self.ledger.read() as conn:
-            row = conn.execute(
-                "SELECT session_id, state, owner_instance_id, lease_generation, admission_id FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
+        tables = self._read()
+        row = self._admission(tables, job_id)
         if row is None or row["admission_id"] != admission_id:
             return None
         if row["state"] == "live" and row["owner_instance_id"] == owner_instance_id:
@@ -223,10 +216,12 @@ class DispatchOperations:
         claim = self.claim_next(owner_instance_id=owner_instance_id, only_job_id=job_id)
         if claim is None:
             return None
-        with self.ledger.immediate() as conn:
-            conn.execute(
-                "UPDATE job_admissions SET queue_state = 'live', resume_command_id = ? WHERE job_id = ? AND owner_instance_id = ? AND lease_generation = ?",
-                (command_id, job_id, owner_instance_id, claim.lease_generation),
+        with self._write() as tables:
+            tables.update(
+                "job_admissions",
+                {"queue_state": "live", "resume_command_id": command_id},
+                job_id=job_id, owner_instance_id=owner_instance_id,
+                lease_generation=claim.lease_generation,
             )
         return claim
 
@@ -241,11 +236,7 @@ class DispatchOperations:
         resource_lease_generation: int | None = None,
     ) -> bool:
         """Fenced, idempotent resource release for a canonical execution."""
-        with self.ledger.read() as conn:
-            row = conn.execute(
-                "SELECT state, admission_id, owner_instance_id, lease_generation FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
+        row = self._admission(self._read(), job_id)
         if row is None or row["admission_id"] != admission_id:
             return False
         if row["state"] == "released":
@@ -266,24 +257,19 @@ class DispatchOperations:
         parent_msg_id: str,
     ) -> bool:
         """Persist the mutable target head under the original admission fence."""
-        with self.ledger.immediate() as conn:
-            row = conn.execute(
-                """SELECT resume_parent_msg_id FROM job_admissions
-                   WHERE job_id = ? AND admission_id = ?
-                     AND state = 'queued' AND dispatch_ready = 0
-                     AND borrowed_parent_job_id IS NULL""",
-                (job_id, admission_id),
-            ).fetchone()
+        with self._write() as tables:
+            row = self._admission(
+                tables, job_id, admission_id=admission_id, state="queued",
+                dispatch_ready=0, borrowed_parent_job_id=None,
+            )
             if row is None:
                 return False
             staged = row["resume_parent_msg_id"]
             if staged is not None and staged != parent_msg_id:
                 return False
-            conn.execute(
-                """UPDATE job_admissions SET resume_parent_msg_id = ?
-                   WHERE job_id = ? AND admission_id = ?
-                     AND state = 'queued' AND dispatch_ready = 0""",
-                (parent_msg_id, job_id, admission_id),
+            tables.update(
+                "job_admissions", {"resume_parent_msg_id": parent_msg_id},
+                job_id=job_id, admission_id=admission_id, state="queued", dispatch_ready=0,
             )
             return True
 
@@ -296,81 +282,44 @@ class DispatchOperations:
         parent_msg_id: str,
     ) -> bool:
         """Publish a staged deferred Job under its immutable admission fence."""
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE job_admissions
-                   SET dispatch_ready = 1
-                   WHERE job_id = ? AND admission_id = ?
-                     AND state = 'queued' AND dispatch_ready = 0
-                     AND terminal_blocked = 0
-                     AND resume_parent_msg_id = ?
-                     AND borrowed_parent_job_id IS NULL""",
-                (job_id, admission_id, parent_msg_id),
-            ).rowcount == 1
+        with self._write() as tables:
+            self.ledger.ensure_job_session(tables, job_id)
+            return tables.update(
+                "job_admissions", {"dispatch_ready": 1},
+                job_id=job_id, admission_id=admission_id, state="queued",
+                dispatch_ready=0, terminal_blocked=0,
+                resume_parent_msg_id=parent_msg_id, borrowed_parent_job_id=None,
+            ) == 1
 
 
     def continuation_parent_msg_id(self, job_id: str) -> str | None:
         """Return the durable deferred-resume target for canonical input."""
-        with self.ledger.read() as conn:
-            row = conn.execute(
-                "SELECT resume_parent_msg_id FROM job_admissions "
-                "WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-        return row[0] if row is not None else None
+        row = self._admission(self._read(), job_id)
+        return row["resume_parent_msg_id"] if row is not None else None
 
 
     def admission_exists(self, job_id: str) -> bool:
         """Check whether the resource ledger owns an admission for a Job."""
-        with self.ledger.read() as conn:
-            return conn.execute(
-                "SELECT 1 FROM job_admissions WHERE job_id = ? LIMIT 1",
-                (job_id,),
-            ).fetchone() is not None
+        return self._admission(self._read(), job_id) is not None
 
 
     def budget_scope_id(self, job_id: str) -> str | None:
         """Return the authoritative budget scope for a canonical Job."""
-        with self.ledger.read() as conn:
-            row = conn.execute(
-                "SELECT budget_scope_id FROM job_admissions WHERE job_id = ?",
-                (job_id,),
-            ).fetchone()
-        return str(row[0]) if row is not None and row[0] else None
+        row = self._admission(self._read(), job_id)
+        return str(row["budget_scope_id"]) if row is not None and row["budget_scope_id"] else None
 
 
     def canonical_limits(self, job_id: str) -> dict[str, int | float | None]:
         """Read the active Job budget from the authoritative ledger row."""
-        with self.ledger.read() as conn:
-            rows = conn.execute(
-                """WITH RECURSIVE ancestors AS (
-                       SELECT b.*, 0 AS depth
-                       FROM budget_scopes b
-                       JOIN job_admissions a
-                         ON a.budget_scope_id = b.budget_scope_id
-                       WHERE a.job_id = ?
-                       UNION ALL
-                       SELECT parent.*, ancestors.depth + 1
-                       FROM budget_scopes parent
-                       JOIN ancestors
-                         ON ancestors.parent_scope_id = parent.budget_scope_id
-                   )
-                   SELECT max_total_tokens, max_cost_microusd,
-                          max_runtime_seconds, idle_timeout_seconds
-                   FROM ancestors ORDER BY depth""",
-                (job_id,),
-            ).fetchall()
-        if not rows:
+        chain = _job_scope_chain(self.ledger, self._read(), job_id)
+        if not chain:
             return {}
-        values = [
-            next((row[index] for row in rows if row[index] is not None), None)
-            for index in range(4)
-        ]
         return {
-            "max_total_tokens": values[0],
-            "max_cost_microusd": values[1],
-            "max_runtime_seconds": values[2],
-            "idle_timeout_seconds": values[3],
+            name: next((scope[name] for scope in chain if scope[name] is not None), None)
+            for name in (
+                "max_total_tokens", "max_cost_microusd",
+                "max_runtime_seconds", "idle_timeout_seconds",
+            )
         }
 
 
@@ -386,16 +335,14 @@ class DispatchOperations:
         to stage.  Its fence is the immutable admission id plus the queued,
         undispatched state.
         """
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE job_admissions SET dispatch_ready = 1
-                   WHERE job_id = ? AND admission_id = ?
-                     AND state = 'queued' AND dispatch_ready = 0
-                     AND terminal_blocked = 0
-                     AND resume_parent_msg_id IS NULL
-                     AND borrowed_parent_job_id IS NULL""",
-                (job_id, admission_id),
-            ).rowcount == 1
+        with self._write() as tables:
+            self.ledger.ensure_job_session(tables, job_id)
+            return tables.update(
+                "job_admissions", {"dispatch_ready": 1},
+                job_id=job_id, admission_id=admission_id, state="queued",
+                dispatch_ready=0, terminal_blocked=0,
+                resume_parent_msg_id=None, borrowed_parent_job_id=None,
+            ) == 1
 
 
     def reset_deferred_resume(
@@ -406,27 +353,22 @@ class DispatchOperations:
         parent_msg_id: str,
     ) -> bool:
         """Undo a staged head whose JobStore update did not survive."""
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE job_admissions SET resume_parent_msg_id = NULL
-                   WHERE job_id = ? AND admission_id = ?
-                     AND state = 'queued' AND dispatch_ready = 0
-                     AND resume_parent_msg_id = ?""",
-                (job_id, admission_id, parent_msg_id),
-            ).rowcount == 1
+        with self._write() as tables:
+            self.ledger.ensure_job_session(tables, job_id)
+            return tables.update(
+                "job_admissions", {"resume_parent_msg_id": None},
+                job_id=job_id, admission_id=admission_id, state="queued",
+                dispatch_ready=0, resume_parent_msg_id=parent_msg_id,
+            ) == 1
 
 
     def pending_deferred_resumes(self) -> list[tuple[str, str, str, str]]:
         """Return staged resume publications left incomplete by a crash."""
-        with self.ledger.immediate() as conn:
-            rows = conn.execute(
-                """SELECT job_id, session_id, admission_id, resume_parent_msg_id
-                   FROM job_admissions
-                   WHERE state = 'queued' AND dispatch_ready = 0
-                     AND resume_parent_msg_id IS NOT NULL
-                     AND borrowed_parent_job_id IS NULL
-                   ORDER BY admitted_seq"""
-            ).fetchall()
+        rows = self._read().rows(
+            "job_admissions", state="queued", dispatch_ready=0, borrowed_parent_job_id=None,
+            where=lambda row: row["resume_parent_msg_id"] is not None,
+            order="admitted_seq",
+        )
         return [
             (
                 str(row["job_id"]), str(row["session_id"]),
@@ -438,48 +380,28 @@ class DispatchOperations:
 
     def deferred_dispatches(self) -> list[tuple[str, str]]:
         """Return admitted Jobs waiting for their inbox intent."""
-        with self.ledger.immediate() as conn:
-            rows = conn.execute(
-                """SELECT job_id, session_id FROM job_admissions
-                   WHERE state = 'queued' AND dispatch_ready = 0
-                     AND borrowed_parent_job_id IS NULL
-                     AND resume_parent_msg_id IS NULL
-                   ORDER BY admitted_seq"""
-            ).fetchall()
+        rows = self._read().rows(
+            "job_admissions", state="queued", dispatch_ready=0,
+            borrowed_parent_job_id=None, resume_parent_msg_id=None, order="admitted_seq",
+        )
         return [(str(row["job_id"]), str(row["session_id"])) for row in rows]
-
-
-    def renew_lease(
-        self, job_id: str, *, owner_instance_id: str, lease_generation: int,
-    ) -> bool:
-        with self.ledger.immediate() as conn:
-            now = time.time()
-            return conn.execute(
-                """UPDATE job_admissions SET lease_expires_at = ?
-                   WHERE job_id = ? AND owner_instance_id = ?
-                     AND lease_generation = ?
-                     AND state IN ('live','stopping')""",
-                (now + 30.0, job_id, owner_instance_id, lease_generation),
-            ).rowcount == 1
 
 
     def requeue_job(
         self, job_id: str, *, owner_instance_id: str, lease_generation: int,
     ) -> bool:
         """Return a claimed job to queued when another turn owns its session."""
-        with self.ledger.immediate() as conn:
-            return conn.execute(
-                """UPDATE job_admissions
-                   SET state = 'queued', queue_state = 'queued', owner_instance_id = NULL,
-                       lease_expires_at = NULL, started_at = NULL,
-                       last_activity_at = NULL
-                   WHERE job_id = ? AND state = 'live'
-                     AND owner_instance_id = ? AND lease_generation = ?
-                     AND NOT EXISTS (
-                         SELECT 1 FROM job_finalizations
-                         WHERE job_finalizations.job_id = job_admissions.job_id
-                           AND job_finalizations.state = 'pending'
-                     )""",
-                (job_id, owner_instance_id, lease_generation),
-            ).rowcount == 1
-
+        with self._write() as tables:
+            self.ledger.ensure_job_session(tables, job_id)
+            if self._pending_finalization(tables, job_id):
+                return False
+            return tables.update(
+                "job_admissions",
+                {
+                    "state": "queued", "queue_state": "queued",
+                    "owner_instance_id": None, "started_at": None,
+                    "last_activity_at": None,
+                },
+                job_id=job_id, state="live", owner_instance_id=owner_instance_id,
+                lease_generation=lease_generation,
+            ) == 1

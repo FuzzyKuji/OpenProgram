@@ -46,7 +46,3 @@ def set_trust(name: str, level: str) -> None:
     d = _load()
     d[name] = level
     _save(d)
-
-
-def all_trust() -> dict[str, str]:
-    return _load()

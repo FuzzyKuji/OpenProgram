@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock
 import pytest
 
 from openprogram.runtime.context.engine import DefaultContextEngine
-from openprogram.runtime.context.summarize import Summary
+from openprogram.runtime.context.compaction.summarize import Summary
 from openprogram.runtime.context.types import CompactResult
 
 
@@ -45,7 +45,7 @@ def engine(monkeypatch):
             candidate_messages=lambda *_a: [{"role": "assistant", "content": "recap"}],
         )
 
-    monkeypatch.setattr("openprogram.runtime.context.compaction_view.load_compaction_view", view)
+    monkeypatch.setattr("openprogram.runtime.context.compaction.view.load_compaction_view", view)
     eng._stamped = stamped
     return eng
 

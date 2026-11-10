@@ -69,6 +69,7 @@ type ProgramSourceEntry = {
   note?: ApplicationNote;
 };
 
+import { ProgramLoadState } from "./program-load-state";
 import styles from "./programs-page.module.css";
 import fileStyles from "@/components/files/files-panel.module.css";
 
@@ -519,14 +520,7 @@ export function ProgramsPage({
 
   const useInChat = () => router.push(`/chat?${new URLSearchParams({ run: invocationName, cat: selectedNode?.program_kind || "" })}`);
   const loadStateLine = selectedEntry?.load_state && (selectedEntry.load_state !== "loaded" || selectedEntry.load_note) ? (
-    <div className={`${styles.loadState} ${selectedEntry.load_state === "error" ? styles.loadStateError : ""}`} role="status" data-testid="programs-load-state">
-      <strong>{selectedEntry.load_state === "error"
-        ? text("Failed to load", "加载失败")
-        : selectedEntry.load_state === "pending"
-          ? text("Not callable yet", "尚不可调用")
-          : text("Uncommitted changes", "有未提交的修改")}</strong>
-      {selectedEntry.load_error || selectedEntry.load_note ? <p>{selectedEntry.load_error || selectedEntry.load_note}</p> : null}
-    </div>
+    <ProgramLoadState key={selectedEntry.path} entry={selectedEntry} />
   ) : null;
 
   const renderCallLogic = (logic: LogicResponse) => <>

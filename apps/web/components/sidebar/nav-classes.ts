@@ -12,7 +12,7 @@
  * Pixel-y values are explicit (`gap-[12px]`, `px-[8px]`) because
  * this project's `html { font-size: 14px }` makes Tailwind's
  * rem-based scale 0.875× off. Height + corner come from the LIST
- * set in docs/reference/design/ui/visual-system/surface-system.md
+ * set in docs/reference/design/ui/visual-system/surface-system.html
  * (--ui-list-h, --ui-list-radius) so future size adjustments
  * happen in one place.
  */

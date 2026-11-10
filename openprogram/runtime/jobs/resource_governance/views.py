@@ -15,6 +15,7 @@ from openprogram.runtime.jobs.resource_governance.limits import (
 from openprogram.runtime.jobs.resource_governance.usage import (
     _cost_to_microusd,
     _durable_job_time_limits,
+    _job_scope_chain,
     _microusd_text,
     _reason_metadata,
     _scope_usage_breakdown,
@@ -22,45 +23,29 @@ from openprogram.runtime.jobs.resource_governance.usage import (
 
 
 def _shared_remaining(ledger: UsageLedger, job_id: str) -> dict[str, Any]:
-    with ledger.read() as conn:
-        scopes = conn.execute(
-            """WITH RECURSIVE ancestors AS (
-                   SELECT parent.* FROM job_admissions admission
-                   JOIN budget_scopes current
-                     ON current.budget_scope_id = admission.budget_scope_id
-                   JOIN budget_scopes parent
-                     ON parent.budget_scope_id = current.parent_scope_id
-                   WHERE admission.job_id = ?
-                   UNION ALL
-                   SELECT parent.* FROM budget_scopes parent
-                   JOIN ancestors child
-                     ON child.parent_scope_id = parent.budget_scope_id
-               )
-               SELECT * FROM ancestors""",
-            (job_id,),
-        ).fetchall()
-        token_remaining: list[int] = []
-        cost_remaining: list[int] = []
-        unknown_cost_events = 0
-        for scope in scopes:
-            usage = _scope_usage_breakdown(conn, scope["budget_scope_id"])
-            unknown_cost_events = max(
-                unknown_cost_events, usage["unknown_cost_events"],
-            )
-            if scope["max_total_tokens"] is not None:
-                token_remaining.append(max(
-                    0,
-                    int(scope["max_total_tokens"])
-                    - usage["actual_tokens"]
-                    - usage["reserved_tokens"],
-                ))
-            if scope["max_cost_microusd"] is not None:
-                cost_remaining.append(max(
-                    0,
-                    int(scope["max_cost_microusd"])
-                    - usage["actual_cost_microusd"]
-                    - usage["reserved_cost_microusd"],
-                ))
+    tables = ledger.run_tables().handle
+    token_remaining: list[int] = []
+    cost_remaining: list[int] = []
+    unknown_cost_events = 0
+    for scope in _job_scope_chain(ledger, tables, job_id)[1:]:
+        usage = _scope_usage_breakdown(ledger, tables, scope["budget_scope_id"])
+        unknown_cost_events = max(
+            unknown_cost_events, usage["unknown_cost_events"],
+        )
+        if scope["max_total_tokens"] is not None:
+            token_remaining.append(max(
+                0,
+                int(scope["max_total_tokens"])
+                - usage["actual_tokens"]
+                - usage["reserved_tokens"],
+            ))
+        if scope["max_cost_microusd"] is not None:
+            cost_remaining.append(max(
+                0,
+                int(scope["max_cost_microusd"])
+                - usage["actual_cost_microusd"]
+                - usage["reserved_cost_microusd"],
+            ))
     return {
         "tokens": min(token_remaining) if token_remaining else None,
         "cost_usd": (
@@ -135,17 +120,14 @@ def build_job_resource_view(
     local_token_limit: int | None = None
     local_cost_limit: str | None = None
     if not legacy:
-        with ledger.read() as conn:
-            timing = conn.execute(
-                """SELECT admission.state, admission.started_at,
-                          admission.last_activity_at, admission.released_at,
-                          scope.max_total_tokens, scope.max_cost_microusd
-                   FROM job_admissions admission
-                   JOIN budget_scopes scope
-                     ON scope.budget_scope_id = admission.budget_scope_id
-                   WHERE admission.job_id = ?""",
-                (job.id,),
-            ).fetchone()
+        tables = ledger.run_tables().handle
+        ledger.ensure_job_session(tables, job.id)
+        admission = tables.first("job_admissions", job_id=job.id)
+        scope = (
+            None if admission is None
+            else tables.get("budget_scopes", admission["budget_scope_id"])
+        )
+        timing = None if scope is None else {**admission, **scope}
         if timing is not None:
             local_token_limit = timing["max_total_tokens"]
             if timing["max_cost_microusd"] is not None:

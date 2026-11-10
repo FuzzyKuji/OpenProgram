@@ -1,291 +1,94 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Occupancy and compaction</title>
-<style>
-  :root {
-    --bg: #f7f7f5; --surface: #fff; --text: #202124; --muted: #6b7280;
-    --line: #deded9; --blue: #2563eb; --blue-soft: #eff6ff;
-    --green: #15803d; --green-soft: #f0fdf4; --amber: #a16207;
-    --amber-soft: #fffbeb; --red: #b42318; --red-soft: #fef2f2;
-    --mono: ui-monospace, SFMono-Regular, Menlo, monospace;
-  }
-  * { box-sizing: border-box; }
-  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.65 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
-  main { max-width: 980px; margin: 0 auto; padding: 48px 24px 96px; }
-  header { max-width: 760px; margin-bottom: 32px; }
-  .eyebrow { color: var(--blue); font: 600 12px/1.2 var(--mono); letter-spacing: .08em; text-transform: uppercase; }
-  h1 { margin: 10px 0 12px; font-size: clamp(30px, 5vw, 44px); line-height: 1.12; letter-spacing: -.03em; }
-  h2 { margin: 0 0 12px; font-size: 21px; }
-  h3 { margin: 18px 0 8px; font-size: 16px; }
-  p { margin: 0 0 12px; }
-  code { font-family: var(--mono); font-size: .9em; background: #eeeeeb; padding: 2px 5px; border-radius: 4px; }
-  .meta { display: flex; flex-wrap: wrap; gap: 8px; }
-  .pill { border: 1px solid var(--line); border-radius: 999px; padding: 4px 10px; background: var(--surface); color: var(--muted); font-size: 12px; }
-  .pill.ok { color: var(--green); border-color: #bbdfc5; background: var(--green-soft); }
-  .pill.warn { color: var(--amber); border-color: #e8d39a; background: var(--amber-soft); }
-  .card { min-width: 0; background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: 18px; }
-  .card strong { display: block; margin-bottom: 6px; }
-  .card p { color: var(--muted); font-size: 14px; overflow-wrap: anywhere; margin: 0; }
-  .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
-  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }
-  section { margin-top: 42px; }
-  table { width: 100%; border-collapse: collapse; background: var(--surface); border: 1px solid var(--line); }
-  th, td { padding: 12px 14px; text-align: left; vertical-align: top; border-bottom: 1px solid var(--line); }
-  th { color: var(--muted); font-size: 12px; letter-spacing: .04em; text-transform: uppercase; background: #f1f1ee; }
-  tr:last-child td { border-bottom: 0; }
-  .note { border-left: 4px solid var(--blue); background: var(--blue-soft); padding: 14px 16px; margin: 12px 0; }
-  .warning { border-left-color: var(--amber); background: var(--amber-soft); }
-  ul, ol { margin: 8px 0 0; padding-left: 20px; }
-  li { margin: 5px 0; }
-  .tree { padding: 16px 18px; background: #202124; color: #e5e7eb; border-radius: 10px; overflow-x: auto; font-family: var(--mono); font-size: 12px; line-height: 1.55; white-space: pre; }
-  .path { font-family: var(--mono); font-size: 13px; color: var(--muted); }
-  .flow { display: grid; grid-template-columns: 1fr auto 1fr auto 1fr auto 1fr; align-items: stretch; gap: 10px; }
-  .flow .step { background: var(--surface); border: 1px solid var(--line); border-radius: 10px; padding: 14px; font-size: 14px; }
-  .flow .arrow { align-self: center; color: var(--muted); font-family: var(--mono); }
-  .states { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
-  .ring-mock { width: 36px; height: 36px; border-radius: 50%; display: grid; place-items: center; margin: 0 auto 10px; }
-  .ring-mock svg { display: block; }
-  @media (max-width: 760px) {
-    main { padding: 28px 16px 64px; }
-    .grid, .grid-2, .flow, .states { grid-template-columns: 1fr; }
-    .flow .arrow { transform: rotate(90deg); justify-self: center; }
-  }
-  @media (prefers-reduced-motion: reduce) {
-    * { transition: none !important; }
-  }
-</style>
-</head>
-<body>
-<main>
-  <header>
-    <div class="eyebrow">Context · Occupancy &amp; compaction</div>
-    <h1>Occupancy and compaction</h1>
-    <p>For implementers of the occupancy ring, <code>/context</code> panel, and compaction pipeline. The ring, panel, and compaction report read the same view: what the model actually receives next turn. Compaction does not move HEAD, so an unchanged HEAD does not mean an unchanged graph.</p>
-    <div class="meta">
-      <span class="pill">Audience: implementers</span>
-      <span class="pill ok">The /compact slash command can already be sent</span>
-      <span class="pill warn">Idle auto-compaction: product decision pending; not implemented</span>
-    </div>
-  </header>
+<meta name="description" content="One occupancy measurement for the ring, the /context panel and compaction reports, and when a compaction counts as successful.">
+<h1>Occupancy and compaction</h1>
+<p>Ring, panel and compaction report read one view: what the model receives next turn. Compaction does not move HEAD, so an unchanged HEAD does not mean an unchanged graph.</p>
 
-  <section>
-    <h2>Scope</h2>
-    <div class="grid-2">
-      <article class="card">
-        <strong>Included</strong>
-        <p>One occupancy metric; ineffective compaction must not report success; the ring reflects ongoing compaction; the panel supports immediate compaction; automatic and manual compaction share four system-message variants.</p>
-      </article>
-      <article class="card">
-        <strong>Excluded</strong>
-        <p>Do not change <code>insert_summary_node</code> semantics that retain old turns. No idle auto-compaction or DAG rendering changes. snip still trims only history for the outgoing request and does not write back to the DAG.</p>
-      </article>
-    </div>
-  </section>
+<h2 id="measurement">One measurement</h2>
+<p><code translate="no">rendered_history</code> is the effective summary plus the uncovered tail.</p>
+<table class="stack">
+<thead><tr><th scope="col">Consumer</th><th scope="col">View</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">session_stats.compute_breakdown</code></th><td><code translate="no">rendered_history</code></td><td>The sole metric. Counts messages after folding, thinking and tool blocks included</td></tr>
+<tr><th scope="row"><code translate="no">engine.compact</code></th><td><code translate="no">estimate_total_used</code></td><td>Once before and once after; written to <code translate="no">compaction_finished</code></td></tr>
+<tr><th scope="row"><code translate="no">refresh_context_stats</code></th><td>Breakdown and total</td><td>Bumps <code translate="no">_context_rev</code>, sets basis <code translate="no">estimated</code>. Runs after compaction, manual or automatic</td></tr>
+<tr><th scope="row"><code translate="no">GET /api/sessions/{id}/context</code></th><td>Current snapshot</td><td>Reused only while the graph is unchanged</td></tr>
+<tr><th scope="row"><code translate="no">session_context_stats</code></th><td>Last request</td><td>Reused only while HEAD and <code translate="no">_context_rev</code> are both unchanged</td></tr>
+<tr><th scope="row"><code translate="no">_get_messages</code>, <code translate="no">get_branch</code></th><td>Unfolded branch</td><td>Chat history. Occupancy never uses it</td></tr>
+</tbody>
+</table>
+<p class="note">Symptom of a cache keyed on HEAD alone: <code translate="no">/compact</code> reports 40.7k while the panel still shows Messages 125k. The summary was stored; the snapshot is old.</p>
 
-  <section>
-    <h2>01 · One measurement basis</h2>
-    <p>The model reads <code>rendered_history</code>: the currently effective summary plus the uncovered tail. The ring, panel, and compaction report all measure this view.</p>
-    <div class="grid">
-      <article class="card">
-        <strong>Counting entry point</strong>
-        <p><code>session_stats.compute_breakdown</code> accepts only <code>rendered_history</code>. Count Messages after folding, including thinking/tool blocks. This supplies the ring and panel breakdown.</p>
-      </article>
-      <article class="card">
-        <strong>Compaction report</strong>
-        <p><code>tokens_before</code> / <code>tokens_after</code> uses totals from the same entry point (<code>estimate_total_used</code>), rather than <code>estimate_history_tokens</code>.</p>
-      </article>
-      <article class="card">
-        <strong>Server cache</strong>
-        <p>Compaction does not move HEAD. The occupancy cache cannot depend on HEAD alone. A graph change, including persisted compaction, requires recomputation instead of retaining pre-compaction measured/category snapshots.</p>
-      </article>
-    </div>
-    <div class="note warning">
-      Compacting an already compacted session with <code>/compact</code> may produce a 40.7k report while the panel still shows Messages 125k. This means the cache retained pre-folding measurements, not that the summary was not stored.
-    </div>
-    <h3>Views used by each consumer</h3>
-    <table>
-      <thead><tr><th>Path</th><th>View</th><th>Rule</th></tr></thead>
-      <tbody>
-        <tr>
-          <td><code>session_stats.compute_breakdown</code></td>
-          <td><code>rendered_history</code></td>
-          <td>The sole occupancy metric, used by both ring and panel.</td>
-        </tr>
-        <tr>
-          <td><code>engine.compact</code></td>
-          <td>Totals from the same metric</td>
-          <td>Estimate once before and once after compaction, writing to <code>compaction_finished</code>.</td>
-        </tr>
-        <tr>
-          <td><code>refresh_context_stats</code></td>
-          <td>Recompute breakdown and total</td>
-          <td>Run after successful compaction or completion of manual compaction. Change basis to <code>estimated</code>.</td>
-        </tr>
-        <tr>
-          <td><code>GET /api/sessions/{id}/context</code></td>
-          <td>Current occupancy snapshot</td>
-          <td>Reuse snapshots only when the graph is unchanged. Compaction changes the graph even when HEAD does not move.</td>
-        </tr>
-        <tr>
-          <td><code>session_context_stats</code> measured reuse</td>
-          <td>Last actual request</td>
-          <td>Retain only when HEAD is unchanged <strong>and </strong>the occupancy generation is unchanged. Compaction increments the generation.</td>
-        </tr>
-        <tr>
-          <td><code>_get_messages</code> / <code>get_branch</code></td>
-          <td>Unfolded branch</td>
-          <td>Chat-history cache, not occupancy. Occupancy calculations must not use this path.</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+<h2 id="outcomes">Compaction outcomes</h2>
+<ol>
+<li>Prepare: build the prompt from rendered history, calculate <code translate="no">budget_pct</code>.</li>
+<li>Compact at 80%: the model writes a summary, a summary node is appended.</li>
+<li>Prepare again: the request reads summary and tail.</li>
+</ol>
+<table class="stack">
+<thead><tr><th scope="col">Outcome</th><th scope="col">Condition</th><th scope="col">Event</th></tr></thead>
+<tbody>
+<tr><th scope="row">Started</th><td>Decision to call the summary model</td><td><code translate="no">compaction_started</code></td></tr>
+<tr><th scope="row">Succeeded</th><td>Summary stored, <code translate="no">summarised_count &gt; 0</code></td><td><code translate="no">compaction_finished</code></td></tr>
+<tr><th scope="row">Nothing to compact</th><td>Fewer than 4 messages, cut at or below the protected head, automatic retry held, or the summary covers nothing</td><td><code translate="no">compaction_finished</code> with <code translate="no">no_op: true</code>. Known before the model call: no started event, no request</td></tr>
+<tr><th scope="row">Failed</th><td>Summary-call or pipeline exception; or history kept with a reason: summary too long, no reduction, cancelled, context changed, invalid range, insert returned nothing</td><td><code translate="no">compaction_failed</code>; with a kept history also <code translate="no">no_op: true</code></td></tr>
+</tbody>
+</table>
+<p class="note">Triggers: <code translate="no">/compact</code> or the panel button; budget at 80% before a request; recovery from 413 or <code translate="no">prompt_too_long</code>. A session has at most one active summary. <code translate="no">insert_summary_node</code> retains old turns.</p>
 
-  <section>
-    <h2>02 · When compaction counts as successful</h2>
-    <p>A session has at most one active summary. Subsequent compaction replaces it rather than stacking summaries. The DAG is append-only: old nodes remain and HEAD does not move.</p>
-    <div class="flow" aria-label="Compaction before a request">
-      <div class="step"><strong>prepare</strong><br>Build the prompt from rendered history and calculate budget_pct</div>
-      <div class="arrow">→</div>
-      <div class="step"><strong>Compact if ≥ 80%</strong><br>The LLM writes a summary; append a summary node</div>
-      <div class="arrow">→</div>
-      <div class="step"><strong>snip fallback</strong><br>Trim outgoing history only if the summary still exceeds the limit</div>
-      <div class="arrow">→</div>
-      <div class="step"><strong>Prepare again</strong><br>This request reads the summary and tail</div>
-    </div>
-    <h3>Four outcomes</h3>
-    <table>
-      <thead><tr><th>Outcome</th><th>Condition</th><th>Event</th></tr></thead>
-      <tbody>
-        <tr>
-          <td>Started</td>
-          <td>The decision to call the summary LLM is made</td>
-          <td><code>compaction_started</code></td>
-        </tr>
-        <tr>
-          <td>Succeeded</td>
-          <td>Summary stored, <code>summarised_count &gt; 0</code></td>
-          <td><code>compaction_finished</code>(without <code>no_op</code>)</td>
-        </tr>
-        <tr>
-          <td>Nothing to compact</td>
-          <td>rendered is already ≤ the retained tail, or <code>cut_idx ≤ 0</code> / covers zero messages / insert returns None</td>
-          <td><code>compaction_finished</code> with <code>no_op: true</code>. If known before the LLM call, emit no started event and make no summary request.</td>
-        </tr>
-        <tr>
-          <td>Failed</td>
-          <td>Summary-call or pipeline exception</td>
-          <td><code>compaction_failed</code></td>
-        </tr>
-      </tbody>
-    </table>
-    <div class="note">
-      Three triggers remain: manual <code>/compact</code> or the panel button; budget ≥ 80% before a request; and recovery from 413 / prompt_too_long. Color the ring by occupancy ratio without a separate suggestion state.
-    </div>
-  </section>
+<h2 id="ring">Ring and panel</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">State</th><th scope="col">Display</th></tr></thead>
+<tbody>
+<tr><th scope="row">Normal</th><td>Neutral track, arc coloured by ratio. No suggestion border or state. Click opens the panel</td></tr>
+<tr><th scope="row">Compacting</th><td>From <code translate="no">compaction_started</code> to finished or failed: ring busy, panel button disabled</td></tr>
+<tr><th scope="row">Compact conversation</th><td>Panel row sends <code translate="no">{action:"compact", session_id}</code>, the WebSocket path of <code translate="no">/compact</code>. Disabled with no session, while compacting, or when recently compacted</td></tr>
+</tbody>
+</table>
 
-  <section>
-    <h2>03 · Ring lifecycle</h2>
-    <div class="states" aria-label="Two ring states">
-      <article class="card">
-        <div class="ring-mock" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 12 12">
-            <circle cx="6" cy="6" r="5" fill="none" stroke="#d1d5db" stroke-width="2"/>
-            <circle cx="6" cy="6" r="5" fill="none" stroke="#16a34a" stroke-width="2" stroke-dasharray="20 12" stroke-linecap="round" transform="rotate(-90 6 6)"/>
-          </svg>
-        </div>
-        <strong>Normal</strong>
-        <p>Neutral base ring with a progress arc colored by occupancy ratio. Click to open the panel. Numbers use the same metric.</p>
-      </article>
-      <article class="card">
-        <div class="ring-mock" aria-hidden="true">
-          <svg width="20" height="20" viewBox="0 0 12 12">
-            <circle cx="6" cy="6" r="5" fill="none" stroke="#d1d5db" stroke-width="2"/>
-            <circle cx="6" cy="6" r="5" fill="none" stroke="#2563eb" stroke-width="2" stroke-dasharray="8 24" stroke-linecap="round" transform="rotate(-90 6 6)"/>
-          </svg>
-        </div>
-        <strong>Compacting</strong>
-        <p><code>compaction_started</code> through finished/failed: show the ring’s busy state and disable the panel button.</p>
-      </article>
-    </div>
-    <p style="margin-top:16px">The panel footer offers “Compact now”. Clicking sends <code>{action:"compact", session_id}</code>, using the same WS path as slash command <code>/compact</code>. Disable it when no session exists or compaction is running.</p>
-  </section>
+<h2 id="messages">System messages</h2>
+<p>Automatic and manual compaction share one branch in <code translate="no">chat-handlers.ts</code>. Messages are bilingual.</p>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Event</th><th scope="col">Text</th></tr></thead>
+<tbody>
+<tr><th scope="row">Started</th><td>Compacting context…</td></tr>
+<tr><th scope="row">Finished</th><td>Context compacted: covered N older messages. On the transcript's event slot: Context compacted here: covered N messages, estimated X → Y tokens</td></tr>
+<tr><th scope="row">Failed</th><td>Context compaction failed[: error]</td></tr>
+<tr><th scope="row">Finished with <code translate="no">no_op</code></th><td>Context unchanged; no smaller summary was applied.</td></tr>
+</tbody>
+</table>
 
-  <section>
-    <h2>04 · Four system-message variants</h2>
-    <p>Automatic and manual compaction use the same <code>chat-handlers.ts</code> branch. Messages are bilingual.</p>
-    <table>
-      <thead><tr><th>Event</th><th>English</th><th>Chinese</th></tr></thead>
-      <tbody>
-        <tr>
-          <td>started</td>
-          <td>Compacting context…</td>
-          <td>Compacting context…</td>
-        </tr>
-        <tr>
-          <td>finished</td>
-          <td>Context compacted: covered N older messages, X → Y tokens</td>
-          <td>Context compacted: covered N old messages, X → Y tokens</td>
-        </tr>
-        <tr>
-          <td>failed</td>
-          <td>Context compaction failed[: error]</td>
-          <td>Context compaction failed[: error]</td>
-        </tr>
-        <tr>
-          <td>finished + <code>no_op</code></td>
-          <td>Context is already compacted; no older messages to fold.</td>
-          <td>The current context is already compacted; no old messages remain to compact</td>
-        </tr>
-      </tbody>
-    </table>
-  </section>
+<h2 id="acceptance">Acceptance</h2>
+<ul>
+<li>After success, ring and panel totals drop and match <code translate="no">compaction_finished.tokens_after</code>.</li>
+<li>Re-compacting does not call the summary model and reports nothing to compact, never "covered 0 messages, X → X".</li>
+<li>No suggestion border at any occupancy.</li>
+<li>During compaction the ring is busy and the button disabled; completion restores both.</li>
+</ul>
 
-  <section>
-    <h2>Acceptance</h2>
-    <ol>
-      <li>After successful compaction, the ring and panel totals drop substantially and use the same basis as <code>compaction_finished.tokens_after</code>.</li>
-      <li>Re-compacting an already compacted session does not call the summary LLM. The system message reports nothing to compact, rather than “covered 0 messages, X → X”.</li>
-      <li>Neither low nor high occupancy shows a suggestion border. The progress arc remains ratio-colored. Clicking “Compact now” sends compact.</li>
-      <li>During compaction the ring is busy and the button disabled; completion restores the normal state.</li>
-    </ol>
-  </section>
+<details>
+<summary>Files</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">File</th><th scope="col">Role</th></tr></thead>
+<tbody>
+<tr><th scope="row"><code translate="no">openprogram/runtime/context/session_stats.py</code></th><td>Occupancy metric</td></tr>
+<tr><th scope="row"><code translate="no">engine.py</code></th><td><code translate="no">compact</code>, <code translate="no">no_op</code>, <code translate="no">tokens_before</code>, <code translate="no">tokens_after</code></td></tr>
+<tr><th scope="row"><code translate="no">compaction/summarize.py</code></th><td><code translate="no">find_cut_index</code>; may short-circuit before the model call</td></tr>
+<tr><th scope="row"><code translate="no">persistence.py</code></th><td><code translate="no">rendered_history</code>; insert retains old turns</td></tr>
+<tr><th scope="row"><code translate="no">openprogram/interfaces/server/server_runtime/context_stats.py</code></th><td><code translate="no">_context_rev</code>, refresh, measured reuse</td></tr>
+<tr><th scope="row"><code translate="no">ws_actions/chat/commands.py</code></th><td>Refresh after manual compaction</td></tr>
+<tr><th scope="row"><code translate="no">ws_actions/chat/context_usage.py</code></th><td>Refresh after each measured request, automatic compaction included</td></tr>
+<tr><th scope="row"><code translate="no">routes/files/tree.py</code></th><td><code translate="no">GET /api/sessions/{id}/context</code></td></tr>
+<tr><th scope="row"><code translate="no">apps/web/components/chat/badges/</code></th><td><code translate="no">context-badge.tsx</code>, <code translate="no">context-breakdown-panel.tsx</code></td></tr>
+<tr><th scope="row"><code translate="no">apps/web/lib/runtime-bridge/session/chat-handlers.ts</code></th><td>Compaction events</td></tr>
+</tbody>
+</table>
+</details>
 
-  <section>
-    <h2>Files</h2>
-    <div class="tree">openprogram/runtime/context/
-├── session_stats.py     occupancy metric (rendered_history)
-├── engine.py            compact / no_op / tokens_before|after
-├── summarize.py         find_cut_index; may short-circuit before the LLM call
-└── persistence.py       rendered_history; insert retains old turns
-
-openprogram/interfaces/server/
-├── server.py                          occupancy generation, refresh, measured reuse
-├── ws_actions/chat/commands.py        refresh after manual compact completes
-├── ws_actions/chat/context_usage.py   refresh after each measured request, automatic compaction included
-└── routes/files/tree.py               GET /context
-
-apps/web/
-├── components/chat/badges/context-badge.tsx
-├── components/chat/badges/context-breakdown-panel.tsx
-└── lib/runtime-bridge/session/chat-handlers.ts</div>
-    <p class="path" style="margin-top:16px">Page path: <code>docs/reference/design/context/occupancy-status.html</code></p>
-  </section>
-
-  <section>
-    <h2>Implementation status</h2>
-    <p>The body describes the target design. Implementation progress:</p>
-    <ul>
-      <li>Immediate execution of optional slash parameters, no-session feedback, and started/succeeded/failed system messages: implemented.</li>
-      <li>Automatic compaction followed by snip: implemented.</li>
-      <li>One metric (post-fold counting, post-compaction refresh, and the same basis as tokens_after): implemented.</li>
-      <li>The no_op event and fourth system-message variant: implemented.</li>
-      <li>Ring busy state and immediate panel compaction: implemented. The ring has no suggestion border.</li>
-      <li>Idle auto-compaction: excluded.</li>
-    </ul>
-  </section>
-</main>
-</body>
-</html>
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Status</th><th scope="col">Items</th></tr></thead>
+<tbody>
+<tr><th scope="row">Implemented</th><td>Optional slash parameters and no-session feedback; system messages; one metric; <code translate="no">no_op</code>; ring busy state; panel compaction</td></tr>
+<tr><th scope="row">Excluded</th><td>Idle auto-compaction; DAG rendering changes</td></tr>
+</tbody>
+</table>

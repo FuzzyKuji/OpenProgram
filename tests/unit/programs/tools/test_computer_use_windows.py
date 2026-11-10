@@ -69,8 +69,12 @@ def test_control_types_cover_the_uia_range_with_tree_role_names():
     assert windows.CONTROL_TYPES[50000] == "button" and windows.CONTROL_TYPES[50004] == "edit"
 
 
-def test_refused_apps_cover_prompts_and_openprogram():
+def test_refused_apps_are_the_owners_list_and_openprogram(monkeypatch):
     refused = windows.WindowsComputer._refused
+    monkeypatch.setattr("openprogram.state.config.read_config", lambda: {})
+    assert not refused(windows.App(pid=2, name="consent", exe=r"C:\Windows\System32\consent.exe"))
+    monkeypatch.setattr("openprogram.state.config.read_config",
+                        lambda: {"computer_use": {"refused_apps": ["credentialuibroker", "consent"]}})
     assert refused(windows.App(pid=1, name="Windows Security", exe=r"C:\Windows\System32\CredentialUIBroker.exe"))
     assert refused(windows.App(pid=2, name="consent", exe=r"C:\Windows\System32\consent.exe"))
     assert refused({"name": "OpenProgram", "app_id": "ai.openprogram.desktop"})
@@ -100,3 +104,48 @@ def test_recording_format_is_the_shared_16k_mono_float():
     clip = windows_audio.Recording(app="x", pid=1, limit=0.001)
     clip.take(bytes(4 * 100))
     assert clip.frames == 16 and clip.seconds == pytest.approx(0.001)
+
+
+def test_a_window_brought_forward_for_input_goes_back_under_the_window_it_stood_under(monkeypatch):
+    from openprogram.host._platform import front
+
+    USERS, OPERATED, ABOVE = 100, 200, 150
+    calls: list[tuple] = []
+
+    class User32:
+        foreground = USERS
+
+        def GetForegroundWindow(self):
+            return self.foreground
+
+        def GetWindow(self, hwnd, which):
+            return ABOVE if (hwnd, which) == (OPERATED, 3) else 0
+
+        def GetCursorPos(self, point):
+            return True
+
+        def SetCursorPos(self, x, y):
+            return True
+
+        def IsWindow(self, hwnd):
+            return True
+
+        def SetWindowPos(self, hwnd, after, x, y, w, h, flags):
+            calls.append(("place", hwnd, after, flags))
+            return True
+
+    user32 = User32()
+    monkeypatch.setattr(windows, "_user32", lambda: user32)
+    monkeypatch.setattr(windows._Forward, "restore", staticmethod(
+        lambda hwnd: (calls.append(("front", hwnd)), setattr(user32, "foreground", hwnd))))
+    monkeypatch.setattr(windows.time, "sleep", lambda seconds: None)
+    monkeypatch.setattr(windows.ctypes, "byref", lambda value: value, raising=False)
+    wintypes = type("wintypes", (), {"POINT": lambda: type("P", (), {"x": 5, "y": 6})()})
+    monkeypatch.setitem(__import__("sys").modules, "ctypes.wintypes", wintypes)
+    monkeypatch.setattr(windows.ctypes, "wintypes", wintypes, raising=False)
+
+    with windows._Forward(OPERATED):
+        assert front._standing["forward"] == 1
+    assert front._standing["forward"] == 0
+    # Forward, the user's window back in front, then the operated one under its old neighbour without activating.
+    assert calls == [("front", OPERATED), ("front", USERS), ("place", OPERATED, ABOVE, 0x13)]

@@ -175,16 +175,15 @@ export const BottomBar: React.FC<BottomBarProps> = ({
     >
       <Box flexShrink={1}>
         <Text color={
-          permissionMode === 'bypass' ? colors.error
-          : permissionMode === 'auto' || permissionMode === 'acceptEdits' ? colors.warning
+          permissionMode === 'auto' || permissionMode === 'acceptEdits' ? colors.warning
           : permissionMode === 'plan' ? colors.primary
           : colors.muted
         }>
-          {permissionMode === 'bypass' ? '▸▸ bypass'
+          {permissionMode === 'bypass' ? '▸▸ bypass permissions'
             : permissionMode === 'auto' ? '▸▸ auto'
             : permissionMode === 'acceptEdits' ? '▸▸ accept edits'
             : permissionMode === 'plan' ? '⏸ plan'
-            : '▸▸ ask'}
+            : '▸▸ manual'}
         </Text>
         <Text color={colors.border}> · </Text>
         <Text color={

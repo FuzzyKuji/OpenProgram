@@ -37,24 +37,21 @@ from . import keys as keymap
 from . import ocr
 from . import window_watch
 from .base import (CUE_LEAD_SECONDS, HOVER_SECONDS, INCLUDE, MAX_COPY_CHARS, MAX_TEXT_CHARS, OCR_SPARSE_NODES,
-                   AudioClip, ComputerUseError, Observation, Report, check_cancelled as _check_cancelled,
+                   AudioClip, ComputerUseError, NotAnswering, RefusedApps, refuse_password_field, NotDispatched, Observation, Report,
+                   check_cancelled as _check_cancelled,
                    click_args, click_words as _click_words, find_text, menu_key as _menu_key, menu_path,
                    save_recording as _save_recording, scroll_args, seconds_arg as _seconds,
                    window_node_count as _window_node_count)
 from .processes import running_applications
 from .skylight import SUBTYPE_DEFAULT, SUBTYPE_TOUCH, skylight
-from .tree import _BIDI_MARKS, Node, Snapshot, TRANSPARENT_ROLES, diff, number, render, role_name, snapshot
+from .tree import _BIDI_MARKS, Node, Snapshot, TRANSPARENT_ROLES, diff, number, rebind, render, role_name, snapshot
 import logging
 
 _log = logging.getLogger(__name__)
 
 
-# Applications the tool never reads or drives: credential prompts and
-# stores, and OpenProgram itself, whose approval cards it must not answer.
-REFUSED_BUNDLES = frozenset({
-    "com.apple.securityagent", "com.apple.loginwindow", "com.apple.keychainaccess",
-    "com.apple.passwords", "ai.openprogram.desktop", "ai.openprogram.runtime",
-})
+# OpenProgram's own windows, refused where they could show an approval card.
+OWN_BUNDLES = frozenset({"ai.openprogram.desktop", "ai.openprogram.runtime"})
 
 # The system Open and Save dialogs (NSOpenPanel / NSSavePanel). A sandboxed
 # app's dialog is drawn by the openAndSavePanelService process: Accessibility
@@ -103,14 +100,29 @@ SETTLE_MIN = 0.3
 SETTLE_MAX = 1.5
 BUSY_MAX = 5.0
 QUICK_NODES = 400
+# An app handles one Accessibility request at a time and answers when it is
+# done. A request that changes the app (an action, a new value) waits
+# ACTION_TIMEOUT seconds for that answer, one check of whether the app
+# answers at all waits ANSWER_TIMEOUT, and a call waits up to UNANSWERED_MAX
+# seconds for an app that does not answer before it gives up.
+ACTION_TIMEOUT = 1.0
+ANSWER_TIMEOUT = 0.5
+UNANSWERED_MAX = 10.0
 _BUSY_ROLES = frozenset({"AXBusyIndicator", "AXProgressIndicator"})
 # Wheel notches per page: ten notches of three lines cover about one window.
 TICKS_PER_PAGE = 10
 LINES_PER_TICK = 3
 PIXELS_PER_EVENT = 40
+# Longest wait for a page to finish scrolling an element into view.
+SCROLL_SETTLE_MAX = 0.8
+# Scans of the running apps before an app counts as not running (see _running_match).
+_MATCH_ATTEMPTS = 3
 
 _ERROR_TYPE = 5        # kAXValueAXErrorType
 _INVALID_ELEMENT = -25202
+# kAXErrorCannotComplete. After the whole timeout it means the app got the
+# request and has not answered yet; at once, that the request could not be made.
+_NOT_ANSWERED = -25204
 _SECURE = "AXSecureTextField"
 _TEXT_ROLES = frozenset({"AXTextField", "AXTextArea", "AXComboBox", "AXSearchField"})
 _SETTABLE_ROLES = _TEXT_ROLES | {"AXSlider", "AXIncrementor", "AXStepper", "AXDateField", "AXColorWell"}
@@ -170,6 +182,28 @@ def _frameworks():
 
 def _frameworks_cached():
     return _Frameworks.get()
+
+
+def _screen_locked() -> bool:
+    """Whether the user's session is locked.
+
+    macOS answers no Accessibility query about a window while the screen is
+    locked, so every application then reads as having no windows.
+    """
+    try:
+        session = _Frameworks.get()[2].CGSessionCopyCurrentDictionary()
+    except Exception:
+        return False
+    return bool(session) and bool(session.get("CGSSessionScreenIsLocked"))
+
+
+def _unlocked() -> None:
+    """Stop a read or a step while the screen is locked, before anything is asked of the app."""
+    if _screen_locked():
+        raise NotDispatched(
+            "The Mac's screen is locked. macOS lets no application window be read or operated while it is "
+            "locked; the applications and their windows are still open. Continue once the user has unlocked "
+            "the screen.")
 
 
 def _appkit():
@@ -262,11 +296,54 @@ class MacComputer:
 
     def _set(self, element, name, value) -> int:
         _, ax, _, _ = _frameworks_cached()
-        return ax.AXUIElementSetAttributeValue(element, name, value)
+        return self._taken(ax.AXUIElementSetAttributeValue, element, name, value)
 
     def _perform(self, element, action) -> int:
         _, ax, _, _ = _frameworks_cached()
-        return ax.AXUIElementPerformAction(element, action)
+        return self._taken(ax.AXUIElementPerformAction, element, action)
+
+    def _taken(self, request, element, *args) -> int:
+        """Send a request that changes the app (an action, a new value); 0 when the app took it.
+
+        The call returns once the app has handled the request. A handler that
+        outlasts the wait (a button that saves a file, a command that runs a
+        dialog, a menu that stays open) makes it return kAXErrorCannotComplete,
+        although the app received the request once and is carrying it out. That
+        counts as taken: sending it again, or clicking instead, would do it
+        twice. The same code at once is a request that could not be made.
+        """
+        _, ax, _, _ = _frameworks_cached()
+        ax.AXUIElementSetMessagingTimeout(element, ACTION_TIMEOUT)
+        started = time.monotonic()
+        code = request(element, *args)
+        if code == _NOT_ANSWERED and time.monotonic() - started >= ACTION_TIMEOUT * 0.9:
+            return 0
+        return code
+
+    def _answers(self, pid: int) -> bool:
+        """Whether the app answers Accessibility requests now: False only when one went unanswered."""
+        _, ax, _, _ = _frameworks_cached()
+        root = ax.AXUIElementCreateApplication(pid)
+        ax.AXUIElementSetMessagingTimeout(root, ANSWER_TIMEOUT)
+        started = time.monotonic()
+        code, _ = ax.AXUIElementCopyAttributeValue(root, "AXRole", None)
+        return not (code == _NOT_ANSWERED and time.monotonic() - started >= ANSWER_TIMEOUT * 0.9)
+
+    def _await_answer(self, app) -> None:
+        """Wait for ``app`` to answer again; NotAnswering once it has stayed silent for UNANSWERED_MAX seconds.
+
+        A busy app answers no read (its windows then look closed) and keeps a
+        step sent to it for later. Requests are handled in order, so the answer
+        to this one comes after the app has finished what it was sent before,
+        or while it shows the dialog or menu that step opened.
+        """
+        pid = int(app.processIdentifier())
+        started = time.monotonic()
+        while not self._answers(pid):
+            _check_cancelled()
+            waited = time.monotonic() - started
+            if waited >= UNANSWERED_MAX:
+                raise NotAnswering(str(app.localizedName() or f"pid {pid}"), waited)
 
     # ------------------------------------------------------------------ apps
     def _window_rows(self) -> list[dict]:
@@ -282,6 +359,7 @@ class MacComputer:
                 pid = int(row.get("kCGWindowOwnerPID", -1))
                 windows[pid] = windows.get(pid, 0) + 1
         running = []
+        refused = RefusedApps(OWN_BUNDLES)
         for app in running_applications(appkit):
             if app.activationPolicy() != appkit.NSApplicationActivationPolicyRegular:
                 continue
@@ -291,7 +369,7 @@ class MacComputer:
                 "pid": int(app.processIdentifier()), "active": bool(app.isActive()),
                 "hidden": bool(app.isHidden()), "windows": windows.get(int(app.processIdentifier()), 0),
                 "path": str(app.bundleURL().path()) if app.bundleURL() else "",
-                "refused": bundle.lower() in REFUSED_BUNDLES,
+                "refused": refused.hits(bundle),
             })
         return running
 
@@ -333,8 +411,9 @@ class MacComputer:
             if row["refused"]:
                 state.append("not controllable")
             lines.append(f"- {row['name']} ({row['bundle_id'] or 'no bundle id'}, pid {row['pid']}; {', '.join(state)})")
+        refused = RefusedApps(OWN_BUNDLES)
         installed = [row for row in self._installed() if row["bundle_id"].lower() not in running_ids
-                     and row["bundle_id"].lower() not in REFUSED_BUNDLES]
+                     and not refused.hits(row["bundle_id"])]
         if installed:
             lines.append("")
             lines.append("Installed, not running (get_app_state launches them in the background):")
@@ -344,6 +423,19 @@ class MacComputer:
         return "\n".join(lines)
 
     def _running_match(self, query: str):
+        # NSRunningApplication's lookup by process id now and then answers nil
+        # for a live app (about 1 in 8000 lookups while other threads look up
+        # too), so one scan can miss an app that is running; a miss is only
+        # believed after the scan misses again.
+        for attempt in range(_MATCH_ATTEMPTS):
+            if attempt:
+                time.sleep(0.05)
+            app = self._running_match_once(query)
+            if app is not None:
+                return app
+        return None
+
+    def _running_match_once(self, query: str):
         appkit = _appkit()
         q = query.strip().lower()
         pid = int(q[4:]) if q.startswith("pid:") and q[4:].isdigit() else None
@@ -363,6 +455,15 @@ class MacComputer:
                 return app
         return None
 
+    def app_key(self, query: str) -> str:
+        """One key for an application however it is named (a name, a bundle id, a path); "" when it is not running."""
+        if not isinstance(query, str) or not query.strip():
+            return ""
+        app = self._running_match_once(query)
+        if app is None:
+            return ""
+        return str(app.bundleIdentifier() or "") or f"pid:{int(app.processIdentifier())}"
+
     def resolve_app(self, query: str, *, launch: bool = True):
         """The running application for ``query``, launched in the background if needed."""
         if not isinstance(query, str) or not query.strip():
@@ -374,7 +475,7 @@ class MacComputer:
             if target is not None:
                 self._refuse(target["bundle_id"], target["display_name"])
             if not launch:
-                raise ComputerUseError(f"{query!r} is not running")
+                raise NotDispatched(f"{query!r} is not running")
             if target is None:
                 raise ComputerUseError(f"No application matches {query!r}. Call list_apps to see what is available.")
             subprocess.run(["/usr/bin/open", "-g", "-b", target["bundle_id"]], check=False,
@@ -425,18 +526,19 @@ class MacComputer:
             info["installed"] = True
         name = str(appkit.NSFileManager.defaultManager().displayNameAtPath_(path) or "") if path else ""
         info.update(name=(name[:-4] if name.endswith(".app") else name) or query, bundle_id=bundle_id,
-                    refused=bundle_id.lower() in REFUSED_BUNDLES, icon=self._icon(path) if path else "")
+                    refused=RefusedApps(OWN_BUNDLES).hits(bundle_id), icon=self._icon(path) if path else "")
         return info
 
     def running_apps(self) -> list[dict[str, Any]]:
         """The running apps a person can name in a message: regular apps other than
-        the refused ones (OpenProgram among them), with the same fields as ``app_info``."""
+        the refused ones, with the same fields as ``app_info``."""
         appkit = _appkit()
+        refused = RefusedApps(OWN_BUNDLES)
         rows = []
         for app in running_applications(appkit):
             bundle_id = str(app.bundleIdentifier() or "")
             if (app.isTerminated() or app.activationPolicy() != appkit.NSApplicationActivationPolicyRegular
-                    or not bundle_id or bundle_id.lower() in REFUSED_BUNDLES or int(app.processIdentifier()) == os.getpid()):
+                    or not bundle_id or refused.hits(bundle_id) or int(app.processIdentifier()) == os.getpid()):
                 continue
             path = str(app.bundleURL().path()) if app.bundleURL() else ""
             name = str(app.localizedName() or "") or Path(path).stem
@@ -467,8 +569,7 @@ class MacComputer:
         return url
 
     def _refuse(self, bundle_id: str, name: str) -> None:
-        if bundle_id.lower() in REFUSED_BUNDLES:
-            raise ComputerUseError(f"{name or bundle_id} cannot be controlled with computer_use.")
+        RefusedApps(OWN_BUNDLES).refuse(name or bundle_id, bundle_id, name)
 
     def _wait_for_window(self, pid: int, seconds: float) -> None:
         _, ax, _, _ = _frameworks()
@@ -872,9 +973,11 @@ class MacComputer:
         include = str(include or "all").lower()
         if include not in INCLUDE:
             raise ComputerUseError("include must be all, tree or screenshot")
+        _unlocked()
+        _, ax, _, _ = _frameworks()
+        app = self.resolve_app(query)
+        self._await_answer(app)
         with self._lock:
-            _, ax, _, _ = _frameworks()
-            app = self.resolve_app(query)
             pid = int(app.processIdentifier())
             root = ax.AXUIElementCreateApplication(pid)
             ax.AXUIElementSetMessagingTimeout(root, 3.0)
@@ -995,45 +1098,67 @@ class MacComputer:
                         "for what each is, then act with x,y at its centre):", ocr.render_shapes(list(shapes))]
         return out
 
-    def _state_for(self, session: str, query: str) -> tuple[Any, WindowState]:
-        app = self.resolve_app(query, launch=False)
+    def _state_for(self, session: str, query: str, app=None) -> tuple[Any, WindowState]:
+        app = app if app is not None else self.resolve_app(query, launch=False)
         state = self._states.get((session, int(app.processIdentifier())))
         if state is None:
-            raise ComputerUseError(f"Call get_app_state for {query!r} first; actions use its element indices and screenshot.")
+            raise NotDispatched(f"Call get_app_state for {query!r} first; actions use its element indices and screenshot.")
         return app, state
 
     def _element(self, state: WindowState, index) -> Any:
         if index is None or isinstance(index, bool):
-            raise ComputerUseError("element_index is required")
+            raise NotDispatched("element_index is required")
         try:
             index = int(index)
         except (TypeError, ValueError) as exc:
-            raise ComputerUseError("element_index must be an integer") from exc
+            raise NotDispatched("element_index must be an integer") from exc
         element = state.elements.get(index)
         if element is None:
-            raise ComputerUseError(f"element_index {index} is not in the last state of this window. "
+            raise NotDispatched(f"element_index {index} is not in the last state of this window. "
                                    "Use an index from the latest tree (get_app_state, or find).")
         _, ax, _, _ = _frameworks()
         code, _ = ax.AXUIElementCopyAttributeValue(element, "AXRole", None)
         if code == _INVALID_ELEMENT:
-            raise ComputerUseError(f"element {index} no longer exists. Call get_app_state for a fresh tree.")
+            element = self._rebind(state, index)
+            if element is None:
+                raise NotDispatched(f"element {index} no longer exists. Call get_app_state for a fresh tree.")
         return element
+
+    def _rebind(self, state: WindowState, index: int):
+        """The element now behind ``index`` when the app replaced the one read earlier (see :func:`tree.rebind`)."""
+        try:
+            _, ax, _, _ = _frameworks()
+            root = ax.AXUIElementCreateApplication(state.pid)
+            ax.AXUIElementSetMessagingTimeout(root, 3.0)
+            windows = self._windows(root)
+            if state.window_id:
+                found = [w for w in windows if self._ax_window_id(w) == state.window_id]
+            else:
+                found = [w for w in windows if str(self._attr(w, "AXTitle") or "") == state.window_title]
+            if len(found) != 1:
+                return None
+            nodes, elements, _ = self._read_tree(root, found[0])
+            return rebind(state, index, nodes, elements)
+        except Exception:
+            # The step then fails as it did before: the model reads the window again.
+            _log.debug("re-reading a window for element %s failed pid=%s", index, state.pid, exc_info=True)
+            return None
 
     def _node_at(self, state: WindowState, index) -> Node:
         return state.by_index[int(index)]
 
     def _point(self, state: WindowState, x, y) -> tuple[float, float]:
         if x is None or y is None:
-            raise ComputerUseError("x and y are required when no element_index is given")
+            raise NotDispatched("x and y are required when no element_index is given")
         if not state.has_screenshot:
-            raise ComputerUseError("This window has no screenshot to take coordinates from; use element_index.")
+            raise NotDispatched("This window has no screenshot to take coordinates from; use element_index.")
         try:
             px, py = float(x), float(y)
         except (TypeError, ValueError) as exc:
-            raise ComputerUseError("x and y must be numbers") from exc
+            raise NotDispatched("x and y must be numbers") from exc
         width, height = state.size[0] * state.scale, state.size[1] * state.scale
         if not (math.isfinite(px) and math.isfinite(py) and 0 <= px <= width and 0 <= py <= height):
-            raise ComputerUseError(f"({x}, {y}) is outside the {int(width)}x{int(height)} screenshot")
+            raise NotDispatched(f"({x}, {y}) is outside the {int(width)}x{int(height)} screenshot")
         return screen_point(px, py, origin=state.origin, scale=state.scale)
 
     def _follow_window(self, state: WindowState) -> None:
@@ -1052,8 +1177,101 @@ class MacComputer:
     def _center(self, element) -> tuple[float, float]:
         frame = self._frame(element)
         if frame is None or frame[2] <= 0 or frame[3] <= 0:
-            raise ComputerUseError("This element has no on-screen frame to point at.")
+            raise NotDispatched("This element has no on-screen frame to point at.")
         return frame[0] + frame[2] / 2, frame[1] + frame[3] / 2
+
+    def _visible_rect(self, state: WindowState, element) -> tuple[float, float, float, float] | None:
+        """The part of the window where ``element`` can show: the window cut by its scroll areas and web area.
+
+        An element scrolled above a web page sits under the browser's toolbar,
+        still inside the window; only its scrolling ancestors know it is hidden.
+        """
+        rect = (state.origin[0], state.origin[1], state.size[0], state.size[1]) if state.size[0] > 0 else None
+        node, depth = self._attr(element, "AXParent"), 0
+        while node is not None and depth < 40:
+            if self._attr(node, "AXRole") in ("AXScrollArea", "AXWebArea"):
+                frame = self._frame(node)
+                if frame is not None and frame[2] > 0 and frame[3] > 0:
+                    rect = frame if rect is None else _intersect(rect, frame)
+            node, depth = self._attr(node, "AXParent"), depth + 1
+        return rect
+
+    def _shown(self, rect, frame) -> bool:
+        """Whether the centre of ``frame`` lies inside ``rect`` (no rect: nothing to check)."""
+        if frame is None or frame[2] <= 0 or frame[3] <= 0:
+            return False
+        if rect is None:
+            return True
+        x, y = frame[0] + frame[2] / 2, frame[1] + frame[3] / 2
+        return rect[0] <= x <= rect[0] + rect[2] and rect[1] <= y <= rect[1] + rect[3]
+
+    def _reachable_center(self, state: WindowState, element) -> tuple[float, float]:
+        """Where the pointer can reach ``element``: its centre, scrolled into view first.
+
+        A long page or list keeps the elements scrolled out of view in its
+        tree, with no frame or with one outside what is shown, where a pointer
+        event lands on nothing or on the toolbar. Those that offer
+        AXScrollToVisible are scrolled into view, and the centre is read again
+        once it stops moving.
+        """
+        frame = self._frame(element)
+        if self._shown(self._visible_rect(state, element), frame):
+            return frame[0] + frame[2] / 2, frame[1] + frame[3] / 2
+        if "AXScrollToVisible" in self._actions(element) and self._perform(element, "AXScrollToVisible") == 0:
+            frame = self._settled_frame(state, element)
+        if (frame is not None and frame[2] > 0 and frame[3] > 0
+                and not self._shown(self._visible_rect(state, element), frame)
+                and self._scroll_areas_to(element, frame)):
+            # Native lists and tables often lack AXScrollToVisible; their scroll bars move them.
+            frame = self._settled_frame(state, element)
+        if frame is None or frame[2] <= 0 or frame[3] <= 0:
+            raise NotDispatched(
+                "This element has no on-screen frame to point at: it is hidden, such as an option of a menu or "
+                "dropdown that is closed now. Open what holds it (click the dropdown or field), then use the "
+                "indices the result shows.")
+        if not self._shown(self._visible_rect(state, element), frame):
+            raise NotDispatched(
+                "This element is outside the visible part of the window and could not be scrolled into view; "
+                "scroll toward it first, or act on it with set_value or perform_secondary_action.")
+        return frame[0] + frame[2] / 2, frame[1] + frame[3] / 2
+
+    def _settled_frame(self, state: WindowState, element):
+        """The element's frame once a scroll has stopped: pages scroll smoothly, so two reads must agree."""
+        deadline = time.monotonic() + SCROLL_SETTLE_MAX
+        frame = previous = None
+        while time.monotonic() < deadline:
+            time.sleep(0.05)
+            frame = self._frame(element)
+            if frame is not None and frame == previous:
+                break
+            previous = frame
+        self._follow_window(state)
+        return frame
+
+    def _scroll_areas_to(self, element, frame) -> bool:
+        """Centre ``element`` in each scroll area that holds it by setting the area's scroll bars.
+
+        The position inside an area's contents is the element's frame less the
+        contents' frame; a scroll bar's value is the share of the scrollable
+        length scrolled past. Returns whether any bar moved.
+        """
+        moved, node, depth = False, self._attr(element, "AXParent"), 0
+        while node is not None and depth < 40:
+            if self._attr(node, "AXRole") == "AXScrollArea":
+                area = self._frame(node)
+                contents = self._attr(node, "AXContents") or []
+                inner = self._frame(contents[0]) if contents else None
+                if area and inner:
+                    for axis, bar_name in ((1, "AXVerticalScrollBar"), (0, "AXHorizontalScrollBar")):
+                        shown, total = area[axis + 2], inner[axis + 2]
+                        bar = self._attr(node, bar_name)
+                        if total <= shown or bar is None or not self._settable(bar, "AXValue"):
+                            continue
+                        middle = frame[axis] + frame[axis + 2] / 2 - inner[axis]
+                        value = max(0.0, min(1.0, (middle - shown / 2) / (total - shown)))
+                        moved = self._set(bar, "AXValue", value) == 0 or moved
+            node, depth = self._attr(node, "AXParent"), depth + 1
+        return moved
 
     # ------------------------------------------------------------------ pointer (background)
     def _route(self, state: WindowState):
@@ -1276,12 +1494,12 @@ class MacComputer:
 
     def _refuse_secure(self, node: Node | None, element=None) -> None:
         if node is not None and "secure" in node.flags:
-            raise ComputerUseError("This is a password field. computer_use does not type into password fields; ask the user to fill it.")
+            refuse_password_field("typing into this password field")
         if element is not None:
             role = str(self._attr(element, "AXRole") or "")
             subrole = str(self._attr(element, "AXSubrole") or "")
             if _SECURE in (role, subrole):
-                raise ComputerUseError("The focused field is a password field. computer_use does not type into it; ask the user to fill it.")
+                refuse_password_field("typing into the focused password field")
 
     def _focused_element(self, pid: int):
         _, ax, _, _ = _frameworks()
@@ -1322,15 +1540,23 @@ class MacComputer:
 
     def act(self, session: str, action: str, args: dict[str, Any]) -> str:
         """Run one action and return a short description of what happened."""
+        _unlocked()
+        handler = getattr(self, f"_do_{action}", None)
+        if handler is None:
+            raise ComputerUseError(f"unknown action {action!r}")
+        app = self.resolve_app(args.get("app") or "", launch=action == "open_file")
+        stateless = action in self.STATELESS or (action in self.AT_FOCUS and args.get("element_index") is None)
+        if not stateless:
+            # A window the model has not read fails here, before anything is waited for.
+            self._state_for(session, args.get("app") or "", app)
+        if action != "wait":
+            # A step sent to a busy app would run whenever it comes back, on whatever it shows then.
+            self._await_answer(app)
         with self._lock:
-            handler = getattr(self, f"_do_{action}", None)
-            if handler is None:
-                raise ComputerUseError(f"unknown action {action!r}")
-            if action in self.STATELESS or (action in self.AT_FOCUS and args.get("element_index") is None):
-                app = self.resolve_app(args.get("app") or "", launch=action == "open_file")
+            if stateless:
                 return handler(app, int(app.processIdentifier()), self._states.get(
                     (session, int(app.processIdentifier()))), args)
-            app, state = self._state_for(session, args.get("app") or "")
+            app, state = self._state_for(session, args.get("app") or "", app)
             # The window may have moved since it was read; points follow it.
             self._follow_window(state)
             self._control(session, state.pid, str(app.localizedName() or ""), None, state.window_id)
@@ -1414,7 +1640,7 @@ class MacComputer:
             if simple and button == "right" and "AXShowMenu" in actions:
                 if self._perform(element, "AXShowMenu") == 0:
                     return f"opened the context menu of {node.body()}"
-            self._background_click(state, pid, self._center(element), button, count, flags, hold)
+            self._background_click(state, pid, self._reachable_center(state, element), button, count, flags, hold)
             return f"{_click_words(button, count)} {node.body()}" + (f" (held {hold:g}s)" if hold else "")
         point = self._point(state, args.get("x"), args.get("y"))
         self._background_click(state, pid, point, button, count, flags, hold)
@@ -1425,7 +1651,7 @@ class MacComputer:
         """Move the pointer over an element or point, in the app only, and rest there."""
         index = args.get("element_index")
         if index is not None:
-            point, what = self._center(self._element(state, index)), self._node_at(state, index).body()
+            point, what = self._reachable_center(state, self._element(state, index)), self._node_at(state, index).body()
         else:
             point, what = self._point(state, args.get("x"), args.get("y")), f"({args.get('x')}, {args.get('y')})"
         rest = _seconds(args.get("duration"), "duration") or HOVER_SECONDS
@@ -1885,8 +2111,10 @@ class MacComputer:
 
     # ------------------------------------------------------------------ windows
     def list_windows(self, query: str) -> str:
+        _unlocked()
         _, ax, cg, _ = _frameworks()
         app = self.resolve_app(query, launch=False)
+        self._await_answer(app)
         pid = int(app.processIdentifier())
         root = ax.AXUIElementCreateApplication(pid)
         focused = self._attr(root, "AXFocusedWindow")
@@ -1956,6 +2184,7 @@ class MacComputer:
     # ------------------------------------------------------------------ reading aids
     def zoom(self, session: str, query: str, x, y, width, height) -> Observation:
         """A region of the last screenshot at the display's full pixel density."""
+        _unlocked()
         with self._lock:
             app, state = self._state_for(session, query)
             if not state.has_screenshot:
@@ -2050,6 +2279,9 @@ class MacComputer:
         """Wait for the window to stop changing after an action; returns the seconds waited."""
         _, ax, _, _ = _frameworks()
         app = self.resolve_app(query, launch=False)
+        began = time.monotonic()
+        # A step the app is still carrying out leaves it silent; what it shows is read once it answers.
+        self._await_answer(app)
         pid = int(app.processIdentifier())
         previous = self._states.get((session, pid))
         root = ax.AXUIElementCreateApplication(pid)
@@ -2067,7 +2299,7 @@ class MacComputer:
             if current == last and not busy:
                 break
             last = current
-        return time.monotonic() - start
+        return time.monotonic() - began
 
     def _quick_signature(self, root, window) -> tuple[tuple, bool]:
         """A cheap fingerprint of the first QUICK_NODES elements, and whether anything shows busy."""
@@ -2102,6 +2334,14 @@ def _report_control(info: dict[str, Any], payload: dict[str, Any]) -> None:
     from openprogram.host.resources.native_window import note_control
     note_control(payload, owner=info.get("owner"))
 
+
+
+def _intersect(a: tuple[float, float, float, float],
+               b: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+    """The overlap of two x, y, width, height rectangles (zero size when they do not meet)."""
+    left, top = max(a[0], b[0]), max(a[1], b[1])
+    right, bottom = min(a[0] + a[2], b[0] + b[2]), min(a[1] + a[3], b[1] + b[3])
+    return left, top, max(0.0, right - left), max(0.0, bottom - top)
 
 
 def screen_point(px: float, py: float, *, origin: tuple[float, float], scale: float) -> tuple[float, float]:
@@ -2259,5 +2499,5 @@ def backend() -> MacComputer:
         return _BACKEND
 
 
-__all__ = ["AudioClip", "ComputerUseError", "INCLUDE", "MacComputer", "Observation", "REFUSED_BUNDLES", "Report",
+__all__ = ["AudioClip", "ComputerUseError", "INCLUDE", "MacComputer", "OWN_BUNDLES", "Observation", "Report",
            "backend", "find_text", "markdown_to_html", "render", "support", "utf16_len"]

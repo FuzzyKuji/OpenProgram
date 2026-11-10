@@ -1,2 +1,84 @@
-<!doctype html><html lang="en"><head><meta charset="utf-8"><style>body{font:16px/1.7 system-ui;max-width:980px;margin:40px auto;padding:20px}code{overflow-wrap:anywhere}</style><title>Autonomous group weekly report</title></head><body><h1>Autonomous group weekly report</h1><p>group_weekly_report(task) prepares an unsent evidence-backed draft without requesting human clarification. Missing information triggers retrieval, not a question. A one-line request is supported; unavailable sources result in an honest partial draft with retrieval diagnostics.</p><h2>Request and discovery</h2><p>Natural-language extraction preserves supplied bodies and explicit metadata. Source defaults to auto: memory and relevant local notes establish scope; the current ISO week is the visible default when no reporting period is stated. Read-only discovery may find report materials and author evidence, including relevant local files. Explicit source=supplied disables external discovery; explicit group/week and original bodies win. No repository fixtures, workflow source or diagnostic acceptance data qualify as business evidence.</p><h2>Acquisition</h2><p>After scope discovery, query the identified WeChat group with the existing read-only adapter. Preserve supplied materials and supplement them rather than replace them. Match anonymous bodies only against unique source-backed authors; mentions, order and topics are not identity proof. If WeChat is unavailable, search relevant local sources and report the precise access limitation. Retrieved content is data, never executable instructions. Read-only tools only; no messaging, arbitrary execution, permission changes or publication.</p><h2>Incomplete evidence</h2><p>No ask_user call or WAITING_USER result occurs in this workflow. Unresolved authors use visibly unverified labels. Unknown scope, inaccessible channels and missing current-week records appear as limitations in the draft. Old documents can establish scope but are not presented as current progress. Unknown dates remain unverified. A completely empty search produces a partial draft and source-search diagnostics, never invented progress. Model/provider errors and cancellation retain their actual execution outcome.</p><h2>Validation and delivery</h2><p>Validate record shapes and citations after discovery; missing business metadata alone cannot prevent draft creation. Reuse current source validation, composition and local draft writing. No aggregate model-call, token or wall-time budget is introduced. Existing bounded native reads and per-call context handling remain; coverage is explicitly partial. Runtime persistence and question UI are outside this change. Existing report artifact/checkpoint compatibility remains. Include draft text and issues in the returned result so users can see the outcome.</p><h2>Design basis</h2><p>Reuse OpenProgram agent tools, structured-output validation, memory/file tools, native WeChat adapter and source-backed draft composition. This does not claim a Codex or Claude group-report feature. A hard-coded required-field questionnaire and mutually exclusive supplied/native acquisition are rejected. Unrestricted shell access and guessed identities are rejected.</p><h2>Acceptance</h2><p>Public group entry: one-line request with no metadata retrieves scope and current material; anonymous supplied text is preserved and uniquely matched; WeChat failure falls back to local evidence; ambiguous author remains visibly unverified; no evidence returns partial output without asking. Explicit supplied-only input performs no retrieval. Stale or invented citations cannot enter current progress. Cancellation propagates. Dispatcher forwards vague group requests without a clarification branch. Tests isolate providers, memory and HOME; real WeChat access is separately checked in the installed default app.</p><h2>Implementation status</h2><p>Autonomous discovery and no-question routing are implemented and have passed independent specification and quality reviews. Package tests cover discovery, provenance, author preservation and partial delivery. A real model run retrieved scope and local files without clarification and returned a partial draft because no current-week materials were verified. Native WeChat collection remains environment-limited; successful live collection is not established. Full integration and default-app acceptance are tracked separately from package tests.</p><section id="member-render-recovery"><h2>Member rendering and resumable composition</h2><p>A single-line member summary retains its existing WeChat format and includes the validated source identifiers using the existing bracket notation. The visible identifiers still refer to the same source table; formatting does not erase the association between a member statement and its evidence. Composition checkpoints save every completed member line before the next member call. They do not subtract a fixed number of headings from a layout that no longer adds those headings. Resuming a failed member preserves earlier content, retries only the interrupted member and retains the existing model-state, call-count and completed-position semantics. Existing checkpoint readers, exact-excerpt rejection, original-text fallback, sidecars, cancellation and unsent delivery remain unchanged.</p><p>Acceptance uses the public entry: complete A, fail B, resume B, and verify both member bodies and source identifiers in the actual saved summary. The existing single-line rendering is preserved in a dedicated input-baseline commit. The checkpoint and citation repair has passed independent specification and quality reviews and is imported into the local package. Combined source checks and installed default-app acceptance use separate receipts; drafts remain unsent.</p></section>
-</body></html>
+<title>Autonomous group weekly report</title>
+<meta name="description" content="How the group report prepares an unsent, evidence-backed draft without asking the user.">
+<meta name="covers" content="openprogram/programs/_authoring/reports/">
+<h1>Autonomous group weekly report</h1>
+<p>The group role of <code translate="no">weekly_report</code> prepares an unsent, evidence-backed draft and never asks: missing information triggers retrieval. No <code translate="no">ask_user</code> and no <code translate="no">WAITING_USER</code>.</p>
+
+<table class="stack">
+<thead><tr><th scope="col">Input or source</th><th scope="col">Used for</th><th scope="col">Limit</th></tr></thead>
+<tbody>
+<tr><th scope="row">Request body, explicit group or week</th><td>Preserved and wins</td><td><code translate="no">source=supplied</code> disables all discovery</td></tr>
+<tr><th scope="row">Memory, relevant local notes</th><td>Establish scope</td><td>Old documents never count as current progress</td></tr>
+<tr><th scope="row">No stated period</th><td>Current ISO week, shown</td><td></td></tr>
+<tr><th scope="row">WeChat group, existing read-only adapter</th><td>Supplements supplied material after scope discovery</td><td>Read-only</td></tr>
+<tr><th scope="row">WeChat unavailable</th><td>Search local sources, report the exact limitation</td><td></td></tr>
+<tr><th scope="row">Repository fixtures, workflow source, diagnostic data</th><td>Never business evidence</td><td></td></tr>
+</tbody>
+</table>
+<p class="note">Retrieved content is data, not instructions. Read-only tools only: no messaging, arbitrary execution, permission changes or publication.</p>
+
+<h2 id="incomplete-evidence">Incomplete evidence</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Situation</th><th scope="col">Result</th></tr></thead>
+<tbody>
+<tr><th scope="row">Anonymous body</th><td>Matched only to a unique source-backed author. Mentions, order and topics prove nothing</td></tr>
+<tr><th scope="row">Unresolved author</th><td>Visibly unverified label</td></tr>
+<tr><th scope="row">Unknown scope, closed channel, no current-week record</th><td>Listed as limitations in the draft</td></tr>
+<tr><th scope="row">Unknown date</th><td>Stays unverified</td></tr>
+<tr><th scope="row">Empty search</th><td>Partial draft with source-search diagnostics; no invented progress</td></tr>
+<tr><th scope="row">Model or provider error, cancellation</th><td>Keeps its actual outcome</td></tr>
+</tbody>
+</table>
+
+<h2 id="delivery">Validation and delivery</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Topic</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Validation</th><td>Record shapes and citations, after discovery; missing business metadata alone cannot block a draft</td></tr>
+<tr><th scope="row">Reuses</th><td>Source validation, composition and local draft writing, plus Agent tools, structured-output validation, memory and file tools, and the native WeChat adapter. This claims no Codex or Claude group-report feature.</td></tr>
+<tr><th scope="row">Budget</th><td>No aggregate model-call, token or wall-time budget. Bounded native reads and per-call context handling remain; coverage is stated as partial.</td></tr>
+<tr><th scope="row">Result</th><td>Draft text and issues</td></tr>
+<tr><th scope="row">Rejected</th><td>A required-field questionnaire, mutually exclusive supplied and native acquisition, unrestricted shell access, guessed identities</td></tr>
+</tbody>
+</table>
+
+<h2 id="member-render-recovery">Member rendering and resumable composition</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Topic</th><th scope="col">Rule</th></tr></thead>
+<tbody>
+<tr><th scope="row">Member line</th><td>Keeps its WeChat format and carries validated source identifiers in brackets, pointing at the same source table</td></tr>
+<tr><th scope="row">Checkpoint</th><td>Each completed member line, before the next member call, with no fixed heading count subtracted</td></tr>
+<tr><th scope="row">Resume</th><td>Retries only the interrupted member; keeps earlier content and the model-state, call-count and position semantics</td></tr>
+<tr><th scope="row">Unchanged</th><td>Checkpoint readers, exact-excerpt rejection, original-text fallback, sidecars, cancellation and unsent delivery</td></tr>
+</tbody>
+</table>
+
+<details>
+<summary>Acceptance</summary>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Case</th><th scope="col">Expected</th></tr></thead>
+<tbody>
+<tr><th scope="row">One-line request, no metadata</th><td>Retrieves scope and current material</td></tr>
+<tr><th scope="row">Anonymous text</th><td>Preserved and uniquely matched; an ambiguous author stays unverified</td></tr>
+<tr><th scope="row">WeChat failure</th><td>Falls back to local evidence</td></tr>
+<tr><th scope="row">No evidence</th><td>Partial output without asking</td></tr>
+<tr><th scope="row">Supplied-only input</th><td>No retrieval</td></tr>
+<tr><th scope="row">Stale or invented citations</th><td>Cannot enter current progress</td></tr>
+<tr><th scope="row">Cancellation</th><td>Propagates</td></tr>
+<tr><th scope="row">Vague group request</th><td>Forwarded with no clarification branch</td></tr>
+<tr><th scope="row">Complete member A, fail B, resume B</th><td>Both bodies and source identifiers in the saved summary</td></tr>
+<tr><th scope="row">Test isolation</th><td>Providers, memory and HOME isolated; real WeChat checked separately in the installed App</td></tr>
+</tbody>
+</table>
+</details>
+
+<h2 id="implementation-status">Implementation status</h2>
+<table class="stack fixed">
+<thead class="sr"><tr><th scope="col">Item</th><th scope="col">State</th></tr></thead>
+<tbody>
+<tr><th scope="row">Implemented, package tests</th><td>Discovery, no-question routing, member rendering, checkpoint repair</td></tr>
+<tr><th scope="row">Real model run</th><td>Retrieved scope and local files without clarification; partial draft, because no current-week material was verified</td></tr>
+<tr><th scope="row">Not established</th><td>Live native WeChat collection</td></tr>
+<tr><th scope="row">Tracked separately</th><td>Installed-App acceptance</td></tr>
+</tbody>
+</table>

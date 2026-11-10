@@ -12,8 +12,10 @@ import asyncio
 import logging
 import threading
 import time
+from types import SimpleNamespace
 
 from openprogram.host.processes.store import ProcessStore
+from openprogram.runtime.permissions.identity import detached_from_window, inherited_automation
 
 POLL_SECONDS = 2.0
 _SOURCE = "process_exit"
@@ -67,7 +69,9 @@ def deliver(record: dict, processes: ProcessStore) -> bool:
     key = f"{_SOURCE}:{record['id']}"
     message_id = store.admission_execution_id(session_id, key) + "_user"
     request = dict(payload["request"])
-    request.update(user_text=notice_text(record, processes.output(record["id"])),
+    request.update(automation=inherited_automation(SimpleNamespace(**request)),
+                   detached=detached_from_window(SimpleNamespace(**request)),
+                   user_text=notice_text(record, processes.output(record["id"])),
                    source=_SOURCE, user_msg_id=message_id, user_already_persisted=False,
                    history_override=None, attachments=None, spawn_caller=None,
                    goal_context=None, goal_trigger=False, goal_verification=None,

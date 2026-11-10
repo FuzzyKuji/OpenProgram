@@ -23,22 +23,23 @@ import {RuntimeBlock} from './components/chat/messages/runtime/runtime-block';
 import {SOLAR_BODIES} from './components/solar-icons';
 // gui_agent rows carry their tool glyph from tool-presentation, not a brand logo.
 window.expectedFunctionGlyph=SOLAR_BODIES.monitor;
-import {useSessionStore} from './lib/session-store';
-import {applyChatWsMessage} from './lib/net/ws/chat-stream';
-import {setPendingUserText} from './lib/chat/send/pending-user-text';
+import {useSessionStore,selectRow} from './lib/session-store';
+import {publishedTurn} from './tests/_support/published-turn.mjs';
 window.fetch=async()=>new Response('{}',{headers:{'content-type':'application/json'}});
 useSessionStore.setState({currentSessionId:'activity-layout',activeChatKey:'activity-layout'});
 const sid='activity-layout';let uid='turn',rid=uid+'_reply';
-window.freshReply=()=>{uid='thinking';rid=uid+'_reply';setPendingUserText(sid,'A new ordinary question');applyChatWsMessage({type:'chat_ack',data:{session_id:sid,msg_id:uid}});};
-window.event=(event)=>applyChatWsMessage({type:'chat_response',data:{type:'stream_event',session_id:sid,msg_id:uid,event}});
-applyChatWsMessage({type:'chat_ack',data:{session_id:sid,msg_id:uid}});
+const turn=publishedTurn(sid,{id:uid,role:'user',rowKind:'user',content:'Check the page',status:'done'});
+turn.startReply();
+window.freshReply=()=>{uid='thinking';rid=uid+'_reply';turn.nextTurn({id:uid,role:'user',rowKind:'user',content:'A new ordinary question',status:'done'});turn.startReply();};
+window.event=(event)=>turn.event(event);
 window.event({type:'tool_use',tool:'bash',tool_call_id:'old',input:'{}'});
 window.event({type:'tool_result',tool:'bash',tool_call_id:'old',result:''});
 window.event({type:'text',text:'The page is ready. Checking the current function.'});
-window.event({type:'tool_use',tool:'gui_agent',tool_call_id:'gui',input:'{"task":"Check the currently open page"}'});
-window.snapshot=()=>useSessionStore.getState().messagesById[rid];
-window.replaceReply=(patch)=>useSessionStore.getState().updateMessage(sid,rid,patch);
-function App(){const msg=useSessionStore(s=>s.messagesById[rid]);return <AssistantBubble msg={msg} sessionIdOverride={sid}/>;}
+// gui_agent is agentic: the server publishes its block but no flat tool record.
+window.event({type:'tool_use',tool:'gui_agent',tool_call_id:'gui',input:'{"task":"Check the currently open page"}',agentic:true});
+window.snapshot=()=>selectRow(sid,rid)(useSessionStore.getState());
+window.replaceReply=(patch)=>{const s=useSessionStore.getState();s.applyRead(sid,(s.messageOrder[sid]??[]).map(id=>id===rid?{...s.rowsByView[sid][id],...patch}:s.rowsByView[sid][id]));};
+function App(){const msg=useSessionStore(s=>selectRow(sid,rid)(s));return <AssistantBubble msg={msg} sessionIdOverride={sid}/>;}
 const root=createRoot(document.getElementById('root'));
 root.render(<QueryClientProvider client={new QueryClient()}><App/></QueryClientProvider>);
 window.showRuntime=()=>root.render(<RuntimeBlock msg={{id:'long-function',role:'assistant',display:'runtime',function:'long_function_name_'.repeat(30),status:'running',content:''}}/>);
@@ -62,8 +63,6 @@ window.showRuntime=()=>root.render(<RuntimeBlock msg={{id:'long-function',role:'
             summaries = page.locator('.tl-toggle')
             expect(summaries).to_have_count(2)
             active = summaries.last
-            # Agentic calls intentionally have no flat ChatToolCall record.
-            assert page.evaluate("snapshot().tools.some(t=>t.tool==='gui_agent')") is False
             expect(active.locator('.thinking-status')).to_have_count(0)
             page.screenshot(path=str(tmp_path/'before-layout.png'))
             labels = page.locator('.tl-toggle > span:first-child')
@@ -97,7 +96,7 @@ window.showRuntime=()=>root.render(<RuntimeBlock msg={{id:'long-function',role:'
             page.set_viewport_size({'width':390,'height':620})
             assert page.evaluate('document.documentElement.scrollWidth <= innerWidth')
             page.screenshot(path=str(tmp_path/'narrow-layout.png'))
-            page.evaluate("event({type:'tool_result',tool:'gui_agent',tool_call_id:'gui',result:''})")
+            page.evaluate("event({type:'tool_result',tool:'gui_agent',tool_call_id:'gui',result:'',agentic:true})")
             expect(page.locator('.thinking-status')).to_have_count(0)
             expect(row.locator('.thinking-status')).to_have_count(0)
             assert labels.last.bounding_box()['x'] == pytest.approx(labels.first.bounding_box()['x'],abs=.5)
@@ -110,7 +109,7 @@ window.showRuntime=()=>root.render(<RuntimeBlock msg={{id:'long-function',role:'
             expect(page.locator('.tl-step-note').last).to_contain_text('Concurrent thinking.')
             expect(page.locator('.thinking-status')).to_have_count(0)
             page.evaluate("event({type:'retry',attempt:2,reason:'transport'})")
-            expect(page.locator('.pending-label')).to_contain_text('Retrying 2')
+            expect(page.locator('.tl-retry[role="status"]').first).to_contain_text('retrying 2')
             expect(page.locator('.thinking-status')).to_have_count(0)
             page.evaluate("event({type:'tool_result',tool:'bash',tool_call_id:'next',result:'ok'})")
             page.evaluate("event({type:'text',text:'Finished.'})")
@@ -119,7 +118,7 @@ window.showRuntime=()=>root.render(<RuntimeBlock msg={{id:'long-function',role:'
             expect(active).to_have_attribute('aria-expanded','true')
             # Only the empty model reply shows the Thinking row.
             page.evaluate('freshReply()')
-            assert page.evaluate("snapshot().id === 'thinking_reply' && snapshot().content === '' && snapshot().status === 'streaming'")
+            assert page.evaluate("snapshot().id === 'thinking_reply' && snapshot().content === '' && snapshot().status === 'running'")
             expect(page.locator('.thinking-status')).to_have_count(1)
             page.evaluate("replaceReply({runtimeChildren:[{id:'legacy-call',role:'assistant',display:'runtime',function:'custom_agent',status:'running',content:''}]})")
             expect(page.locator('.thinking-status')).to_have_count(0)

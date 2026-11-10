@@ -93,6 +93,8 @@ export interface JobStatusDetail {
   session_id?: string;
   status?: string;
   parent_msg_id?: string | null;
+  /** The Job this Job's agent continues, as the server names it. */
+  continues_job_id?: string | null;
   target_branch_head_id?: string | null;
   head_id?: string | null;
   label?: string | null;

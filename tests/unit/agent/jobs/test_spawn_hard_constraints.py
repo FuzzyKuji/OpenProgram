@@ -60,19 +60,14 @@ def _text(result) -> str:
 @pytest.mark.parametrize("tool_name", [
     "worktree_create", "worktree_merge", "worktree_discard",
 ])
-def test_agent_spawn_cannot_run_worktree_tools_even_on_bypass(
+def test_an_owners_agent_runs_worktree_tools_on_bypass(
     owner_authority, tool_name,
 ):
     from openprogram.runtime.permissions.approval import wrap_with_approval
 
     req = _request("agent_spawn", owner_authority)
     wrapped = wrap_with_approval(_echo_tool(tool_name), req, lambda _e: None)
-    result = _run(wrapped, {"name": "wt"})
-
-    assert result.details["denied"] is True
-    assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
-    assert tool_name in _text(result)
-    assert "RAN" not in _text(result)
+    assert _text(_run(wrapped, {"name": "wt"})) == "RAN"
 
 
 def test_worktree_tools_still_run_for_an_interactive_owner_turn(owner_authority):
@@ -106,7 +101,7 @@ def test_mcp_cannot_run_risky_or_worktree_tools_even_on_bypass(
 
     result = _run(wrapped, {"command": "id"})
 
-    assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED"
+    assert result.details["reason_code"] == "AUTHORITY_CAPABILITY_DENIED"
     assert "RAN" not in _text(result)
 
 
@@ -157,16 +152,13 @@ def _gate(tool_names, outer_req):
 
 
 def test_inner_tools_are_gated_by_the_outer_hard_constraints(owner_authority):
-    outer = _request("agent_spawn", owner_authority)
+    outer = _request("mcp", owner_authority)
     gated = _gate(["bash", "worktree_create", "read"], outer)
 
     by_name = {t.name: t for t in gated}
-    # Owner-delegated shell calls follow the admitted permission policy;
-    # worktree operations remain a hard constraint even under Bypass.
-    assert _text(_run(by_name["bash"], {"command": "id"})) == "RAN"
-    for blocked in ("worktree_create",):
+    for blocked in ("bash", "worktree_create"):
         result = _run(by_name[blocked], {"command": "id"})
-        assert result.details["reason_code"] == "HARD_CONSTRAINT_DENIED", blocked
+        assert result.details["reason_code"] == "IDENTITY_SCOPE", blocked
         assert "RAN" not in _text(result), blocked
 
     assert _text(_run(by_name["read"], {"file_path": "/etc/hosts"})) == "RAN"
@@ -182,7 +174,7 @@ def test_inner_tools_are_gated_by_the_outer_deny_rules(owner_authority):
     gated = _gate(["read"], outer)
     result = _run(gated[0], {"file_path": "/etc/hosts"})
 
-    assert result.details["reason_code"] == "PERMISSION_RULE_DENY"
+    assert result.details["reason_code"] == "RULE_DENY"
     assert "RAN" not in _text(result)
 
 

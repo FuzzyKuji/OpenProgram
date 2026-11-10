@@ -20,6 +20,19 @@ export const HOVER_POP_SCALE = 1.12;
 
 export const HOVER_POP: Variants = { normal: { scale: 1 }, animate: { scale: HOVER_POP_SCALE } };
 
+/** The box of a filled icon in the composer and the popups it opens: the
+ *  drawing's ink is scaled until its longer side is this many px. */
+export const FILL_BOX = 16;
+
+/** The box a filled icon grows to on its control's hover, in px. */
+export const FILL_HOVER_BOX = 18;
+
+/** The hover scale of a filled icon: its 16 px box becomes exactly 18 px. */
+export const HOVER_FILL_SCALE = FILL_HOVER_BOX / FILL_BOX;
+
+/** The pop of a filled icon (opt-in; every other icon keeps HOVER_POP). */
+export const HOVER_POP_FILL: Variants = { normal: { scale: 1 }, animate: { scale: HOVER_FILL_SCALE } };
+
 /** The element whose hover moves the icon `self`. */
 export function hoverHostOf(self: Element): Element {
   return self.parentElement?.closest(HOVER_HOST) ?? self;

@@ -27,7 +27,6 @@ export const ProviderItem = memo(function ProviderItem({
       type="button"
       className={styles.providerItem + (active ? " " + styles.active : "")}
       onClick={() => onSelect(p.id)}
-      title={p.label}
       aria-label={p.label}
       aria-current={active ? "true" : undefined}
     >

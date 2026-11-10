@@ -41,16 +41,8 @@ export interface ChannelGroup {
   accounts: ChannelAccount[];
 }
 
-const BRAND: Record<string, string> = {
-  wechat: "WeChat",
-  discord: "Discord",
-  telegram: "Telegram",
-  slack: "Slack",
-};
-
-export function channelBrand(plat: string): string {
-  return BRAND[plat.toLowerCase()] || plat;
-}
+// The brand names, colours and logos live in lib/channels/channel-brands.ts.
+export { channelBrand } from "@/lib/channels/channel-brands";
 
 /** Draft picks live outside the session store; bumping this re-renders
  *  every chip and menu reading them. */
@@ -119,7 +111,7 @@ export function useChannelChoices() {
       if (conv) {
         conv.channel = ch || null;
         conv.account_id = ch && acct ? acct : null;
-        // Optimistic: the sidebar row prefix and the chip update now.
+        // Optimistic: the sidebar row's logo and the chip update now.
         mirrorUpsertConv({ ...conv, id: sessionId });
       }
     } else {

@@ -4,7 +4,6 @@ from __future__ import annotations
 import os
 from types import SimpleNamespace
 
-from openprogram.host.sandbox.protected_paths import applications_root
 from openprogram.host.sandbox import (
     SANDBOX_DENIAL_GUIDANCE,
     SandboxPolicy,
@@ -56,7 +55,6 @@ def test_hard_floor_ignores_allow_read():
     assert read_is_denied(os.path.realpath(auth), policy)
     err = persist_allow_read(auth)
     assert err and "hard floor" in err
-    assert persist_allow_read(applications_root())
 
 
 def test_seatbelt_allow_follows_deny(tmp_path):

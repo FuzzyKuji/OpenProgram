@@ -48,6 +48,7 @@ import { type SlashCommand } from "./slash/slash-commands";
 import { SlashMenu } from "./slash/slash-menu";
 import { AttachmentStrip } from "./attach/strip/attachment-strip";
 import { attachmentsBlockSend } from "./attach/attachment-session-cache";
+import { forgetRefill, setRewindUploading } from "@/lib/chat/rewind/rewind-store";
 import { useComposerAttachments } from "./attach/use-composer-attachments";
 import { useFileMention } from "./attach/mention/use-file-mention";
 import type { MentionSources } from "./attach/mention/mention-sources";
@@ -454,6 +455,8 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
       ));
       return;
     }
+    // What leaves the composer stops being a refill; a command does not.
+    if (draftOwner && !input.trimStart().startsWith("/")) forgetRefill(draftOwner);
     return submitDraft(mode);
   };
 
@@ -551,6 +554,10 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
   // border instead. The button still LOOKS dim (data-fn-missing) and
   // its title spells out which field is blocking.
   const attachmentBlock = attachmentsBlockSend(pendingImages, pendingDocs);
+  const attachmentsLoading = attachmentBlock === "loading";
+  useEffect(() => {
+    if (draftOwner) setRewindUploading(draftOwner, attachmentsLoading);
+  }, [draftOwner, attachmentsLoading]);
   const hasAttachments = pendingImages.length > 0 || pendingDocs.length > 0 || !!pendingRecording;
   const sendDisabled = fnFormActive
     ? false
@@ -747,7 +754,7 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
             isCancelling
               ? text("Cancelling…", "正在取消")
               : showStop
-                ? text("Cancel execution (Esc)", "取消运行（Esc）")
+                ? text("Stop this reply (Esc)", "停止这次回复（Esc）")
                 : sendTitle
           }
           aria-label={
@@ -773,7 +780,7 @@ export function Composer({ sessionId: boundSessionId }: { sessionId?: string } =
             title={text("Close", "关闭")}
             aria-label={text("Close", "关闭")}
           >
-            <SolarIcon name="close-circle" size={14} />
+            <SolarIcon name="close-circle" size={16} fit="fill" />
           </button>
         )}
       </div>

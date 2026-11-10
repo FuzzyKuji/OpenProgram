@@ -22,6 +22,7 @@ import { renderMathIn } from "@/lib/format-utils/markdown";
 import { runtimeState } from "@/lib/runtime-bridge/state";
 import { sendRuntimeCommand } from "@/lib/runtime-bridge/session/session-load";
 import {
+  selectRow,
   useSessionStore,
   type AgenticFunction,
   type ChatMsg,
@@ -32,14 +33,17 @@ import { copyText } from "@/lib/clipboard";
 import { startFunctionRetry } from "@/lib/runtime-bridge/actions/function-retry";
 import { optimisticAction } from "@/lib/runtime-bridge/optimistic-action";
 
+import { isLive, isStopped } from "@/lib/chat/transcript/row-status";
 import { SystemAccessRecovery } from "./system-access-recovery";
 import { systemAccessRequired } from "@/lib/access/system-access-result";
 
 import type { TNode } from "../execution/tree-types";
 import { ExecutionStrip, StepRow, TreeStep, decodeEscapes } from "../execution/execution-strip";
+import { StepExpansionScope } from "../execution/step-expansion";
 import { ActionButton, MessageTimestamp, NavButton, SVG } from "../bubbles/message-actions";
 import { renderMarkdown, useMarkdownReady } from "../bubbles/markdown";
 import { runtimeAnswer, runtimeSummaryLabel } from "./runtime-summary";
+import { useRowSessionId } from "../list/transcript-view-scope";
 
 /** Commands go out as they are; a `load_session` goes through the managed
  *  session read, since the transcript applies only the reply to a read it
@@ -66,21 +70,20 @@ function checkoutSibling(
 ): void {
   const store = useSessionStore.getState();
   const id = currentMsg.id;
-  const snapshot = store.messagesById[id];
   optimisticAction(
     {
       apply: () => {
-        store.updateMessage(sessionId, id, {
-          status: "running",
-          contextTree: undefined,
-          siblingIndex: targetIndex,
+        store.applyLocalChange(sessionId, {
+          kind: "overlay_set", rowId: id,
+          fields: { status: "running", contextTree: undefined, siblingIndex: targetIndex },
+          clear: ["until_row_gone"],
         });
       },
       // The load_session reload rebuilds the transcript with new ids, so
       // this card's id is gone from the store once the switch lands.
-      settled: () => !useSessionStore.getState().messagesById[id],
+      settled: () => !selectRow(sessionId, id)(useSessionStore.getState()),
       revert: () => {
-        if (snapshot) useSessionStore.getState().updateMessage(sessionId, id, snapshot);
+        useSessionStore.getState().applyLocalChange(sessionId, { kind: "overlay_clear", rowId: id });
       },
       onTimeoutMessage: "Version switch timed out — reverted.",
     },
@@ -134,13 +137,8 @@ export function RuntimeBlock({
   const [now, setNow] = useState(() => Date.now());
   useMarkdownReady();
 
-  const focusedSessionId = useSessionStore((s) => s.currentSessionId);
-  const sessionId = sessionIdOverride || focusedSessionId;
-  const running =
-    msg.status === "streaming" ||
-    msg.status === "pending" ||
-    msg.status === "running" ||
-    msg.status === "cancelling";
+  const sessionId = useRowSessionId(sessionIdOverride || undefined);
+  const running = isLive(msg.status);
   const { fn } = parseRun(msg.function || msg.content || "");
   const fnName = msg.function || fn;
   const tree = displayTree(msg);
@@ -202,33 +200,30 @@ export function RuntimeBlock({
   function doRetry() {
     if (!sessionId) return;
     // 0ms feedback (interaction-feedback policy): flip THIS card into the
-    // new-version pending state right now; the reload on
-    // running_task_clear backfills the real run. Stuck retry reverts.
+    // new-version pending state right now; the new row
+    // replaces it. Stuck retry reverts.
     const store = useSessionStore.getState();
     const rid = msg.id;
-    const snapshot = store.messagesById[rid];
     const total = (msg.siblingTotal ?? 0) + 1;
     const requestId = crypto.randomUUID();
-    const alreadyReloading = runtimeState.__reloadOnTaskClear.has(sessionId);
     const retryPayload: Record<string, unknown> = {
       action: "retry_function", session_id: sessionId, function: fnName,
-      node_id: msg.id, retry_request_id: requestId,
+      node_id: msg.id, retry_request_id: requestId, client_request_id: requestId,
     };
     const surface = surfaceOriginForChat(sessionId);
     if (surface) retryPayload.surface_ref = surface;
     startFunctionRetry({
       sessionId, requestId,
       apply: () => {
-        runtimeState.__reloadOnTaskClear.add(sessionId);
-        store.updateMessage(sessionId, rid, {
-          status: "running", contextTree: undefined,
-          siblingIndex: total, siblingTotal: total,
+        store.applyLocalChange(sessionId, {
+          kind: "overlay_set", rowId: rid,
+          fields: { status: "running", contextTree: undefined, siblingIndex: total, siblingTotal: total },
+          clear: ["until_row_gone"],
         });
       },
-      settled: () => !useSessionStore.getState().messagesById[rid],
+      settled: () => !selectRow(sessionId, rid)(useSessionStore.getState()),
       restore: () => {
-        if (!alreadyReloading) runtimeState.__reloadOnTaskClear.delete(sessionId);
-        if (snapshot) useSessionStore.getState().updateMessage(sessionId, rid, snapshot);
+        useSessionStore.getState().applyLocalChange(sessionId, { kind: "overlay_clear", rowId: rid });
       },
       send: () => wsSend(retryPayload), toast: showToast,
       timeoutMessage: text(
@@ -346,8 +341,12 @@ export function RuntimeBlock({
     <StepRow
       icon="function"
       title={fnName || headerLabel}
-      note={text("Running…", "运行中…")}
-      running
+      note={streaming ? text("Running…", "运行中…")
+        : systemAccessPaused ? text("Paused", "已暂停")
+        : isStopped(msg.status) ? text("Interrupted", "已中断")
+        : undefined}
+      running={streaming}
+      error={msg.status === "error" || isStopped(msg.status)}
     />
   );
   const runtimeAfter = (
@@ -362,6 +361,7 @@ export function RuntimeBlock({
   // LLM-initiated calls keep the existing frameless tree unchanged.
   if (nested) {
     return (
+      <StepExpansionScope view={sessionId || undefined} row={msg.id}>
       <div
         ref={ref}
         className="tl"
@@ -375,12 +375,14 @@ export function RuntimeBlock({
         {runtimeAfter}
         {footer}
       </div>
+      </StepExpansionScope>
     );
   }
 
   // The function marker identifies the runtime row's type; it does not turn
   // the program run into an assistant/agent message identity.
   return (
+    <StepExpansionScope view={sessionId || undefined} row={msg.id}>
     <div
       ref={ref}
       className="runtime-program-run"
@@ -393,6 +395,7 @@ export function RuntimeBlock({
       <div className="runtime-program-avatar" aria-hidden="true">ƒ</div>
       <div className="runtime-program-content">
         <ExecutionStrip
+          expansionId="run"
           label={summaryLabel}
           streaming={streaming}
           after={runtimeAfter}
@@ -409,5 +412,6 @@ export function RuntimeBlock({
         {footer}
       </div>
     </div>
+    </StepExpansionScope>
   );
 }
